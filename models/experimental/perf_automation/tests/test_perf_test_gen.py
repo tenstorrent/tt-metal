@@ -208,3 +208,124 @@ def test_injected_runner_defaults_to_no_execution(tmp_path, monkeypatch):
     monkeypatch.setattr("agent.perf_test_gen._run_perf_node", boom)
     node = generate_perf_test(tmp_path, "text_generation", demo_rel, runner=lambda p: _VALID, force=True)
     assert node is not None
+
+
+def test_self_recording_pipeline_detected_and_rerecording_rejected(tmp_path):
+    """MODEL-AGNOSTIC: a pipeline whose own function self-captures a trace is detected from source, and a
+    generated test that re-records it (measure_adapter/begin_trace_capture) is rejected; a time-it-directly
+    draft is accepted. No per-model names."""
+    from agent.perf_test_gen import _self_tracing_fns, generate_perf_test
+
+    (tmp_path / "tt").mkdir(parents=True)
+    (tmp_path / "tt" / "pipeline.py").write_text(
+        "import ttnn\n"
+        "def run_fast(p):\n"
+        "    tid = ttnn.begin_trace_capture(dev, cq_id=0)\n"
+        "    ttnn.end_trace_capture(dev, tid, cq_id=0)\n"
+        "def run_plain(p):\n"
+        "    return p()\n"
+    )
+    assert _self_tracing_fns(tmp_path) == {"run_fast"}  # only the self-recording one, derived from source
+
+    d = tmp_path / "demo"
+    d.mkdir()
+    (d / "demo_fast.py").write_text("from tt.pipeline import run_fast\nout = run_fast(p)\n")
+
+    # re-recording a self-recording function (measure_adapter AROUND run_fast) nests two captures -> rejected
+    rerecord = "import ttnn\ndef test_fast_perf(device):\n" "    measure_adapter(lambda: run_fast(p), device)\n"
+    assert generate_perf_test(tmp_path, "fast", "demo/demo_fast.py", runner=lambda p: rerecord, force=True) is None
+
+    # timing the self-recording function directly (no external capture) is accepted
+    time_it = (
+        "import ttnn\ndef test_fast_perf(device):\n"
+        "    run_fast(p)\n"
+        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+2cq')\n"
+    )
+    assert generate_perf_test(tmp_path, "fast", "demo/demo_fast.py", runner=lambda p: time_it, force=True) is not None
+
+
+def test_eager_mislabelled_as_trace_is_rejected(tmp_path):
+    """AGNOSTIC GUARD (the kokoro `tts` failure): a task whose pipeline function does NOT self-record must
+    NOT ship a test that times it directly and stamps TRACE_REPLAY_PATH=trace+2cq with no measure_adapter —
+    that times the EAGER path and lies. Validated against the generated test, so no demo/launcher shape can
+    smuggle it through. A test that actually captures via measure_adapter is accepted."""
+    from agent.perf_test_gen import generate_perf_test
+
+    (tmp_path / "tt").mkdir(parents=True)
+    (tmp_path / "tt" / "pipeline.py").write_text(
+        "import ttnn\n"
+        "def run_slow(p):\n"  # NO begin_trace_capture -> not self-recording
+        "    return p()\n"
+    )
+    d = tmp_path / "demo"
+    d.mkdir()
+    # demo runs the non-tracing op as a pipeline call AND ends with a bare launcher (the contamination trap)
+    (d / "demo_slow.py").write_text(
+        "from tt.pipeline import run_slow\n"
+        "def main():\n    out = run_slow(p)\n"
+        "if __name__ == '__main__':\n    main()\n"
+    )
+
+    eager_lie = (
+        "import ttnn\ndef test_slow_perf(device):\n"
+        "    run_slow(p)\n"
+        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+2cq')\n"
+    )
+    assert generate_perf_test(tmp_path, "slow", "demo/demo_slow.py", runner=lambda p: eager_lie, force=True) is None
+
+    proper = (
+        "import ttnn\ndef test_slow_perf(device):\n"
+        "    measure_adapter(lambda: run_slow(p), device)\n"
+        "    print('TRACE_PER_TOKEN_MS=1.0'); print('TRACE_REPLAY_PATH=trace+2cq')\n"
+    )
+    assert generate_perf_test(tmp_path, "slow", "demo/demo_slow.py", runner=lambda p: proper, force=True) is not None
+
+
+def test_self_recording_detects_all_shapes(tmp_path):
+    """MODEL-AGNOSTIC: self-recording is detected whether it lives in a top-level function OR a class
+    method, with nested private helpers rolling up to the public callable the demo invokes; a callable
+    with no begin_trace_capture is not flagged."""
+    from agent.perf_test_gen import _self_tracing_fns
+
+    (tmp_path / "top_level.py").write_text(
+        "def run_fast(p, x):\n"
+        "    def _frame():\n"
+        "        return ttnn.begin_trace_capture(dev, cq_id=0)\n"
+        "    return _frame()\n"
+    )
+    (tmp_path / "as_method.py").write_text(
+        "class Pipeline:\n"
+        "    def generate(self, x):\n"
+        "        def _inner():\n"
+        "            ttnn.begin_trace_capture(self.dev, cq_id=0)\n"
+        "        _inner()\n"
+        "    def unrelated(self):\n"
+        "        return 1\n"
+    )
+    got = _self_tracing_fns(tmp_path)
+    assert "run_fast" in got  # top-level function shape
+    assert "generate" in got  # class-method shape
+    assert "unrelated" not in got  # a method that does not self-record
+    assert "_frame" not in got and "_inner" not in got  # nested helpers roll up to the public callable
+
+
+def test_self_traced_ignores_bare_launcher():
+    """REGRESSION: a self-recording `main()` launcher must NOT flag a task whose real pipeline function
+    does not self-record. Only a PIPELINE-OP call (P.fn(...) or fn(pipe, ...)) counts; a bare `main()`
+    that every demo ends with does not. (kokoro: demo_tts.py runs the non-tracing run_tts but ends with
+    main(); it must get the standard template, not the time-it-directly one.)"""
+    from agent.perf_test_gen import _invoked_as_pipeline_op
+
+    # a demo that ONLY runs the non-tracing op and then launches main() -> self-recording main is ignored
+    tts_demo = "wav = P.run_tts(pipe, ids, ref)\nif __name__ == '__main__':\n    main()\n"
+    assert _invoked_as_pipeline_op("main", tts_demo) is False
+    assert _invoked_as_pipeline_op("run_tts_fast", tts_demo) is False
+
+    # a demo that actually invokes the self-recording pipeline op -> flagged
+    fast_demo = "wav = P.run_tts_fast(pipe, ids, ref)\nif __name__ == '__main__':\n    main()\n"
+    assert _invoked_as_pipeline_op("run_tts_fast", fast_demo) is True
+    assert _invoked_as_pipeline_op("main", fast_demo) is False  # bare launcher still ignored
+
+    # direct import call WITH args also counts (no attribute access)
+    assert _invoked_as_pipeline_op("run_tts_fast", "run_tts_fast(pipe, ids)\n") is True
+    assert _invoked_as_pipeline_op("run_tts_fast", "run_tts_fast()\n") is False  # no args = not a pipeline op

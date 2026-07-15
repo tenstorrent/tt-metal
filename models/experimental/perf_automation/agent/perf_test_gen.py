@@ -97,6 +97,41 @@ def test_<task>_perf(device_params, device):
 """
 
 
+_SELF_TRACED_SKELETON_REF = """
+import os
+import time
+import pytest
+import ttnn
+# from <model>.tt.<module> import build_pipeline, <self_traced_fn>   # lift both from the demo
+
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+_DEV_PARAMS = {"l1_small_size": 24576}
+if _PERF_TRACE:
+    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
+    _DEV_PARAMS["num_command_queues"] = int(os.environ.get("TT_PERF_NUM_CQ", "2"))
+
+@pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
+def test_<task>_perf(device_params, device):
+    # SELF-RECORDING PIPELINE: the model's own <self_traced_fn> already records its trace (trace+2CQ)
+    # internally. Do NOT re-record its trace here (no adapter, no manual capture calls) — a nested capture
+    # fatals + hangs. Build EXACTLY as the demo does, WARM UP once, then TIME steady-state calls of that
+    # SAME function; that native latency IS the trace+2CQ number. Print the markers verbatim.
+    pipe = ...        # build EXACTLY as demo/demo_<task>.py does, on `device`
+    _inp = ...        # a SMALL representative input (lift from the demo)
+    <self_traced_fn>(pipe, _inp)                       # warm up (its own internal capture runs here)
+    _iters = int(os.environ.get("TT_PERF_REPLAY_ITERS", "16"))
+    _t0 = time.monotonic()
+    for _ in range(_iters):
+        out = <self_traced_fn>(pipe, _inp)             # its own trace+2CQ path, timed
+    ttnn.synchronize_device(device)
+    _ms = (time.monotonic() - _t0) * 1000.0 / _iters
+    assert out is not None                              # perf only — NO PCC
+    print("FORWARD_WALL_MS=%.4f" % _ms)
+    print("TRACE_PER_TOKEN_MS=%.4f" % _ms)
+    print("TRACE_REPLAY_PATH=trace+2cq native batch=1")
+"""
+
+
 def _inline_inprocess_sources(src_text: str, root: Path) -> str:
     """When a source orchestrates the forward by launching pytest node-ids in SUBPROCESSES (a
     union gate), tracy cannot see those device ops — profiling yields an empty CSV. Pull the REAL
@@ -426,6 +461,90 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
     )
 
 
+def _self_traced_prompt(out_rel: str, task: str, src_label: str, demo_src: str, fns: list) -> str:
+    """Dedicated prompt for a SELF-RECORDING pipeline: no measure_adapter instructions anywhere (they'd
+    mandate a second, freezing capture). Just: build like the demo, TIME the model's own self-recording
+    function, print the markers. Its native path already runs trace+2CQ."""
+    _fns = ", ".join("`%s`" % f for f in fns)
+    return (
+        f"Write a pytest PERFORMANCE test file `{out_rel}` for the '{task}' pipeline of this TTNN model.\n"
+        f"CRITICAL — SELF-RECORDING PIPELINE: this pipeline's function(s) {_fns} ALREADY capture their own "
+        f"trace (trace+2CQ) INTERNALLY (they call ttnn.begin_trace_capture). You must NOT record a SECOND "
+        f"time — a nested capture fatals and hangs the device. So do NOT import or call measure_adapter, "
+        f"PipelineStageAdapter, or ttnn.begin_trace_capture ANYWHERE in this test.\n"
+        f"Instead, MEASURE the native path by TIMING it: build the pipeline EXACTLY as the demo does, warm "
+        f"up once, then time steady-state calls of the model's own function; that latency IS the trace+2CQ "
+        f"number.\n"
+        f"<demo path='{src_label}'>\n{demo_src}\n</demo>\n\n"
+        "Requirements:\n"
+        f"- a pytest function named `test_{task}_perf`.\n"
+        "- DEVICE OPEN: open the device the SAME way the demo/source does (lift its open, or use the "
+        "device_params fixture) with trace_region_size + num_command_queues=2 when TT_PERF_TRACE is set, so "
+        "the model's own capture + 2-CQ replay have the budget. Pass that device to the build + the function.\n"
+        "- Run the device work IN-PROCESS (never subprocess/os.system/python -m pytest).\n"
+        "- Cap the input SMALL (a representative phoneme/token input, not the max shape).\n"
+        "- NO PCC / correctness asserts. Print, verbatim, `FORWARD_WALL_MS=<ms>`, `TRACE_PER_TOKEN_MS=<ms>` "
+        "(the per-call latency), and `TRACE_REPLAY_PATH=trace+2cq`.\n"
+        "- Do NOT use measure_adapter / PipelineStageAdapter / begin_trace_capture — the model self-records.\n\n"
+        f"Use this skeleton (adapt build + the function name to the demo):\n{_SELF_TRACED_SKELETON_REF}\n\n"
+        "Do NOT use any tools and do NOT write the file yourself — the caller writes it. Respond with ONLY "
+        "the complete python file content — no prose, no markdown fences."
+    )
+
+
+def _self_tracing_fns(root: Path) -> set:
+    """MODEL-AGNOSTIC: the model's OWN callables that ALREADY capture a trace themselves — their body
+    calls ttnn.begin_trace_capture. Instrumenting one under the tool's own trace/measure would nest two
+    captures on the device -> TT_FATAL + teardown hang. Derived by scanning the model's source (no
+    per-model names); empty for models that don't self-trace. Lets the generator emit a time-it-directly
+    test for a self-recording pipeline instead of a re-recording one that freezes.
+
+    Covers BOTH shapes the demo can call: a top-level function (`run_tts_fast(...)`) AND a class method
+    (`pipe.generate(...)`). An indent-tracked scope stack attributes a begin_trace_capture to the OUTERMOST
+    enclosing callable — the public entry the demo invokes — so nested private helpers roll up to it."""
+    fns = set()
+    try:
+        for py in sorted(root.rglob("*.py")):
+            p = py.as_posix()
+            if "/tests/" in p or py.name.startswith("test_"):
+                continue
+            try:
+                txt = py.read_text(errors="ignore")
+            except Exception:  # noqa: BLE001
+                continue
+            if "begin_trace_capture" not in txt:
+                continue
+            stack = []
+            for raw in txt.splitlines():
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                indent = len(raw) - len(raw.lstrip())
+                while stack and stack[-1][0] >= indent:
+                    stack.pop()
+                m = re.match(r"(class|def)\s+([A-Za-z_]\w*)", stripped)
+                if m:
+                    stack.append((indent, m.group(1), m.group(2)))
+                elif "begin_trace_capture" in raw:
+                    for _ind, kind, name in stack:
+                        if kind == "def":
+                            fns.add(name)
+                            break
+    except Exception:  # noqa: BLE001
+        pass
+    return fns
+
+
+def _invoked_as_pipeline_op(fn: str, demo_src: str) -> bool:
+    """True only when the demo calls `fn` as a PIPELINE OPERATION — attribute-accessed (`P.fn(...)`) or
+    called WITH arguments (`fn(pipe, ...)`). This excludes a bare launcher like `main()`, which every demo
+    ends with: a self-recording `main` must NOT make a task whose actual pipeline function (e.g. run_tts)
+    does NOT self-record get the time-it-directly treatment — that would time the eager path and mislabel
+    it trace+2CQ."""
+    esc = re.escape(fn)
+    return bool(re.search(r"\.%s\s*\(" % esc, demo_src) or re.search(r"\b%s\s*\(\s*[^)\s]" % esc, demo_src))
+
+
 def generate_perf_test(
     model_root: str | Path,
     task: str,
@@ -466,6 +585,8 @@ def generate_perf_test(
             return None
         src_label = demo_rel
     demo_src = src_file.read_text(errors="ignore")
+    _selfrec_set = _self_tracing_fns(root)
+    self_traced = sorted(f for f in _selfrec_set if _invoked_as_pipeline_op(f, demo_src))
     if source_kind == "pcc":
         prompt = (
             f"Write a pytest PERFORMANCE test file `{out_rel}` for the '{task}' pipeline of this TTNN model.\n"
@@ -574,6 +695,8 @@ def generate_perf_test(
         "\n\nDo NOT use any tools and do NOT try to write the file yourself — the caller writes it. "
         "Respond with ONLY the complete python file content as your message text — no prose, no markdown fences."
     )
+    if self_traced:
+        prompt = _self_traced_prompt(out_rel, task, src_label, demo_src, self_traced)
     # A generative demo's perf test must exercise the (capped) decode loop, not a prefill-only slice.
     demo_is_generative = any(
         k in demo_src.lower()
@@ -607,6 +730,35 @@ def generate_perf_test(
             feedback = _correction_feedback(
                 "draft shelled out (subprocess/Popen/os.system/python -m pytest) — tracy can't profile "
                 "child-process ops. Run the device forward IN-PROCESS.",
+                "",
+                content,
+            )
+            prev_draft = content
+            continue
+        # AGNOSTIC trace-recording guards — validate the GENERATED test against the real self-recording set
+        # (not a demo-scan guess), so no launcher name or demo shape can produce a wrong test for any model.
+        _code = "\n".join(re.sub(r"#.*$", "", ln) for ln in content.splitlines())
+        _times_selfrec = sorted(f for f in _selfrec_set if _invoked_as_pipeline_op(f, _code))
+        _external_capture = "measure_adapter(" in _code or "begin_trace_capture(" in _code
+        _claims_trace = "trace+2cq" in content.lower()
+        if _times_selfrec and _external_capture:
+            stall += 1
+            feedback = _correction_feedback(
+                "the timed function (%s) ALREADY records its own trace+2CQ internally — do NOT re-record it with "
+                "measure_adapter or begin_trace_capture (a nested capture fatals + hangs the device). Just TIME "
+                "it directly and print TRACE_PER_TOKEN_MS + TRACE_REPLAY_PATH=trace+2cq." % ", ".join(_times_selfrec),
+                "",
+                content,
+            )
+            prev_draft = content
+            continue
+        if _claims_trace and not _external_capture and not _times_selfrec:
+            stall += 1
+            feedback = _correction_feedback(
+                "the test prints TRACE_REPLAY_PATH=trace+2cq but the timed function does NOT record a trace "
+                "(it is not one of the model's self-recording functions) and you did not call measure_adapter — "
+                "so this is TIMING THE EAGER PATH and mislabelling it. Wrap the timed forward in measure_adapter "
+                "to actually capture + replay a trace+2CQ, or time a function that self-records.",
                 "",
                 content,
             )
