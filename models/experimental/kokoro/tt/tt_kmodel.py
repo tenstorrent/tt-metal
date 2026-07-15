@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -298,7 +299,16 @@ class TTKModel:
         # (keyed by exact ids/speed/style — the token uploads are baked into the graph) and replayed
         # bit-for-bit on a repeat call, so BERT + prosody + the ASR encoder's ~480 BiLSTM dispatches
         # stop running eagerly. Full-length path only (the padded path uploads masks mid-graph).
-        self._trace_mgr_a = TraceManager(device) if trace else None
+        #
+        # OPT-IN (KOKORO_TRACE_A=1), DEFAULT OFF: keeping Trace A's captured trace + persistent buffers
+        # alive while the decoder (Trace B) does fresh allocations and its own capture/replay in the
+        # SAME forward corrupts the decoder trace ("Allocating device buffers is unsafe due to the
+        # existence of an active trace") — the decoder replay then hangs on-device. Trace A capture +
+        # replay + prosody themselves are verified correct (bit-identical, 17.88× in
+        # tests/test_tt_prosody_asr_trace.py); the unsolved piece is co-existing with Trace B, which
+        # needs an allocation-ordering redesign (pre-allocate all persistent buffers for both traces,
+        # no interleaved eager allocation). Off by default so the decoder-only trace path is unchanged.
+        self._trace_mgr_a = TraceManager(device) if (trace and os.environ.get("KOKORO_TRACE_A") == "1") else None
 
     # ------------------------------------------------------------------
     # Decoder cache
