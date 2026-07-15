@@ -392,9 +392,48 @@ def _run_moe_compute_single_card_test(
     #########################################
     logger.info(f"\n========== Running op (compute_only={compute_only}) ==========")
 
-    # For local-full mode (compute_only=False on 1x1), pre-allocate the combine output tensor.
-    tt_combine_output_tensor = None
+    def create_combine_output_tensor():
+        torch_combine_output = torch.zeros([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
+        return ttnn.from_torch(
+            torch_combine_output,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        )
+
+    def run_moe_compute_once(optional_combine_output_tensor):
+        return ttnn.experimental.moe_compute(
+            tt_sparse_buffer,
+            tt_expert_indices,
+            tt_expert_scores,
+            tt_expert_mapping,
+            tt_w0_w1,
+            tt_w2,
+            layer_id=layer_id,
+            output_height_shard_dim=output_height_shard_dim,
+            intermediate_size=N,
+            has_bias=has_bias,
+            # cluster_axis=None: required for both compute_only and single-device fused (FullLocal).
+            # topology/num_links/mux/semaphore must be None for both paths.
+            cluster_axis=None,
+            topology=None,
+            num_links=None,
+            mux_core_range_set=None,
+            optional_output_tensor=optional_combine_output_tensor,
+            optional_cross_device_semaphore=None,
+            activation_type=activation_type,
+            compute_only=compute_only,
+        )
+
+    def deallocate_l1_moe_compute_outputs(output_tensors):
+        # Slots 3 and 4 share a backing buffer; deallocating slot 4 releases the shared L1 output.
+        for tensor in (output_tensors[0], output_tensors[1], output_tensors[2], output_tensors[4]):
+            ttnn.deallocate(tensor)
+
+    # For local-full mode (compute_only=False on 1x1), pre-allocate the optional combine output tensor.
     combine_goldens = None
+    tt_combine_output_tensor = None
     if not compute_only:
         combine_goldens = compute_combine_golden(
             num_layers,
@@ -407,38 +446,10 @@ def _run_moe_compute_single_card_test(
             [golden_activation],  # compute_combine_golden expects a per-layer list
             cluster_axis=-1,  # single-device: get_cluster_dims uses -1 for "no replication axis"
         )
-        torch_combine_output = torch.zeros([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
-        tt_combine_output_tensor = ttnn.from_torch(
-            torch_combine_output,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-        )
+        tt_combine_output_tensor = create_combine_output_tensor()
 
     layer_id = 0
-    outputs = ttnn.experimental.moe_compute(
-        tt_sparse_buffer,
-        tt_expert_indices,
-        tt_expert_scores,
-        tt_expert_mapping,
-        tt_w0_w1,
-        tt_w2,
-        layer_id=layer_id,
-        output_height_shard_dim=output_height_shard_dim,
-        intermediate_size=N,
-        has_bias=has_bias,
-        # cluster_axis=None: required for both compute_only and single-device fused (FullLocal).
-        # topology/num_links/mux/semaphore must be None for both paths.
-        cluster_axis=None,
-        topology=None,
-        num_links=None,
-        mux_core_range_set=None,
-        optional_output_tensor=tt_combine_output_tensor,
-        optional_cross_device_semaphore=None,
-        activation_type=activation_type,
-        compute_only=compute_only,
-    )
+    outputs = run_moe_compute_once(tt_combine_output_tensor)
 
     # ===================================================================
     # TRIPWIRE: output count must match the mode.
@@ -582,6 +593,35 @@ def _run_moe_compute_single_card_test(
     assert matmul_all_passed, "Matmul output tensor verification failed!"
     if not compute_only:
         assert combine_all_passed, "Combine output tensor verification failed!"
+
+        # Exercise the cached-program path with a fresh optional output tensor. This catches stale
+        # FullLocal combine runtime arguments, especially output addresses patched on cache hit.
+        deallocate_l1_moe_compute_outputs(outputs)
+        ttnn.deallocate(tt_combine_output_tensor)
+        ttnn.synchronize_device(mesh_device)
+
+        logger.info(f"\n========== Running op cache hit (compute_only={compute_only}) ==========")
+        cache_hit_outputs = run_moe_compute_once(create_combine_output_tensor())
+        assert (
+            len(cache_hit_outputs) == expected_n
+        ), f"compute_only={compute_only} cache hit must return {expected_n} tensors. Got {len(cache_hit_outputs)}."
+
+        cache_hit_combine_output_tensor = ttnn.to_memory_config(
+            cache_hit_outputs[5], memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        cache_hit_combine_all_passed = validate_combine(
+            layer_id,
+            mesh_device,
+            cluster_axis=1,  # single device: either axis works
+            tt_combine_output=cache_hit_combine_output_tensor,
+            combine_goldens=combine_goldens,
+            pcc_threshold=base_pcc_threshold,
+        )
+        logger.info(f"Combine Output Tensor Cache Hit: {'PASSED' if cache_hit_combine_all_passed else 'FAILED'}")
+        assert cache_hit_combine_all_passed, "Combine output tensor cache-hit verification failed!"
+
+        deallocate_l1_moe_compute_outputs(cache_hit_outputs)
+        ttnn.deallocate(cache_hit_outputs[5])
 
 
 # DeepSeek-shaped workload mirrored on a single WH card so kernels see the same dims.
