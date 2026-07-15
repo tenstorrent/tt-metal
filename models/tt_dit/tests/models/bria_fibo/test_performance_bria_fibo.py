@@ -500,7 +500,7 @@ def _profile_forward(mesh_device, header, forward):
 @pytest.mark.parametrize("mesh_device", [(2, 2), (4, 8)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
 def test_fibo_encode_device_profile(*, mesh_device):
-    """Device-op profile of ONLY the SmolLM3 text encoder (encode stage), 2x2 mesh, replicated (as in the pipeline).
+    """Device-op profile of ONLY the SmolLM3 text encoder (encode stage), tensor-parallel on tp_axis (as in the pipeline).
 
     Builds just the encoder and runs one free-text prompt through it (its input is a string; the token
     count is the "shape"). 1 warmup + 1 signposted ("fibo encode") measured forward. See the section
@@ -513,9 +513,13 @@ def test_fibo_encode_device_profile(*, mesh_device):
 
     ckpt = _fibo_local()
     ccl = CCLManager(mesh_device, num_links=_num_links(mesh_device), topology=ttnn.Topology.Linear)
-    # tp factor 1 -> fully replicated across the mesh (matches the pipeline's encoder_parallel_config).
+    # tp factor = mesh[tp_axis] (tp=2 on 2x2, tp=8 on 4x8) -> tensor-parallel on axis 1, matching the
+    # pipeline's encoder_parallel_config and tests/encoders/smollm3::test_smollm3_encoder_full_mesh.
     encoder = SmolLM3TextEncoderWrapper(
-        ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=EncoderParallelConfig.from_tuple((1, 1))
+        ckpt,
+        device=mesh_device,
+        ccl_manager=ccl,
+        parallel_config=EncoderParallelConfig.from_tuple((mesh_device.shape[1], 1)),
     )
 
     prompt_embeds, hidden_states = _profile_forward(

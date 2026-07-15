@@ -472,6 +472,29 @@ _BLOCKINGS = {
     # T_out_block=1 in the winner is valid for any output T. Swept 2026-07-13, same run as above.
     (2, 2, 1024, 2048, (3, 1, 1), 2, 64, 64): (256, 512, 1, 2, 16),  # up0 tconv — 39184us -> 637us (61.6x)
     (2, 2, 1024, 2048, (3, 1, 1), 2, 128, 128): (256, 512, 1, 4, 8),  # up1 tconv — 156624us -> 1964us (79.8x)
+    # ===================================================================
+    # BH Galaxy 4x8, FIBO image decode (1024x1024, latent T=1, full-T uncached). h_factor=8, w_factor=4.
+    # (FIBO's VaeHWParallelConfig on 4x8: height=(tp=8,axis1), width=(sp=4,axis0) -> the mirror of the
+    # video h4w8.) Per-device output (H,W): stage0(16,32) 1(32,64) 2(64,128) 3(128,256). These convs
+    # previously MISSED the table and fell back to the generic (256,32,1,1,1) default (H=W=1, ~one
+    # pixel/core). Swept 2026-07-15 via bruteforce_conv3d_sweep.py -k "h8w4_1024_t1" (HiFi2,
+    # hw_product=32). us = HiFi2 per-op trace time (fallback -> best).
+    # ===================================================================
+    (8, 4, 1024, 1024, (3, 3, 3), 3, 16, 32): (64, 256, 1, 8, 4),  # mid/stage0 res — 13353us -> 765us (17.5x)
+    (8, 4, 1024, 1024, (3, 3, 3), 3, 32, 64): (64, 256, 1, 8, 4),  # up1 res — 52115us -> 2220us (23.5x)
+    (8, 4, 512, 512, (3, 3, 3), 3, 64, 128): (64, 256, 1, 4, 8),  # up1 res — 37491us -> 1536us (24.4x)
+    (8, 4, 256, 256, (3, 3, 3), 3, 128, 256): (64, 256, 1, 16, 2),  # up2 res — 17649us -> 1071us (16.5x)
+    (8, 4, 64, 1024, (3, 3, 3), 3, 16, 32): (64, 256, 1, 8, 4),  # first up res — 736us -> 52us (14.1x)
+    (8, 4, 1024, 512, (3, 3, 3), 3, 64, 128): (64, 256, 1, 8, 4),  # up1 chg — 104106us -> 3163us (32.9x)
+    (8, 4, 512, 256, (3, 3, 3), 3, 128, 256): (64, 256, 1, 16, 2),  # up2 chg — 70186us -> 2644us (26.5x)
+    (8, 4, 256, 12, (3, 3, 3), 3, 128, 256): (128, 32, 1, 16, 2),  # conv_out — 2114us -> 540us (3.9x)
+    (8, 4, 1024, 1024, (1, 3, 3), 1, 32, 64): (256, 128, 1, 4, 8),  # up0 spatial — 22797us -> 453us (50.4x)
+    (8, 4, 1024, 1024, (1, 3, 3), 1, 64, 128): (256, 128, 1, 2, 16),  # up1 spatial — 90913us -> 1337us (68.0x)
+    (8, 4, 512, 512, (1, 3, 3), 1, 128, 256): (128, 256, 1, 2, 16),  # up2 spatial — 57225us -> 1333us (42.9x)
+    # Temporal-upsample convs (3,1,1): runtime key T=2 (causal-padded); swept at T_in=3. T_out_block=1
+    # in the winner is valid for any output T. Swept 2026-07-15, same run as above.
+    (8, 4, 1024, 2048, (3, 1, 1), 2, 16, 32): (256, 256, 1, 2, 16),  # up0 tconv — 4956us -> 184us (26.9x)
+    (8, 4, 1024, 2048, (3, 1, 1), 2, 32, 64): (256, 512, 1, 16, 2),  # up1 tconv — 19613us -> 416us (47.1x)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
