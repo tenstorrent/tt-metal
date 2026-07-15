@@ -210,6 +210,15 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     kv_v2a_sp_s2_bf8 = ttnn.from_torch(
         torch.randn(1, 1, V_ROWS_S2, 2 * a_loc), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, device=mesh_device
     )
+    # bf4 too: unlike the TP-axis (dim=3) activation gather, which hits a bf8 byte floor (bf4 == bf8,
+    # job 589), this SP-axis (dim=2) seq-scaled gather is bandwidth-bound (cost scales ~linearly with
+    # tokens, job 596), so halving the payload again should keep saving. Prices whether it does.
+    kv_v2a_sp_s1_bf4 = ttnn.from_torch(
+        torch.randn(1, 1, V_ROWS_S1, 2 * a_loc), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b, device=mesh_device
+    )
+    kv_v2a_sp_s2_bf4 = ttnn.from_torch(
+        torch.randn(1, 1, V_ROWS_S2, 2 * a_loc), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b, device=mesh_device
+    )
     tiny_a = _bf16(torch.randn(1, 1, 32, 32), mesh_device)
     tiny_b = _bf16(torch.randn(1, 1, 32, 32), mesh_device)
 
@@ -454,6 +463,16 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
         (
             "sp_ag_video_kv_v2a_s2_bf8",
             lambda: ccl.all_gather_persistent_buffer(kv_v2a_sp_s2_bf8, dim=2, mesh_axis=sp_axis),
+            False,
+        ),
+        (
+            "sp_ag_video_kv_v2a_s1_bf4",
+            lambda: ccl.all_gather_persistent_buffer(kv_v2a_sp_s1_bf4, dim=2, mesh_axis=sp_axis),
+            False,
+        ),
+        (
+            "sp_ag_video_kv_v2a_s2_bf4",
+            lambda: ccl.all_gather_persistent_buffer(kv_v2a_sp_s2_bf4, dim=2, mesh_axis=sp_axis),
             False,
         ),
         # rest of the block's TP collectives, so the census table has a price for every row
