@@ -112,7 +112,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.moe_shared_intermediate_size = getattr(text_config, "shared_expert_intermediate_size", None)
         self.moe_norm_topk_prob = bool(getattr(text_config, "norm_topk_prob", True))
         self.moe_decoder_sparse_step = getattr(text_config, "decoder_sparse_step", 1) or 1
-        self.moe_only_layers = set(getattr(text_config, "mlp_only_layers", None) or [])
+        self.mlp_only_layers = set(getattr(text_config, "mlp_only_layers", None) or [])
 
         # Blackhole P150 device config (lazy import to allow CPU-only testing)
         if mesh_device is not None:
@@ -191,16 +191,6 @@ class Qwen36ModelArgs(ModelArgs):
         self.attn_wo_weight_memcfg = tpc.create_dram_sharded_mem_config(self.attn_out_dim_tp, self.dim)
         self.mlp_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(self.hidden_dim // tp, self.dim)
 
-        # MoE experts: per-device intermediate for the column/row TP shard of the
-        # sparse experts, tile-aligned so each device's shard is a whole number of
-        # tiles. The gemma4-style sparse_matmul path uses interleaved-DRAM expert
-        # weights and builds its own per-op program configs, so only the sharded
-        # dim is needed here (guarded — absent on the dense 9B/27B).
-        if self.moe_num_experts > 0:
-            self.moe_intermediate_per_device = (
-                (self.moe_intermediate_size // tp + tpc.TILE_SIZE - 1) // tpc.TILE_SIZE
-            ) * tpc.TILE_SIZE
-
         # DRAM-sharded matmul program configs (decode, m=1)
         M = 1
         self.gdn_qkvz_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.gdn_qkvz_dim_tp)
@@ -273,7 +263,7 @@ class Qwen36ModelArgs(ModelArgs):
         """
         if self.moe_num_experts <= 0:
             return False
-        if layer_idx in self.moe_only_layers:
+        if layer_idx in self.mlp_only_layers:
             return False
         return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
 
