@@ -563,4 +563,7 @@ is `stage_review.md`.
 After the verdict, `doc/context_contract.json` was advanced from
 `complete_pending_stage_review` to `complete_clean_pass`. Checkpoint branch:
 `odjuricic/agentic-research/graph-rewrite-skill`. The Stage 08 source checkpoint
-SHA is appended below after the isolated local commit.
+is `46c292e84a90cc13653d6bbe74703fc25973c338` (`Complete Gemma 4 31B Stage 08
+datatype sweep`). It contains the 121 audited Stage 08 files, including the
+targeted ignored CSV/log evidence; repository pre-commit hooks passed. A final
+provenance-only commit records this SHA. Neither commit is pushed.
