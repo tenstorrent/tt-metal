@@ -7,7 +7,7 @@
 Wires the three sp1/sp2/sp3 components into one denoise loop, mirroring
 ``models/tt_dit/pipelines/flux1/pipeline_flux1.py``:
 
-* SmolLM3 text encoder (``SmolLM3TextEncoderWrapper``, replicated on the submesh),
+* SmolLM3 text encoder (``SmolLM3TextEncoderWrapper``, tensor-parallel on tp_axis of the submesh),
 * ``BriaFiboTransformer`` denoiser (sp=2, tp=2) + ``EulerSolver`` flow-match step,
 * Wan 2.2 residual VAE decoder (``WanVAEDecoderAdapter``).
 
@@ -101,9 +101,12 @@ class BriaFiboPipelineConfig:
             cfg=(1, 0), sp=(sp_factor, sp_axis), tp=(tp_factor, tp_axis)
         )
 
-        # Encoder: tp factor 1 -> fully replicated across the submesh (no CCL); mesh_axis is unused
-        # when the factor is 1 (SmolLM3Context sets tp_axis=None), so replication is exact.
-        encoder_parallel_config = EncoderParallelConfig.from_tuple((1, tp_axis))
+        # Encoder: tensor-parallel on the same axis as the DiT (tp_axis), factor = mesh[tp_axis]
+        # (tp=2 on 2x2, tp=8 on 4x8). SmolLM3Attention shards Q/K/V/O over this axis and pads the
+        # GQA heads (optimal_groups/split_factor) so factors > num_kv_heads (4) work; the encoder
+        # all-gathers over tp_axis via the ccl_manager the pipeline already passes it. PCC-validated
+        # by tests/encoders/smollm3/test_smollm3.py::test_smollm3_encoder_full_mesh.
+        encoder_parallel_config = EncoderParallelConfig.from_tuple((tp_factor, tp_axis))
 
         # VAE: height/width parallel matched to the physical mesh (mirrors wan's (2,2) BH preset:
         # height on the tp axis, width on the sp axis). The Wan 2.2 residual decoder decodes on the full
