@@ -194,3 +194,41 @@
 {"source":"run_safe_pytest","pid":4021203,"started_at_ms":1784082747170,"wait_ms":1,"run_ms":50416,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}
 {"source":"run_safe_pytest","pid":4022193,"started_at_ms":1784082807396,"wait_ms":2,"run_ms":16684,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":0}
 {"source":"run_safe_pytest","pid":4022844,"started_at_ms":1784082926110,"wait_ms":2,"run_ms":106878,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}
+{"event": "phase", "phase": "refinement_5a", "state": "end", "at_ms": 1784083283766}
+{"event": "phase", "phase": "refinement_5a_golden", "state": "start", "at_ms": 1784083284070}
+{"source":"eval_test_runner","pid":4025814,"started_at_ms":1784083284073,"wait_ms":3458,"run_ms":851855,"test_path":"eval/golden_tests/rms_norm/","exit_code":0}
+{"event": "phase", "phase": "refinement_5a_golden", "state": "end", "at_ms": 1784084139389}
+{"event": "phase", "phase": "refinement_5b", "state": "start", "at_ms": 1784084145804}
+{"source":"tt-probe","pid":4072769,"started_at_ms":1784085303199,"wait_ms":251,"run_ms":24184,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":4073472,"started_at_ms":1784085354389,"wait_ms":230,"run_ms":63681,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":4076375,"started_at_ms":1784085489240,"wait_ms":2,"run_ms":15508,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4076967,"started_at_ms":1784085510563,"wait_ms":2,"run_ms":22513,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0}
+{"source":"run_safe_pytest","pid":4078037,"started_at_ms":1784085607257,"wait_ms":1,"run_ms":20262,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":3}
+{"source":"run_safe_pytest","pid":4078305,"started_at_ms":1784085640832,"wait_ms":1,"run_ms":37102,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0}
+{"source":"run_safe_pytest","pid":4079021,"started_at_ms":1784085695376,"wait_ms":1,"run_ms":559680,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0}
+{"source":"run_safe_pytest","pid":4085369,"started_at_ms":1784086266030,"wait_ms":2,"run_ms":16000,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":0}
+{"source":"run_safe_pytest","pid":4085659,"started_at_ms":1784086282036,"wait_ms":2,"run_ms":12972,"test_path":"eval/golden_tests/rms_norm/test_regression.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4088065,"started_at_ms":1784086470152,"wait_ms":2,"run_ms":12015,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py::test_rms_norm_row_major_width_ragged_unicast","exit_code":0}
+{"event": "phase", "phase": "refinement_5b", "state": "end", "at_ms": 1784086508505}
+{"event": "phase", "phase": "refinement_5b_golden", "state": "start", "at_ms": 1784086508794}
+{"source":"eval_test_runner","pid":4088580,"started_at_ms":1784086508797,"wait_ms":3409,"run_ms":731404,"test_path":"eval/golden_tests/rms_norm/","exit_code":0}
+{"event": "phase", "phase": "refinement_5b_golden", "state": "end", "at_ms": 1784087243612}
+{"event": "phase", "phase": "refinement_5c", "state": "start", "at_ms": 1784087249973}
+{"source":"tt-probe","pid":4124723,"started_at_ms":1784088241062,"wait_ms":268,"run_ms":16222,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":4125533,"started_at_ms":1784088436094,"wait_ms":271,"run_ms":18192,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":4125987,"started_at_ms":1784088490677,"wait_ms":2,"run_ms":61128,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5c_debug.py","exit_code":2}
+{"source":"run_safe_pytest","pid":4126911,"started_at_ms":1784088559610,"wait_ms":2,"run_ms":47680,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5c_debug.py","exit_code":2}
+{"source":"run_safe_pytest","pid":4128061,"started_at_ms":1784088798325,"wait_ms":2,"run_ms":13486,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5c_debug.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4128586,"started_at_ms":1784088826931,"wait_ms":1,"run_ms":23442,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5c_debug.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4129458,"started_at_ms":1784088891354,"wait_ms":2,"run_ms":16464,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py","exit_code":0}
+{"source":"run_safe_pytest","pid":4130096,"started_at_ms":1784088912576,"wait_ms":2,"run_ms":24314,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/","exit_code":0}
+{"source":"run_safe_pytest","pid":4131242,"started_at_ms":1784089024824,"wait_ms":2,"run_ms":20195,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":3}
+{"source":"run_safe_pytest","pid":4131499,"started_at_ms":1784089052084,"wait_ms":2,"run_ms":20222,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":3}
+{"source":"run_safe_pytest","pid":4131743,"started_at_ms":1784089078284,"wait_ms":1,"run_ms":20148,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":3}
+{"source":"run_safe_pytest","pid":4137304,"started_at_ms":1784089248632,"wait_ms":2,"run_ms":72701,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0}
+{"source":"run_safe_pytest","pid":4137957,"started_at_ms":1784089330137,"wait_ms":1,"run_ms":62597,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0}
+{"source":"run_safe_pytest","pid":4138610,"started_at_ms":1784089412813,"wait_ms":2,"run_ms":100422,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0}
+{"source":"run_safe_pytest","pid":4139346,"started_at_ms":1784089519718,"wait_ms":1,"run_ms":103063,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op","exit_code":0}
+{"source":"run_safe_pytest","pid":4140103,"started_at_ms":1784089634332,"wait_ms":2,"run_ms":18440,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":0}
+{"source":"run_safe_pytest","pid":4141795,"started_at_ms":1784089838151,"wait_ms":1,"run_ms":9474,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5c_debug.py::test_r5c_bf8b_tile_gamma_still_excluded","exit_code":0}
+{"source":"run_safe_pytest","pid":4142720,"started_at_ms":1784089877760,"wait_ms":2,"run_ms":14962,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_r5c_debug.py","exit_code":0}
