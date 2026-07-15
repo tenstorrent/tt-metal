@@ -1,0 +1,9 @@
+# Single rank owning the 4x2 (8-device) block of one BH galaxy. Device ids match the proven
+# connected block used by the DeepSeek one_galaxy rank0 binding.
+rank_bindings:
+- rank: 0
+  mesh_id: 0
+  mesh_host_rank: 0
+  env_overrides:
+    TT_VISIBLE_DEVICES: 0,1,4,5,8,9,12,13
+mesh_graph_desc_path: mesh_graph_descriptor.textproto
