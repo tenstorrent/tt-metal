@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
@@ -26,24 +27,32 @@ template <
     InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32,
     int ITERATIONS = 8>
 inline void calculate_sfpu_binary_bitwise(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // SFPU microcode
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    // Bitwise AND/OR/XOR of two integer operands. `a & b` / `a | b` / `a ^ b` lower to the same
+    // single SFPAND/SFPOR/SFPXOR the raw path used (no constant materialization), while the loads,
+    // store and dst walk are left to the compiler.
+    constexpr sfpi::DataLayout layout =
+        (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
+    using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
+
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
+
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64 rows
-        constexpr std::uint32_t dst_tile_size = 64;
+        vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<layout>();
+        vType b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<layout>();
 
-        TT_SFPLOAD(0, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
-        TT_SFPLOAD(1, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
-
+        vType result;
         if constexpr (BITWISE_OP == BinaryBitwiseOp::AND) {
-            TTI_SFPAND(0, 1, 0, 0);
+            result = a & b;
         } else if constexpr (BITWISE_OP == BinaryBitwiseOp::OR) {
-            TTI_SFPOR(0, 1, 0, 0);
-        } else if constexpr (BITWISE_OP == BinaryBitwiseOp::XOR) {
-            TTI_SFPXOR(0, 1, 0, 0);
+            result = a | b;
+        } else {
+            result = a ^ b;
         }
 
-        TT_SFPSTORE(0, INSTRUCTION_MODE, ADDR_MOD_7, dst_index_out * dst_tile_size);
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<layout>() = result;
         sfpi::dst_reg++;
     }
 }
