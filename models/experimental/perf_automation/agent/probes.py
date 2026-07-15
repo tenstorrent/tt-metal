@@ -54,7 +54,7 @@ def tt_smi_probe() -> str:
     The real snapshot has no `arch` key — it carries board_info.board_type
     (e.g. "n300 L"); we adapt that to the arch token here.
     """
-    proc = subprocess.run(["tt-smi", "-s"], check=True, capture_output=True, text=True)
+    proc = subprocess.run(["tt-smi", "-s"], check=True, capture_output=True, text=True, timeout=120)
     data = json.loads(proc.stdout)
     devices = data.get("device_info") or []
     if not devices:

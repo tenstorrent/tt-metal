@@ -483,7 +483,9 @@ def _print_scorecard(
 
 def _git(repo_root: Path, *args: str) -> str:
     try:
-        return subprocess.run(["git", "-C", str(repo_root), *args], capture_output=True, text=True).stdout.strip()
+        return subprocess.run(
+            ["git", "-C", str(repo_root), *args], capture_output=True, text=True, timeout=300
+        ).stdout.strip()
     except Exception:  # noqa: BLE001
         return ""
 
@@ -925,20 +927,23 @@ def catalog_push(repo_root: Path, remote: str, branch: str) -> None:
                 timeout=180,
             )
             if has_remote:
-                subprocess.run(["git", "checkout", "-B", branch], cwd=wt, capture_output=True, text=True)
+                subprocess.run(["git", "checkout", "-B", branch], cwd=wt, capture_output=True, text=True, timeout=300)
             else:
-                subprocess.run(["git", "checkout", "--orphan", branch], cwd=wt, capture_output=True, text=True)
-                subprocess.run(["git", "rm", "-rf", "."], cwd=wt, capture_output=True, text=True)
+                subprocess.run(
+                    ["git", "checkout", "--orphan", branch], cwd=wt, capture_output=True, text=True, timeout=300
+                )
+                subprocess.run(["git", "rm", "-rf", "."], cwd=wt, capture_output=True, text=True, timeout=300)
             dest = Path(wt) / _GL_REL
             dest.mkdir(parents=True, exist_ok=True)
             for g in grads:
                 shutil.copy2(g, dest / g.name)
-            subprocess.run(["git", "add", _GL_REL], cwd=wt, capture_output=True, text=True)
+            subprocess.run(["git", "add", _GL_REL], cwd=wt, capture_output=True, text=True, timeout=300)
             c = subprocess.run(
                 ["git", "commit", "-m", f"[perf-catalog] graduated knobs ({len(grads)})"],
                 cwd=wt,
                 capture_output=True,
                 text=True,
+                timeout=300,
             )
             if c.returncode != 0:
                 print("  [catalog] no new graduated knobs to push.")
@@ -952,7 +957,11 @@ def catalog_push(repo_root: Path, remote: str, branch: str) -> None:
                 )
         finally:
             subprocess.run(
-                ["git", "worktree", "remove", "--force", wt], cwd=str(repo_root), capture_output=True, text=True
+                ["git", "worktree", "remove", "--force", wt],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
     except Exception as exc:  # noqa: BLE001
         print(f"  [catalog] push error (ignored): {str(exc)[-140:]}")

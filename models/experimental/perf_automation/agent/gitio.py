@@ -16,7 +16,10 @@ class GitError(Exception):
 
 
 def _git(args: list[str], cwd) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
+    try:
+        return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(["git", *args], returncode=124, stdout="", stderr="git timed out")
 
 
 def repo_root(path) -> Path:

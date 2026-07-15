@@ -254,8 +254,8 @@ def refine(
     if arch:
         cmd += ["--arch", arch]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as exc:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         blob = (exc.stderr or "") + (exc.stdout or "")
         if "Unknown math fidelity" not in blob:
             raise
