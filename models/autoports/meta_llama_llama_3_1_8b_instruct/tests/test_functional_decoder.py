@@ -1,0 +1,324 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import gc
+import inspect
+import os
+from pathlib import Path
+
+import pytest
+import torch
+from safetensors import safe_open
+from transformers import AutoConfig
+from transformers.cache_utils import DynamicCache
+from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRotaryEmbedding
+
+import ttnn
+from models.autoports.meta_llama_llama_3_1_8b_instruct.tt.functional_decoder import (
+    EMITTED_BATCH,
+    EMITTED_CACHE_LENGTH,
+    EMITTED_PREFILL_SEQUENCE,
+    FunctionalDecoder,
+)
+from models.common.utility_functions import comp_pcc
+
+MODEL_CONFIG_DIR = Path("models/tt_transformers/model_params/Llama-3.1-8B-Instruct")
+LAYER_IDX = 16
+REAL_WEIGHT_FILE_ENV = "LLAMA_31_8B_REAL_WEIGHT_FILE"
+WEIGHT_SUFFIXES = (
+    "input_layernorm.weight",
+    "post_attention_layernorm.weight",
+    "self_attn.q_proj.weight",
+    "self_attn.k_proj.weight",
+    "self_attn.v_proj.weight",
+    "self_attn.o_proj.weight",
+    "mlp.gate_proj.weight",
+    "mlp.up_proj.weight",
+    "mlp.down_proj.weight",
+)
+
+
+def _config():
+    return AutoConfig.from_pretrained(MODEL_CONFIG_DIR, local_files_only=True)
+
+
+def _weight_key(suffix: str) -> str:
+    return f"model.layers.{LAYER_IDX}.{suffix}"
+
+
+def _synthetic_state(config) -> dict[str, torch.Tensor]:
+    generator = torch.Generator().manual_seed(7)
+    hidden = config.hidden_size
+    head_dim = hidden // config.num_attention_heads
+    kv_width = config.num_key_value_heads * head_dim
+    intermediate = config.intermediate_size
+
+    def normal(shape, scale=0.02):
+        tensor = torch.empty(shape, dtype=torch.bfloat16)
+        return tensor.normal_(mean=0.0, std=scale, generator=generator)
+
+    return {
+        _weight_key("input_layernorm.weight"): 1.0 + normal((hidden,), scale=0.01),
+        _weight_key("post_attention_layernorm.weight"): 1.0 + normal((hidden,), scale=0.01),
+        _weight_key("self_attn.q_proj.weight"): normal((hidden, hidden)),
+        _weight_key("self_attn.k_proj.weight"): normal((kv_width, hidden)),
+        _weight_key("self_attn.v_proj.weight"): normal((kv_width, hidden)),
+        _weight_key("self_attn.o_proj.weight"): normal((hidden, hidden)),
+        _weight_key("mlp.gate_proj.weight"): normal((intermediate, hidden)),
+        _weight_key("mlp.up_proj.weight"): normal((intermediate, hidden)),
+        _weight_key("mlp.down_proj.weight"): normal((hidden, intermediate)),
+    }
+
+
+def _real_state() -> dict[str, torch.Tensor]:
+    path_text = os.environ.get(REAL_WEIGHT_FILE_ENV)
+    if not path_text:
+        pytest.skip(f"Set {REAL_WEIGHT_FILE_ENV} to the HF safetensors shard containing layer {LAYER_IDX}")
+    path = Path(path_text)
+    if not path.is_file():
+        pytest.fail(f"{REAL_WEIGHT_FILE_ENV} does not name a file: {path}")
+
+    state = {}
+    with safe_open(path, framework="pt", device="cpu") as handle:
+        available = set(handle.keys())
+        for suffix in WEIGHT_SUFFIXES:
+            key = _weight_key(suffix)
+            if key not in available:
+                pytest.fail(f"{path} does not contain {key}")
+            state[key] = handle.get_tensor(key).to(torch.bfloat16)
+    return state
+
+
+def _hf_layer(state: dict[str, torch.Tensor], config) -> LlamaDecoderLayer:
+    config._attn_implementation = "eager"
+    layer = LlamaDecoderLayer(config, layer_idx=LAYER_IDX).to(dtype=torch.bfloat16).eval()
+    layer_state = {suffix: state[_weight_key(suffix)] for suffix in WEIGHT_SUFFIXES}
+    layer.load_state_dict(layer_state, strict=True)
+    return layer
+
+
+@torch.no_grad()
+def _reference_layer(
+    layer: LlamaDecoderLayer,
+    hidden_states: torch.Tensor,
+    config,
+    *,
+    start_pos: int = 0,
+    cache: DynamicCache | None = None,
+):
+    layer_input = hidden_states[0]
+    batch, seq_len, _ = layer_input.shape
+    positions = torch.arange(start_pos, start_pos + seq_len, dtype=torch.long).unsqueeze(0)
+    rotary = LlamaRotaryEmbedding(config)
+    cos, sin = rotary(layer_input, positions)
+
+    absolute_query = torch.arange(start_pos, start_pos + seq_len).view(seq_len, 1)
+    absolute_key = torch.arange(start_pos + seq_len).view(1, start_pos + seq_len)
+    attention_mask = torch.zeros(
+        (batch, 1, seq_len, start_pos + seq_len),
+        dtype=layer_input.dtype,
+    )
+    attention_mask.masked_fill_(absolute_key > absolute_query, torch.finfo(layer_input.dtype).min)
+
+    if cache is None:
+        cache = DynamicCache(config=config)
+    output = layer(
+        layer_input,
+        attention_mask=attention_mask,
+        past_key_values=cache,
+        use_cache=True,
+        position_embeddings=(cos, sin),
+    )
+    current_key = cache.layers[LAYER_IDX].keys[:, :, -seq_len:, :]
+    current_value = cache.layers[LAYER_IDX].values[:, :, -seq_len:, :]
+    return output.unsqueeze(0), current_key, current_value, cache
+
+
+def _tt_tensor(tensor: torch.Tensor, mesh_device, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+    return ttnn.from_torch(
+        tensor,
+        device=mesh_device,
+        layout=layout,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _empty_caches(config, mesh_device, *, batch=EMITTED_BATCH):
+    head_dim = config.hidden_size // config.num_attention_heads
+    shape = (batch, config.num_key_value_heads, EMITTED_CACHE_LENGTH, head_dim)
+    key = _tt_tensor(torch.zeros(shape, dtype=torch.bfloat16), mesh_device)
+    value = _tt_tensor(torch.zeros(shape, dtype=torch.bfloat16), mesh_device)
+    return key, value
+
+
+def _to_host(tensor):
+    result = ttnn.to_torch(tensor)
+    if isinstance(result, list):
+        if len(result) != 1:
+            raise AssertionError(f"Expected one tensor from the 1x1 mesh, got {len(result)}")
+        result = result[0]
+    return result
+
+
+def _assert_pcc(reference, actual, threshold: float, label: str):
+    passed, message = comp_pcc(reference.float(), actual.float(), pcc=threshold)
+    print(f"{label}: {message}")
+    assert passed, f"{label}: {message}"
+
+
+def test_runtime_forwards_have_no_host_fallback():
+    forbidden = ("torch", "from_torch", "to_torch")
+    for method in (FunctionalDecoder.prefill_forward, FunctionalDecoder.decode_forward):
+        source = inspect.getsource(method)
+        for token in forbidden:
+            assert token not in source, f"{method.__name__} contains forbidden runtime token {token!r}"
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_synthetic_prefill_pcc_small_and_captured(mesh_device):
+    config = _config()
+    state = _synthetic_state(config)
+    decoder = FunctionalDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
+        mesh_device=mesh_device,
+    )
+    reference_layer = _hf_layer(state, config)
+
+    for seq_len in (4, EMITTED_PREFILL_SEQUENCE):
+        generator = torch.Generator().manual_seed(100 + seq_len)
+        hidden = torch.randn(
+            (1, EMITTED_BATCH, seq_len, config.hidden_size),
+            generator=generator,
+            dtype=torch.bfloat16,
+        )
+        reference, reference_key, reference_value, _ = _reference_layer(reference_layer, hidden, config)
+        key_cache, value_cache = _empty_caches(config, mesh_device)
+        actual = decoder.prefill_forward(_tt_tensor(hidden, mesh_device), key_cache, value_cache)
+
+        _assert_pcc(reference, _to_host(actual), 0.99, f"synthetic prefill seq={seq_len} output")
+        actual_key = _to_host(key_cache)[:, :, :seq_len, :]
+        actual_value = _to_host(value_cache)[:, :, :seq_len, :]
+        _assert_pcc(reference_key, actual_key, 0.99, f"synthetic prefill seq={seq_len} key cache")
+        _assert_pcc(reference_value, actual_value, 0.99, f"synthetic prefill seq={seq_len} value cache")
+
+    del decoder, reference_layer, state
+    gc.collect()
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_synthetic_non_emitted_batch_prefill_and_decode(mesh_device):
+    config = _config()
+    state = _synthetic_state(config)
+    batch = 13
+    decoder = FunctionalDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
+        mesh_device=mesh_device,
+        batch=batch,
+    )
+    reference_layer = _hf_layer(state, config)
+    key_cache, value_cache = _empty_caches(config, mesh_device, batch=batch)
+
+    generator = torch.Generator().manual_seed(808)
+    prefill_hidden = torch.randn(
+        (1, batch, 4, config.hidden_size),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    reference_prefill, _, _, reference_cache = _reference_layer(reference_layer, prefill_hidden, config)
+    actual_prefill = decoder.prefill_forward(_tt_tensor(prefill_hidden, mesh_device), key_cache, value_cache)
+    _assert_pcc(
+        reference_prefill,
+        _to_host(actual_prefill),
+        0.99,
+        f"synthetic batch={batch} prefill seq=4 output",
+    )
+
+    decode_hidden = torch.randn(
+        (1, batch, 1, config.hidden_size),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    reference_decode, decode_key, decode_value, _ = _reference_layer(
+        reference_layer,
+        decode_hidden,
+        config,
+        start_pos=4,
+        cache=reference_cache,
+    )
+    actual_decode = decoder.decode_forward(
+        _tt_tensor(decode_hidden, mesh_device),
+        key_cache,
+        value_cache,
+        current_pos=4,
+    )
+    _assert_pcc(
+        reference_decode,
+        _to_host(actual_decode),
+        0.99,
+        f"synthetic batch={batch} decode pos=4 output",
+    )
+    actual_key = _to_host(key_cache)[:, :, 4:5, :]
+    actual_value = _to_host(value_cache)[:, :, 4:5, :]
+    _assert_pcc(decode_key, actual_key, 0.99, f"synthetic batch={batch} decode key append")
+    _assert_pcc(decode_value, actual_value, 0.99, f"synthetic batch={batch} decode value append")
+
+    del decoder, reference_layer, state
+    gc.collect()
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+def test_real_weight_prefill_and_decode_pcc(mesh_device):
+    config = _config()
+    state = _real_state()
+    decoder = FunctionalDecoder.from_state_dict(
+        state,
+        hf_config=config,
+        layer_idx=LAYER_IDX,
+        mesh_device=mesh_device,
+    )
+    reference_layer = _hf_layer(state, config)
+    key_cache, value_cache = _empty_caches(config, mesh_device)
+
+    generator = torch.Generator().manual_seed(31)
+    prefill_hidden = torch.randn(
+        (1, EMITTED_BATCH, EMITTED_PREFILL_SEQUENCE, config.hidden_size),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    reference_prefill, _, _, reference_cache = _reference_layer(reference_layer, prefill_hidden, config)
+    actual_prefill = decoder.prefill_forward(_tt_tensor(prefill_hidden, mesh_device), key_cache, value_cache)
+    _assert_pcc(reference_prefill, _to_host(actual_prefill), 0.99, "real prefill seq=18 output")
+
+    decode_hidden = torch.randn(
+        (1, EMITTED_BATCH, 1, config.hidden_size),
+        generator=generator,
+        dtype=torch.bfloat16,
+    )
+    reference_decode, decode_key, decode_value, _ = _reference_layer(
+        reference_layer,
+        decode_hidden,
+        config,
+        start_pos=EMITTED_PREFILL_SEQUENCE,
+        cache=reference_cache,
+    )
+    actual_decode = decoder.decode_forward(
+        _tt_tensor(decode_hidden, mesh_device),
+        key_cache,
+        value_cache,
+        current_pos=EMITTED_PREFILL_SEQUENCE,
+    )
+    _assert_pcc(reference_decode, _to_host(actual_decode), 0.99, "real decode pos=18 output")
+    actual_key = _to_host(key_cache)[:, :, EMITTED_PREFILL_SEQUENCE : EMITTED_PREFILL_SEQUENCE + 1, :]
+    actual_value = _to_host(value_cache)[:, :, EMITTED_PREFILL_SEQUENCE : EMITTED_PREFILL_SEQUENCE + 1, :]
+    _assert_pcc(decode_key, actual_key, 0.99, "real decode pos=18 key append")
+    _assert_pcc(decode_value, actual_value, 0.99, "real decode pos=18 value append")
+
+    del decoder, reference_layer, state
+    gc.collect()
