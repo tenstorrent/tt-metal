@@ -153,6 +153,15 @@ runs:
         SYFT_VERSION="v1.18.1"
         ORAS_VERSION="1.2.0"
         if [ "${INPUT_ENRICH_SBOM}" = "true" ] && [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
+          # /usr/local/bin is not guaranteed to be writable without sudo on every
+          # runner (observed: "install: cannot create regular file
+          # '/usr/local/bin/syft': Permission denied" on a real run). Install into a
+          # directory we know is writable and put it on PATH for the rest of this
+          # script instead of assuming elevated privileges.
+          TOOL_BIN_DIR="${RUNNER_TEMP:-/tmp}/manual-docker-bake-bin"
+          mkdir -p "$TOOL_BIN_DIR"
+          export PATH="${TOOL_BIN_DIR}:${PATH}"
+
           if ! command -v syft >/dev/null 2>&1; then
             echo "Installing syft ${SYFT_VERSION}..."
             # DOWNLOAD_TAG_INSTALL_SCRIPT=false: skip the installer's default behavior
@@ -161,7 +170,7 @@ runs:
             # dependency that has been observed to fail (HTTP 000/connection refused)
             # on GitHub-hosted runners. Install directly from the copy we already have.
             curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-              | DOWNLOAD_TAG_INSTALL_SCRIPT=false sh -s -- -b /usr/local/bin "${SYFT_VERSION}"
+              | DOWNLOAD_TAG_INSTALL_SCRIPT=false sh -s -- -b "$TOOL_BIN_DIR" "${SYFT_VERSION}"
           fi
           if ! command -v oras >/dev/null 2>&1; then
             echo "Installing oras ${ORAS_VERSION}..."
@@ -169,7 +178,7 @@ runs:
               -o /tmp/oras.tar.gz
             mkdir -p /tmp/oras-install
             tar -xzf /tmp/oras.tar.gz -C /tmp/oras-install
-            install /tmp/oras-install/oras /usr/local/bin/oras
+            install /tmp/oras-install/oras "${TOOL_BIN_DIR}/oras"
             rm -rf /tmp/oras.tar.gz /tmp/oras-install
           fi
         fi
