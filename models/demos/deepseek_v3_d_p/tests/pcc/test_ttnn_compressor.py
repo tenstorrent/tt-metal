@@ -23,8 +23,32 @@ from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtH
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("seq_len", [256, 384, 512, 300], ids=["seq256", "seq384", "seq512", "seq300-unaligned"])
-def test_hca_compressor(device, seq_len):
+@pytest.mark.parametrize(
+    "batch, seq_len",
+    [
+        (1, 128),
+        (1, 256),
+        (1, 512),
+        (1, 1024),
+        (1, 2048),
+        (1, 4096),
+        (1, 300),
+        (1, 4095),
+        (2, 512),
+    ],
+    ids=[
+        "b1-seq128",
+        "b1-seq256",
+        "b1-seq512",
+        "b1-seq1k",
+        "b1-seq2k",
+        "b1-seq4k",
+        "b1-seq300-unaligned",
+        "b1-seq4095-unaligned",
+        "b2-seq512",
+    ],
+)
+def test_hca_compressor(device, batch, seq_len):
     """
     Test TtHCACompressor PCC against DeepseekV4HCACompressor reference.
 
@@ -35,7 +59,6 @@ def test_hca_compressor(device, seq_len):
     """
     torch.manual_seed(42)
 
-    batch = 1
     config = DeepseekV4Config(
         hidden_size=DeepSeekV4FlashConfig.EMB_SIZE,
         head_dim=DeepSeekV4FlashConfig.HEAD_DIM,
