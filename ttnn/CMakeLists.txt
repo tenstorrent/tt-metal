@@ -207,7 +207,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*)
+file(GLOB_RECURSE ttnn_kernels cpp/ttnn/operations/copy/typecast/device/kernels/*.cpp)
 target_sources(
     ttnncpp
     PUBLIC
@@ -299,10 +299,6 @@ if(WITH_PYTHON_BINDINGS)
         PRIVATE
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
-            ${CCL_TTNN_SRCS_PYBIND}
-            ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
-            ${DEBUG_TTNN_SRCS_PYBIND}
-            ${TTNN_P2P_PYBIND}
     )
     target_include_directories(
         ttnn

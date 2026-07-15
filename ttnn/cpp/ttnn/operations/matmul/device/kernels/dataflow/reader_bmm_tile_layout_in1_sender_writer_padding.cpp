@@ -99,7 +99,16 @@ void kernel_main() {
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
 
     constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
-    constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
+    // Use the CB page size (padded to the DRAM alignment by the factory) for DRAM reads
+    // and L1 write strides, NOT the raw tile size. On Blackhole, the DRAM read alignment
+    // is 64B, so a sub-64B tile (e.g. 32B for a (1,16) bf16 bias tile) cannot be read
+    // directly from DRAM, and 32B-strided L1 writes land at non-64B-aligned addresses
+    // that disagree with the 64B-aligned DRAM source. The factory pads the CB page to
+    // 64B; the unpacker still reads the actual 32B tile from the padded page via tile
+    // dims. For tiles already >= dram_alignment (e.g. 32x32 bf16 = 2048B), the page size
+    // equals the tile size, so this is a no-op. Mirrors how in0/in1 readers walk at the
+    // aligned stride.
+    const uint32_t bias_single_tile_size_bytes = get_local_cb_interface(cb_id_in3).fifo_page_size;
     constexpr const uint32_t in3_tile_hw = get_tile_hw(cb_id_in3);
 
 #ifndef BIAS_SHARDED

@@ -72,12 +72,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
                 .runtime_arg_names = {"report_addr"},
             },
         .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                    },
-            },
+            experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
     };
     dm_kernel.scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -102,7 +97,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = experimental::KernelSpecName{"scratch_kernel"},
-        .runtime_arg_values = {{node, {{"report_addr", kReportAddr}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
     experimental::SetProgramRunArgs(program, params);
 

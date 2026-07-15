@@ -6,7 +6,13 @@
 
 wormhole_b0:
   # Job-level timeouts -- can be cut down still
+  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_nd_sharded_large_row
+  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_interleaved_to_legacy_2D_sharded_large_row
+  - tests/ttnn/unit_tests/base_functionality/test_copy.py::test_copy_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/base_functionality/test_graph_report.py::test_resnet50_e2e_graph_capture
+  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_interleaved_to_nd_sharded_large_row
+  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_interleaved_to_legacy_2D_sharded_large_row
+  - tests/ttnn/unit_tests/base_functionality/test_to_memory_config.py::test_to_memory_config_rm_nd_sharded_to_interleaved_large_row
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
   - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py

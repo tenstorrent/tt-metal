@@ -241,10 +241,10 @@ skus:
   # the ttsim binary (sim_wormhole_b0 → libttsim_wh.so, sim_blackhole → libttsim_bh.so).
   sim_wormhole_b0:
     runs_on:
-      - tt-ubuntu-2204-medium-stable
+      - ubuntu-latest
   sim_blackhole:
     runs_on:
-      - tt-ubuntu-2204-medium-stable
+      - ubuntu-latest
   sim_wormhole_b0_galaxy:
     runs_on:
       - tt-ubuntu-2204-large-stable

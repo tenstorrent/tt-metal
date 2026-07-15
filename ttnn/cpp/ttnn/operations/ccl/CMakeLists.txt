@@ -15,13 +15,15 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    broadcast/device/kernels/*
-    common/kernels/*
-    kernel_common/*
-    kernels/*
-    all_to_all_combine/device/kernels/*
-    all_to_all_dispatch/device/kernels/*
-    reduce_to_root/device/kernels/*
+    broadcast/device/kernels/*.cpp
+    common/kernels/*.cpp
+    common/kernels/*.hpp
+    kernel_common/*.hpp
+    kernels/*.cpp
+    kernels/*.hpp
+    all_to_all_combine/device/kernels/*.cpp
+    all_to_all_dispatch/device/kernels/*.cpp
+    reduce_to_root/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_ccl
@@ -122,3 +124,19 @@ install(
 )
 
 install(TARGETS ttnn_op_ccl LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's own
+# registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_CCL_NANOBIND_SRCS) lives in sources.cmake,
+# not here: this file carries metalium-developers-infra as a required
+# co-owner (so infra can land sweeping build-system changes), and routine
+# add/remove/rename of a nanobind source shouldn't need to go through infra.
+# This wiring line itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_CCL_NANOBIND_SRCS})
+endif()
