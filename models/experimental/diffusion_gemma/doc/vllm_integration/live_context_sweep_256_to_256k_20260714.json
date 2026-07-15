@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "status": "failed",
+  "label": "complete-sweep-256-to-256k-chunkedlong",
+  "max_model_len": 262144,
+  "prompt_length_targets": [
+    256,
+    1024,
+    4096,
+    16384,
+    32768,
+    65536,
+    131072,
+    261632
+  ],
+  "blocks_requested": 2,
+  "warmup_requests_per_target": 0,
+  "measured_repetitions_per_target": 1,
+  "require_no_compile_markers": false,
+  "canvas_length": 256,
+  "max_denoise_steps": 48,
+  "tt_metal_head": "eead73415634a38bbaad0545f0f18f197173a375",
+  "vllm_head": "6b4a3a7b4e04c3b7f4f60dea97a7e156c3956d46",
+  "server": {
+    "cwd": "/home/zni/tt-vllm",
+    "command": [
+      "/home/zni/venvs/tt-diffusion-gemma/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "--served-model-name",
+      "diffusiongemma-26B-A4B-it",
+      "--generation-config",
+      "vllm",
+      "--max-model-len",
+      "262144",
+      "--max-num-batched-tokens",
+      "262144",
+      "--max-num-seqs",
+      "1",
+      "--block-size",
+      "64",
+      "--additional-config",
+      "{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false,\"trace_mode\":\"all\",\"trace_region_size\":4294967296}}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000",
+      "--num-gpu-blocks-override",
+      "4224"
+    ],
+    "env": {
+      "PYTHONPATH": "/home/zni/tt-metal:/home/zni/tt-metal/ttnn",
+      "TT_METAL_HOME": "/home/zni/tt-metal",
+      "TT_METAL_RUNTIME_ROOT": "/home/zni/tt-metal",
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "DG_CKPT": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "DG_VLLM_TRACE": "1",
+      "DG_VLLM_GUMBEL_MODE": "argmax",
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_VLLM_MAX_DENOISE_STEPS": "48",
+      "DG_TRACE_REGION_SIZE": "4294967296",
+      "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+      "VLLM_RPC_TIMEOUT": "1800000",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "TT_LOGGER_LEVEL": "ERROR",
+      "LOGURU_LEVEL": "INFO",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "additional_config": {
+      "tt": {
+        "sample_on_device_mode": "all",
+        "enable_model_warmup": false,
+        "trace_mode": "all",
+        "trace_region_size": 4294967296
+      }
+    },
+    "log_path": "/tmp/dg_live_sweep_256k_server.log",
+    "pid": 2423655,
+    "shutdown": {
+      "method": "already_exited",
+      "returncode": 1
+    },
+    "log_bytes": 44062,
+    "log_sha256": "105faf9deb7f6bda8eeae0dea23f485dd03000018efc1694eef2087ed2f3e370"
+  },
+  "warmups": [],
+  "requests": [],
+  "aggregates": [],
+  "error": {
+    "type": "RuntimeError",
+    "message": "OpenAI server exited during startup with code 1"
+  }
+}
