@@ -24,6 +24,8 @@ using namespace ckernel::unpacker;
 /**
  * @brief Configures the unpacker MOP for reduction operations. Handles both tiny tiles (face_r_dim < 16) and standard tiles.
  *
+ * @note For full 4-face SUM/AVG REDUCE_ROW, a single UNPACR path unpacks all faces in a single instruction.
+ *
  * @tparam pool_type: Type of pooling operation, values = <SUM/AVG/MAX>
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
@@ -46,7 +48,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
     const bool full_tile          = swap_operands && (tensor_shape.total_num_faces() == 4);
     const bool is_tiny            = tensor_shape.face_r_dim < FACE_R_DIM;
     const std::uint32_t innerloop = full_tile ? 1 : tensor_shape.total_num_faces();
-    const std::uint32_t clear_val = is_max ? 1 : p_unpacr_nop::CLR_SRC_0;
+    const std::uint32_t clear_val = is_max ? p_unpacr_nop::CLR_SRC_NEGINF : p_unpacr_nop::CLR_SRC_0;
 
     load_replay_buf(
         0,
