@@ -67,6 +67,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>     // RoutingDirection
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
+#include "tt_emule/kernel_patcher.hpp"  // tt::emule::patch_kernel_source (the extracted JIT patch pass)
 #include "tt_emule/tile_counter.hpp"
 #include "jit_hw/internal/emule_thread_ctx.h"
 #include "emule_fiber_scheduler.hpp"
@@ -266,8 +267,8 @@ extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
 
-// Worker L1 slot size + mask: a worker's L1 offset is a 2 MB-aligned truncated host pointer, so the masked
-// low bits recover the in-slot offset. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
+// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 2 MB), so masking the low
+// bits is an idempotent guard. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
 // per-resolver comments). Used by every NOC-address resolver.
 static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
 static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
@@ -276,10 +277,8 @@ static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
 //
 // The L1_SLOT_MASK is applied ONLY for WORKER cores. Two reasons:
-//  1. The mask handles a worker-kernel pattern where the L1 offset is a
-//     truncated host pointer (from `get_write_ptr()`) rather than a
-//     firmware-style L1 offset. Worker L1 slots are 2 MB-aligned, so the
-//     masked low bits recover the in-slot offset.
+//  1. Worker L1 fields are 0-based in-slot offsets (from `get_write_ptr()` etc.),
+//     always < 2 MB, so the mask is an idempotent guard on the local field.
 //  2. DRAM banks are GB-scale (2 GB on Wormhole views, 4 GB on Blackhole)
 //     and the kernel-side per-bank addrgen helper produces an `addr` field
 //     that is the true in-bank offset (already includes
@@ -336,10 +335,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t y_start = (mcast_addr >> (NOC_LOCAL_BITS + 3 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t l1_offset = mcast_addr & NOC_LOCAL_MASK;
 
-    // The L1 offset may be a truncated host pointer (from get_write_ptr()) rather
-    // than a firmware-style L1 offset.  Worker L1 slots are 2 MB-aligned, so
-    // masking with SLOT_MASK extracts the true within-slot offset.  For
-    // firmware-style offsets (< 2 MB) this is a no-op.
+    // The L1 offset is a 0-based in-slot offset (< 2 MB, from get_write_ptr() etc.), so masking
+    // with SLOT_MASK is an idempotent guard on the local field.
     // Multicast targets only WORKER cores (DRAM cores are skipped by the role
     // check in the delivery loop below), so the mask is L1-correct here.
     l1_offset &= L1_SLOT_MASK;
@@ -659,261 +656,6 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 // JIT Kernel Compilation
 // ---------------------------------------------------------------------------
 
-// Rewrite RISC-V-specific inline asm and raw-L1-pointer idioms so the kernel
-// compiles for x86 host.  The rewrites:
-//   1. `asm volatile("csrr %0, mhartid" : "=r"(V));` → `V = __processor_id;`
-//      (x86 assembler rejects RISC-V CSR instructions; the runner sets the
-//      __processor_id TLS before each kernel launch.)
-//   2. `asm volatile("fence" ::: "memory");` or bare `asm volatile("fence");`
-//      → `__sync_synchronize();` (Host memory barrier is the closest
-//      emulation-side equivalent; the clobber list is optional — e.g. the
-//      embedding_backward compute kernel's ARCH_BLACKHOLE cache-flush fence
-//      omits it.)
-//   3. `reinterpret_cast<T*>(get_arg_val<uint32_t>(N))` →
-//      `reinterpret_cast<T*>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>(N)))`
-//      (Quasar kernels pass raw L1 firmware offsets as runtime args; x86 needs
-//      translation through the per-thread __emule_bridge_l1 base pointer.)
-// Reads from `src_path`, writes the patched source to `out_path`, and throws
-// on any I/O failure.
-// Regex-replace preserving the total line count (pads each replacement with the
-// newlines its match consumed beyond it). The resulting line-alignment with the
-// original kernel is what lets the `#line` directive below keep debug info — and
-// thus ASAN backtraces — pointing at the real kernel file:line.
-static std::string emule_line_preserving_replace(
-    const std::string& input, const std::regex& re, const std::string& fmt) {
-    std::string out;
-    auto pos = input.cbegin();
-    for (std::sregex_iterator it(input.cbegin(), input.cend(), re), end; it != end; ++it) {
-        const std::smatch& m = *it;
-        out.append(pos, m[0].first);
-        const std::string matched = m.str();
-        const std::string rep = m.format(fmt);
-        const long pad = std::count(matched.begin(), matched.end(), '\n') - std::count(rep.begin(), rep.end(), '\n');
-        out += rep;
-        for (long k = 0; k < pad; ++k) {
-            out += '\n';
-        }
-        pos = m[0].second;
-    }
-    out.append(pos, input.cend());
-    return out;
-}
-
-// Apply the x86 portability rewrites to one source string in place (RISC-V inline
-// asm and L1-pointer/address reinterpret_casts that don't compile on the host).
-// Line-spanning rewrites go through emule_line_preserving_replace to keep the
-// body line-aligned with the original kernel (see there).
-static void apply_x86_rewrites(std::string& src) {
-    static const std::regex mhartid_re(
-        R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
-    src = emule_line_preserving_replace(src, mhartid_re, "$1 = __emule_self->processor_id;");
-
-    static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*(:::\s*"memory"\s*)?\)\s*;)");
-    src = emule_line_preserving_replace(src, fence_re, "__sync_synchronize();");
-
-    static const std::regex l1_arg_ptr_re(
-        R"(reinterpret_cast<([^>]+\*)>\s*\(\s*get_arg_val<uint32_t>\s*(\([^)]*\))\s*\))");
-    src = emule_line_preserving_replace(
-        src, l1_arg_ptr_re, "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>$2))");
-
-    // Metal 2.0 named-arg pattern: reinterpret_cast<T*>(static_cast<uintptr_t>(get_arg(args::NAME)))
-    static const std::regex l1_named_arg_ptr_re(
-        R"(reinterpret_cast<([^>]+\*)>\s*\(\s*static_cast<uintptr_t>\s*\(\s*get_arg\s*\(\s*([^)]+)\s*\)\s*\)\s*\))");
-    src = emule_line_preserving_replace(
-        src,
-        l1_named_arg_ptr_re,
-        "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>(get_arg($2))))");
-
-    // Persistent / compile-time L1 addresses dereferenced directly:
-    // `reinterpret_cast<volatile tt_l1_ptr T*>(<bare identifier>)` where the operand
-    // is a ct-arg/constexpr L1 offset (e.g. dm1::metadata_persistent_addr,
-    // core::q_arrival_sem_addr, dm0::indices_addr — from a tensor buffer_address()).
-    // Silicon derefs that raw L1 offset directly; on the host the offset is an
-    // unmapped address → SIGSEGV (or, when it happens to land in a mapped page, a
-    // stale read → downstream CB deadlock). Route it through the __emule_local_l1_to_ptr
-    // chokepoint like the get_arg forms above.
-    //
-    // The operand is restricted to a bare (optionally ::-qualified) identifier ON
-    // PURPOSE: it must NOT match `&cb_config[...]` (a real host pointer — translating
-    // it would corrupt the address) or `get_write_ptr(cb)` (already an absolute host
-    // address). A bare identifier is either a ct-arg constant (an offset, needs
-    // translation) or a local holding a get_*_ptr result (absolute → __emule_l1_translate
-    // returns it unchanged, so the wrap is a no-op). Both are safe.
-    static const std::regex l1_ptr_cast_re(
-        R"(reinterpret_cast<([^>;]*tt_l1_ptr[^>;]*\*)>\s*\(\s*([A-Za-z_][A-Za-z0-9_:]*)\s*\))");
-    src = emule_line_preserving_replace(
-        src, l1_ptr_cast_re, "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>($2)))");
-
-    // reinterpret_cast<uint32_t>(ptr): an L1 pointer collapsed to its 32-bit
-    // device address (no-op on silicon, "cast loses information" on the host).
-    // emule L1 addresses are the low 32 bits of host pointers, so truncate via
-    // uintptr_t. Arg allows one nested-paren level; requiring '>' after uint32_t
-    // skips the pointer-typed reinterpret_cast<T*> forms handled above.
-    static const std::regex ptr_to_l1_addr_re(
-        R"(reinterpret_cast<\s*(?:std::)?uint32_t\s*>\s*\(\s*((?:[^()]|\([^()]*\))*?)\s*\))");
-    src = std::regex_replace(
-        src, ptr_to_l1_addr_re, "static_cast<uint32_t>(reinterpret_cast<uintptr_t>($1))");
-
-    // tt-metal's sharded-layernorm dataflow util declares
-    // `using RemoteNocCoords = RemoteNocCoord[N];`. The two-stage reduce path
-    // instantiates it with N==0 for a core that has no second-stage workers,
-    // forming a zero-length array RemoteNocCoord[0]. Silicon's kernel compiler
-    // accepts that as a GNU extension; stock x86 clang rejects it as a
-    // substitution failure ("zero-length arrays are not permitted in C++"),
-    // even though the array is dead (the N==0 loop never runs and it is never
-    // indexed). The instantiation is unavoidable because kernel_main() is not a
-    // template, so the `if constexpr (use_two_stage_reduce)` dead branch is
-    // still type-checked. Rewrite the array bound so N==0 yields a 1-element
-    // dummy; behavior is identical on both arches (the element is never touched).
-    static const std::regex zero_len_noc_coords_re(
-        R"((using\s+RemoteNocCoords\s*=\s*RemoteNocCoord\s*\[)\s*N\s*(\]))");
-    src = std::regex_replace(src, zero_len_noc_coords_re, "$1(N) == 0 ? 1 : (N)$2");
-
-    // Note: C-style `(uint32_t)ptr` truncation casts (common in fabric/CCL kernels, e.g.
-    // `(uint32_t)sem_header_ptr`) are handled globally by the -fms-extensions JIT flag, which
-    // downgrades pointer→smaller-int casts from a hard error to a warning. The MAP_32BIT window keeps
-    // those addresses in the low 2 GB so the truncation is value-preserving.
-}
-
-// Patch `src_path` into `out_path`, then recurse into the quoted project headers
-// it #includes (a shared `*_common.hpp` can hold the offending casts too). Each
-// patched header is written into `out_dir` under its include name; since the
-// top-level patched_kernel.cpp also lives there, the compiler finds the patched
-// copy before the original on the `-I kernel_dir` path. Includes resolved
-// elsewhere (emule api/, system) or escaping `out_dir` are left alone; `done`
-// guards cycles.
-static void preprocess_tu_recursive(
-    const std::string& src_path,
-    const std::string& out_path,
-    const std::string& out_dir,
-    std::set<std::string>& done) {
-    std::ifstream in(src_path);
-    if (!in) {
-        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
-    }
-    std::stringstream ss;
-    ss << in.rdbuf();
-    std::string src = ss.str();
-
-    apply_x86_rewrites(src);
-
-    const std::filesystem::path src_dir = std::filesystem::path(src_path).parent_path();
-    const std::filesystem::path out_dir_canon = std::filesystem::weakly_canonical(out_dir);
-
-    static const std::regex include_re(R"RE(#[ \t]*include[ \t]*"([^"]+)")RE");
-    // Directive rewrites for includes patched into a mirror path (see the escaping
-    // branch below): applied to `src` after the loop, back-to-front so offsets stay valid.
-    struct IncDirectiveRewrite {
-        size_t pos;
-        size_t len;
-        std::string text;
-    };
-    std::vector<IncDirectiveRewrite> directive_rewrites;
-    for (std::sregex_iterator it(src.begin(), src.end(), include_re), end; it != end; ++it) {
-        const std::smatch& m = *it;
-        const std::string inc_name = m[1].str();
-        std::error_code ec;
-        const std::filesystem::path candidate = src_dir / inc_name;  // absolute inc_name → itself
-        if (!std::filesystem::exists(candidate, ec)) {
-            // Resolved via a -I path (emule api/, system headers, repo-rooted kernel-common). Not ours
-            // to patch — pointer-truncation idioms there are handled by -fms-extensions (see the JIT
-            // compile flags), which downgrades pointer→uint32 casts to warnings.
-            continue;
-        }
-        const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
-        if (canon.empty()) {
-            continue;
-        }
-        const std::filesystem::path out_inc =
-            std::filesystem::weakly_canonical(std::filesystem::path(out_dir) / inc_name);
-        const std::string out_inc_str = out_inc.string();
-        const std::string& out_dir_str = out_dir_canon.string();
-        // Path-boundary-aware containment: a bare string-prefix compare would treat
-        // /tmp/dir2/x as under /tmp/dir, so require the match to end on a separator.
-        const bool under_out_dir = out_inc_str.size() > out_dir_str.size() &&
-                                   out_inc_str.compare(0, out_dir_str.size(), out_dir_str) == 0 &&
-                                   out_inc_str[out_dir_str.size()] == '/';
-        if (under_out_dir) {
-            // Maps cleanly UNDER out_dir (relative include): write the shadow copy and
-            // let `-I out_dir` make the compiler find it before the original. Directive
-            // stays as-is.
-            if (!done.insert(canon).second) {
-                continue;  // cycle / already patched
-            }
-            std::filesystem::create_directories(out_inc.parent_path(), ec);
-            preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
-        } else {
-            // ESCAPES out_dir — an absolute include (kernel codegen can emit
-            // `#include "/abs/.../op.hpp"`) or a ".." path. The compiler resolves the
-            // absolute directive directly, bypassing `-I out_dir`, so a shadow copy
-            // can't redirect it. Mirror the real file under out_dir and REPOINT the
-            // #include directive at the patched mirror — otherwise op headers keep
-            // their raw `reinterpret_cast<tt_l1_ptr T*>(<persistent L1 addr>)` derefs,
-            // which segfault on the host. The mirror's `#line` still names the real
-            // file, so DWARF / ASAN backtraces are unaffected.
-            if (!std::filesystem::path(canon).is_absolute()) {
-                continue;  // only mirror real absolute paths
-            }
-            // Only mirror an escaping include that the L1 rewrite above will actually
-            // change — i.e. one carrying a bare-identifier `reinterpret_cast<tt_l1_ptr
-            // T*>(ident)` persistent-address deref (an op header). Mirroring a shared
-            // header reached elsewhere via -I (whose only tt_l1_ptr cast takes `&buf[i]`
-            // and is deliberately NOT rewritten) would create a second copy that
-            // `#pragma once` can't dedupe against the original → redefinition errors.
-            // Probe with the SAME operand constraint as l1_ptr_cast_re so the two stay
-            // in lockstep. The file exists (checked above); if it cannot be read here,
-            // do NOT silently skip — that would leave a persistent-L1 deref unpatched
-            // and reintroduce the segfault — so fail loudly instead.
-            {
-                std::ifstream probe(canon);
-                if (!probe) {
-                    throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + canon);
-                }
-                std::stringstream pss;
-                pss << probe.rdbuf();
-                const std::string content = pss.str();
-                static const std::regex l1cast_probe(
-                    R"(reinterpret_cast<[^>;]*tt_l1_ptr[^>;]*\*>\s*\(\s*[A-Za-z_][A-Za-z0-9_:]*\s*\))");
-                if (!std::regex_search(content, l1cast_probe)) {
-                    continue;  // no translatable L1 cast — leave the directive; shared original used
-                }
-            }
-            const std::filesystem::path mirror = std::filesystem::path(out_dir) / "_patched_inc" / canon.substr(1);
-            const std::string mirror_str = mirror.string();
-            directive_rewrites.push_back(
-                {static_cast<size_t>(m.position(0)),
-                 static_cast<size_t>(m.length(0)),
-                 "#include \"" + mirror_str + "\""});
-            if (!done.insert(canon).second) {
-                continue;  // already patched via another includer; directive repointed above
-            }
-            std::filesystem::create_directories(mirror.parent_path(), ec);
-            preprocess_tu_recursive(canon, mirror_str, out_dir, done);
-        }
-    }
-    for (auto rit = directive_rewrites.rbegin(); rit != directive_rewrites.rend(); ++rit) {
-        src.replace(rit->pos, rit->len, rit->text);
-    }
-
-    std::ofstream out(out_path);
-    if (!out) {
-        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot write " + out_path);
-    }
-    // Attribute the emitted body to the real kernel file so DWARF (and thus ASAN
-    // backtraces) report `<real kernel>.cpp:<line>` rather than the generated temp
-    // copy. The rewrites above are line-preserving, so line N here == line N there.
-    std::error_code ec;
-    std::filesystem::path abs = std::filesystem::absolute(src_path, ec);
-    out << "#line 1 \"" << (ec ? src_path : abs.string()) << "\"\n";
-    out << src;
-}
-
-static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
-    const std::string out_dir = std::filesystem::path(out_path).parent_path().string();
-    std::set<std::string> done;
-    preprocess_tu_recursive(src_path, out_path, out_dir, done);
-}
-
 static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
     Metal2BindingsSnapshot s;
     s.is_metal2 = kernel.is_metal2_kernel();
@@ -1090,7 +832,20 @@ static std::function<void()> jit_compile_kernel(
           << "#include \"api/dataflow/dataflow_api.h\"\n"
           << "void kernel_main() {}\n";
     } else {
-        preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path);
+        // Kernel include roots (ttnn/, tt_metal/) parsed from the JIT -I flags so the patcher
+        // can reach + patch shared kernel helpers that live in another directory (the raw-L1-deref
+        // idioms in e.g. kernel_lib/*.inl). The emule shadow roots are checked first, so jit_hw
+        // headers are never patched.
+        std::vector<std::string> kernel_inc_roots;
+        {
+            static const std::regex inc_flag_re(R"RE(-I"([^"]+)")RE");
+            for (std::sregex_iterator it(extra_include_flags.begin(), extra_include_flags.end(), inc_flag_re), end;
+                 it != end; ++it) {
+                kernel_inc_roots.push_back((*it)[1].str());
+            }
+        }
+        const std::vector<std::string> emule_inc_roots = {jit_inc, parent_inc};
+        tt::emule::patch_kernel_source(abs_kernel, patched_kernel_path, kernel_inc_roots, emule_inc_roots);
     }
 
     // 2c. Emit named_args_generated.h with the kernel's ct_args:: namespaces
@@ -1228,10 +983,16 @@ static std::function<void()> jit_compile_kernel(
     std::ostringstream cmd;
     // -fms-extensions: fabric/CCL kernels collapse 32-bit-device L1 pointers to uint32_t (e.g.
     // `(uint32_t)pkt_hdr`); on the 64-bit host clang treats pointer→smaller-int as a hard error, but
-    // -fms-extensions downgrades it to a warning. emule's MAP_32BIT window keeps those addresses in the
-    // low 2 GB, so the truncation is value-preserving. (opt_flags = -O2, + ASAN debug info when enabled.)
+    // -fms-extensions downgrades it to a warning. The JIT patch pass rewrites those header narrowings to
+    // bridge_l1-relative offsets (A-rule), so they stay correct when worker L1 is mapped above 4 GB.
+    // (opt_flags = -O2, + ASAN debug info when enabled.)
     cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared" << opt_flags
         << " -Wno-c++11-narrowing -fms-extensions"
+        // out_dir first: patched copies of shared kernel headers (written under
+        // out_dir/<include-name> by the patcher) must shadow the
+        // originals for full-path includes at any nesting depth. out_dir never
+        // contains emule (jit_hw) headers — those are skipped — so it can't shadow them.
+        << " -I\"" << dir << "\""
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
@@ -2330,48 +2091,58 @@ struct EmuleRoute {
     uint32_t mux_x = 0xFFFF, mux_y = 0xFFFF;   // worker's mux NOC (TRANSLATED) coords (fabric MUX path)
 };
 static std::mutex g_route_meta_mu;
-static std::unordered_map<uint32_t, EmuleRoute> g_route_meta;
+// Keyed by the header's FULL host pointer (bridge_l1 + offset). Post-offset-migration a packet
+// header's L1 offset is both chip- AND core-agnostic — it is 0-based within each core's L1, so the
+// same offset recurs on every core of every chip. A (chip, offset) key would collide across cores
+// of one chip (one core's route overwriting another's → wrong-chip delivery → PCC fail / a fiber
+// waiting on an atomic-inc that lands elsewhere → quiescent deadlock). The baseline's key was the
+// header's host pointer, which is inherently unique per (chip, core, offset) because every core's
+// L1 is a distinct mapping; reconstruct that full (untruncated) pointer here — untruncated so it
+// stays unique above 4 GB, and host-side-only (a runner map key, never a kernel/L1 value). Both set
+// (shim offset) and read (teleport) run on the same fiber → same bridge_l1 → same key.
+static std::unordered_map<uint64_t, EmuleRoute> g_route_meta;
+static inline uint64_t emule_route_key(uint32_t hdr_off) {
+    return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(__emule_self->bridge_l1 + hdr_off));
+}
 
 extern "C" void __emule_fabric_set_route(
     uint32_t hdr, uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f) {
+    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    auto& r = g_route_meta[hdr];
+    auto& r = g_route_meta[emule_route_key(hdr)];
     r.kind = kind; r.a = a; r.b = b; r.c = c; r.d = d; r.e = e; r.f = f;  // dir_index set separately at send
-}
-
-// A worker composes a packet header (its route stamped by the setters above, keyed by the header's L1
-// address) and then COPIES the header bytes into a forwarder core's relay slot; the forwarder later
-// teleports the send FROM that slot. The slot is a different L1 address, so the teleport's route lookup
-// (keyed by the header address it reads) would miss and fall back to the physical neighbor — the wrong
-// chip on a multi-hop forwarder relay (blaze all_gather_4x2), so the destination worker's recv semaphore
-// is never incremented and every consumer fiber parks (deadlock). On silicon the routing fields live IN
-// the packet header and therefore travel with the byte copy for free; emule keeps them in this address-keyed
-// side-table, so the copy has to carry the entry across explicitly. This mirrors that: when a NOC write
-// copies bytes out of an address that carries a stamped route, replicate the route onto the destination
-// address (the forwarder slot the teleport will read). Same address (no relocation) is a no-op. This is a
-// single faithful mechanism, not a divergent path. See tt-emule docs/fabric-ccl-emulation.md.
-extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) {
-    if (src_key == dst_key) {
-        return;
-    }
-    std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    auto it = g_route_meta.find(src_key);
-    if (it == g_route_meta.end()) {
-        return;  // src carries no route — not a packet-header copy; nothing to follow.
-    }
-    const EmuleRoute r = it->second;  // copy before the insert below can rehash/invalidate `it`.
-    g_route_meta[dst_key] = r;
 }
 
 // Record a 1D send's per-connection direction signals: the fwd/bwd conn_index (direct path) and the
 // worker's mux NOC coords (MUX path); 0xFFFF means unset. See tt-emule docs/fabric-ccl-emulation.md.
 extern "C" void __emule_fabric_set_route_dir(
     uint32_t hdr, uint32_t conn_index, uint32_t mux_x, uint32_t mux_y) {
+    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    auto& r = g_route_meta[hdr];
+    auto& r = g_route_meta[emule_route_key(hdr)];
     r.dir_index = conn_index;
     r.mux_x = mux_x;
     r.mux_y = mux_y;
+}
+
+// Carry a stamped route from a source header address to a destination when the header bytes are copied
+// (a worker staging a packet header into a forwarder relay slot). On silicon the routing fields ride inside
+// the header, so a byte copy carries them for free; emule keeps them in the address-keyed side-table, so the
+// copy must replicate the entry. No-op when src carries no route. src_key/dst_key are 0-based L1 offsets
+// (the fabric shim passes bridge_l1-relative offsets); widen through emule_route_key to match the set/read
+// sides. See tt-emule docs/fabric-ccl-emulation.md.
+extern "C" void __emule_fabric_route_follow(uint32_t src_key, uint32_t dst_key) {
+    emule_require_self(__func__);  // keys through __emule_self->bridge_l1 via emule_route_key
+    if (src_key == dst_key) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_route_meta_mu);
+    auto it = g_route_meta.find(emule_route_key(src_key));
+    if (it == g_route_meta.end()) {
+        return;  // src carries no route — not a packet-header copy; nothing to follow.
+    }
+    const EmuleRoute r = it->second;  // copy before the insert below can rehash/invalidate `it`.
+    g_route_meta[emule_route_key(dst_key)] = r;
 }
 
 // Fabric connection routes recorded host-side by append_fabric_connection_rt_args: for 1D the dst chip is
@@ -2474,7 +2245,10 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
     EmuleRoute r;
     {
         std::lock_guard<std::mutex> lk(g_route_meta_mu);
-        auto it = g_route_meta.find(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(h)));
+        // Round-trip h -> offset -> bridge_l1+offset via emule_route_key so the read key is derived
+        // by the same helper as the set-side key (one source of truth for the key formula).
+        auto it = g_route_meta.find(emule_route_key(static_cast<uint32_t>(
+            reinterpret_cast<uintptr_t>(h) - reinterpret_cast<uintptr_t>(__emule_self->bridge_l1))));
         if (it == g_route_meta.end()) {
             return {__emule_fabric_neighbor(src_chip)};  // unstamped (e.g. 1D direct, not yet wired)
         }
@@ -2748,48 +2522,6 @@ extern "C" void __emule_fabric_teleport(const void* packet_header, const void* p
     }
 }
 
-// DESIGN DIVERGENCE: see tt-emule/.claude/skills/workarounds (DM-1). Faithful mechanism, not a hack.
-// Remap a local-L1 host pointer (a cross-chip-shared object's absolute pointer, valid for only one chip's
-// MAP_32BIT mmap) to the CURRENT chip's copy of the same (core, offset). Single-chip runs short-circuit.
-// See tt-emule docs/fabric-ccl-emulation.md.
-extern "C" uint8_t* __emule_chip_relative_l1(uint8_t* p) {
-    emule_require_self(__func__);
-    std::lock_guard<std::mutex> lock(g_core_map_mutex);
-    if (g_core_map_cache.size() <= 1) {
-        return p;  // single chip: the pointer is already this chip's
-    }
-    const uint32_t cur = __emule_self->chip_id;
-    auto cur_it = g_core_map_cache.find(cur);
-    for (auto& [chip, mapp] : g_core_map_cache) {
-        if (!mapp) {
-            continue;
-        }
-        for (auto& [key, core] : *mapp) {
-            uint8_t* base = core->l1_data();
-            if (base != nullptr && p >= base && p < base + core->l1_size()) {
-                if (chip == cur) {
-                    return p;  // already on the current chip
-                }
-                uint64_t off = static_cast<uint64_t>(p - base);
-                if (cur_it != g_core_map_cache.end() && cur_it->second) {
-                    auto cc = cur_it->second->find(key);
-                    if (cc != cur_it->second->end()) {
-                        uint8_t* rp = cc->second->l1_ptr(off);
-                        if (std::getenv("EMULE_FABRIC_DEBUG") != nullptr) {
-                            fprintf(stderr,
-                                "[EMULE_FABRIC]   chip_relative cur=%u: %p (chip%u core[0x%llx]+0x%llx) -> %p\n",
-                                cur, (void*)p, chip, (unsigned long long)key, (unsigned long long)off, (void*)rp);
-                        }
-                        return rp;  // same core+offset on the current chip
-                    }
-                }
-                return p;
-            }
-        }
-    }
-    return p;  // not a known L1 pointer (firmware offset etc.) — leave unchanged
-}
-
 // ---------------------------------------------------------------------------
 // setup_core_state: Configure CBs and semaphores per core, build CoreSetup list.
 // ---------------------------------------------------------------------------
@@ -2905,26 +2637,28 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         uint64_t dim_key = (static_cast<uint64_t>(cfg.entry_size) << 32) | cfg.num_entries;
         bool compute_is_consumer = (cfg.consumer_risc_mask & TENSIX_MASK) != 0;
         bool compute_is_producer = (cfg.producer_risc_mask & TENSIX_MASK) != 0;
-        // Prefer the finalize-allocated L1 address (so host/test verification
-        // hits the same offset); fall back to bump-alloc when absent.
+        // Prefer the finalize-allocated L1 offset (so host/test verification
+        // hits the same offset); fall back to bump-alloc when absent. L1 offset
+        // model: base_addr is a 0-based L1 offset (finalize supplies the offset
+        // directly; l1_alloc returns one too). Use a found-flag, not addr != 0,
+        // as the "has finalize" test — offset 0 is a valid L1 address.
         auto cl = dfb_impl->core_lookup_.find(logical_core);
-        uint32_t finalize_addr = (cl != dfb_impl->core_lookup_.end()) ? core->l1_base_addr() + cl->second.second : 0;
+        bool has_finalize = (cl != dfb_impl->core_lookup_.end());
+        uint32_t finalize_addr = has_finalize ? cl->second.second : 0;  // 0-based L1 offset
         uint32_t base_addr;
         if (compute_is_producer && !compute_is_consumer) {
             auto it = bridge_consumer_alloc.find(dim_key);
             base_addr = (it != bridge_consumer_alloc.end()) ? it->second
-                                                            : (finalize_addr ? finalize_addr : core->l1_alloc(total));
+                                                            : (has_finalize ? finalize_addr : core->l1_alloc(total));
         } else {
-            base_addr = finalize_addr ? finalize_addr : core->l1_alloc(total);
+            base_addr = has_finalize ? finalize_addr : core->l1_alloc(total);
             if (compute_is_consumer && !compute_is_producer) {
                 bridge_consumer_alloc.emplace(dim_key, base_addr);
             }
         }
-        // `base_addr` is already a host pointer truncated to uint32_t — the L1 pool
-        // is mmap'd with MAP_32BIT so every L1 address fits in the low 32 bits.
-        // Reconstructing the host pointer is a widening cast, not a new allocation.
-        // See docs/QUASAR_EMULATION.md §4.1 and IMPLEMENTATION_REPORT.md "Address Translation".
-        uint8_t* base = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(base_addr));
+        // base_addr is a 0-based L1 offset (L1 offset model); rebase onto this
+        // core's L1 to get the host pointer the DFB/CB sync state stores.
+        uint8_t* base = core->l1_data() + base_addr;
         // STRIDED: M = max(P, C); ALL: M = P.
         bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
         uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
@@ -3350,6 +3084,7 @@ static void launch_cores(
                 ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
                 : nullptr;
             ctx->bridge_l1 = l1_data;
+            ctx->l1_size = static_cast<uint32_t>(core->l1_size());
             ctx->bridge_dram = dram_data;
             ctx->cbs = cb_array;
             ctx->dfbs = dfb_array;
