@@ -28,7 +28,32 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+bool env_var_enabled(const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr && std::string_view(value) == "1";
+}
+
+// Read once when tt-metal is loaded. Runtime hot paths only read these cached values.
+const bool trace_alloc_tracking_enabled = env_var_enabled("TT_METAL_TRACE_ALLOC_TRACKING");
+const bool trace_alloc_diagnostics_enabled =
+    trace_alloc_tracking_enabled && env_var_enabled("TT_METAL_TRACE_ALLOC_TRACEBACKS");
+const bool trace_alloc_skip_program_cache_enabled =
+    trace_alloc_tracking_enabled && env_var_enabled("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE");
+
+}  // namespace
+
+bool trace_allocation_tracking_enabled() { return trace_alloc_tracking_enabled; }
+
+bool trace_allocation_diagnostics_enabled() { return trace_alloc_diagnostics_enabled; }
+
+bool trace_allocation_skip_program_cache_enabled() { return trace_alloc_skip_program_cache_enabled; }
+
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
+    tracking_enabled_(trace_allocation_tracking_enabled()),
+    traceback_capture_enabled_(trace_allocation_diagnostics_enabled()),
+    skip_program_cache_(trace_allocation_skip_program_cache_enabled()),
     config_(std::make_unique<AllocatorConfig>(alloc_config)), view_(std::make_unique<Allocator>(this)) {}
 
 void AllocatorImpl::validate_bank_assignments() const {
@@ -104,7 +129,9 @@ static thread_local std::vector<size_t> pending_traceback_ids;
 static thread_local std::vector<std::string> allocation_context_stack;
 static const std::string empty_context;
 
-void push_allocation_context(std::string ctx) { allocation_context_stack.push_back(std::move(ctx)); }
+void push_allocation_context(std::string_view ctx) {
+    allocation_context_stack.emplace_back(ctx);
+}
 
 void pop_allocation_context() {
     TT_ASSERT(!allocation_context_stack.empty(), "pop_allocation_context called with empty stack");
@@ -215,7 +242,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
-    if (allocations_unsafe_ && tracking_enabled_) {
+    if (tracking_enabled_ && allocations_unsafe_) {
         // If corruptible_allocation_scope appears anywhere in the context stack,
         // suppress tracking for all nested allocations, including program-cache misses.
         const auto& ctx = current_allocation_context();
@@ -497,24 +524,6 @@ void AllocatorImpl::reset_allocator_size(const BufferType& buffer_type) {
 void AllocatorImpl::mark_allocations_unsafe() {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = true;
-
-    auto env_var_enabled = [](const char* name) {
-        const char* value = std::getenv(name);
-        return value != nullptr && std::string_view(value) == "1";
-    };
-    static const bool env_tracking =
-        env_var_enabled("TT_METAL_TRACE_ALLOC_TRACKING") || env_var_enabled("TT_METAL_TRACE_ALLOC_TRACEBACKS");
-    static const bool env_tracebacks = env_var_enabled("TT_METAL_TRACE_ALLOC_TRACEBACKS");
-    static const bool env_skip_pcache = env_var_enabled("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE");
-    if (env_tracking) {
-        tracking_enabled_ = true;
-    }
-    if (env_tracebacks) {
-        traceback_capture_enabled_ = true;
-    }
-    if (env_skip_pcache) {
-        skip_program_cache_ = true;
-    }
 }
 
 void AllocatorImpl::mark_allocations_safe() {

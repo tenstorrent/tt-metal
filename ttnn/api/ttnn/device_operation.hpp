@@ -210,15 +210,15 @@ void enqueue_mesh_workload(
 
     // Set allocation context so that any program-cache buffer allocations inside EnqueueMeshWorkload
     // are tagged with the op name + compile args for the trace allocation tracker.
-    std::string alloc_ctx;
-    {
+    std::optional<tt::tt_metal::AllocationContextGuard> ctx_guard;
+    if (tt::tt_metal::trace_allocation_tracking_enabled()) {
         auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
-        alloc_ctx = "program_cache: " + std::string(op_name);
+        std::string alloc_ctx = "program_cache: " + std::string(op_name);
         for (const auto& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
             alloc_ctx += " " + std::string(name) + "=" + value.to_string();
         }
+        ctx_guard.emplace(alloc_ctx);
     }
-    tt::tt_metal::AllocationContextGuard ctx_guard(std::move(alloc_ctx));
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(

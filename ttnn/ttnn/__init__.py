@@ -161,35 +161,40 @@ from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
 
-_TRACE_ALLOC_TRACKING = (
-    os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") == "1" or os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") == "1"
-)
+from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
 
 
-@contextlib.contextmanager
-def corruptible_allocation_scope(mesh_device):
-    """
-    Suppress unsafe-allocation tracking for allocations made while this scope is active.
-    Use for tensors that intentionally persist across replays (e.g. input buffers
-    for a second trace that are overwritten before use).
+if TRACE_ALLOC_TRACKING:
 
-    This suppresses tracking for nested op allocations too, including program-cache
-    misses while the scope is active.
-    """
-    _push_allocation_context("corruptible_allocation_scope")
-    try:
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """Suppress accounting for intentionally corruptible allocations in this scope."""
+        _push_allocation_context("corruptible_allocation_scope")
+        try:
+            yield
+        finally:
+            _pop_allocation_context()
+
+else:
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """No-op when trace allocation tracking is disabled."""
         yield
-    finally:
-        _pop_allocation_context()
 
 
-def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
-    """Execute a captured trace, with automatic safety verification when tracking is enabled."""
-    if _TRACE_ALLOC_TRACKING:
+if TRACE_ALLOC_TRACKING:
+
+    def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
+        """Execute a captured trace, with automatic allocation-safety verification."""
         from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
 
         UnsafeAllocationTracker(device).verify_before_replay()
-    return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
+        return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
+
+else:
+    # Preserve the original nanobind fast path when tracking is disabled.
+    execute_trace = _ttnn_execute_trace
 
 
 def mark_corruptible(tensor):
