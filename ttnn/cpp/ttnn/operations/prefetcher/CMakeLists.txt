@@ -13,7 +13,7 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels prefetcher/device/kernels/*)
+file(GLOB_RECURSE kernels prefetcher/device/kernels/*.cpp)
 
 target_sources(
     ttnn_op_prefetcher
