@@ -1,16 +1,16 @@
 {
   "arch": "wormhole_b0",
-  "description": "op-to-op latency CI golden (Wormhole). Populate golden values from a real CI run, then the test gates on official_op2op_us.",
-  "pinned_config": "--use-trace --trace-warmup-replays 2 --num-programs 8 --num-pages-per-core 4 --compute-nops 2000 --use-device-profiler --use-realtime-profiler",
+  "description": "op-to-op latency CI golden (Wormhole, wh_n300_civ2). Gates official_op2op_us and pack_to_unpack_op2op_us against the pinned config below. Values are medians of 3 CI calibration runs.",
+  "pinned_config": "--use-trace --trace-warmup-replays 2 --num-programs 8 --num-pages-per-core 4 --compute-nops 2000 --use-device-profiler",
   "min_prog_id": 3,
-  "gated_metric": "official_op2op_us",
+  "gated_metrics": ["official_op2op_us", "pack_to_unpack_op2op_us"],
   "golden": {
-    "official_op2op_us": null,
+    "official_op2op_us": 2.565,
+    "pack_to_unpack_op2op_us": 4.681,
     "tolerance_pct": 15.0
   },
   "tracked": {
     "rt_gap_to_next_go_ns": null,
-    "device_kernel_dur_us": null,
-    "pack_to_unpack_op2op_us": null
+    "device_kernel_dur_us": null
   }
 }
