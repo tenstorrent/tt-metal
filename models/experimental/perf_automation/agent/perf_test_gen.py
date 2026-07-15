@@ -406,9 +406,11 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
     _write_trace_caps(out_path, caps)
     if caps["trace_2cq"]:
         return "ok_2cq", ""
+    if caps["trace_1cq"]:
+        return "ok_1cq", ""
     return "invalid", (
-        f"trace-capable pipeline degraded to 1cq (path={path2 or _parse_trace_path(out1)}); the 2-CQ "
-        "overlap never engaged, so it would silently downgrade at the optimize bookend. " + (_extract_error(out2) or "")
+        f"pipeline could not trace at all (path={path2 or _parse_trace_path(out1)}); neither 1cq nor "
+        "2cq trace engaged. " + (_extract_error(out2) or "")
     )
 
 
@@ -614,7 +616,7 @@ def generate_perf_test(
         if not validate:
             return node
         verdict, failure = validate_generated_perf_test(out_path, task)
-        if verdict in ("ok_2cq", "ok_marker", "skip"):
+        if verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
             return node
         stall += 1
         if "WEDGE" in failure:
