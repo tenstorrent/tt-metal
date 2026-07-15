@@ -53,6 +53,16 @@ void GlobalSemaphore::setup_buffer(
     TT_FATAL(device_ != nullptr, "Device cannot be null");
     TT_FATAL(cores_.num_cores() > 0, "CoreRangeSet must have at least one core");
     uint32_t num_cores = cores_.num_cores();
+    // A singleton semaphore has one local consumer and therefore no
+    // same-address requirement across worker banks.  In HYBRID mode place it
+    // through the per-core allocator so a late 64-byte semaphore does not need
+    // to find a hole compatible with unrelated per-core tensor allocations.
+    bool singleton_per_core = false;
+    if (auto* mesh_device = dynamic_cast<distributed::MeshDevice*>(device_); mesh_device != nullptr) {
+        singleton_per_core =
+            num_cores == 1 &&
+            MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid();
+    }
     auto shard_parameters = ShardSpecBuffer(cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
     ShardedBufferConfig sem_shard_config = {
         .device = device_,
@@ -61,6 +71,7 @@ void GlobalSemaphore::setup_buffer(
         .buffer_type = buffer_type,
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
+        .per_core_allocation = singleton_per_core,
     };
     buffer_ = distributed::AnyBuffer::create(sem_shard_config, address);
 

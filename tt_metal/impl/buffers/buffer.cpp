@@ -286,7 +286,14 @@ Buffer::Buffer(
     size_(size),
     buffer_type_(buffer_type),
     buffer_layout_(sharding_args.buffer_layout()),
-    bottom_up_(bottom_up.value_or(this->is_dram())),
+    // HYBRID L1 has two address-space consumers: lockstep buffers must retain
+    // a uniform address across all participating banks, while per-core buffers
+    // may use a different address on each bank.  Keep their default growth
+    // directions disjoint so either allocation order leaves a contiguous common
+    // region for later lockstep buffers.  An explicit bottom_up argument still
+    // wins for callers that need a specific placement direction.
+    bottom_up_(bottom_up.value_or(
+        this->is_dram() || experimental::per_core_allocation::is_per_core_allocation(sharding_args))),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
     page_size_(page_size),

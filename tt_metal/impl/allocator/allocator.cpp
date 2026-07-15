@@ -10,6 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
 #include <functional>
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <mutex>
@@ -159,9 +160,26 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-                uint32_t num_banks = l1_manager_->num_banks();
+                // A sharded lockstep buffer only occupies the banks corresponding
+                // to its shard grid.  Querying every per-core bank here makes a
+                // weight on an unrelated core block its common address.
+                std::vector<uint32_t> bank_ids;
+                if (buffer->has_shard_spec()) {
+                    const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+                    bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+                    for (const auto& core : corerange_to_cores(grid, std::nullopt, row_major)) {
+                        bank_ids.push_back(logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0));
+                    }
+                    std::sort(bank_ids.begin(), bank_ids.end());
+                    bank_ids.erase(std::unique(bank_ids.begin(), bank_ids.end()), bank_ids.end());
+                } else {
+                    bank_ids.reserve(l1_manager_->num_banks());
+                    for (uint32_t bank_id = 0; bank_id < l1_manager_->num_banks(); bank_id++) {
+                        bank_ids.push_back(bank_id);
+                    }
+                }
                 for (auto* dev_alloc : hybrid_device_allocators_) {
-                    for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+                    for (uint32_t bank_id : bank_ids) {
                         auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
                         additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
                     }
@@ -249,16 +267,25 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_r
     return state.allocated_regions;
 }
 
-void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
+void AllocatorImpl::mirror_lockstep_allocation(
+    DeviceAddr address, DeviceAddr size, const std::optional<CoreRangeSet>& shard_grid) {
     std::lock_guard<std::mutex> lock(mutex_);
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    l1_manager_->mark_allocated(AllocatorID{0}, address, size);
+    const auto& grid = shard_grid.value_or(config_->worker_grid);
+    for (const auto& core : corerange_to_cores(grid, std::nullopt, true)) {
+        auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+        l1_manager_->mark_allocated(AllocatorID{bank_id + 1}, address, size);
+    }
 }
 
-void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
+void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address, const std::optional<CoreRangeSet>& shard_grid) {
     std::lock_guard<std::mutex> lock(mutex_);
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    l1_manager_->mark_deallocated(AllocatorID{0}, address);
+    const auto& grid = shard_grid.value_or(config_->worker_grid);
+    for (const auto& core : corerange_to_cores(grid, std::nullopt, true)) {
+        auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+        l1_manager_->mark_deallocated(AllocatorID{bank_id + 1}, address);
+    }
 }
 
 std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {

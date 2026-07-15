@@ -123,6 +123,47 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     }
 }
 
+TEST_F(PerCoreAllocationTest, PerCoreDefaultsBottomUpInEitherAllocationOrder) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    auto compute_grid = device->compute_with_storage_grid_size();
+    uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
+    ASSERT_GE(num_cores, 2u);
+
+    CoreRange core_range(CoreCoord(0, 0), CoreCoord(num_cores - 1, 0));
+    std::array<uint32_t, 2> shard_shape = {32, 32};
+    std::array<uint32_t, 2> page_shape = {32, 32};
+    std::array<uint32_t, 2> tensor2d_shape = {num_cores, 1};
+    ShardSpecBuffer shard_spec(
+        CoreRangeSet(core_range), shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
+
+    // Use a material-sized allocation so this exercises placement, rather than
+    // merely proving two tiny allocations can coexist.
+    constexpr DeviceAddr per_core_size = 128 * PAGE_SIZE;
+    DeviceAddr total_size = per_core_size * num_cores;
+    auto per_core_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    experimental::per_core_allocation::set_per_core_allocation(per_core_args, true);
+    auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    auto cores = corerange_to_cores(CoreRangeSet(core_range), std::nullopt, true);
+
+    // Lockstep first must leave the low-L1 region available to per-core.
+    {
+        auto lockstep = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, lockstep_args);
+        auto per_core_buffer = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, per_core_args);
+        for (const auto& core : cores) {
+            EXPECT_LT(per_core::get_per_core_address(*per_core_buffer, core), lockstep->address());
+        }
+    }
+
+    // Per-core first must leave the high-L1 common region available to lockstep.
+    {
+        auto per_core_buffer = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, per_core_args);
+        auto lockstep = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, lockstep_args);
+        for (const auto& core : cores) {
+            EXPECT_LT(per_core::get_per_core_address(*per_core_buffer, core), lockstep->address());
+        }
+    }
+}
+
 TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
     auto* device = this->devices_[0]->get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();

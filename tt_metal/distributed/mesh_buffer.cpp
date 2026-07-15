@@ -198,8 +198,9 @@ void MeshBuffer::initialize_device_buffers() {
         }
     }
 
-    // In HYBRID mode, mirror the lockstep L1 allocation into each device's lockstep allocator
-    // so that per-core allocations on individual devices avoid this address range.
+    // In HYBRID mode, mirror the lockstep L1 allocation only into the device
+    // banks that own a shard. Per-core allocations on unrelated cores can then
+    // use their local L1 without being blocked by a mesh-wide lockstep range.
     // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
     // Note: we check HYBRID via rtoptions rather than mesh_device->allocator_impl() because
     // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
@@ -209,10 +210,14 @@ void MeshBuffer::initialize_device_buffers() {
         MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
         auto* backing = get_backing_buffer();
         auto alloc_size = backing->aligned_size_per_bank();
+        std::optional<CoreRangeSet> shard_grid;
+        if (const auto& shard_spec = device_local_config_.sharding_args.shard_spec(); shard_spec.has_value()) {
+            shard_grid = shard_spec->tensor_shard_spec.grid;
+        }
         for (const auto& [coord, device_buffer] : buffers_) {
             if (mesh_device->impl().is_local(coord)) {
                 auto* device = mesh_device->impl().get_device(coord);
-                device->allocator_impl()->mirror_lockstep_allocation(address_, alloc_size);
+                device->allocator_impl()->mirror_lockstep_allocation(address_, alloc_size, shard_grid);
             }
         }
     }
@@ -275,11 +280,15 @@ void MeshBuffer::deallocate() {
             // device_->is_initialized() guard in Buffer::deallocate_impl().
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
+                std::optional<CoreRangeSet> shard_grid;
+                if (const auto& shard_spec = device_local_config_.sharding_args.shard_spec(); shard_spec.has_value()) {
+                    shard_grid = shard_spec->tensor_shard_spec.grid;
+                }
                 for (const auto& [coord, device_buffer] : buffers_) {
                     if (mesh_device->impl().is_local(coord)) {
                         auto* device = mesh_device->impl().get_device(coord);
                         if (device->is_initialized()) {
-                            device->allocator_impl()->unmirror_lockstep_allocation(address_);
+                            device->allocator_impl()->unmirror_lockstep_allocation(address_, shard_grid);
                         }
                     }
                 }
@@ -391,10 +400,14 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
         .size = config.size,
     };
+    auto sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout);
+    if (config.per_core_allocation) {
+        per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
     DeviceLocalBufferConfig local_config{
         .page_size = config.page_size,
         .buffer_type = config.buffer_type,
-        .sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout),
+        .sharding_args = std::move(sharding_args),
     };
     return MeshBuffer::create(mesh_config, local_config, mesh_device, address);
 }

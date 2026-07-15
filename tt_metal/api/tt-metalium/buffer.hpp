@@ -131,6 +131,10 @@ struct ShardedBufferConfig {
     BufferType buffer_type = BufferType::L1;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardSpecBuffer shard_parameters;
+    // Opt into HYBRID's independent per-core placement.  This is only valid
+    // for L1 sharded buffers and is intentionally opt-in at this low-level
+    // creation surface.
+    bool per_core_allocation = false;
 };
 
 class BufferShardingArgs {

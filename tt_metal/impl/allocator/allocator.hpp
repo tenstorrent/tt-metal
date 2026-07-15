@@ -103,10 +103,12 @@ public:
     std::vector<std::pair<DeviceAddr, DeviceAddr>> get_l1_allocated_ranges(
         BankManager::AllocatorDependencies::AllocatorID allocator_id) const;
 
-    // Mirror a lockstep allocation (from the mesh-level allocator) into this allocator's lockstep sub-allocator.
-    // This marks the region as occupied so per-bank allocators avoid it.
-    void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
-    void unmirror_lockstep_allocation(DeviceAddr address);
+    // Mirror a mesh lockstep allocation into precisely the device-bank allocators
+    // whose cores hold a shard. This prevents a per-core buffer from colliding
+    // with a resident lockstep shard without conservatively blocking unrelated
+    // cores on the same device.
+    void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size, const std::optional<CoreRangeSet>& shard_grid);
+    void unmirror_lockstep_allocation(DeviceAddr address, const std::optional<CoreRangeSet>& shard_grid);
 
     // We likely won't need to perform heap allocation just to expose the user side of Allocator,
     // this is to ease transition so we keep the pointer-to-allocator semantics.
