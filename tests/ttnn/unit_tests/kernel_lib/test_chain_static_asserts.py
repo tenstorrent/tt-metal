@@ -166,3 +166,21 @@ def test_dest_accumulation_pack_mismatch_illegal(device, expect_error):
         "dest_accumulation_pack_mismatch.cpp",
         "PackTile must pack the sticky DEST slot",
     )
+
+
+def test_relu_l1_accumulation_illegal(device, expect_error):
+    """Packer ReLU on an L1-accumulating pack — clamp-vs-accumulate ordering unverified; forbidden."""
+    _expect_build_failure(device, expect_error, "relu_l1_accumulation.cpp", "packer ReLU combined with L1 accumulation")
+
+
+def test_relu_dest_accumulation_illegal(device, expect_error):
+    """Packer ReLU on a DEST-accumulation chain — the set/reset aren't wired on that walk; forbidden."""
+    _expect_build_failure(
+        device, expect_error, "relu_dest_accumulation.cpp", "packer ReLU combined with DEST accumulation"
+    )
+
+
+def test_relu_setupowner_caller_illegal(device, expect_error):
+    """SetupOwner::Caller with a packer-ReLU knob — the chain emits no setup under Caller, so the ReLU
+    is inert; must not compile (all reconfigs are None, so ReLU is the sole trigger)."""
+    _expect_build_failure(device, expect_error, "relu_setupowner_caller.cpp", "non-None reconfig knob")
