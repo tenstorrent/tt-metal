@@ -518,6 +518,17 @@ void kernel_main() {
                     // tilize_block datacopy<->pack loop (ERROR_TRISC1 0x19, fault tile/core move with DPRINT
                     // latency) survives even with correct init -- it is an LLK-team issue, see
                     // ~/llk_conv_tilize_issue.md.
+                    //
+                    // ROOT CAUSE (LLK hazard audit 2026-07-15): the Quasar MATH<->PACK *semaphore* dest-sync
+                    // scheme never issues a CLEARDVALID, so the HW DEST data-valid bit SET by the preceding
+                    // matmul's terminal MVMUL is never scrubbed. The tilize's MOVA2D datacopy MOP is then
+                    // rejected at issue for targeting a bank whose dvalid is still set -> ERROR_TRISC1 (MATH)
+                    // 0x19. (Standalone tilize passes because no prior op set the dvalid.) All prior fixes
+                    // stalled on PACK, but the dvalid + ZEROACC retire on MATH/FPU, so a PACK stall can't drain
+                    // them -- the fix is a state SCRUB, not a stall. Issue the CLEARDVALID (both banks in
+                    // SyncFull, the active bank in SyncHalf) to clear the matmul's stale math dvalid before the
+                    // tilize. Cheaper than compute_kernel_hw_startup (no hw_configure).
+                    MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
                     MATH((llk_math_pack_sync_init()));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
                     // A/B RESULT: disabling this moved the tilize fault EARLIER (t=4 -> t=1), so dest_init
@@ -777,6 +788,13 @@ void kernel_main() {
                     if constexpr (fuse_bias) {
                         if (in0_block_w_i < in0_num_blocks_w - 1) {
                             cb_matmul_partials.wait_front(out_block_num_tiles);
+#ifdef ARCH_QUASAR
+                            // TEN-4746: a bare pop_front right after wait_front traps the Quasar unpacker (HW
+                            // expects TDMA activity between). Interpose a dummy op as the documented quick
+                            // guard; proper fix is a scratch-CB + semaphore sequence. Now reachable on the
+                            // Quasar spill path (force_conv_no_spill disabled).
+                            UNPACK(TTI_NOP);
+#endif
                             cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, matmul_partials_cb));
@@ -787,6 +805,10 @@ void kernel_main() {
                     } else {
                         if (in0_block_w_i < in0_num_blocks_w - 2) {
                             cb_matmul_partials.wait_front(out_block_num_tiles);
+#ifdef ARCH_QUASAR
+                            // TEN-4746 (see above): TDMA interpose between bare wait_front/pop_front.
+                            UNPACK(TTI_NOP);
+#endif
                             cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, matmul_partials_cb));
