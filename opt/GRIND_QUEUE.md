@@ -631,6 +631,18 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
     alternatives (`cut1b_new` 422.69, `cut1b_old` 467.64). **NOTE:** the original decision-rule keyed only on gather-hiding, which
     undercounts S1 — the matmul-fold carries the win; total-cost accounting is what decides. E2E per-step ceiling (48 sites):
     S2 22.5 ms/step (~2.1%), S1 3.3 ms/step (~1.0%). Follow-on = WARM weight-concat authoring, NOT a cron fire-and-exit.
+    - **DESIGN SOLVED + it is PURE-PYTHON (2026-07-15 02:13Z lap; the "build_metal" hedge was overcaution — census `col_linear`
+      proves the shape).** The census only prices the fused matmul (deallocs the output); the correct MODEL wiring is: on the W1
+      dedup path gate+qkv are LOCAL matmuls (`parallel_config=None`, attention_ltx.py:458) on the gathered activation w/ column-
+      sharded weights ⇒ fold needs a per-device head-interleave **extending `_interleave_heads` (attention_ltx.py:264-270)** to
+      append the gate's num_heads cols per-device → device *d* shard `[q512|k512|v512|gate4]`=1540, then a `[1536|4]` local slice-
+      back. ⚠ **A naive torch-concat + even column-shard is WRONG** (dumps all 32 gate cols onto the last device, breaks the per-
+      head gate↔SDPA head-shard alignment). Slice-back adds ops (cf. W3 stat-merge: +17µs ate 8µs) ⇒ measure vs the fold win at S1.
+    - ⛔ **BLOCKER — the correctness gate can't run in cron on THIS box (harder than the do_pcc wall).** The fusion is AV-ONLY
+      (`apply_gated_attention=has_audio`, test:683/708 — gate exists only with audio); the AV block harness loads a 22B ckpt from
+      `~/.cache/ltx-checkpoints/`, which here holds only `sulphur_lora_fused_distil.safetensors` ⇒ `fast`+`dev` resolve absent ⇒
+      `pytest.skip` (test:880). **UNBLOCK:** provision `dev` (kevinmi's `/home/kevinmi/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors`
+      EXISTS; equivalence gate is ckpt-agnostic) to `~/.cache/ltx-checkpoints/` — a resourcing/authorization action, NOT autonomous cron.
 - [x] **W3 — the ~90 µs per-op fixed SETUP cost → NO NEW LEVER (the one candidate is receipt-DEAD; the rest have no API).**
       Off-device source attribution (2026-07-13 23:17Z lap), citations re-verified in-tree. The census-priced 89.9 µs is
       **100% on-device replay command-stream time, NOT host program-setup** — traced `enqueue_trace` emits one fixed-size
@@ -1118,6 +1130,12 @@ regression a live outcome if the gathers are already overlapped. **Both landed i
       cron. The a2v audio-K/V mirror is negligible (`sp_ag_audio_kv` 16.2 µs = 1 tile, not seq-scaled).
 - [ ] **NEXT: make `LTX_QUALITY=medium/fast` carry both QA flags AND (once funded) the v2a cross-K/V bf8 cast** — gated on
       the 1080p decoded-video quality sign-off. The v2a cast (~90 ms ceiling) stacks on top of QA2's −411 ms.
+  - 🔴 **LIVE (human, in-flight as of 2026-07-15 02:13Z) — DO NOT re-dispatch; this lever is CLAIMED.** The worktree holds an
+    active v2a bf8 gate authoring session: `_assert_v2a_bf8_equivalence` + `LTX_V2A_BF8_GATE`/`LTX_QUANT_XATTN_SDPA_BF8` in
+    test_transformer_ltx.py (uncommitted +98) AND untracked **test_audio_quant_gate.py**, which decodes the audio latents through
+    the real vocoder to score audio-path quant **directly** — defeating the `do_pcc = run_pcc and not has_audio` (test:762) wall
+    the 01:54Z lap called terminal for audio casts. So the do_pcc-off block on audio-path casts is being SOLVED by a decode gate,
+    not just held. Leave the foreign source (test_transformer_ltx.py / test_audio_quant_gate.py / quant_config.py / pipeline) UNTOUCHED.
 
 ## QUALITY GATE — the instrument, and why every earlier one was wrong
 
