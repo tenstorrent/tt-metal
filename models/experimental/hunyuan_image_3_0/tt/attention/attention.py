@@ -290,6 +290,9 @@ class HunyuanTtAttention(LightweightModule):
 
         # ---- 1. Fused QKV projection ----------------------------------------
         # x: [B, S, H]  →  xqkv: [B, S, Q_dim + 2*KV_dim]
+        # l1_sharded_linear self-schedules: small-M -> L1 width-sharded, large-M ->
+        # DRAM with an explicit 2D-mcast config (ttnn auto mis-schedules these large-M
+        # bf16 x bf8 projections onto 110 cores at ~3% FLOP).
         xqkv = l1_sharded_linear(
             x,
             self.qkv_proj,

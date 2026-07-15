@@ -463,7 +463,16 @@ def l1_sharded_linear(
     # Large-M (backbone MoE / shared MLP / gate on full sequence): L1 output +
     # 8×10 prefill CBs clash with residual activations already in L1. DRAM is the
     # stable denoise path; L1 width-sharding above remains for small-M emb ops.
+    # ttnn's auto-heuristic also mis-schedules these large-M bf16 x bf8 shapes onto
+    # all 110 cores at ~3% FLOP, so pass an explicit 2D-mcast config when the caller
+    # didn't supply one (wide_mm_program_config returns None => auto when unsafe).
+    if program_config is None:
+        from .parallel_utils import wide_mm_program_config
+
+        program_config = wide_mm_program_config(x.device(), m, k, n)
     kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "compute_kernel_config": compute_kernel_config}
+    if program_config is not None:
+        kwargs["program_config"] = program_config
     if bias is not None:
         kwargs["bias"] = bias
     if dtype is not None:
