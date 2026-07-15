@@ -33,6 +33,19 @@ def test_smollm3_config_defaults():
     assert sum(c.no_rope_layers) == 27  # 36 - 9 NoPE layers
 
 
+def test_encoder_parallel_config_from_tuples():
+    pc = EncoderParallelConfig.from_tuples(tp=(4, 1), sp=(4, 0), cfg=(2, 1))
+    assert pc.tensor_parallel == ParallelFactor(4, 1)
+    assert pc.sequence_parallel == ParallelFactor(4, 0)
+    assert pc.cfg_parallel == ParallelFactor(2, 1)
+
+    # back-compat: from_tuple sets only tensor_parallel, leaves sp/cfg None
+    legacy = EncoderParallelConfig.from_tuple((8, 1))
+    assert legacy.tensor_parallel == ParallelFactor(8, 1)
+    assert legacy.sequence_parallel is None
+    assert legacy.cfg_parallel is None
+
+
 def test_smollm3_rope_matches_hf():
     from models.tt_dit.encoders.smollm3.model_smollm3 import create_rope_tensors
 
