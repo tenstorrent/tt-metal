@@ -869,7 +869,7 @@
     pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
   model: sdxl-perf
   skus:
-    wh_n300:
+    wh_n150:
       timeout: 35
       tier: 2
     bh_p150:
@@ -878,14 +878,14 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: ttnn nightly sdxl lora device-perf (wormhole N300)
+- name: ttnn nightly sdxl lora device-perf (wormhole N150)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TRACY_NO_INVARIANT_CHECK=1
     pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal
   model: sdxl-perf
   skus:
-    wh_n300:
+    wh_n150:
       timeout: 30
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
