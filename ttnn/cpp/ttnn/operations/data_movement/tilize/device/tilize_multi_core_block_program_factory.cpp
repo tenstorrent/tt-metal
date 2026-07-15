@@ -30,17 +30,18 @@ void push_cb_pair(
     uint32_t num_tiles,
     tt::DataFormat input_cb_data_format,
     tt::DataFormat output_cb_data_format,
-    uint32_t dram_alignment) {
+    uint32_t dram_alignment,
+    uint32_t tile_height) {
     // c_1 is a per-row staging buffer used by the reader when the DRAM source row and the
     // L1 destination have different alignment offsets: the reader rounds the source address
     // down to a dram_alignment boundary, issues one noc_async_read of (row_bytes + dram_alignment)
     // into this buffer, then copies the correctly-offset slice into c_0.
-    //   row_bytes  = TILE_WIDTH * elt_size * num_tiles  (one row of a sub-block)
-    //              = input_single_tile_size / TILE_HEIGHT * num_tiles
+    //   row_bytes  = tile_width * elt_size * num_tiles  (one row of a sub-block)
+    //              = input_single_tile_size / tile_height * num_tiles
     //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
     //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
     //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
-    uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
+    uint32_t input_row_bytes = input_single_tile_size / tile_height;
     uint32_t temp_cb_size = input_row_bytes * num_tiles + 2 * dram_alignment;
     desc.cbs.push_back(CBDescriptor{
         .total_size = temp_cb_size,
@@ -78,11 +79,14 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
+    const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -94,10 +98,10 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
-    uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_col = output.padded_shape()[-2] / tile_height;
+    uint32_t num_tiles_per_row = output.padded_shape()[-1] / tile_width;
 
-    uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+    uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / tile_hw;
     uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     auto
@@ -145,7 +149,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_sub_block_size,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            tile_height);
     }
     if (has_cliff_col && has_cliff_row) {
         push_cb_pair(
@@ -156,7 +161,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_block_size_cliff_row,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            tile_height);
     }
     if (has_cliff_row) {
         push_cb_pair(
@@ -167,7 +173,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_block_size_cliff_row,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            tile_height);
     }
     if (has_cliff_col) {
         push_cb_pair(
@@ -178,11 +185,12 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_sub_block_size,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            tile_height);
     }
 
     // reader
-    uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / TILE_HW;
+    uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / tile_hw;
 
     auto log_shape = output.logical_shape();
     uint32_t third_dim = 1;
@@ -191,8 +199,6 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     } else if (log_shape.rank() >= 4) {
         third_dim = log_shape[-3] * log_shape[-4];
     }
-
-    uint32_t tile_height = output.tensor_spec().tile().get_height();
 
     uint32_t total_num_rows = a.logical_shape()[-2];
 
@@ -311,22 +317,22 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             core,
             {src0_buffer,
              std::uint32_t{0},
-             TILE_WIDTH * a.element_size() * single_block_size_row_arg,
+             tile_width * a.element_size() * single_block_size_row_arg,
              start_row_id,
              start_column_id,
              single_block_size_row_arg,
              single_block_size_col_arg,
-             TILE_WIDTH * a.element_size() * single_sub_block_size_row_arg,
+             tile_width * a.element_size() * single_sub_block_size_row_arg,
              single_sub_block_size_row_arg});
 
         // writer runtime args
         writer_desc.emplace_runtime_args(
             core, {dst_buffer, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
 
-        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * a.element_size());
+        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * tile_width * a.element_size());
         start_column_id = end_column_id % row_size_bytes;
         if (end_column_id % row_size_bytes == 0 && end_column_id != 0) {
-            start_row_id += single_block_size_col_arg * TILE_HEIGHT;
+            start_row_id += single_block_size_col_arg * tile_height;
         }
 
         if (start_column_id == 0) {

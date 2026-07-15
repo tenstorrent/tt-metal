@@ -47,10 +47,12 @@ bool can_use_sharded_optimized_factories(
             operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
             return false;
         }
-        if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH != 0) {
+        const uint32_t tile_width = operation_attributes.tile.get_width();
+        const uint32_t tile_height = operation_attributes.tile.get_height();
+        if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tile_width != 0) {
             return false;
         }
-        if (operation_attributes.output_mem_config.shard_spec().value().shape[0] % tt::constants::TILE_HEIGHT != 0) {
+        if (operation_attributes.output_mem_config.shard_spec().value().shape[0] % tile_height != 0) {
             return false;
         }
     }
@@ -60,7 +62,9 @@ bool can_use_sharded_optimized_factories(
     // correct for ROW_MAJOR shard orientation (shards are ordered row-wise matching the output).
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& shard = input_tensor.shard_spec().value();
-        if (shard.shape[0] % tt::constants::TILE_HEIGHT != 0 || shard.shape[1] % tt::constants::TILE_WIDTH != 0) {
+        const uint32_t tile_width = operation_attributes.tile.get_width();
+        const uint32_t tile_height = operation_attributes.tile.get_height();
+        if (shard.shape[0] % tile_height != 0 || shard.shape[1] % tile_width != 0) {
             return false;  // Non-tile-aligned shard: num_tiles_per_shard would silently truncate.
         }
         const auto out_layout = operation_attributes.output_mem_config.memory_layout();
@@ -82,8 +86,9 @@ bool can_use_sharded_optimized_factories(
 
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         const auto& out_shard = operation_attributes.output_mem_config.shard_spec().value();
-        if (out_shard.shape[0] % tt::constants::TILE_HEIGHT != 0 ||
-            out_shard.shape[1] % tt::constants::TILE_WIDTH != 0) {
+        const uint32_t tile_width = operation_attributes.tile.get_width();
+        const uint32_t tile_height = operation_attributes.tile.get_height();
+        if (out_shard.shape[0] % tile_height != 0 || out_shard.shape[1] % tile_width != 0) {
             return false;
         }
     }
@@ -124,12 +129,18 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
 
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
     TT_FATAL(
-        input_tensor_a.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0,
-        "Input tensor width must be divisible by TILE_WIDTH");
+        input_tensor_a.padded_shape()[-1] % tile_width == 0,
+        "Input tensor width ({}) must be divisible by tile width ({})",
+        input_tensor_a.padded_shape()[-1],
+        tile_width);
     TT_FATAL(
-        input_tensor_a.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
-        "Input tensor height must be divisible by TILE_HEIGHT");
+        input_tensor_a.padded_shape()[-2] % tile_height == 0,
+        "Input tensor height ({}) must be divisible by tile height ({})",
+        input_tensor_a.padded_shape()[-2],
+        tile_height);
 
     auto width = input_tensor_a.padded_shape()[-1];
     uint32_t stick_s = width;
@@ -195,18 +206,18 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
-                PageConfig(Layout::TILE),
+                PageConfig(Layout::TILE, operation_attributes.tile),
                 mem_config,
                 input_tensor.logical_shape(),
                 input_tensor.padded_shape()))};
     }
 
-    auto output_layout = TensorLayout(
-        operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
     return {TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
-            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
+            operation_attributes.output_dtype,
+            PageConfig(Layout::TILE, operation_attributes.tile),
+            operation_attributes.output_mem_config))};
 }
 
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(
@@ -232,12 +243,16 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
 
-    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
+    const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
 
-    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tile_width;
 
-    int32_t ntiles = input_tensor_a.physical_volume() / tt::constants::TILE_HW;
-    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tile_height;
+
+    int32_t ntiles = input_tensor_a.physical_volume() / tile_hw;
+    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tile_width;
     uint32_t nblocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_block);
 
     auto* device = input_tensor_a.device();
@@ -251,8 +266,8 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
-        uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
-                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        uint32_t num_blocks_block =
+            (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) / (tile_height * tile_width);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
             return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
@@ -284,7 +299,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> TilizeDeviceOperation::get_dynamic_
         /*kernel_idx=*/0,
         corerange_to_cores(shard_spec.grid).front(),
         /*arg_idx=*/0,
-        shard_spec.shape[0] * shard_spec.shape[1] / tt::constants::TILE_HW}};
+        shard_spec.shape[0] * shard_spec.shape[1] / operation_attributes.tile.get_tile_hw()}};
 }
 
 ttnn::Tensor tilize(
@@ -295,6 +310,7 @@ ttnn::Tensor tilize(
     bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
+    const Tile& tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<TilizeDeviceOperation>(
         TilizeParams{
@@ -304,6 +320,7 @@ ttnn::Tensor tilize(
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,
+            .tile = tile,
             .sub_core_grids = sub_core_grids,
         },
         TilizeInputs{input_tensor, std::nullopt});

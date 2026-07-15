@@ -47,14 +47,14 @@ ttnn::Tensor tilize(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     bool use_low_perf,
+    tt::tt_metal::Tile tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
-        output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
-                                 : input_single_tile_size;
-    tt::tt_metal::Tile tile =
-        (input_tensor.layout() == Layout::TILE) ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+        output_dtype.has_value()
+            ? tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
+            : input_single_tile_size;
     uint32_t input_tile_width = tile.get_width();
     uint32_t input_tile_height = tile.get_height();
 
@@ -86,6 +86,7 @@ ttnn::Tensor tilize(
                 enough_space_width,
                 /*enough_space_height=*/false,
                 use_low_perf,
+                tile,
                 sub_core_grids);
             return ttnn::to_memory_config(interleaved_tile, target_memory_config);
         }
@@ -97,6 +98,7 @@ ttnn::Tensor tilize(
             enough_space_width,
             enough_space_height,
             use_low_perf,
+            tile,
             sub_core_grids);
     };
 
