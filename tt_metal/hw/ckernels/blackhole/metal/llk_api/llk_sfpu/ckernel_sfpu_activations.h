@@ -29,12 +29,15 @@ inline void apply_activation(sfpi::vFloat& v) {
     ActivationImpl<APPROXIMATION_MODE, ACTIVATION_TYPE>::apply(v);
 }
 
-template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS>
+template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS, bool fp32_dest_acc_en>
 inline void calculate_activation() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         apply_activation<APPROXIMATION_MODE, ACTIVATION_TYPE>(v);
+        if constexpr (!fp32_dest_acc_en) {
+            v = sfpi::convert<sfpi::vFloat16b>(v, sfpi::RoundMode::Nearest);
+        }
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }

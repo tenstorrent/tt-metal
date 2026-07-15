@@ -10,12 +10,16 @@
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en>
 inline void calculate_square() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = v * v;
+        v = v * v;
+        if constexpr (!fp32_dest_acc_en) {
+            v = sfpi::convert<sfpi::vFloat16b>(v, sfpi::RoundMode::Nearest);
+        }
+        sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
 }
