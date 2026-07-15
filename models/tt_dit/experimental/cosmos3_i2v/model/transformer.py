@@ -211,7 +211,13 @@ class Cosmos3OmniTransformer(Module):
             # bf16 input quantization adds sqrt(192) × bf16_eps ≈ 5.9% error per output
             # element, which compounds visibly over 64 layers at large sequence lengths.
             gen_seq_fp32 = ttnn.typecast(gen_seq, ttnn.float32)
-            gen_seq = self.proj_in(gen_seq_fp32, compute_kernel_config=self._proj_in_compute_kernel_config)
+            # default_block_size=4: float32 tiles are 2× larger than bf16, halving the block
+            # size keeps circular buffers within BH's 1.5 MB L1 limit.
+            gen_seq = self.proj_in(
+                gen_seq_fp32,
+                compute_kernel_config=self._proj_in_compute_kernel_config,
+                default_block_size=4,
+            )
             ttnn.deallocate(gen_seq_fp32)
             gen_seq = ttnn.typecast(gen_seq, und_seq.dtype)
             if time_embed is not None and noisy_mask_gen is not None:
