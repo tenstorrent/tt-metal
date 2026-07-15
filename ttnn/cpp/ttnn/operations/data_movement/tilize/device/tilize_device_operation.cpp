@@ -179,6 +179,8 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
     }
 
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
     TT_FATAL(
         input_tensor_a.padded_shape()[-1] % tile_width == 0,
         "Input tensor width ({}) must be divisible by tile width ({})",
@@ -270,10 +272,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
                 input_tensor.padded_shape()))};
     }
 
-    auto output_layout = TensorLayout(
-        operation_attributes.output_dtype,
-        PageConfig(Layout::TILE, operation_attributes.tile),
-        operation_attributes.output_mem_config);
+
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
