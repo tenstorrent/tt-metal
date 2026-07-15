@@ -16,8 +16,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
-from ..matmul_utils import l1_sharded_linear
-from ..parallel_utils import moe_full_seq_mem_config
+from ..parallel_utils import decode_mm_program_config, moe_full_seq_mem_config, wide_mm_program_config
 
 
 class HunyuanTtMLP(LightweightModule):
@@ -92,16 +91,23 @@ class HunyuanTtMLP(LightweightModule):
         Returns:
             [.., H] tensor.
         """
-        # l1_sharded_linear self-gates L1 vs DRAM by M-tile count (small-M -> L1
-        # width-sharded, large-M -> DRAM), which subsumes the seq bound for the two
-        # matmuls. The transient SwiGLU multiply still follows the measured
-        # full-sequence L1->DRAM gate so its full-S buffer never clashes with the
-        # ops' static CBs above the bound.
+        # The transient SwiGLU multiply follows the measured full-sequence L1->DRAM
+        # gate so its full-S buffer never clashes with the ops' static CBs above bound.
         mc = moe_full_seq_mem_config(x.shape[1])
-        gu = l1_sharded_linear(
+        # gate_up (M x H x 2I): small/mid M (Mt 1-7) wins ~1.3x with the 1D split-N
+        # config vs auto; large M (Mt>=8) uses the 2D wide_mm grid.
+        Mt_gu = (x.shape[-2] + 31) // 32
+        gu_pc = (
+            wide_mm_program_config(self.device, x.shape[-2], x.shape[-1], self.w_gate_up.shape[-1])
+            if Mt_gu >= 8
+            else decode_mm_program_config(self.device, x.shape[-2], x.shape[-1], self.w_gate_up.shape[-1])
+        )
+        gu = ttnn.linear(
             x,
             self.w_gate_up,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=mc,
+            program_config=gu_pc,
         )  # [.., 2I]
 
         # SwiGLU: split into gate (x1) and up (x2) halves along the last dim.
@@ -114,10 +120,20 @@ class HunyuanTtMLP(LightweightModule):
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
 
-        out = l1_sharded_linear(
+        # Down-proj: large M (Mt>=8) needs the 2D rectangular grid (auto mis-schedules
+        # onto 110 cores at ~3% FLOP); small/mid M (Mt 1-7) wins ~1.6x with 1D split-N.
+        Mt_dn = (h.shape[-2] + 31) // 32
+        down_pc = (
+            wide_mm_program_config(self.device, h.shape[-2], h.shape[-1], self.w_down.shape[-1])
+            if Mt_dn >= 8
+            else decode_mm_program_config(self.device, h.shape[-2], h.shape[-1], self.w_down.shape[-1])
+        )
+        out = ttnn.linear(
             h,
             self.w_down,
             compute_kernel_config=self.compute_kernel_config,
+            memory_config=mc,
+            program_config=down_pc,
         )  # [.., H]
         ttnn.deallocate(h)
         return out
