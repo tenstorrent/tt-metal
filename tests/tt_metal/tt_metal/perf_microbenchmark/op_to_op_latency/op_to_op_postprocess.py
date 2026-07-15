@@ -313,8 +313,9 @@ def main() -> int:
     )
     ap.add_argument(
         "--gate-metric",
-        default="official_op2op_us",
-        help="metric key to gate on (default official_op2op_us)",
+        default=None,
+        help="restrict gating to a single metric key. Default: gate every non-null metric in "
+        "the golden's 'golden' block (e.g. official_op2op_us and pack_to_unpack_op2op_us).",
     )
     ap.add_argument(
         "--tolerance-pct",
@@ -347,53 +348,69 @@ def main() -> int:
         print(f"wrote {args.out_json}")
 
     if args.golden is not None:
-        return gate_against_golden(metrics, args.golden, args.gate_metric, args.tolerance_pct)
+        gate_metrics = [args.gate_metric] if args.gate_metric else None
+        return gate_against_golden(metrics, args.golden, gate_metrics, args.tolerance_pct)
 
     return 0
 
 
-def gate_against_golden(metrics: dict, golden_path: Path, gate_metric: str, tolerance_override) -> int:
-    """Compare one measured metric against a golden JSON, mirroring the runtime-perf
-    compare_*.py convention. Returns a process exit code:
+def _fmt(v) -> str:
+    try:
+        return f"{float(v):.4f}"
+    except (TypeError, ValueError):
+        return str(v)
 
-      0  pass (within tolerance) OR record mode (golden value is null)
-      1  regression (outside tolerance) OR measurement/golden problem
+
+def gate_against_golden(metrics: dict, golden_path: Path, gate_metrics, tolerance_override) -> int:
+    """Compare measured metrics against a golden JSON, mirroring the runtime-perf
+    compare_*.py convention. Gates every non-null value in the golden's 'golden' block
+    (or only `gate_metrics` if provided). A metric whose golden value is null is in record
+    mode: printed and skipped. Returns a process exit code:
+
+      0  every populated gate passes (or all are null -> record mode)
+      1  any gated metric regresses, or a gated measurement is missing/NaN
     """
     if not golden_path.exists():
         print(f"ERROR: golden file not found: {golden_path}", file=sys.stderr)
         return 1
 
-    measured = metrics.get(gate_metric)
-    if measured is None or measured != measured:  # None or NaN
-        print(f"ERROR: measured {gate_metric} is missing/NaN (no samples extracted)", file=sys.stderr)
-        return 1
-
     golden = json.loads(golden_path.read_text())
     golden_block = golden.get("golden", {})
-    golden_value = golden_block.get(gate_metric)
     tol = tolerance_override if tolerance_override is not None else golden_block.get("tolerance_pct", 15.0)
 
-    if golden_value is None:
-        print(
-            f"[record mode] golden '{gate_metric}' not populated in {golden_path.name}; "
-            f"measured={measured:.4f}. Populate it from this run to enable the gate. Passing."
-        )
-        return 0
+    keys = list(gate_metrics) if gate_metrics else [k for k in golden_block if k != "tolerance_pct"]
+    if not keys:
+        print(f"ERROR: golden {golden_path.name} defines no gate metrics", file=sys.stderr)
+        return 1
 
-    lo = golden_value * (1.0 - tol / 100.0)
-    hi = golden_value * (1.0 + tol / 100.0)
-    print(
-        f"gate: {gate_metric} measured={measured:.4f} golden={golden_value:.4f} allowed=[{lo:.4f}, {hi:.4f}] (+/-{tol}%)"
-    )
-    if lo <= measured <= hi:
-        print("gate: PASS")
-        return 0
-    print(
-        f"gate: FAIL — {gate_metric} regression: measured {measured:.4f} outside "
-        f"[{lo:.4f}, {hi:.4f}] (golden {golden_value:.4f} +/-{tol}%)",
-        file=sys.stderr,
-    )
-    return 1
+    failed = False
+    for key in keys:
+        golden_value = golden_block.get(key)
+        measured = metrics.get(key)
+        if golden_value is None:
+            print(
+                f"[record mode] golden '{key}' not populated in {golden_path.name}; "
+                f"measured={_fmt(measured)}. Populate it to enable this gate. Passing."
+            )
+            continue
+        if measured is None or measured != measured:  # None or NaN
+            print(f"gate: FAIL — measured {key} is missing/NaN (no samples extracted)", file=sys.stderr)
+            failed = True
+            continue
+        lo = golden_value * (1.0 - tol / 100.0)
+        hi = golden_value * (1.0 + tol / 100.0)
+        status = "PASS" if lo <= measured <= hi else "FAIL"
+        line = (
+            f"gate: {key} measured={measured:.4f} golden={golden_value:.4f} "
+            f"allowed=[{lo:.4f}, {hi:.4f}] (+/-{tol}%) -> {status}"
+        )
+        if status == "PASS":
+            print(line)
+        else:
+            print(line, file=sys.stderr)
+            failed = True
+
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
