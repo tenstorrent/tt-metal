@@ -158,10 +158,15 @@ class Qwen36DecoderLayer:
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
+            # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
+            if _norm_mode == Mode.PREFILL:
+                _attn_norm_config = {**_attn_norm_config, "distributed_output_mem_config": ttnn.L1_MEMORY_CONFIG}
             # DECODE ff_norm uses the attn_norm layout (act_shard_hidden, 32-core) so Qwen36MLP's input reshard is a no-op and the norm runs on 32 cores not 8; PREFILL keeps the framework ff config.
             if _norm_mode == Mode.DECODE:
                 _ff_norm_config = self.args.get_norm_config("attn", _norm_mode)
             else:
+                # ff_norm output stays DRAM: L1 keeps the full-width norm resident across the whole MLP,
+                # clashing with each matmul's CBs (w1/w3/w2) for no gain
                 _ff_norm_config = self.args.get_norm_config("ff", _norm_mode)
         else:
             # In decode the norm output stays in L1 (as the old rms_norm_ttnn(memory_config=L1) did);

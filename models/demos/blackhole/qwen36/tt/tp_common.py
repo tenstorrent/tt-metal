@@ -246,13 +246,22 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
 
 
 def all_gather_matmul_prefill(
-    x, weight, tt_ccl, compute_cfg, topology, grid=(7, 9), cluster_axis=1, fused_activation=None
+    x,
+    weight,
+    tt_ccl,
+    compute_cfg,
+    topology,
+    grid=(7, 9),
+    cluster_axis=1,
+    fused_activation=None,
+    out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     """Fused all-gather(dim=3) + column-parallel matmul for prefill (all_gather_minimal_matmul_async).
 
     x: K-sharded activation [.,S,K/tp]; weight: [K,N] col-sharded (K full). Gathers x to full K and
     matmuls in one op, replacing a separate all_gather + linear. fused_activation applied per tile
-    before pack (non-parametrized op, e.g. ttnn.UnaryOpType.SILU). Returns [1,1,S,N] per device (DRAM)."""
+    before pack (non-parametrized op, e.g. ttnn.UnaryOpType.SILU). out_memory_config places the result
+    (default DRAM; L1 keeps it resident for downstream slices)."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
@@ -278,7 +287,7 @@ def all_gather_matmul_prefill(
         num_links=num_links,
         topology=topology,
         cluster_axis=cluster_axis,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=out_memory_config,
         dtype=ttnn.bfloat16,
         force_transpose=True,
         num_workers_per_link=workers,

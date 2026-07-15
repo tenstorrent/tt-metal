@@ -306,16 +306,20 @@ class TPGatedDeltaNet:
 
     def _project_qkvzab(self, x, S, out_mc=None):
         """Project x → (qkv, z, a, b). Fused path: one [qkv|z|a|b] matmul then slice.
-        out_mc: placement of the qkvzab matmul + slices. Default (None) → DRAM (prefill, where
-        L1 only adds NoC traffic). forward_decode passes L1 to keep the small decode qkvzab
-        resident (avoids the sharded→DRAM round-trip + DRAM-resident slices)."""
+        out_mc: placement of the qkvzab matmul + slices. None → DRAM; prefill+decode now pass L1 to
+        keep qkvzab + q/k/v/z/a/b resident (was DRAM to spare NoC traffic — re-measure if reverting)."""
         Nv, qz, az = self.Nv, self.qkv_dim_tp, self.qkvz_dim_tp
         _proj_mc = out_mc if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
         if self._fuse_ab:
             # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
             if self._fuse_agmm and S > tpc.TILE_SIZE:
                 qkvzab = tpc.all_gather_matmul_prefill(
-                    x, self.tw["qkvz"], self.tt_ccl, self.cfg, self.args.ccl_topology()
+                    x,
+                    self.tw["qkvz"],
+                    self.tt_ccl,
+                    self.cfg,
+                    self.args.ccl_topology(),
+                    out_memory_config=_proj_mc,
                 )
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
             elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
@@ -330,10 +334,18 @@ class TPGatedDeltaNet:
             else:
                 qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_proj_mc)
             qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
-            z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az), memory_config=out_mc)
-            a = ttnn.slice(qkvzab, (0, 0, az), (1, S, az + Nv), memory_config=out_mc)
-            b = ttnn.slice(qkvzab, (0, 0, az + Nv), (1, S, az + 2 * Nv), memory_config=out_mc)
+            # z (output gate) lives across the chunk kernel (gated = out_f * silu(z)); L1 z (6MB@S=2048)
+            # clashes with the scan kernel CBs -> keep DRAM in chunk-prefill; decode (small S) keeps out_mc.
+            _z_mc = ttnn.DRAM_MEMORY_CONFIG if (self._fuse_agmm and S > tpc.TILE_SIZE) else out_mc
+            z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az), memory_config=_z_mc)
+            # a,b end mid-tile; slicing straight from qkvzab untilizes the full 4120-wide tensor.
+            # Grab the enclosing tile-aligned block once (no untilize), then split a/b from it (test_gdn_slice_opt).
+            _ab_end = min(az + -(-2 * Nv // tpc.TILE_SIZE) * tpc.TILE_SIZE, qkvzab.shape[-1])  # 2*Nv up to a tile
+            ab = ttnn.slice(qkvzab, (0, 0, az), (1, S, _ab_end), memory_config=out_mc)
             ttnn.deallocate(qkvzab)
+            a = ttnn.slice(ab, (0, 0, 0), (1, S, Nv), memory_config=out_mc)
+            b = ttnn.slice(ab, (0, 0, Nv), (1, S, 2 * Nv), memory_config=out_mc)
+            ttnn.deallocate(ab)
             return qkv, z, a, b
         qkvz = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvz_progcfg)
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, S, qz))
@@ -361,7 +373,8 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
 
-        qkv, z, a, b = self._project_qkvzab(x, T)
+        # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
         conv, conv_new_state = _causal_conv1d_fir(
@@ -379,7 +392,7 @@ class TPGatedDeltaNet:
         )
         ttnn.deallocate(qkv)
 
-        # q/k/v/beta/g stay DRAM — alive across chunk kernel (L1 would clash with kernel CBs)
+        # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
         kd = self.key_dim_tp
         if self._gdn_flat_qkv:
             # Flat q/k/v: adapter splits heads inside untilize
