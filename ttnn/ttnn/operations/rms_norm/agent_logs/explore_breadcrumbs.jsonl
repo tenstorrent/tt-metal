@@ -1,0 +1,2 @@
+{"event":"read_sources","details":"Read eval/sharding.py auto_shard_config, rms_norm feature_spec/axes/helpers/conftest/test_golden. Analyzing WIDTH_SHARDED ragged-grid logic for non-tile-aligned W.","ts":"2026-07-15T03:02:41+00:00"}
+{"event":"analysis_complete","details":"Confirmed op EXCLUDES {ROW_MAJOR,WIDTH_SHARDED,w_non_aligned} because auto_shard_config makes a ragged grid. Computed concrete shard for (1,1,64,50): bf16 wg=7 (7 cores, 7x1 not ragged); fp32 wg=13 (13 cores in 8x2 bbox, RAGGED).","ts":"2026-07-15T03:03:22+00:00"}

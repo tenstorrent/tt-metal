@@ -165,28 +165,36 @@ def _height_sharded_assignment(input_tensor, total_tile_rows, is_row_major):
 # design's dependent-axis scheme-change (references/cross_core_reduction_design.md,
 # Pattern A "centralized reduce-root mcast"; transport = mcast_pipe.hpp).
 #
-# GROUPS MUST BE RECTANGULAR (mcast addresses a rectangle):
+# GROUP GEOMETRY (the broadcast-back must reach every member):
 #   * BLOCK -> each group is a horizontal core line (grid-row) — always rectangular.
 #   * WIDTH -> one group = the whole shard grid (all cores share the tile-rows).
-# When the shard grid is NOT a full rectangle (ragged WIDTH ncores), or the input is
-# ROW_MAJOR, or W is non-tile-aligned, the plan returns rectangular=False and the
-# caller falls back to the interleaved streaming path (a single core streams the
-# whole W of each tile-row via TensorAccessor from the resident shards — correct,
-# verified, no cross-core sync). That keeps the golden surface hang-free while the
-# true scheme-change runs for the cases it applies to (both loose cases + clean grids).
+# A RECTANGULAR group (ncores == nx*ny) uses the fast mcast broadcast (Mcast2D wire).
+# A RAGGED WIDTH group (ncores != nx*ny — auto_shard_config pads a non-tile-aligned W
+# into ceil(W/w_gran) cores, which overflows a full row into a partial one) cannot be
+# addressed by a single mcast rectangle. Refinement 5b broadcasts 1/rms to a ragged
+# WIDTH group by UNICAST instead (root -> each member individually + a per-member ready
+# flag — mirroring the already-unicast gather leg; cross_core_reduction_design.md §8
+# option 3). The gather leg and the non-root receiver are topology-agnostic, so only the
+# root's broadcast differs (mcast vs unicast). TILE ragged WIDTH still routes to the
+# interleaved-collapse fallback (the TILE fallback reads full-W sticks correctly, and
+# TILE + w_non is not tile_eligible anyway); the ragged unicast leg is the RM path.
 
 
 def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout, is_row_major):
     """Derive the per-core cross-core reduction plan from the shard spec.
 
-    Returns (rectangular, group_size, assignment, groups, shard_shape):
+    Returns (buildable, group_size, assignment, groups, shard_shape, ragged):
+      * buildable: a cross-core plan could be built for this geometry (WIDTH always;
+        BLOCK when rectangular — BLOCK is always rectangular in practice).
       * assignment: one dict per core — core, start_tile_row, num_tile_rows,
         w_tile_start (TILE), w_col_start (RM gamma col offset), num_w_tiles (local
         W-tiles), my_index (slot in its group), is_root, group_id.
-      * groups: one dict per reduction group — rect (CoreRangeSet), root (CoreCoord).
+      * groups: one dict per reduction group — rect (CoreRangeSet bbox), root
+        (CoreCoord), members (CoreCoord list in slot order — the unicast broadcast
+        targets these when ragged).
       * shard_shape: (Hs, Ws) — the uniform per-core shard extent (elements).
-    rectangular=False signals a non-mcastable geometry (caller uses the fallback for
-    TILE; RM never reaches a non-rectangular case — {RM, WIDTH, w_non} is EXCLUDED).
+      * ragged: the WIDTH group's bbox holds phantom cores (ncores != nx*ny), so the
+        broadcast-back must be unicast (R5b), not mcast. Always False for BLOCK.
 
     R5a: for the ROW_MAJOR leg each core owns a resident [Hs, Ws] shard read
     directly from local L1, so the per-core W-tile count is the ceil-of-shard
@@ -211,19 +219,24 @@ def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout, is_ro
     nx = x1 - x0 + 1
     ny = y1 - y0 + 1
     ncores = grid.num_cores()
-    if ncores != nx * ny or per_w < 1:
-        return False, 0, [], [], (Hs, Ws)  # ragged grid -> not mcastable
+    ragged = ncores != nx * ny
+    is_width = memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    # WIDTH: buildable for both rectangular (mcast) and ragged (R5b unicast) grids.
+    # BLOCK: only rectangular (grid-row groups are always rectangular; a ragged BLOCK
+    # grid is unexpected -> not buildable, caller falls back).
+    if per_w < 1 or (ragged and not is_width):
+        return False, 0, [], [], (Hs, Ws), ragged
 
     cores = ttnn.corerange_to_cores(grid, None, True)  # row-major fill order
     assignment = []
     groups = []
 
-    if memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+    if is_width:
         # One group = every core; H is not split, W split row-major across the grid.
         group_size = ncores
         root = cores[-1]
         rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))])
-        groups.append({"rect": rect, "root": root})
+        groups.append({"rect": rect, "root": root, "members": list(cores)})
         num_tile_rows = rm_tile_rows if is_row_major else total_tile_rows
         for i, c in enumerate(cores):
             assignment.append(
@@ -245,7 +258,7 @@ def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout, is_ro
             members = [ttnn.CoreCoord(gx, gy) for gx in range(x0, x1 + 1)]
             root = members[-1]
             rect = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, gy), ttnn.CoreCoord(x1, gy))])
-            groups.append({"rect": rect, "root": root})
+            groups.append({"rect": rect, "root": root, "members": members})
             if is_row_major:
                 # RM: each core reads its own resident shard from local L1 (start=0),
                 # bounded by the uniform shard height Hs.
@@ -268,7 +281,7 @@ def _sharded_cross_core_plan(input_tensor, total_tile_rows, memory_layout, is_ro
                         "group_id": gy - y0,
                     }
                 )
-    return True, group_size, assignment, groups, (Hs, Ws)
+    return True, group_size, assignment, groups, (Hs, Ws), ragged
 
 
 # Cross-core semaphore ids (progress = gather counter; the mcast pipe owns two more).
@@ -294,6 +307,7 @@ def _build_cross_core_descriptor(
     groups,
     is_row_major,
     shard_hw,
+    ragged,
 ):
     """Build the WIDTH/BLOCK cross-core reduce-root program (see the section header).
 
@@ -301,7 +315,14 @@ def _build_cross_core_descriptor(
     resident [Hs, Ws] shard directly from local L1 (the sharded reader/writer local
     legs), compute tilizes/untilizes it (the shared IS_ROW_MAJOR compute branch), and
     the cross-core combine + mcast broadcast are REUSED UNCHANGED. `shard_hw = (Hs, Ws)`
-    is the uniform per-core shard extent driving the local-shard stride + padding."""
+    is the uniform per-core shard extent driving the local-shard stride + padding.
+
+    R5b: `ragged` selects the UNICAST broadcast-back for a non-rectangular WIDTH group.
+    The mcast wire (Mcast2D over the bbox) still supplies the semaphore-id / flags CT
+    block, but the reader's root leg unicasts 1/rms to each group member (their virtual
+    coords ride the root's runtime-arg tail) instead of one mcast to the bbox rectangle
+    (which would hit phantom cores). The gather leg and the non-root ReceiverPipe are
+    topology-agnostic and unchanged."""
     device = input_tensor.device()
     has_gamma = gamma is not None
     gamma_is_row_major = has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -432,14 +453,27 @@ def _build_cross_core_descriptor(
         shard_h,  # RM leg: local shard rows (Hs)
         shard_w,  # RM leg: local shard cols (Ws)
         input_elt,  # RM leg: input element bytes (local shard stride)
+        1 if ragged else 0,  # USE_UNICAST_BCAST (R5b): ragged WIDTH group -> unicast 1/rms
     ]
-    reader_ct_args.extend(mcast_ct)  # 5-word McastArgs block (CT base = 14)
+    reader_ct_args.extend(mcast_ct)  # 5-word McastArgs block (CT base = 15)
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
         if has_gamma
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
+
+    # R5b ragged unicast broadcast: the root reaches each group member individually, so it
+    # needs their VIRTUAL coords in slot order. Precompute per group (member slot i lines up
+    # with my_index=i / w_col_start=i*Ws). Only appended to the ragged root's RT tail; the
+    # mcast (rectangular) path never reads them.
+    group_member_virt = []
+    for g in groups:
+        mv = []
+        for m in g.get("members", []):
+            v = device.worker_core_from_logical_core(m)
+            mv.extend([int(v.x), int(v.y)])
+        group_member_virt.append(mv)
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
@@ -449,7 +483,7 @@ def _build_cross_core_descriptor(
         root = groups[a["group_id"]]["root"]
         root_v = device.worker_core_from_logical_core(root)
         mcast_rt = list(helper_by_group[a["group_id"]].runtime_args(c))
-        reader_rt_args[c.x][c.y] = [
+        reader_rt = [
             input_addr,
             gamma_addr,
             a["start_tile_row"],
@@ -461,6 +495,11 @@ def _build_cross_core_descriptor(
             int(root_v.y),
             a["w_col_start"],  # RM leg: this core's global W-col start (gamma slice)
         ] + mcast_rt
+        # Ragged WIDTH root: append the group's member virtual coords (2 words each) for the
+        # unicast broadcast. Reader reads them at mc.next_runtime_args_offset() (= RT 14).
+        if ragged and a["is_root"]:
+            reader_rt = reader_rt + group_member_virt[a["group_id"]]
+        reader_rt_args[c.x][c.y] = reader_rt
         writer_rt_args[c.x][c.y] = [output_addr, a["start_tile_row"], a["num_tile_rows"], a["w_tile_start"]]
         compute_rt_args[c.x][c.y] = [a["num_tile_rows"], a["start_tile_row"], eps_bits, 1 if a["is_root"] else 0]
 
@@ -674,14 +713,20 @@ def create_program_descriptor(
     # cross-core groups are rectangular (BLOCK grids always are; {RM, WIDTH, w_non} — the
     # only ragged RM geometry — is op-side EXCLUDED), so the mcast transport is reused.
     if is_width_or_block:
-        rectangular, group_size, cc_assignment, cc_groups, cc_shard_hw = _sharded_cross_core_plan(
+        buildable, group_size, cc_assignment, cc_groups, cc_shard_hw, ragged = _sharded_cross_core_plan(
             input_tensor, total_tile_rows, memory_layout, is_row_major
         )
-        # TILE cross-core (R5): tile-aligned W + rectangular; else -> interleaved fallback.
-        # RM cross-core (R5a): rectangular (guaranteed by the exclusion); no partial-W gate
-        # (the zero-padded W-tail handles a non-aligned W without a partial scaler).
+        # TILE cross-core (R5): tile-aligned W + rectangular; else -> interleaved fallback
+        # (a ragged/non-aligned TILE grid streams full-W sticks correctly there).
+        # RM cross-core (R5a rectangular = mcast; R5b ragged WIDTH = unicast broadcast).
+        # No partial-W gate for RM — the zero-padded W-tail handles a non-aligned W with
+        # the same 1/W_global scaler (no partial scaler).
         tile_eligible = (not is_row_major) and (not has_partial_w)
-        if (is_row_major or tile_eligible) and rectangular and group_size > 1:
+        # Route to the cross-core reduce-root program when buildable and the group is
+        # addressable: TILE needs a rectangular group (mcast only); RM accepts a ragged
+        # WIDTH group too (R5b unicast broadcast). Ragged TILE falls back below.
+        addressable = is_row_major or not ragged
+        if (is_row_major or tile_eligible) and buildable and group_size > 1 and addressable:
             return _build_cross_core_descriptor(
                 input_tensor,
                 output_tensor,
@@ -699,15 +744,15 @@ def create_program_descriptor(
                 cc_groups,
                 is_row_major,
                 cc_shard_hw,
+                ragged,
             )
         if is_row_major:
-            # RM cross-core needs a rectangular mcastable group. {RM, WIDTH, w_non} (the only
-            # ragged RM geometry) is EXCLUDED op-side, so this is unreachable — guard so the
-            # interleaved-collapse fallback (which reads a split RM stick as one page -> garbage)
-            # never runs for RM width/block sharding.
+            # Every RM WIDTH/BLOCK geometry is now buildable (rectangular -> mcast, ragged
+            # WIDTH -> unicast). This guard is defensive — reached only if buildable is False
+            # (per_w < 1, structurally impossible for RM), never for a supported cell.
             raise NotImplementedError(
-                "rms_norm: ROW_MAJOR WIDTH/BLOCK sharding requires a rectangular reduction group "
-                f"(got group_size={group_size}, rectangular={rectangular})"
+                "rms_norm: ROW_MAJOR WIDTH/BLOCK sharding could not build a reduction group "
+                f"(got group_size={group_size}, buildable={buildable}, ragged={ragged})"
             )
 
     if is_height_sharded:

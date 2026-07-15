@@ -453,3 +453,58 @@
   `test_rms_norm_sharded.py::test_rms_norm_row_major_cross_core` (RM WIDTH/BLOCK acceptance) +
   `test_rms_norm_rejects_row_major_width_block_remaining` (5b/5c carve-outs still refused),
   replacing the old blanket `test_rms_norm_rejects_row_major_width_block`. Probes 056–059.
+
+## Refinement 5b — RM + WIDTH_SHARDED, non-tile-aligned W (ragged-grid unicast broadcast)
+- Date: 2026-07-15
+- What was done: Lifted the `{ROW_MAJOR, WIDTH_SHARDED, w_non_aligned}` EXCLUSION (the last
+  R5a WIDTH carve-out). `auto_shard_config` pads a non-tile-aligned W into `ceil(W/w_gran)`
+  cores (`w_gran` = 8 for bf16, 4 for fp32); when that overflows a full grid row into a
+  partial one the shard grid is **RAGGED** (`ncores != nx*ny`, e.g. fp32 W=50 -> 13 cores in
+  an 8x2 bbox), so no single mcast rectangle addresses the whole WIDTH reduction group. R5b
+  broadcasts `1/rms` back to a ragged WIDTH group by **UNICAST** — the design's dependent-axis
+  scheme-change extended to a non-rectangular topology (`cross_core_reduction_design.md §8
+  option 3`):
+  - The **gather leg is already unicast** (raw `noc_async_write` + a `progress` counter),
+    topology-agnostic — unchanged.
+  - The **non-root `ReceiverPipe` is topology-agnostic** (`mc.receiver().receive()` acks the
+    root + waits its own `data_ready` flag) — unchanged; works whether the root mcasts or
+    unicasts.
+  - Only the **root's broadcast** changes: for a ragged group the root fills its own `cb_sumsq`
+    (local self-read), then unicasts `1/rms` to each other member's `cb_sumsq` (identical L1
+    offset on every core) + raises each member's `data_ready` flag (0 -> VALID) after a
+    data-before-signal write barrier, gated on `consumer_ready == GROUP_SIZE-1` (every non-root
+    member's readiness ack — the SAME pre-handshake the mcast SenderPipe uses). Rectangular
+    WIDTH/BLOCK groups keep the mcast fast path (`USE_UNICAST_BCAST=0`); ragged WIDTH routes to
+    unicast (`USE_UNICAST_BCAST=1`). TILE ragged WIDTH still uses the interleaved-collapse
+    fallback (full-W stick reads are correct there); the ragged unicast leg is the RM path.
+  - **Reused**: the R5/R5a `_sharded_cross_core_plan` + `_build_cross_core_descriptor`, the
+    `mcast_pipe` `ReceiverPipe` (non-root, unchanged), the `Mcast2D` host wire (still supplies
+    the sem-id/flags CT block), the whole gather leg + progress counter, all CBs
+    (`cb_partial`/`cb_gather`/`cb_rms_src`/`cb_combine`), and the compute + writer kernels
+    (BYTE-IDENTICAL — the broadcast is a reader-only concern). The non-ragged RM WIDTH w_non
+    cells (e.g. bf16 W=50 -> 7 cores rectangular) work through the existing mcast path
+    unchanged — identical to R5a's already-passing BLOCK w_non.
+  - **Added**: `ragged` return from `_sharded_cross_core_plan` (WIDTH now buildable for both
+    rectangular and ragged; `members` list per group); a `ragged` param + `USE_UNICAST_BCAST`
+    CT flag + per-member virtual coords on the ragged root's RT tail in
+    `_build_cross_core_descriptor`; the reader's `USE_UNICAST_BCAST` unicast-broadcast root leg
+    (`rms_norm_sharded_reader.cpp`). No new kernel file, no new transport, no parallel datapath.
+- Accuracy achieved: PCC bf16>=0.995 / fp32>=0.999, rel-RMS within golden tolerance, across RM
+  WIDTH w_non shapes [1x1x32x50, 2x1x128x100, 4x8x32x47, 1x1x17x50, 2x1x100x47, 1x32x50,
+  4x128x47, 128x100, 1x1x64x17, 32x17], bf16 + fp32, gamma + no_gamma. Ragged grids to 25 cores
+  (8x4 bbox) and multi-round groups to 32 tile-rows all pass.
+- Golden test progress: RM WIDTH w_non slice **90 passed / 0 failed / 0 xpassed** (150 remaining
+  xfailed are the permanent `{fp32,False}` + the 5c `{RM,WIDTH,gamma_layout=TILE}` exclusion, both
+  correct). Full `test_op` cartesian **6072 passed / 0 failed / 0 xpassed / 2310 xfailed / 31938
+  skipped** (up from R5a; no regression on the R5 TILE surface or the R5a RM rectangular surface).
+  `test_op_loose` 6/6; `test_regression.py` + `test_translated.py` 99 passed. Unit dir 353 passed.
+- Issues encountered: None. The design landed on the first implementation — probes confirmed both
+  the non-ragged mcast path and the ragged unicast path (incl. 32-round multi-tile-row groups)
+  correct with no hang. The pre-handshake analysis (the members' next-round ack is causally after
+  the previous round's broadcast, so the reset-counter never overshoots) held on device.
+- Tests added: `test_rms_norm_sharded.py` — added 3 RM WIDTH w_non shapes to
+  `RM_CROSS_CORE_SHAPES` (mix of ragged + non-ragged) and a new
+  `test_rms_norm_row_major_width_ragged_unicast` (asserts the grid IS ragged, so the unicast leg
+  is exercised, not silently skipped); removed the RM+WIDTH+w_non case from
+  `test_rms_norm_rejects_row_major_width_block_remaining` (now supported; the 5c TILE-gamma
+  carve-out stays). Probes 060–061 capture the non-ragged/ragged + multi-round verification.

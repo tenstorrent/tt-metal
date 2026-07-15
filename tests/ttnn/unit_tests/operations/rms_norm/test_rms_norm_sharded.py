@@ -152,17 +152,23 @@ def test_rms_norm_cross_core_sharded(device, shape, memory_layout, dtype, with_g
     assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
 
 
-# Refinement 5a — ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction. RM width-sharding
+# Refinement 5a / 5b — ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction. RM width-sharding
 # splits each logical row's W across cores at sub-tile (stick) granularity, so each core
 # reads its OWN resident [Hs, Ws] shard from local L1, zero-pads the sub-tile W (and H) tail
-# to whole tiles, tilizes, and the SAME R5 reduce-root gather + mcast broadcast combine runs
-# unchanged. Supported: no_gamma + RM gamma, all alignments (WIDTH excludes w_non — ragged
-# grid; TILE gamma excluded — sub-tile gamma column offset). These flip the old rejection.
+# to whole tiles, tilizes, and the SAME R5 reduce-root gather + broadcast combine runs
+# unchanged. R5b lifts the WIDTH w_non exclusion: auto_shard_config pads a non-tile-aligned W
+# into ceil(W/w_gran) cores, which overflows into a RAGGED (non-rectangular) grid the mcast
+# can't address, so the root broadcasts 1/rms by UNICAST to each member (rectangular WIDTH/BLOCK
+# groups keep the mcast fast path). Supported: no_gamma + RM gamma, all alignments (TILE gamma
+# still excluded — sub-tile gamma column offset, 5c).
 RM_CROSS_CORE_SHAPES = [
     ((1, 1, 32, 64), WIDTH),  # sub-tile Ws=8, 1 tile-row
     ((2, 4, 128, 512), WIDTH),  # multi-tile-row (32), multi-image
     ((1, 1, 17, 64), WIDTH),  # h_non
     ((1, 1, 32, 4096), WIDTH),  # wide, tile-aligned Ws
+    ((1, 1, 32, 50), WIDTH),  # R5b: w_non — bf16 rectangular (7 cores), fp32 ragged (13 in 8x2)
+    ((2, 1, 128, 100), WIDTH),  # R5b: w_non ragged (bf16 13/8x2, fp32 25/8x4), multi-round (8)
+    ((4, 8, 32, 47), WIDTH),  # R5b: w_non, multi-round (32 tile-rows) — fp32 ragged (12/8x2)
     ((1, 1, 32, 64), BLOCK),  # sub-tile H=4 AND W=8
     ((1, 1, 256, 512), BLOCK),  # design loose case
     ((1, 1, 64, 17), BLOCK),  # w_non (BLOCK grids stay rectangular)
@@ -196,23 +202,58 @@ def test_rms_norm_row_major_cross_core(device, shape, memory_layout, dtype, with
     assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
 
 
-def test_rms_norm_rejects_row_major_width_block_remaining(device, expect_error):
-    """R5a carve-outs still refused (structural follow-ups): RM+WIDTH with non-tile-aligned
-    W (ragged grid -> non-rectangular mcast group), and RM cross-core + TILE gamma (sub-tile
-    global column offset can't index a TILE-stored gamma)."""
-    torch.manual_seed(42)
-    # (a) RM + WIDTH + w_non-aligned W (W=50).
-    shape_wnon = (1, 1, 64, 50)
-    x_wnon = torch.randn(shape_wnon, dtype=torch.bfloat16)
-    mem_wnon = auto_shard_config(
-        list(shape_wnon), WIDTH, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device
-    )
-    in_wnon = ttnn.from_torch(
-        x_wnon, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_wnon
-    )
-    with expect_error((NotImplementedError, RuntimeError), ".*"):
-        rms_norm(in_wnon, compute_kernel_config=_cfg(), memory_config=in_wnon.memory_config())
+# Refinement 5b — RM + WIDTH_SHARDED with non-tile-aligned W. auto_shard_config pads W into
+# ceil(W/w_gran) cores; when that overflows a full grid row into a partial one the shard grid
+# is RAGGED (ncores != nx*ny) and no single mcast rectangle addresses the whole reduction
+# group. The root then broadcasts 1/rms by UNICAST to each member. These shapes force a genuine
+# ragged grid (asserted below) so the unicast leg is actually exercised, not silently skipped.
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 32, 50),  # fp32: 13 cores in 8x2 bbox (ragged), 1 tile-row
+        (2, 1, 128, 100),  # fp32: 25 cores in 8x4 bbox (ragged), multi-round (8 tile-rows)
+        (4, 8, 32, 47),  # fp32: 12 cores in 8x2 bbox (ragged), multi-round (32 tile-rows)
+    ],
+)
+@pytest.mark.parametrize("with_gamma", [False, True])
+def test_rms_norm_row_major_width_ragged_unicast(device, shape, with_gamma):
+    """R5b: RM WIDTH with a RAGGED shard grid -> unicast broadcast-back. fp32 (w_gran=4) makes
+    these ncores overflow into a partial row; assert the grid really is ragged, then verify
+    the cross-core unicast reduction matches the reference and keeps the input's shard spec."""
+    torch.manual_seed(0)
+    dtype = ttnn.float32
+    W = shape[-1]
+    torch_input = torch.randn(shape, dtype=torch.float32)
+    gamma_t = torch.randn(W, dtype=torch.float32) if with_gamma else None
+    mem_cfg = auto_shard_config(list(shape), WIDTH, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device)
 
+    grid = mem_cfg.shard_spec.grid
+    bb = grid.bounding_box()
+    nx = int(bb.end.x) - int(bb.start.x) + 1
+    ny = int(bb.end.y) - int(bb.start.y) + 1
+    assert grid.num_cores() != nx * ny, f"expected a ragged grid, got {grid.num_cores()} in {nx}x{ny}"
+
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    ttnn_gamma = (
+        ttnn.from_torch(gamma_t.reshape(1, 1, 1, W), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        if with_gamma
+        else None
+    )
+    out = rms_norm(ttnn_input, gamma=ttnn_gamma, compute_kernel_config=_cfg(), memory_config=ttnn_input.memory_config())
+    assert out.memory_config().memory_layout == WIDTH
+    actual = ttnn.to_torch(out).reshape(shape)
+    expected = pytorch_rms_norm(torch_input, gamma=gamma_t)
+    assert_with_pcc(expected.to(torch.float32), actual.to(torch.float32), PCC[dtype])
+
+
+def test_rms_norm_rejects_row_major_width_block_remaining(device, expect_error):
+    """R5c carve-out still refused (structural follow-up): RM cross-core + TILE gamma (a
+    sub-tile global column offset can't index a TILE-stored gamma). R5b lifted the other
+    R5a carve-out — RM+WIDTH with non-tile-aligned W now works via the ragged unicast
+    broadcast (see test_rms_norm_row_major_cross_core)."""
+    torch.manual_seed(42)
     # (b) RM + BLOCK + TILE gamma.
     shape_g = (1, 1, 64, 512)
     x_g = torch.randn(shape_g, dtype=torch.bfloat16)

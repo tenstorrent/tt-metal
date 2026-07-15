@@ -116,19 +116,16 @@ EXCLUSIONS = [
     # R5a landed ROW_MAJOR + WIDTH/BLOCK_SHARDED cross-core reduction: each core reads
     # its OWN resident [Hs, Ws] shard directly from local L1, zero-pads the sub-tile W
     # (and H) tail to whole tiles, tilizes, and the SAME R5 reduce-root gather + mcast
-    # broadcast combine runs unchanged. Two structural gaps remain, carved out below:
+    # broadcast combine runs unchanged. One structural gap remains, carved out below:
     #
-    # (a) RM + WIDTH_SHARDED + non-tile-aligned W. auto_shard_config splits a
+    # (5b landed) RM + WIDTH_SHARDED + non-tile-aligned W. auto_shard_config splits a
     #     non-aligned W into a RAGGED grid (ncores != nx*ny), so the WIDTH reduction
-    #     group (= the whole shard grid) is not a rectangle the mcast broadcast can
-    #     address. BLOCK grids are always rectangular, and RM+WIDTH tile/h-aligned
-    #     grids are too, so those are supported. Follow-up: unicast broadcast for the
-    #     ragged tail group.
-    {
-        "layout": ttnn.ROW_MAJOR_LAYOUT,
-        "memory_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        "alignment": "w_non_aligned",
-    },
+    #     group is not a rectangle the mcast broadcast can address. R5b replaces the
+    #     mcast broadcast-back with a UNICAST broadcast (root -> each group member +
+    #     a per-member ready flag, mirroring the already-unicast gather leg) for ragged
+    #     WIDTH groups only; rectangular WIDTH/BLOCK groups keep the mcast fast path.
+    #     So {RM, WIDTH, w_non_aligned} is now SUPPORTED (no exclusion).
+    #
     # (b) RM cross-core + TILE gamma. Each core owns a sub-tile W-slice at a sub-tile
     #     global column offset, so a TILE-stored gamma can't be read as whole tiles
     #     aligned to the core's LOCAL column 0 (its cols 0..Ws map to global cols

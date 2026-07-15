@@ -35,15 +35,20 @@
 // zero-padding the sub-tile W-tail (and any H-tail) so compute always tilizes a
 // clean full tile. The Σx² partial over the zero-padded tile equals the partial
 // over the core's real columns (zeros add nothing) and ×1/W_global makes the
-// group-sum the true global mean(x²) — no partial scaler needed. The combine +
-// broadcast transport is REUSED UNCHANGED (all RM cross-core groups are
-// rectangular: BLOCK grids always are, and RM+WIDTH+w_non — the only ragged
-// geometry — is op-side EXCLUDED). Gamma (RM only on this leg) is read as a
-// column-slice stick at the core's global W-offset (w_col_start), matching the
-// input's local column layout.
+// group-sum the true global mean(x²) — no partial scaler needed. Gamma (RM only on
+// this leg) is read as a column-slice stick at the core's global W-offset
+// (w_col_start), matching the input's local column layout.
 //
-// The gather is many->one (raw unicast + a `progress` counter). The broadcast
-// is one->many via the mcast_pipe helper (SenderPipe/ReceiverPipe + Mcast2D).
+// The gather is many->one (raw unicast + a `progress` counter). The broadcast is
+// one->many, chosen by group geometry:
+//   * RECTANGULAR group (ncores == nx*ny): mcast_pipe SenderPipe/ReceiverPipe + a
+//     host Mcast2D rectangle (the R5/R5a fast path).
+//   * RAGGED WIDTH group (R5b — auto_shard_config pads a non-tile-aligned W into
+//     ceil(W/w_gran) cores, overflowing a full row into a partial one): the bbox
+//     holds phantom cores no mcast should touch, so the root UNICASTS 1/rms to each
+//     member individually + a per-member ready flag (USE_UNICAST_BCAST). The non-root
+//     ReceiverPipe is topology-agnostic and unchanged — it acks the root and waits its
+//     own flag whether the root mcasts or unicasts.
 
 #include <stdint.h>
 
@@ -99,9 +104,16 @@ void kernel_main() {
     constexpr uint32_t shard_h = get_compile_time_arg_val(11);    // Hs (RM leg): shard rows
     constexpr uint32_t shard_w = get_compile_time_arg_val(12);    // Ws (RM leg): shard cols
     constexpr uint32_t input_elt = get_compile_time_arg_val(13);  // input element bytes (RM leg)
-    // mcast wire (host Mcast2D) at CT 14; TensorAccessors chained after it.
-    constexpr auto mc = McastArgs</*CT=*/14, /*RT=*/10>();
+    // R5b: ragged WIDTH group -> broadcast 1/rms by UNICAST (root -> each member) instead
+    // of one mcast to the bbox rectangle (which would hit phantom cores). The gather leg
+    // and the non-root ReceiverPipe are topology-agnostic and unchanged.
+    constexpr uint32_t USE_UNICAST_BCAST = get_compile_time_arg_val(14);
+    // mcast wire (host Mcast2D) at CT 15; TensorAccessors chained after it.
+    constexpr auto mc = McastArgs</*CT=*/15, /*RT=*/10>();
     constexpr uint32_t ta_ct_base = mc.next_compile_time_args_offset();
+    // Ragged unicast broadcast: the root reads its group's member virtual coords from the
+    // RT tail (2 words each, slot order), starting right after the 4-word mcast RT block.
+    constexpr uint32_t member_rt_base = mc.next_runtime_args_offset();
     constexpr auto input_args = TensorAccessorArgs<ta_ct_base>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
@@ -212,12 +224,52 @@ void kernel_main() {
             }
             cb_push_back(cb_gather, GROUP_SIZE);  // compute folds -> cb_rms_src
 
-            // broadcast the finalized 1/rms to the whole group (loopback fills own cb_sumsq)
+            // broadcast the finalized 1/rms to the whole group
             cb_wait_front(cb_rms_src, 1);
             uint32_t rms_rp = get_read_ptr(cb_rms_src);
             cb_reserve_back(cb_sumsq, 1);
-            auto sender = mc.sender(noc);
-            sender.send(rms_rp, get_write_ptr(cb_sumsq), sumsq_bytes);
+            uint32_t sumsq_wp = get_write_ptr(cb_sumsq);
+            if constexpr (USE_UNICAST_BCAST) {
+                // R5b ragged group: the mcast rectangle would hit phantom bbox cores, so
+                // UNICAST 1/rms to each member individually + a per-member ready flag —
+                // the SAME handshake the non-root ReceiverPipe expects (cross_core_
+                // reduction_design.md §8 option 3). Mirrors the unicast gather leg.
+                Semaphore<> data_ready(mc.data_ready);          // members' S->R data-ready flag
+                Semaphore<> consumer_ready(mc.consumer_ready);  // members' R->S readiness ack
+                if constexpr (mc.pre_handshake) {
+                    if (GROUP_SIZE > 1) {
+                        // gate the send on every non-root member having drained its cb_sumsq
+                        consumer_ready.wait(GROUP_SIZE - 1);
+                        consumer_ready.set(0);
+                    }
+                }
+                // fill own cb_sumsq (the root is a group member) via a local self-read
+                noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], rms_rp), sumsq_wp, sumsq_bytes);
+                noc_async_read_barrier();
+                // unicast 1/rms to each other member's cb_sumsq (identical L1 offset everywhere)
+                for (uint32_t m = 0; m < GROUP_SIZE; ++m) {
+                    if (m == my_index) {
+                        continue;
+                    }
+                    uint32_t mx = get_arg_val<uint32_t>(member_rt_base + 2 * m + 0);
+                    uint32_t my = get_arg_val<uint32_t>(member_rt_base + 2 * m + 1);
+                    noc_async_write(rms_rp, get_noc_addr(mx, my, sumsq_wp), sumsq_bytes);
+                }
+                noc_async_write_barrier();  // data lands before any flag (§9 barrier-before-signal)
+                // raise each other member's data-ready flag (Flag: 0 -> VALID; receiver clears it)
+                for (uint32_t m = 0; m < GROUP_SIZE; ++m) {
+                    if (m == my_index) {
+                        continue;
+                    }
+                    uint32_t mx = get_arg_val<uint32_t>(member_rt_base + 2 * m + 0);
+                    uint32_t my = get_arg_val<uint32_t>(member_rt_base + 2 * m + 1);
+                    data_ready.up(noc, mx, my, VALID);
+                }
+            } else {
+                // rectangular group: one mcast to the group rect (loopback fills own cb_sumsq)
+                auto sender = mc.sender(noc);
+                sender.send(rms_rp, sumsq_wp, sumsq_bytes);
+            }
             cb_pop_front(cb_rms_src, 1);
             cb_push_back(cb_sumsq, 1);
         } else {

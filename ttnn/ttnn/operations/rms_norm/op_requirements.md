@@ -264,7 +264,7 @@ alignments}` for `no_gamma` + RM gamma. Golden: WIDTH/BLOCK **2590 passed / 0 fa
 across ~29 shapes; INTERLEAVED/HEIGHT **481 passed** (no regression from the shared-writer CT
 change); loose 6/6; unit dir 335 passed. Two structural carve-outs remain EXCLUDED → 5b/5c.
 
-### [ ] Refinement 5b — RM + WIDTH_SHARDED, non-tile-aligned W (ragged-grid unicast broadcast)
+### [x] Refinement 5b — RM + WIDTH_SHARDED, non-tile-aligned W (ragged-grid unicast broadcast)
 
 **Goal**: lift the `{ROW_MAJOR, WIDTH_SHARDED, w_non_aligned}` EXCLUSION (5a). `auto_shard_config`
 splits a non-tile-aligned W into a **ragged** WIDTH grid (`ncores != nx*ny`, e.g. 13 cores in an
@@ -279,6 +279,21 @@ W) — low priority.
 
 **Done when**: `{RM, WIDTH, w_non_aligned}` moves out of EXCLUSIONS into passing golden cells;
 no regression on the RM WIDTH/BLOCK rectangular surface (R5a) or the R5 TILE surface.
+
+**Landed (2026-07-15)**: the `{RM, WIDTH, w_non_aligned}` EXCLUSION is lifted. `auto_shard_config`
+pads a non-tile-aligned W into `ceil(W/w_gran)` cores; when that overflows a full grid row into a
+partial one the shard grid is RAGGED (`ncores != nx*ny`). The root now broadcasts `1/rms` to a ragged
+WIDTH group by **UNICAST** (root → each member's `cb_sumsq` + a per-member `data_ready` flag, gated
+on the members' readiness ack — the SAME handshake the mcast `ReceiverPipe` expects), mirroring the
+already-unicast gather leg (`cross_core_reduction_design.md §8 option 3`). Rectangular WIDTH/BLOCK
+groups keep the mcast fast path; only ragged WIDTH groups route to unicast. The gather leg and the
+non-root `ReceiverPipe` are topology-agnostic and unchanged — the reader's root leg is the only delta
+(compute + writer untouched). Reused the R5/R5a plan + `mcast_pipe` `ReceiverPipe` + CB set; added a
+`USE_UNICAST_BCAST` CT flag + per-member virtual coords on the ragged root's RT tail. Golden: RM WIDTH
+w_non slice **90 passed / 0 failed / 0 xpassed** (150 correctly-xfailed remain — the permanent
+`{fp32,False}` + the 5c TILE-gamma exclusion); full `test_op` cartesian **6072 passed / 0 failed / 0
+xpassed / 2310 xfailed** (no regression); loose 6/6; regression+translated 99; unit dir 353 passed.
+Stresses covered: ragged grids to 25 cores (8×4 bbox) and multi-round groups to 32 tile-rows.
 
 ### [ ] Refinement 5c — RM cross-core + TILE gamma (sub-tile-offset gamma tile-column extract)
 
