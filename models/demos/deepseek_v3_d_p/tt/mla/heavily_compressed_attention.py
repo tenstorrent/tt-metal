@@ -16,18 +16,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 
 
-def compress_rope_cos_sin(
-    n_windows: int, compress_rate: int, rope_head_dim: int, theta: float
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Interleaved cos/sin tables [1, 1, n_windows, rope_head_dim] at per-window positions ``i * compress_rate``."""
-    inv_freq = 1.0 / (theta ** (torch.arange(0, rope_head_dim, 2, dtype=torch.int64).float() / rope_head_dim))
-    positions = torch.arange(n_windows, dtype=torch.float32) * compress_rate
-    freqs = torch.outer(positions, inv_freq)
-    cos = freqs.cos().repeat_interleave(2, dim=-1)
-    sin = freqs.sin().repeat_interleave(2, dim=-1)
-    return cos[None, None], sin[None, None]
-
-
 def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rate: int) -> torch.Tensor:
     """Per-query causal mask: query ``t`` may attend entry ``w`` only if ``t >= (w+1)*compress_rate``."""
     batch, seq_len = position_ids.shape
@@ -52,7 +40,7 @@ class TtHCACompressor(LightweightModule):
         head_dim: int,
         compress_rate: int,
         rope_head_dim: int,
-        compress_rope_theta: float,
+        rotary_emb,
         rms_norm_eps: float = 1e-6,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -63,7 +51,7 @@ class TtHCACompressor(LightweightModule):
         self.head_dim = int(head_dim)
         self.compress_rate = int(compress_rate)
         self.rope_head_dim = int(rope_head_dim)
-        self.compress_rope_theta = float(compress_rope_theta)
+        self.rotary_emb = rotary_emb
         self.rms_norm_eps = float(rms_norm_eps)
 
         self.wkv = self._to_tt_linear_weight(kv_proj_weight)
@@ -89,7 +77,7 @@ class TtHCACompressor(LightweightModule):
             head_dim=config.head_dim,
             compress_rate=config.compress_rates["heavily_compressed_attention"],
             rope_head_dim=config.qk_rope_head_dim,
-            compress_rope_theta=config.rope_parameters["compress"]["rope_theta"],
+            rotary_emb=reference.rotary_emb,
             rms_norm_eps=config.rms_norm_eps,
             **kwargs,
         )
@@ -112,6 +100,13 @@ class TtHCACompressor(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.memory_config,
         )
+
+    def _compress_cos_sin(self, positions: torch.Tensor):
+        """Interleaved cos/sin [1, 1, T, rope_head_dim] from the reference compress rotary."""
+        cos, sin = self.rotary_emb(torch.zeros(1), position_ids=positions, layer_type="compress")
+        cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1)
+        sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1)
+        return self._from_torch(cos), self._from_torch(sin)
 
     def forward(self, hidden_states, position_ids: torch.Tensor):
         """``hidden_states``: TTNN tensor [B, 1, S, hidden]. ``position_ids``: torch [B, S].
@@ -147,12 +142,9 @@ class TtHCACompressor(LightweightModule):
             nope_dim = self.head_dim - self.rope_head_dim
             nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
             rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
-            cos, sin = compress_rope_cos_sin(
-                n_windows, self.compress_rate, self.rope_head_dim, self.compress_rope_theta
-            )
-            rope = ttnn.experimental.rotary_embedding_llama(
-                rope, self._from_torch(cos), self._from_torch(sin), self.trans_mat, is_decode_mode=False
-            )
+            positions = (torch.arange(n_windows) * self.compress_rate).unsqueeze(0)
+            cos, sin = self._compress_cos_sin(positions)
+            rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
             compressed_kv = ttnn.concat([nope, rope], dim=-1)
         else:
             n_windows = 0
