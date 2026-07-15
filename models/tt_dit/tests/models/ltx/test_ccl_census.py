@@ -277,6 +277,8 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
     out_a = col_linear(AUDIO_DIM, AUDIO_DIM)  # audio_attn1/audio_attn2/v2a .to_out
     kv_a2v = col_linear(AUDIO_DIM, 2 * AUDIO_DIM, chunks=2)  # audio_to_video_attn.to_kv (audio context)
     kv_v2a = col_linear(VIDEO_DIM, 2 * AUDIO_DIM, chunks=2)  # video_to_audio_attn.to_kv (video context)
+    kv_v2a_bf8 = col_linear(VIDEO_DIM, 2 * AUDIO_DIM, chunks=2)  # same, but gathers its input in bf8
+    kv_v2a_bf8.activation_dtype = ttnn.bfloat8_b
     ff1_a = col_linear(AUDIO_DIM, 4 * AUDIO_DIM)  # audio_ff.ff1
 
     # to_out inputs are the concatenated-heads SDPA output: TP-sharded on the head dim, so the
@@ -475,6 +477,13 @@ def test_ccl_census(mesh_device: ttnn.MeshDevice) -> None:
             False,
         ),
         ("agmm_out_video_s2_bf4", lambda: out_v_bf4(x_v2, parallel_config=pc), True),
+        # v2a to_kv at S2: the SAME video-activation gather as the out-proj, feeding a matmul the
+        # same 4096 wide (VIDEO_DIM -> 2*AUDIO_DIM). Priced as the out-proj triple — fused agmm vs
+        # pure matmul on the gathered input (isolates the exposed gather) vs bf8 (how much it reclaims)
+        # — to answer whether a SECOND exposed S2 collective exists that the bf8 cast can shrink.
+        ("agmm_kv_v2a_video_s2", lambda: kv_v2a(x_v2, parallel_config=pc), True),
+        ("mm_kv_v2a_s2_gathered", lambda: kv_v2a(x_v2_full), True),
+        ("agmm_kv_v2a_video_s2_bf8", lambda: kv_v2a_bf8(x_v2, parallel_config=pc), True),
     ]
 
     variants += cut1c
