@@ -509,8 +509,15 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
                 attributes, input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), output_spec);
         }
 
-        // The descriptor path's program is shape-agnostic, so it keys on dtype/memory_config plus the
-        // per-operand shard volumes (computed only on this branch — the metal_v2 branch folds full specs).
+        // Descriptor (ProgramFactory) path. Its program is nominally shape-agnostic via runtime args, but
+        // it bakes shape-dependent uint32 scalars (per-core tile counts, start ids, D/N/C/Ht/Wt dims,
+        // row-width strides — see the reader/writer arg builders in binary_ng_program_factory.cpp) into
+        // those args, and now declares the output as a BufferBinding, so a cross-shape cache hit would
+        // re-use frozen scalars against a differently-shaped tensor (wrong tile range / OOB). Key on
+        // dtype/memory_config plus the per-operand shard volumes AND the full padded shapes of every
+        // present operand + output, so both differently-sharded and differently-shaped ops get distinct
+        // cache entries (over-keying is safe; under-keying is the bug). shard_volumes is computed only on
+        // this branch — the metal_v2 branch folds full specs instead.
         const auto shard_volumes =
             get_shard_volumes(input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), output_spec);
         return operation::hash_operation<BinaryNgDeviceOperation>(
@@ -519,11 +526,21 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
             input_tensor_a.memory_config(),
             input_tensor_b->dtype(),
             input_tensor_b->memory_config(),
-            shard_volumes);
+            shard_volumes,
+            input_tensor_a.padded_shape(),
+            input_tensor_b->padded_shape(),
+            output_spec.padded_shape());
     }
 
+    // Descriptor path, single operand (scalar RHS). Same reasoning as the has-b descriptor branch above:
+    // the baked reader/writer scalars derive from the a/output padded shapes, so hash them.
+    const auto output_spec = compute_output_specs(attributes, tensor_args);
     return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
+        attributes,
+        input_tensor_a.dtype(),
+        input_tensor_a.memory_config(),
+        input_tensor_a.padded_shape(),
+        output_spec.padded_shape());
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
