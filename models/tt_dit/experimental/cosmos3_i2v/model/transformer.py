@@ -212,6 +212,27 @@ class Cosmos3OmniTransformer(Module):
 
         import os as _os
 
+        # When set, dumps gen_seq (after proj_in) at the specified call index to a .pt file
+        # for numerical comparison against the host-side reference.
+        _dump_gen_seq_step = int(_os.environ.get("TT_COSMOS3_DUMP_GEN_SEQ_STEP", "-1"))
+        _gen_seq_call_idx = getattr(self, "_gen_seq_call_idx", 0)
+        object.__setattr__(self, "_gen_seq_call_idx", _gen_seq_call_idx + 1)
+        if _dump_gen_seq_step >= 0 and _gen_seq_call_idx == _dump_gen_seq_step and self.proj_in is not None:
+            import torch as _torch
+
+            _dump_dir = _os.environ.get("TT_COSMOS3_DUMP_GEN_SEQ_DIR", "/tmp")
+            _os.makedirs(_dump_dir, exist_ok=True)
+            _trunk_id = f"trunk{id(self) & 0xFFFF:04x}"
+            _gen_tensor = ttnn.to_torch(ttnn.get_device_tensors(gen_seq)[0])
+            _path = f"{_dump_dir}/{_trunk_id}_gen_seq_after_proj_in_step{_gen_seq_call_idx}.pt"
+            _torch.save(_gen_tensor.detach().cpu(), _path)
+            print(
+                f"[proj_in-debug] step={_gen_seq_call_idx} shape={tuple(_gen_tensor.shape)} "
+                f"mean={_gen_tensor.float().mean():.4f} std={_gen_tensor.float().std():.4f} "
+                f"saved={_path}",
+                flush=True,
+            )
+
         per_layer_dir = _os.environ.get("TT_COSMOS3_DUMP_PER_LAYER_DIR")
         per_layer_call = getattr(self, "_per_layer_call_idx", 0)
         do_dump = per_layer_dir is not None and per_layer_call == 0

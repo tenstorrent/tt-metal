@@ -543,6 +543,30 @@ def _install_device_proj_out_forward(pipe) -> None:
             _n_clean = packed_tokens_vision.shape[0] - _n_noisy
             packed_tokens_vision[_n_clean:].add_(single_embed)
             t_after_vision_pre = _time.perf_counter() if _hoist_timing_enabled else 0.0
+
+            import _thread as _thr
+            import os as _os_dbg
+
+            _dump_step = int(_os_dbg.environ.get("TT_COSMOS3_DUMP_GEN_SEQ_STEP", "-1"))
+            _call_key = f"_baseline_gen_seq_call_{_thr.get_ident()}"
+            _call_idx = getattr(self, _call_key, 0)
+            object.__setattr__(self, _call_key, _call_idx + 1)
+            if _dump_step >= 0 and _call_idx == _dump_step:
+                import torch as _torch
+
+                _dump_dir = _os_dbg.environ.get("TT_COSMOS3_DUMP_GEN_SEQ_DIR", "/tmp")
+                _os_dbg.makedirs(_dump_dir, exist_ok=True)
+                _path = (
+                    f"{_dump_dir}/baseline_gen_seq_after_projin_step{_call_idx}_tid{_thr.get_ident() & 0xFFFF:04x}.pt"
+                )
+                _torch.save(packed_tokens_vision.detach().cpu(), _path)
+                print(
+                    f"[baseline-debug] step={_call_idx} shape={tuple(packed_tokens_vision.shape)} "
+                    f"mean={packed_tokens_vision.float().mean():.4f} std={packed_tokens_vision.float().std():.4f} "
+                    f"saved={_path}",
+                    flush=True,
+                )
+
             layer_kwargs = {}
 
         if _hoist_timing_enabled:
