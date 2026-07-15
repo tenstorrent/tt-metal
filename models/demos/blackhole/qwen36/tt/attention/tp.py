@@ -548,18 +548,21 @@ class TPAttention:
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
-        # Cap SDPA-decode grid to 64 cores (tree-reduction limit on P150). Swept two knobs
-        # looking for a fix to SDPA-decode's ~3.7x per-call slowdown at B=8 vs B=1: (1) grid size
-        # 64 -> the real P150x4 grid (11x10=110 cores) -- measured NO improvement (114.6us ->
-        # 118.0us, slightly worse), likely because the extra cores sit in a less favorable
-        # NOC/DRAM-distance region, or the added tree-reduction round offsets the gain; (2)
-        # max_cores_per_head_batch (defaults to 16 in SDPAProgramConfig when unset -- B=1 has only
-        # ever used 16 of the 64 grid cores, not all 64) swept 1..64 at both B=1 and B=8 -- flat
-        # within noise (~1-3%) at every value. Neither knob moves this op; the B-scaling looks
-        # like a fixed per-batch-group cost (dispatch/output-write per independent reduction
-        # group), not a cores-per-group effect -- not fixable via SDPAProgramConfig tuning.
+        # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
+        # hardcoded 64. cores_per_head = grid_total/B (sdpa_decode_program_factory.cpp), so a
+        # bigger grid gives each batch row more parallel cores for its KV-reduction. At SHORT
+        # context (~4k) the reduction is shallow enough that fixed per-core overhead dominates
+        # and this makes ~no difference (B=1: flat; B=8: ~3% worse, both within noise). At LONG
+        # context (~64k) the reduction is deep enough that the extra cores are a real win:
+        # SdpaDecodeDeviceOperation duration B=8: 1569.9us -> 1396.2us (-11%); B=1: 220.8us ->
+        # 215.5us (-2.4%, no regression). Using the full grid unconditionally since it never hurts
+        # and helps significantly at long context, where batched decode is otherwise slowest.
+        _sdpa_grid = self.mesh.compute_with_storage_grid_size()
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0
+            compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
         )
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
