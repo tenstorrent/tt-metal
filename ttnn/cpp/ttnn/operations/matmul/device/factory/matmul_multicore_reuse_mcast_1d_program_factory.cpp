@@ -168,6 +168,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
     uint32_t in1_aligned_tile_size =
         in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above. Sharded bias is backed by the L1 tensor buffer and keeps its
+    // natural page size. No-op on Wormhole and for tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size =
+        bias_is_sharded ? bias_single_tile_size : tt::align(bias_single_tile_size, dram_alignment);
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     uint32_t in2_block_tiles = 0;
@@ -205,7 +211,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
@@ -868,7 +874,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_page_size(src3_cb_index, bias_aligned_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
 
         if (bias_is_sharded) {
@@ -880,8 +886,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,
-            bias_single_tile_size,
-            in3_CB_size / bias_single_tile_size,
+            bias_aligned_tile_size,
+            in3_CB_size / bias_aligned_tile_size,
             in3_CB_size);
     }
 
@@ -1189,6 +1195,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
     uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
+    // tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
     uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
 
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
@@ -1242,7 +1253,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
 
@@ -1748,15 +1759,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_page_size(src3_cb_index, bias_aligned_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,
-            bias_single_tile_size,
-            in3_CB_size / bias_single_tile_size,
+            bias_aligned_tile_size,
+            in3_CB_size / bias_aligned_tile_size,
             in3_CB_size);
     }
 
@@ -2997,6 +3008,12 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
     uint32_t in1_aligned_tile_size =
         in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above. Sharded bias is backed by the L1 tensor buffer and keeps its
+    // natural page size. No-op on Wormhole and for tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size =
+        bias_is_sharded ? bias_single_tile_size : tt::align(bias_single_tile_size, dram_alignment);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -3051,7 +3068,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
@@ -3707,7 +3724,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
+            .page_size = bias_aligned_tile_size,
             .tile = bias_tile_desc});
         if (bias_is_sharded) {
             cb_desc.tensor = &*bias_tensor;
@@ -4012,6 +4029,11 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     uint32_t in0_aligned_tile_size =
         in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
     uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
+    // tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
@@ -4077,7 +4099,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     CoreCoord start_core = sub_device_start_core;
 
@@ -4576,7 +4598,7 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
+            .page_size = bias_aligned_tile_size,
             .tile = bias_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
