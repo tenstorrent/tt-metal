@@ -464,7 +464,7 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
             B = page_table.padded_shape()[0];
         }
     } else {
-        B = tensor_args.k.padded_shape()[0];
+        B = tensor_args.q.padded_shape()[1];
     }
     bool q_locally_available = false;
     uint32_t num_q_heads = q_shape_unpadded[2];
