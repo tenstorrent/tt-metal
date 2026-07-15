@@ -27,22 +27,24 @@ namespace tt::tt_metal {
 // GlobalSemaphoreImpl implementation
 
 GlobalSemaphoreImpl::GlobalSemaphoreImpl(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    std::optional<uint64_t> address) :
+    IDevice* device, const CoreRangeSet& cores, std::optional<uint32_t> initial_value, BufferType buffer_type) :
     device_(device), cores_(cores) {
-    this->setup_buffer(initial_value, buffer_type, address);
+    this->setup_buffer(initial_value, buffer_type, std::nullopt);
+}
+
+GlobalSemaphoreImpl::GlobalSemaphoreImpl(
+    IDevice* device, CoreRangeSet&& cores, std::optional<uint32_t> initial_value, BufferType buffer_type) :
+    device_(device), cores_(std::move(cores)) {
+    this->setup_buffer(initial_value, buffer_type, std::nullopt);
 }
 
 GlobalSemaphoreImpl::GlobalSemaphoreImpl(
     IDevice* device,
-    CoreRangeSet&& cores,
+    const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
-    std::optional<uint64_t> address) :
-    device_(device), cores_(std::move(cores)) {
+    uint64_t address) :
+    device_(device), cores_(cores) {
     this->setup_buffer(initial_value, buffer_type, address);
 }
 
@@ -116,11 +118,11 @@ GlobalSemaphore CreateGlobalSemaphore(
 
 GlobalSemaphore::GlobalSemaphore(
     IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
-    GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type, std::nullopt)) {}
+    GlobalSemaphore(GlobalSemaphoreImpl(device, cores, initial_value, buffer_type)) {}
 
 GlobalSemaphore::GlobalSemaphore(
     IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
-    GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type, std::nullopt)) {}
+    GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type)) {}
 
 GlobalSemaphore::GlobalSemaphore(GlobalSemaphoreImpl&& impl) :
     pimpl_(std::make_unique<GlobalSemaphoreImpl>(std::move(impl))) {}

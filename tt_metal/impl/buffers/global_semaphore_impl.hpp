@@ -22,18 +22,19 @@ class GlobalSemaphore;
 class GlobalSemaphoreImpl {
 public:
     GlobalSemaphoreImpl(
+        IDevice* device, const CoreRangeSet& cores, std::optional<uint32_t> initial_value, BufferType buffer_type);
+
+    GlobalSemaphoreImpl(
+        IDevice* device, CoreRangeSet&& cores, std::optional<uint32_t> initial_value, BufferType buffer_type);
+
+    // Dedicated constructor for creating a global semaphore without allocation.
+    // The instantiation of GlobalSemphore will be emplaced onto the address specified.
+    GlobalSemaphoreImpl(
         IDevice* device,
         const CoreRangeSet& cores,
         std::optional<uint32_t> initial_value,
         BufferType buffer_type,
-        std::optional<uint64_t> address);
-
-    GlobalSemaphoreImpl(
-        IDevice* device,
-        CoreRangeSet&& cores,
-        std::optional<uint32_t> initial_value,
-        BufferType buffer_type,
-        std::optional<uint64_t> address);
+        uint64_t address);
 
     // Copy/move semantics
     GlobalSemaphoreImpl(const GlobalSemaphoreImpl&) = default;
@@ -59,14 +60,5 @@ private:
     IDevice* device_;
     CoreRangeSet cores_;
 };
-
-namespace experimental {
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address);
-}  // namespace experimental
 
 }  // namespace tt::tt_metal
