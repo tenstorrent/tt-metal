@@ -249,7 +249,7 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
         repo_root / PERF_DIR,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_GATE_TIMEOUT", "1800") or "1800"),
+        int(os.environ.get("PERF_MCP_MEASURE_TIMEOUT", "1200") or "1200"),
         "termination_check",
     )
     if rc is None:
@@ -286,7 +286,7 @@ def _fullpipe_e2e(repo_root: Path, mcp_env: dict, devices: str, label: str) -> f
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL 52 layers, no tracy (one slow run, minutes)..."
     )
     ms = None
-    timeout_s = int(os.environ.get("PERF_MCP_FULLPIPE_TIMEOUT", "1200") or "1200")
+    timeout_s = int(os.environ.get("PERF_MCP_MEASURE_TIMEOUT", "1200") or "1200")
     proc = subprocess.Popen(
         [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
         cwd=str(repo_root / PERF_DIR),
@@ -367,7 +367,7 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
         repo_root,
         env,
         devices,
-        int(os.environ.get("PERF_MCP_COVERAGE_TIMEOUT", "1800") or "1800"),
+        int(os.environ.get("PERF_MCP_MEASURE_TIMEOUT", "1200") or "1200"),
         "coverage probe",
     )
     if rc is None:
@@ -646,9 +646,14 @@ def _run_device_proc(
     cmd, cwd, env, devices: str, timeout_s: int, label: str = "", reset_on_timeout: bool = True, capture: bool = True
 ):
     """Run a DEVICE-touching subprocess so a device wedge can never hang the tool forever. Own session +
-    hard timeout; on timeout SIGKILL the WHOLE process group (reaping device-holding children that would
-    otherwise leak the mesh and wedge every later step) and optionally tt-smi -r. Returns (rc, combined
-    stdout+stderr); rc is None when it timed out / was killed."""
+    hard timeout; on timeout SIGKILL the WHOLE process group + _reclaim_device (kill any holder + tt-smi
+    -r); AND reap the group on every exit so no stale holder survives to wedge the next op. Returns (rc,
+    combined stdout+stderr); rc is None when it timed out / was killed.
+
+    Recovery-timeout tiers (all env-overridable, one knob each):
+      BUILD   discover (perf-test build, legitimately ~25 min)  -> PERF_MCP_DISCOVER_TIMEOUT (3600s)
+      MEASURE gate / coverage / full-pipeline device runs       -> PERF_MCP_MEASURE_TIMEOUT  (1200s)
+      ROUND   agent round (stall-detector on no-progress)       -> PERF_MCP_ROUND_STALL_SEC  (600s)"""
     proc = subprocess.Popen(
         list(cmd),
         cwd=str(cwd),
@@ -658,12 +663,14 @@ def _run_device_proc(
         text=True if capture else None,
         start_new_session=True,
     )
+    rc, out = None, ""
     try:
         if capture:
             out, _ = proc.communicate(timeout=timeout_s)
-            return proc.returncode, out or ""
-        proc.wait(timeout=timeout_s)
-        return proc.returncode, ""
+            out = out or ""
+        else:
+            proc.wait(timeout=timeout_s)
+        rc = proc.returncode
     except subprocess.TimeoutExpired:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -679,6 +686,16 @@ def _run_device_proc(
             f"(likely a device wedge / leaked mesh) -- killed the whole process group + {tail}"
         )
         return None, ""
+    finally:
+        # Reap any lingering group member on EVERY exit. A daemon child (profiler, not-fully-closed mesh)
+        # can outlive the main subprocess and keep holding the device -- a stale holder that wedges the
+        # NEXT device op (observed: a completed baseline measurement leaked a holder that blocked the
+        # coverage probe). Killing the whole process group here guarantees no leftover survives.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            pass
+    return rc, out
 
 
 def _progress_token(repo_root: Path, kernel_log: str):
