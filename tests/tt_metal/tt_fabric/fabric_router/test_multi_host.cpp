@@ -235,6 +235,27 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
     check_asic_mapping_against_golden("TestDual2x4ControlPlaneInit");
 }
 
+// Same logical dual-T3K (2x4) mapping as TestDual2x4ControlPlaneInit, but exercised against the
+// physically distinct t3k_dual_host mock cluster (identical tray/asic_location/mesh/chip layout,
+// different asic_ids and hostnames). Kept as a separate test so it carries its own golden file.
+TEST(MultiHost, TestDual2x4T3kDualHostControlPlaneInit) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        log_info(tt::LogTest, "This test is only for T3K");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        dual_galaxy_mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    check_asic_mapping_against_golden("TestDual2x4T3kDualHostControlPlaneInit");
+}
+
 // Verifies that ControlPlane APIs return values derived from the post-solving mapping (MappedChipInfo in
 // fabric_node_id_to_mapping_), not from pre-solved mesh_graph, PSD, or local bindings. Uses discovery path
 // (no set_custom_fabric_topology). Run with:

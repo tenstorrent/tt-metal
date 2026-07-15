@@ -107,7 +107,7 @@ shield:
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
   unit:
-    cpu_medium: 225 # fabric CPU-only shards: unit/sp4-glx/subtorus/pod-revAB/pod-revC ×15 + bh-slices ×25 + pod-llama ×55 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30
+    cpu_medium: 235 # fabric CPU-only shards: unit/sp4-glx/subtorus/pod-revAB/pod-revC ×15 + bh-slices ×25 + pod-llama ×55 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30 + bh-ring-stress ×10
     wh_llmbox: 60
     wh_galaxy: 25
   stress:
