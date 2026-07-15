@@ -679,8 +679,9 @@ no gate does not ship.** Measure on the block harness (`test_ltx_transformer_blo
       → removes 1 exposed SP collective/block ×48. **Predicted sign = WASH, leaning LOSS** (INCLUDING exposed latency):
       saves ~1 fixed collective latency but pays ~1 ring-PC fixed overhead + retile risk — the ring cross-PC is tuned
       `q_chunk=64` for the SHORT audio Q (`attention_ltx.py:204-211`), badly sized for A→V's LONG video Q; the existing
-      explicit/ring asymmetry looks deliberate for exactly this reason. **A/B (gated on a CLEAN tree — blocked now by the
-      driver's uncommitted W1 WIP in these files):** add `LTX_A2V_RING_CROSS` env toggle, slope-price the A→V attention
+      explicit/ring asymmetry looks deliberate for exactly this reason. **A/B (needs a CLEAN tree — UNBLOCKED as of 2026-07-15 01:27Z: transformer_ltx.py + attention_ltx.py are
+      clean, only foreign `pipeline_ltx_distilled.py` is modified; still WARM authoring, not a cron cell — model source
+      edit + new census-harness body):** add `LTX_A2V_RING_CROSS` env toggle, slope-price the A→V attention
       body both ways at S1 (q=1216) + S2 (q=4864) via the census harness, confirm STEP_MS delta. Revert unless slope drop
       beats the added ring-PC fixed cost. LOW priority — a ~1/28-collective crumb against a 2.2s gap.
       **MEASURED envelope (skip-cross ablation, nl2, ms/block):** cross-modal (a2v+v2a) = full-AV − skip-cross
