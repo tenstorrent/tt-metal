@@ -485,6 +485,7 @@ class SmolLM3TextEncoder(Module):
         self._device = device
         self._head_dim = config.head_dim
         self._rope_theta = config.rope_theta
+        self._sp_bias_cache: dict[int, ttnn.Tensor] = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # HF SmolLM3ForCausalLM prefix is "model."; SmolLM3Model state has no prefix.
@@ -527,10 +528,17 @@ class SmolLM3TextEncoder(Module):
         batch_size, seq_len = input_ids.shape
 
         if self._sp_factor > 1:
-            # Sharded seq: build the per-shard rectangular causal bias (global offset baked in) once
-            # and thread it through every layer. No local padding -- the wrapper pads to a bucket.
+            # Sharded seq: per-shard rectangular causal bias (global offset baked in), threaded through
+            # every layer. It is constant for a given local seq length, so build it once and cache it:
+            # that keeps the host->device build out of a captured trace (it runs during the tracer's
+            # prep_run and is only read inside capture/replay). No local padding -- the wrapper buckets.
             padded = seq_len
-            attention_bias = build_sp_causal_bias(seq_len, self._sp_factor, device=self._device, sp_axis=self._sp_axis)
+            attention_bias = self._sp_bias_cache.get(seq_len)
+            if attention_bias is None:
+                attention_bias = build_sp_causal_bias(
+                    seq_len, self._sp_factor, device=self._device, sp_axis=self._sp_axis
+                )
+                self._sp_bias_cache[seq_len] = attention_bias
         elif attention_mask is not None:
             padded = (
                 -(-seq_len // 32) * 32 if seq_len < MAX_CHUNK_SIZE else -(-seq_len // MAX_CHUNK_SIZE) * MAX_CHUNK_SIZE
