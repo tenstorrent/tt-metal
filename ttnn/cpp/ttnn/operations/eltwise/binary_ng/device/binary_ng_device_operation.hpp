@@ -81,30 +81,21 @@ struct BinaryNgDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
-    // compute_program_hash EXCLUDES the tensor volume, so one cached program is reused across
-    // differently-shaped calls.  All shape-/work-split-dependent per-core runtime args are therefore
-    // re-applied on every cache hit here.  Mirrors create_descriptor()'s shared builder.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Re-apply ALL per-dispatch state to the cached program on every program-cache hit — the
+    // descriptor-era analog of the legacy override_runtime_arguments().  compute_program_hash
+    // EXCLUDES the tensor volume, so one cached program is reused across differently-shaped and
+    // differently-allocated (incl. in-place, out=x) calls; this re-derives every per-core runtime
+    // arg AND every tensor-backed circular-buffer base address for the CURRENT tensors, via the same
+    // shared builder create_descriptor() uses.  Correct by construction — no address inference, so
+    // in-place / mixed-aliasing / matmul(X,X)-style cases can't be mis-patched.  An op that defines
+    // this MUST NOT also define get_dynamic_runtime_args (the adapter static_asserts it); override
+    // supersedes both it and resolve_bindings, which this op no longer uses.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& c,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
-
-    // Opt in to the in-place output_tensor program-cache fast path (#48928: in-place residual add):
-    // an output_tensor carried in tensor_args that aliases input_a is treated as a safe in-place
-    // alias instead of bailing to slow-path rebuild (drives resolve_bindings'
-    // allow_inplace_output_tensor_alias via the adapter). Safe here because get_dynamic_runtime_args()
-    // above re-derives EVERY per-core arg for the current tensors on each cache hit, so the shared
-    // cached program stays correct for a differently-shaped/-allocated in-place call. Ops without a
-    // complete get_dynamic (unary/ternary/moreh_*) must NOT set this — they keep bailing (see #49573).
-    //
-    // POLICY: this flag IS the correctness argument and nothing verifies it — the UNSAFE_ prefix is a
-    // deliberate hazard marker at the declaration site, not a normal tuning knob. Set it true ONLY with
-    // an accompanying in-place cache-hit regression test that varies shape/allocation across the hit and
-    // asserts a single cache entry + PCC (test_binary_ng_program_cache.py: the interleaved cross-shape
-    // and sharded-readdress cases). No test → do not opt in. (Removed once get_dynamic is made complete
-    // for all in-place ops, or a debug parity check lands, or descriptors move to Metal 2.0.)
-    static constexpr bool UNSAFE_optin_inplace_program_cache_alias = true;
 };
 
 }  // namespace ttnn::operations::binary_ng

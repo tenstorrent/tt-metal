@@ -105,13 +105,12 @@ def test_ng_cache_reuse_same_config(device, isolate_program_cache):
     ],
 )
 def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, shape_first, shape_second):
-    """binary_ng opts in to the in-place program-cache fast path (UNSAFE_optin_inplace_program_cache_alias,
-    #48928). An in-place add (output_tensor aliases input) with different logical shapes shares one
+    """binary_ng re-applies all per-dispatch state on a cache hit via override_runtime_arguments
+    (#48928). An in-place add (output_tensor aliases input) with different logical shapes shares one
     cache entry (volume is excluded from the hash), so the second call is a cache HIT that reuses the
-    first program WITHOUT rebuild. binary_ng's get_dynamic_runtime_args must re-derive every per-core
+    first program WITHOUT rebuild. binary_ng's override_runtime_arguments must re-derive every per-core
     arg for the current shape or the reused program corrupts the result. Regression guard for the
-    in-place fast path that #49573 protects for ops WITHOUT a complete get_dynamic (SDXL silu / moreh)
-    but that binary_ng is allowed to take."""
+    in-place cache-hit path (the SDXL silu / moreh class of bug)."""
 
     def inplace_add(shape, seed):
         torch.manual_seed(seed)
@@ -137,11 +136,11 @@ def test_ng_inplace_cache_reuse_different_shapes(device, isolate_program_cache, 
 
 def test_ng_inplace_cache_hit_sharded_readdresses(device, isolate_program_cache):
     """binary_ng in-place add on SHARDED tensors — the sharding mode SDXL exercised (silu) — driven
-    through binary_ng's opt-in fast path. Repeated at the SAME shard config (sharded binary_ng keys
-    shard_volume into the hash, so a different shape would MISS, not hit) but with freshly-allocated
-    operands kept alive, so each cache HIT sees a DIFFERENT buffer address. binary_ng's tensor-backed
-    CB / rt-arg addresses must be re-patched on the hit (no rebuild) or the result is stale. Guards
-    the sharded in-place path that is now binary_ng's responsibility as the sole opt-in op."""
+    through binary_ng's override_runtime_arguments cache-hit path. Repeated at the SAME shard config
+    (sharded binary_ng keys shard_volume into the hash, so a different shape would MISS, not hit) but
+    with freshly-allocated operands kept alive, so each cache HIT sees a DIFFERENT buffer address.
+    binary_ng's tensor-backed CB / rt-arg addresses must be re-applied on the hit (no rebuild) or the
+    result is stale."""
     shape = [1, 1, 256, 256]
     mem = ttnn.create_sharded_memory_config(
         shape, core_grid=ttnn.CoreGrid(y=8, x=1), strategy=ttnn.ShardStrategy.HEIGHT
@@ -163,6 +162,77 @@ def test_ng_inplace_cache_hit_sharded_readdresses(device, isolate_program_cache)
         assert_with_pcc(a + b, ttnn.to_torch(tt_c), 0.999)
 
     # One shared program reused across all four differently-addressed in-place hits.
+    assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("first_inplace", [True, False], ids=["inplace_first", "outofplace_first"])
+def test_ng_cache_mixed_inplace_outofplace_interleaved(device, isolate_program_cache, first_inplace):
+    """REGRESSION (aliased address re-derivation): one cached INTERLEAVED program reused across a MIX of
+    in-place (output_tensor aliases an input) and out-of-place calls sharing a single cache entry
+    (logical shape is excluded from the hash). The legacy resolve_bindings maps an aliased buffer to its
+    FIRST occurrence, so a program built under one aliasing pattern and reused under another would patch
+    the writer's output address from the wrong tensor slot. binary_ng's override_runtime_arguments
+    re-derives every rt-arg address for the actual current tensors, so it MUST survive both orders —
+    this proves the rt-arg axis is re-applied, not just that a cache hit occurred."""
+
+    def do(seed, inplace):
+        torch.manual_seed(seed)
+        a = torch.rand([1, 1, 32, 64], dtype=torch.bfloat16)
+        b = torch.rand([1, 1, 32, 64], dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = tt_a if inplace else None
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b, output_tensor=out)
+        if inplace:
+            assert tt_c.buffer_address() == tt_a.buffer_address()
+        return a + b, ttnn.to_torch(tt_c)
+
+    # Alternate aliasing across the SAME cache entry, in both orders.
+    for i, inplace in enumerate([first_inplace, not first_inplace, first_inplace, not first_inplace]):
+        ref, out = do(i, inplace)
+        assert_with_pcc(ref, out, 0.999)
+    assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("first_inplace", [True, False], ids=["inplace_first", "outofplace_first"])
+def test_ng_cache_mixed_inplace_outofplace_sharded(device, isolate_program_cache, first_inplace):
+    """REGRESSION (SDXL-class, the axis that actually broke): one cached SHARDED program reused across
+    a MIX of in-place and out-of-place calls sharing a single cache entry. For sharded ops the input/
+    output addresses ride on tensor-backed CB base addresses. Under the legacy path these were patched
+    by resolved_bindings.cbs via first-occurrence resolution (and get_dynamic could not touch CBs at
+    all), so a program built under one aliasing pattern and reused under another mis-resolved the output
+    CB to the wrong tensor slot with NOTHING to correct it — the exact PCC~0 behind SDXL in-place silu.
+    binary_ng's override_runtime_arguments re-applies the CB addresses by CBIndex from the current
+    tensors, so both orders must stay correct."""
+    shape = [1, 1, 256, 256]
+    mem = ttnn.create_sharded_memory_config(
+        shape, core_grid=ttnn.CoreGrid(y=8, x=1), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    keep_alive = []  # hold refs so successive calls see fresh (different) buffer addresses
+
+    def do(seed, inplace):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16)
+        b = torch.rand(shape, dtype=torch.bfloat16)
+        tt_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        tt_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        if inplace:
+            out = tt_a
+        else:
+            out = ttnn.from_torch(
+                torch.zeros(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
+            )
+        with device.cache_entries_counter.measure():
+            tt_c = ttnn.add(tt_a, tt_b, output_tensor=out)
+        assert tt_c.buffer_address() == out.buffer_address()
+        keep_alive.extend([tt_a, tt_b, tt_c, out])
+        return a + b, ttnn.to_torch(tt_c)
+
+    for i, inplace in enumerate([first_inplace, not first_inplace, first_inplace, not first_inplace]):
+        ref, out = do(i, inplace)
+        assert_with_pcc(ref, out, 0.999)
+    # Same shard config across all calls (sharded binary_ng keys shard_volume) → one shared cache entry.
     assert device.cache_entries_counter.total == 1
 
 

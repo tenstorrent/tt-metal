@@ -25,10 +25,10 @@
  *   args.push_back(num_tiles);    // uint32_t
  *   kernel_desc.emplace_runtime_args(core, std::move(args));
  *
- *   // In the adapter (cache miss): store resolved bindings.  Pass num_input_buffers and, for an op
- *   // that re-applies every cache-hit-varying arg itself, allow_inplace_output_tensor_alias=true to
- *   // keep the fast path when its output_tensor is carried in tensor_args and aliases an input
- *   // (surfaced from the op via the ttnn trait UNSAFE_optin_inplace_program_cache_alias; see below).
+ *   // In the adapter (cache miss): store resolved bindings.  NOTE: this is the LEGACY address-inference
+ *   // path, being migrated out.  An op that needs correct in-place / mixed-aliasing behavior should
+ *   // instead define override_runtime_arguments() (re-derives all per-dispatch state itself, correct by
+ *   // construction) — the adapter then bypasses resolve_bindings entirely for that op.
  *   auto tensor_buffers = collect_tensor_buffers(tensor_args, tensor_return_value);
  *   auto resolved = tt::tt_metal::resolve_bindings(program, desc, tensor_buffers);
  *
@@ -168,5 +168,27 @@ struct DynamicRuntimeArg {
 // Uses GetRuntimeArgs / GetCommonRuntimeArgs for the same pre/post-first-enqueue correctness as
 // apply_resolved_bindings.
 void apply_dynamic_runtime_args(Program& program, std::span<const DynamicRuntimeArg> dynamic_args);
+
+// ---------------------------------------------------------------------------
+// Fast-path parity check (debug / CI regression net)
+// ---------------------------------------------------------------------------
+
+// Universal, op-agnostic correctness invariant for the cache-hit fast path.  After the fast path
+// has patched the cached program (apply_resolved_bindings + apply_dynamic_runtime_args), the caller
+// rebuilds the descriptor for the CURRENT tensors into a scratch Program and passes both here.  This
+// asserts the fast path reproduced EXACTLY what a full rebuild would: every per-core and common
+// runtime arg (enumerated from `desc`) and every circular-buffer base address must match.
+//
+// A mismatch means resolved_bindings + get_dynamic_runtime_args is INCOMPLETE for this op — a stale
+// runtime arg or (for sharded ops) a stale CB address survives on a differently-aliased or
+// differently-allocated cache hit (the SDXL in-place silu / MorehAdamW failure mode).  It fires a
+// TT_FATAL naming the op, kernel, core, arg, and both values, turning silent PCC garbage into a loud,
+// pinpointed failure.  The rebuild is the oracle, so no per-op assertions have to be hand-maintained.
+//
+// Intended to be called only under -DTT_DESCRIPTOR_PATCHING_PARITY_CHECK (CI/debug); it is a no-cost
+// helper otherwise since the caller guards the call site.  The check makes the in-place fast path a
+// verified framework invariant rather than a per-op trust assertion.
+void assert_fastpath_parity(
+    const Program& fast, const Program& rebuilt, const ProgramDescriptor& desc, std::string_view op_name);
 
 }  // namespace tt::tt_metal
