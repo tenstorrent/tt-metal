@@ -132,10 +132,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
-    sender_run_params.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_tx", (uint32_t)test_config.num_of_transactions}, {"tx_size", (uint32_t)bytes_per_transaction}}});
+    AddRuntimeArgsForNode(
+        sender_run_params.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_tx", (uint32_t)test_config.num_of_transactions},
+            {"tx_size", (uint32_t)bytes_per_transaction},
+        });
     run_params.kernel_run_args.push_back(sender_run_params);
     SetProgramRunArgs(program, run_params);
 

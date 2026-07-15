@@ -449,13 +449,17 @@ inline void run_single_dfb_program(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     using RuntimeArgValues = decltype(experimental::ProgramRunArgs::KernelRunArgs::runtime_arg_values);
-    using NodeRuntimeArgs = RuntimeArgValues::value_type;
     auto build_dm_named_rtas = [&]() {
         RuntimeArgValues result;
         for (const auto& [core, chunk_offset] : core_to_chunk_offset) {
-            result.push_back(NodeRuntimeArgs{
-                experimental::NodeCoord{core.x, core.y},
-                {{"chunk_offset", chunk_offset}, {"entries_per_core", entries_per_core}}});
+            const experimental::NodeCoord node{core.x, core.y};
+            experimental::AddRuntimeArgsForNode(
+                result,
+                node,
+                {
+                    {"chunk_offset", chunk_offset},
+                    {"entries_per_core", entries_per_core},
+                });
         }
         return result;
     };
@@ -799,8 +803,8 @@ inline void run_single_dfb_program_2_0(
     if (p.producer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
             .kernel = PRODUCER,
-            .runtime_arg_values =
-                {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
         params.kernel_run_args.push_back({.kernel = PRODUCER});
@@ -808,8 +812,8 @@ inline void run_single_dfb_program_2_0(
     if (p.consumer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
             .kernel = CONSUMER,
-            .runtime_arg_values =
-                {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}),
         });
     } else {
         params.kernel_run_args.push_back({.kernel = CONSUMER});
