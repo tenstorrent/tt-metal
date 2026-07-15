@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -152,6 +152,8 @@ static bool get_post_process_bias(
         // The reuse-optimized factory fuses a full [M, N] bias (broadcast over batch) for a
         // single-block-per-element config; route exactly those to fusion. Everything else (including
         // batched weights with any other bias) falls through to a post-processed add.
+        const bool is_reuse_config = program_config.has_value() &&
+                                     std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(program_config.value());
         if (reuse_config_fuses_full_block_bias(
                 program_config,
                 input_tensor_a_adjusted,
@@ -160,6 +162,10 @@ static bool get_post_process_bias(
                 transpose_a,
                 transpose_b)) {
             return false;
+        }
+        // A row-broadcastable ([1, N]) bias on the reuse config must be post-processed.
+        if (is_reuse_config && utilities::fused_matmul_bias_row_broadcastable(bias)) {
+            return true;
         }
         // Fused matmul+bias does not support batched weights; apply bias via add().
         if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {

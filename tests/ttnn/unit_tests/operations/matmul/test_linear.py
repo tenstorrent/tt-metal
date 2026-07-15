@@ -1550,6 +1550,9 @@ def test_linear_batched_reuse_fused_bias_program_cache(device):
     b = ttnn.from_torch(torch_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     biases = [ttnn.from_torch(tb, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) for tb in torch_biases]
 
+    device.enable_program_cache()
+    device.clear_program_cache()
+
     before = device.num_program_cache_entries()
     out0 = ttnn.linear(a, b, bias=biases[0], program_config=pc)
     after_first = device.num_program_cache_entries()
