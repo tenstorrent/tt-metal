@@ -15,6 +15,8 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/subchunk_bands.hpp"
 
 #ifndef IN0_SUB_CHUNKS
