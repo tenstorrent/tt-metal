@@ -703,7 +703,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 //   1. Spec → MakeProgramFromSpec resolves the binding's TensorSpec into a correct CTA payload
 //      (page size, args_config, bank coords, alignment).
 //   2. Each binding's slot in the kernel's TensorBinding address section is filled with
-//      MeshTensor::address() at enqueue.
+//      the MeshTensor's mesh_buffer().address() at enqueue.
 //   3. kernel_bindings_generated.h emits a `tensor::` namespace with a working type alias + token.
 //   4. TensorAccessor(tensor::name) constructs an accessor whose get_noc_addr returns
 //      addresses that NoC reads/writes actually use correctly.
@@ -849,7 +849,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
 //   DM consumer (NCRISC)   — out_dfb → DRAM output.
 //
 // The tensor is a single-shard L1 tensor on core (0,0) (the compute kernel's core), so its shard base
-// address equals MeshTensor::address(). No dereference of the shard occurs (address-of only), so the
+// address equals the MeshTensor's mesh_buffer().address(). No dereference of the shard occurs (address-of only), so the
 // proof does not depend on the shard's contents.
 
 TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
@@ -919,7 +919,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     std::vector<uint32_t> output_data;
     detail::ReadFromBuffer(output_buffer, output_data);
 
-    const uint32_t expected_address = static_cast<uint32_t>(local_tensor.address());
+    const uint32_t expected_address = static_cast<uint32_t>(local_tensor.mesh_buffer().address());
     constexpr uint32_t words_per_entry = entry_size / sizeof(uint32_t);
     ASSERT_EQ(output_data.size(), total_bytes / sizeof(uint32_t));
     for (uint32_t e = 0; e < num_tiles; ++e) {

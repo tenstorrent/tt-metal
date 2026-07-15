@@ -118,7 +118,7 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
     auto buffer_address = mesh_buffer->address();
     MeshTensor tensor = MeshTensor::from_buffer(std::move(*mesh_buffer), std::move(spec), std::move(topology));
 
-    EXPECT_EQ(tensor.address(), buffer_address);
+    EXPECT_EQ(tensor.mesh_buffer().address(), buffer_address);
     EXPECT_EQ(&tensor.device(), mesh_device_.get());
     EXPECT_EQ(tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);

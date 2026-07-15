@@ -760,8 +760,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         bool is_worker_core = true;
         std::vector<uint32_t> mm_in1_sender_writer_args;
         mm_in1_sender_writer_args.push_back((std::uint32_t)is_worker_core);
-        mm_in1_sender_writer_args.push_back(in1_tensor.address());  // [1]: will be replaced by Buffer*
-        mm_in1_sender_writer_args.push_back(bias.has_value() ? bias->address() : 0u);  // [2]: may be replaced
+        mm_in1_sender_writer_args.push_back(0u);  // [1]: in1_tensor address, bound below
+        mm_in1_sender_writer_args.push_back(0u);  // [2]: bias address (if present), bound below
 
         uint32_t vc = bank_id & 0x3;
         bank_ids.push_back(bank_id);

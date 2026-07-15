@@ -1265,7 +1265,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_AttachWritesTensorAddressToDFB) {
     };
     SetProgramRunArgs(program, params);
 
-    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor.address()))
+    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), static_cast<uint32_t>(tensor.mesh_buffer().address()))
         << "DFB base addr should match the borrowed MeshTensor's address after attach";
 }
 
@@ -1391,7 +1391,7 @@ TEST_F(ProgramRunArgsTestQuasar, BindingOnlyKernelOmittedFromRunArgsSucceeds) {
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     ASSERT_FALSE(kernel->common_runtime_args().empty())
         << "binding-only kernel's CRTA buffer should have been allocated by SetProgramRunArgs";
-    EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor.address()))
+    EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor.mesh_buffer().address()))
         << "binding base address should be written even though the kernel was omitted from kernel_run_args";
 }
 
@@ -2230,7 +2230,9 @@ TEST_F(ProgramRunArgsTestGen1, TensorBindingOnlyKernelOmittedFromRunArgsSucceeds
     };
 
     EXPECT_NO_THROW(SetProgramRunArgs(program, params));
-    EXPECT_EQ(ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor.address()))
+    EXPECT_EQ(
+        ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"),
+        static_cast<uint32_t>(tensor.mesh_buffer().address()))
         << "binding address should be written even though the kernel was omitted from kernel_run_args";
 }
 

@@ -88,7 +88,7 @@ inline uint32_t get_cb_address(const CBDescriptor& desc) {
         return desc.buffer->address() + addr_offset;
     }
     if (desc.tensor != nullptr) {
-        return desc.tensor->address() + addr_offset;
+        return desc.tensor->mesh_buffer().address() + addr_offset;
     }
     return addr_offset;
 }

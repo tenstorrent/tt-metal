@@ -215,7 +215,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorMovesOutUnderl
     // The released tensor is valid and owns the very same MeshBuffer that the storage held —
     // proving the memory was moved out, not copied or reallocated.
     EXPECT_FALSE(released.is_valueless_after_move());
-    EXPECT_EQ(released.address(), address);
+    EXPECT_EQ(released.mesh_buffer().address(), address);
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ReleaseMeshTensorLeavesDefaultConstructedState) {
