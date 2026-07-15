@@ -348,50 +348,45 @@ def _build_rope_cache_tt(
     device,
     rope_theta: float = 1_000_000.0,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Build RoPE cos/sin on device. Returns [1, 1, seq_len, head_dim] TILE fp32.
+    """Build RoPE cos/sin on device. Returns [1, 1, seq_len, head_dim] TILE bf16.
 
-    fp32 (not bf16) is required for a clean long-form traced render: the ~2e-4/step
-    bf16 rope error amplifies chaotically over the ~40k-step feedback loop and drives
-    the render into energy collapse.  Prefill slices these tables; the traced decode
-    is fed matching fp32 per-position rows (see the generator's _sf_cos/_sin buffers).
+    bf16 matches ``ttnn.experimental.rotary_embedding_hf`` (and the on-device embedding
+    tables used by the traced decode path).  Isolated PCC vs the fp32 sinusoid is
+    ~0.999995–0.999999 at decode/prefill shapes used here.
     """
     cos, sin = _build_rope_cache(seq_len, head_dim, rope_theta)  # numpy [S, hd] fp32
     cos_4d = cos[np.newaxis, np.newaxis, :, :]  # [1, 1, S, head_dim]
     sin_4d = sin[np.newaxis, np.newaxis, :, :]
     cos_tt = ttnn.as_tensor(
-        cos_4d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        cos_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     sin_tt = ttnn.as_tensor(
-        sin_4d, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        sin_4d, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     return cos_tt, sin_tt
 
 
-def _rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
-    """Rotate half: [B, n, S, hd] → [-x2, x1] where x = [x1 | x2], hd split in half."""
-    sh = x.shape
-    B, n, S, hd = sh[0], sh[1], sh[2], sh[3]
-    half = hd // 2
-    x1 = ttnn.slice(x, [0, 0, 0, 0], [B, n, S, half], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    x2 = ttnn.slice(x, [0, 0, 0, half], [B, n, S, hd], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.concat(
-        [ttnn.neg(x2, memory_config=ttnn.DRAM_MEMORY_CONFIG), x1], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-
 def _apply_rope_ttnn(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    """Apply RoPE in float32 (matches reference fp32 RoPE numerics).
+    """Apply HF-style RoPE via fused ``rotary_embedding_hf`` (prefill-mode layout).
 
-    Restored from the fused bf16 ``rotary_embedding_hf`` path: fp32 rope is required for a
-    clean long-form traced render (bf16's ~2e-4/step error amplifies over the feedback loop).
+    Replaces the previous ~9-op fp32 typecast/mul/rotate_half/concat path.  Input is
+    ``[B, n_heads, S, head_dim]`` with cos/sin ``[1, 1, S, head_dim]`` (same layout the
+    op's prefill mode expects).  Decode uses S==1 after slicing the position row.
     """
-    x_f32 = ttnn.typecast(x, ttnn.float32)
-    rotated = ttnn.add(
-        ttnn.mul(x_f32, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
-        ttnn.mul(_rotate_half_ttnn(x_f32), sin, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+    if x.dtype != ttnn.bfloat16:
+        x = ttnn.typecast(x, ttnn.bfloat16)
+    if cos.dtype != ttnn.bfloat16:
+        cos = ttnn.typecast(cos, ttnn.bfloat16)
+    if sin.dtype != ttnn.bfloat16:
+        sin = ttnn.typecast(sin, ttnn.bfloat16)
+    return ttnn.experimental.rotary_embedding_hf(
+        x,
+        cos,
+        sin,
+        is_decode_mode=False,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=_HIFI4,
     )
-    return ttnn.typecast(rotated, ttnn.bfloat16)
 
 
 def _reshape_tt(x: ttnn.Tensor, shape: list) -> ttnn.Tensor:
