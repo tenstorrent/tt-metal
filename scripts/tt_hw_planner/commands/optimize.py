@@ -353,6 +353,37 @@ def _derive_topology_env(args, model_dir):
 
 
 def cmd_optimize(args) -> int:
+    # AUTO-RESTART SUPERVISOR: an orchestrator SIGSEGV / native tt-metal crash kills the whole Python
+    # process, which no in-process recovery can catch. Run the real work in a supervised CHILD and, on
+    # abnormal exit, reset the device and relaunch it -- the per-op ladder + attempt log persist on disk,
+    # so a native crash becomes an automatic restart instead of a dead run. Disable with
+    # PERF_MCP_SUPERVISE=0; bounded by PERF_MCP_MAX_RESTARTS (default 3).
+    import os as _os, sys as _sys, subprocess as _sp, shutil as _sh, time as _t
+
+    if _os.environ.get("PERF_MCP_SUPERVISED") != "1" and _os.environ.get("PERF_MCP_SUPERVISE", "1") == "1":
+        _max = int(_os.environ.get("PERF_MCP_MAX_RESTARTS", "3") or "3")
+        _ttsmi = _sh.which("tt-smi")
+        for _n in range(_max + 1):
+            _rc = _sp.run(
+                [_sys.executable, "-m", "scripts.tt_hw_planner", *_sys.argv[1:]],
+                env={**_os.environ, "PERF_MCP_SUPERVISED": "1"},
+            ).returncode
+            if _rc == 0 or _n >= _max:
+                if _rc != 0:
+                    print(f"  [optimize/supervisor] child exited rc={_rc}; {_max} restart(s) exhausted.", flush=True)
+                return _rc
+            print(
+                f"  [optimize/supervisor] orchestrator exited rc={_rc} (likely native crash / device wedge) "
+                f"-- resetting device + restarting (restart {_n + 1}/{_max}); ladder state is preserved on disk.",
+                flush=True,
+            )
+            if _ttsmi:
+                try:
+                    _sp.run([_ttsmi, "-r"], timeout=420, capture_output=True, text=True)
+                except Exception as _e:  # noqa: BLE001
+                    print(f"  [optimize/supervisor] tt-smi -r skipped: {_e}", flush=True)
+            _t.sleep(5)
+
     try:
         from ..cli import _quiet_framework_logging
 
