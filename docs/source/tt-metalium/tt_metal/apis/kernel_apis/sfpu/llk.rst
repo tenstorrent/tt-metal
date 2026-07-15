@@ -259,7 +259,7 @@ available:
   * SM16 - (vSMag16), 16-bit sign-magnitude integer
   * M32 - (vMag), 32-bit magnitude only integer
   * LO16 - zero extend low 16 bits
-  * HI16 - high 16 bits (store will transfer 32-bits that are uint16_t-swapped)
+  * HI16 - high 16 bits (store will transfer 32 bits that are uint16_t-swapped)
 
 On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
@@ -333,27 +333,39 @@ the ``RoundMode`` operand is optional, and the following are provided:
 Not all conversions are supported (columns are the source type, rows
 are the result type):
 
++-----------+--------+------+-------+-------+------+
 | Result    | vFloat | vInt | vUInt | vSMag | vMag |
-|-----------|:------:|:----:|:-----:|:-----:|:----:|
++===========+========+======+=======+=======+======+
 | vFloat    |   -    | YES  |       | YES   | YES  |
++-----------+--------+------+-------+-------+------+
 | vInt      |  QSR   |  -   |       | YES   | YES  |
++-----------+--------+------+-------+-------+------+
 | vUInt     |        |      |       |       |      |
++-----------+--------+------+-------+-------+------+
 | vSMag     |  QSR   | YES  |       |   -   | YES  |
++-----------+--------+------+-------+-------+------+
 | vMag      |        |      |       |       |  -   |
++-----------+--------+------+-------+-------+------+
 | vFloat16a |  YES   | YES  |       | YES   | YES  |
++-----------+--------+------+-------+-------+------+
 | vFloat16b |  YES   | YES  |       | YES   | YES  |
++-----------+--------+------+-------+-------+------+
 | vUInt16   |  YES   |      |       |       |      |
++-----------+--------+------+-------+-------+------+
 | vUInt8    |  YES   |      |       |       |      |
++-----------+--------+------+-------+-------+------+
 | vSMag16   |  YES   |      |       |       |      |
++-----------+--------+------+-------+-------+------+
 | vSMag8    |  YES   |      |       |       |      |
++-----------+--------+------+-------+-------+------+
 
-The restricted types (``vFloat16a``, ``vSMag16``, etc can be converted
-from, the same as their unrestricted variant (``vFloat``, ``vSMag`` etc).
+The restricted types (``vFloat16a``, ``vSMag16``, etc, can be
+converted to the same types as their unrestricted variants
+(``vFloat``, ``vSMag``, etc).
 
-Note: The older ``int32_to_float`` and vice verse actually converted
-between sign-magnitude and float representations. Thus code using them
-should now use a ``vSMag`` source or result type, (or it was malfunctioning).
-
+Note: The older ``int32_to_float`` function actually converted from
+sign-magnitude to float representations. Thus code using it should now
+use a ``vSMag`` source type, (or it was malfunctioning).
 
 Operators
 ^^^^^^^^^
@@ -486,9 +498,9 @@ a structured binding, if you want both:
 
 .. code-block:: c++
 
-   auto [f, i] = round (v);
-   vFloat f = round (v);
-   vInt i = round (v);
+   auto [f1, i1] = round (v);
+   vFloat f2 = round (v);
+   vInt i2 = round (v);
 
 .. code-block:: c++
 
@@ -497,7 +509,7 @@ a structured binding, if you want both:
 
 Scale ``in`` by 2^``scale``. You may select an ``LdexpMode::Fast``,
 which for the vector case can be slightly faster at the expense of not
-dealing with exponent over, or underflow.
+dealing with exponent overflow or underflow.
 
 .. code-block:: c++
 
@@ -540,8 +552,8 @@ available on Wormhole.
    vFloat polynomial (vFloat x, T0 Coeff0, T1 Coeff1, T2 Coeff2, ...);
 
 Compute the polynomial expansion ``Coeff0 + Coeff1 * x + Coeff2 * x^2
-+ ...``.  Coefficients may be any ``vFloat`` type, or scalar ``float``,
-they need not be the same type.
++ ...``.  Coefficients may any be mixture of vector ``vFloat`` and
+scalar ``float`` types.
 
 .. code-block:: c++
 
