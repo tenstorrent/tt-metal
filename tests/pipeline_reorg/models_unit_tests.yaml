@@ -759,17 +759,17 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # Run pytest as the payload of tt-run (ttrun.py), which launches it under mpirun on the
-    # allocated ranks, so the test executes in the worker venv (with ttnn + pytest) rather than
-    # directly on the runner's system python. Mirrors demo_sp_multihost_tests.yaml; the rankfile
-    # and rank_bindings.yaml are written to /etc/ttop by the allocation.
-    TTRUN_DIR=/etc/ttop
+    # Flux has no mesh graph descriptor of its own, and bh_spsg is a Count allocation (no MGD is
+    # written to /etc/ttop), so point tt-run at a generic single-galaxy MGD and let its Phase-1
+    # discovery generate the rank bindings. tt-run then launches pytest under mpirun in the worker
+    # venv (which has ttnn + pytest). New mode uses --mesh-graph-descriptor + --hosts and is
+    # mutually exclusive with --rank-binding.
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    MPI_ARGS="--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}"
-    python3 "${TTRUN_PY}" --tcp-interface ens5f0np0 --mpi-args "${MPI_ARGS}" --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+    MGD="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy/mesh_graph_descriptor.textproto"
+    PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    python3 "${TTRUN_PY}" --tcp-interface ens5f0np0 --mesh-graph-descriptor "${MGD}" --hosts "$PIPELINE_HOSTS" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
-    python3 "${TTRUN_PY}" --tcp-interface ens5f0np0 --mpi-args "${MPI_ARGS}" --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+    python3 "${TTRUN_PY}" --tcp-interface ens5f0np0 --mesh-graph-descriptor "${MGD}" --hosts "$PIPELINE_HOSTS" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
   model: flux-multihost-tests
   skus:
