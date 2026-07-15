@@ -304,6 +304,15 @@ def test_pipeline_distilled(
             run(prompt=prompt, number=1, seed=seed)
             check_output_with_clip(prompt, 1)
             check_output_with_vbench(prompt, 1)
+            # LTX_SEED_SWEEP=N: N extra warm replays at seeds seed+1..seed+N reusing the already
+            # captured s1/s2 traces. The seed only reseeds the host noise copied into the baked
+            # latent buffer, so each replay is a warm denoise — no re-warmup, no re-capture — which
+            # is what makes a >=5-seed VBench A/B cheap enough to run on a warmup-degraded box. Each
+            # writes a distinct ltx_av_fast_{w}x{h}_{seed}.mp4 (OUTPUT_PATH must stay unset) for
+            # off-device scoring; RUN_VBENCH stays off here.
+            for k in range(1, int(os.environ.get("LTX_SEED_SWEEP", "0")) + 1):
+                logger.info(f"=== LTX_SEED_SWEEP replay {k} (seed={seed + k}) ===")
+                run(prompt=prompt, number=seed + k, seed=seed + k)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)
