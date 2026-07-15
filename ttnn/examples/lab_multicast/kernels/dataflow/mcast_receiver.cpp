@@ -45,4 +45,5 @@ void kernel_main() {
         // Mark it as available in the input CB for the compute kernel to consume.
         cb_push_back(cb_id_in0, 1);
     }
+    noc_async_atomic_barrier();
 }

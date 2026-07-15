@@ -41,4 +41,5 @@ void kernel_main() {
             cb_push_back(cb_id, block_size_tiles);
         }
     }
+    noc_async_atomic_barrier();
 }

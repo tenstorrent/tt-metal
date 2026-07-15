@@ -150,4 +150,5 @@ void kernel_main() {
     post_reduce_sender_sem.wait(VALID);
     cb_ex_global_obj.push_back(1);
     cb_ex2_obj.pop_front(1);
+    noc_async_atomic_barrier();
 }

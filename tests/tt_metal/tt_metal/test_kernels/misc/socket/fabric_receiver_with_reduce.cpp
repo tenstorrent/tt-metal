@@ -25,6 +25,7 @@ void kernel_main() {
 
     noc_async_write(socket_config_addr, worker_config_unicast_noc_addr, sizeof(SocketReceiverInterface));
     noc_semaphore_inc(worker_config_sem_noc_addr, 1);
+    noc_async_atomic_barrier();
 
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =

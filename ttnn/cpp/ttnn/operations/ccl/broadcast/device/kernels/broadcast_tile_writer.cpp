@@ -200,6 +200,7 @@ void kernel_main() {
 
         close_connections(fabric_connection);
 
+        noc_async_atomic_barrier();
         noc_async_write_barrier();
     } else {
         if (wait_output_semaphore) {

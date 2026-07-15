@@ -36,6 +36,7 @@ void kernel_main() {
             noc_semaphore_wait(receiver_sem_ptr, 1);
         }
     }
+    noc_async_atomic_barrier();
 
     DeviceTimestampedData("Test id", test_id);
 

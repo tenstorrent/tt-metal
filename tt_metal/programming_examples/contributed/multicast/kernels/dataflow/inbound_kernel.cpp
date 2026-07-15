@@ -67,4 +67,5 @@ void kernel_main() {
     cb_reserve_back(cb_id_out0, 1);
     copy_tile_between_cb(get_read_ptr(cb_id_in0), get_write_ptr(cb_id_out0), ublock_size_bytes);
     cb_push_back(cb_id_out0, 1);
+    noc_async_atomic_barrier();
 }

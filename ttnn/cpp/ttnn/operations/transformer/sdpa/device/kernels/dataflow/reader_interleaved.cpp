@@ -712,4 +712,5 @@ void kernel_main() {
             }
         }
     }  // close phase
+    noc.async_atomic_barrier();
 }

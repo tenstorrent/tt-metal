@@ -95,6 +95,7 @@ void kernel_main() {
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
             do_signaling(noc_obj, rt_args_idx);
+            noc_obj.async_atomic_barrier();
             noc_obj.async_write_barrier();
         }
         return;
@@ -211,7 +212,7 @@ void kernel_main() {
 
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
-    noc_obj.async_atomic_barrier();
 #endif
+    noc_obj.async_atomic_barrier();
     noc_obj.async_write_barrier();
 }

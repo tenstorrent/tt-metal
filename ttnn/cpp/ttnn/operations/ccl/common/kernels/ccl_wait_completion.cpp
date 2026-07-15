@@ -62,6 +62,7 @@ void kernel_main() {
             DPRINT("SENDING TERMINATION SIGNAL TO {} {} {}\n", (uint32_t)noc_x, (uint32_t)noc_y, (uint32_t)termination_addr);
             noc_semaphore_inc(get_noc_addr(noc_x, noc_y, termination_addr), 1);
         }
+        noc_async_atomic_barrier();
     }
     DPRINT("DRAIN DONE\n");
 }

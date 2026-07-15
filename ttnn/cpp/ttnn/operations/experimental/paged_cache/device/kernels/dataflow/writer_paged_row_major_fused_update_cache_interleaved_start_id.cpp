@@ -177,5 +177,6 @@ void kernel_main() {
     if (send_signal) {
         // send signal to receiver core that we are done using the input CB
         Semaphore<>(receiver_sem_id).up(noc, send_core_x, send_core_y, 1);
+        noc.async_atomic_barrier();
     }
 }
