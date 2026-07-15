@@ -539,25 +539,20 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& tensor_shape)
 {
+    static_assert(
+        !(is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM),
+        "Integer Scalar SUM/AVG (Int32 dest) unsupported on FPU: after the first GAPOOL, "
+        "partials cannot fit back into Src for the final GAPOOL");
+
     _set_dst_write_addr_by_rows_(tile_idx);
 
     if constexpr (is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
         _llk_math_reduce_row_int32_fpu_<POOL_TYPE>(tensor_shape);
     }
-    else if constexpr (is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::MAX)
-    {
-        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-    }
-    else if constexpr (is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
-    {
-        LLK_ASSERT(
-            false,
-            "Scalar SUM/AVG (Int32 dest) unsupported on FPU: after the first GAPOOL, "
-            "partials cannot fit back into Src for the final GAPOOL");
-    }
     else
     {
+        // Non-int paths and the int32 scalar-MAX path both run the MOP configured in the init.
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
 
