@@ -306,13 +306,26 @@ enrich_target_sbom() {
     ENRICHED_SBOM_JSON=$(docker buildx imagetools inspect "$target_tag" --format '{{json .SBOM}}' 2>/dev/null || echo "")
     if [ -n "$ENRICHED_SBOM_JSON" ] && [ "$ENRICHED_SBOM_JSON" != "null" ]; then
       echo "  SBOM attestation enriched - describing package now reflects OCI labels:"
+      # Resolve the actual describing/root package the same way enrich-sbom.sh
+      # does (documentDescribes[0], falling back to a DocumentRoot-matching
+      # SPDXID) rather than blindly taking packages[0] - for a real image with
+      # many detected packages (e.g. a Python venv full of pip packages),
+      # packages[0] is just whichever unrelated package syft listed first, not
+      # the one we patched. (Bug found by Neil Sexton on a real ci-test venv
+      # image: packages[0] was "ipywidgets"/BSD-3-Clause/Project Jupyter, not
+      # the image's own Apache-2.0/tenstorrent describing package.)
       echo "$ENRICHED_SBOM_JSON" | jq -r '
         .SPDX as $s |
+        (
+          ($s.documentDescribes[0]? // null)
+          // ([$s.packages[]? | select(.SPDXID | test("DocumentRoot"))][0].SPDXID // null)
+          // null
+        ) as $root_id |
+        ([$s.packages[]? | select(.SPDXID == $root_id)][0] // {}) as $root |
         "    documentNamespace: " + ($s.documentNamespace // "?"),
-        ($s.packages // [] | .[0] // {} |
-          "    licenseDeclared: " + (.licenseDeclared // "NOASSERTION"),
-          "    downloadLocation: " + (.downloadLocation // "NOASSERTION"),
-          "    supplier: " + (.supplier // "NOASSERTION"))
+        "    licenseDeclared: " + ($root.licenseDeclared // "NOASSERTION"),
+        "    downloadLocation: " + ($root.downloadLocation // "NOASSERTION"),
+        "    supplier: " + ($root.supplier // "NOASSERTION")
       ' 2>/dev/null || echo "    (could not parse enriched SBOM JSON)"
     else
       echo "  WARNING: could not re-fetch SBOM after enrichment for $target_tag"
