@@ -1,0 +1,8 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "attention_output_bfp8_hifi2",
+  "description": "Isolate BFP8 attention-output HiFi2 while retaining BFP8 QKV LoFi.",
+  "compute_fidelities": {
+    "attention_output": "HiFi2"
+  }
+}

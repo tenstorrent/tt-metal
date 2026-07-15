@@ -1,0 +1,6 @@
+{
+  "extends": "lm_head_bfp4_lofi.json",
+  "config_id": "lm_head_bfp4_hifi2",
+  "description": "BFP4+HiFi2 comparison for the material LM-head projection group.",
+  "compute_fidelities": {"lm_head": "HiFi2"}
+}

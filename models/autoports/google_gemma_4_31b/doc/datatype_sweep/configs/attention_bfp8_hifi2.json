@@ -1,0 +1,6 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "attention_bfp8_hifi2",
+  "description": "Same-dtype fidelity control for both dominant BFP8 attention projection groups.",
+  "compute_fidelities": {"attention_qkv": "HiFi2", "attention_output": "HiFi2"}
+}

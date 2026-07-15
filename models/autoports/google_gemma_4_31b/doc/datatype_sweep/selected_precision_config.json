@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "model": "google/gemma-4-31B",
+  "config_id": "lm_head_bfp8_hifi2",
+  "description": "Stage 08 selected full-model policy: fastest accuracy-passing trace-verified teacher-forcing candidate.",
+  "weight_groups": {
+    "attention_prefill": {
+      "dtype": "bfloat8_b",
+      "layer_ranges": [[0, 59]],
+      "phase": "prefill QKV and output projections"
+    },
+    "attention_qkv": {
+      "dtype": "bfloat8_b",
+      "layer_ranges": [[0, 59]],
+      "phase": "decode QKV projection"
+    },
+    "attention_output": {
+      "dtype": "bfloat8_b",
+      "layer_ranges": [[0, 59]],
+      "phase": "decode output projection"
+    },
+    "mlp_gate_up": {
+      "dtype": "bfloat4_b",
+      "layer_ranges": [[0, 59]]
+    },
+    "mlp_down": {
+      "dtype": "bfloat4_b",
+      "layer_ranges": [[0, 59]]
+    },
+    "lm_head": {
+      "dtype": "bfloat8_b",
+      "tied_value_source": "model.language_model.embed_tokens.weight"
+    }
+  },
+  "layer_exceptions": [],
+  "compute_fidelities": {
+    "attention_qkv": "LoFi",
+    "attention_output": "LoFi",
+    "mlp_gate_up": "LoFi",
+    "mlp_down": "LoFi",
+    "lm_head": "HiFi2"
+  },
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": {
+    "prefill": "bfloat16",
+    "decode": "bfloat8_b"
+  },
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling": {
+    "gather_values_dtype": "float32",
+    "greedy_pair_value_dtype": "bfloat16",
+    "token_dtype": "int32",
+    "assumptions": "device-side exact greedy; lowest global token wins ties; no full-vocabulary host readback"
+  },
+  "selection": {
+    "accuracy_thresholds": {
+      "top1": 0.9,
+      "top5": 0.98,
+      "top100": 1.0
+    },
+    "measured_accuracy": {
+      "top1": 0.92,
+      "top5": 1.0,
+      "top100": 1.0
+    },
+    "selection_metric": "trace_verified_teacher_forcing_decode_t/s/u",
+    "measured_value": 24.561083170322924,
+    "trace_replays": 99,
+    "reference_tokens": 100
+  }
+}

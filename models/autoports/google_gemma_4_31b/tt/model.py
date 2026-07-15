@@ -25,10 +25,13 @@ from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 import ttnn
 from models.autoports.google_gemma_4_31b.tt.functional_decoder import HF_ADVERTISED_CONTEXT, HF_MODEL_ID
 from models.autoports.google_gemma_4_31b.tt.multichip_decoder import (
+    DEFAULT_MULTICHIP_OPTIMIZATION_POLICY,
     TARGET_MESH_SHAPE,
     MultichipDecoder,
     release_multichip_decoder_resources,
 )
+from models.autoports.google_gemma_4_31b.tt.optimized_decoder import DecoderOptimizationPolicy
+from models.autoports.google_gemma_4_31b.tt.precision import dtype_name, fidelity_name, load_precision_config
 from models.demos.gemma4.tt.ccl import ccl_allgather
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 
@@ -141,6 +144,35 @@ class Gemma4FullModelConfig:
     lm_head_in0_block_w: int = 2
     lm_head_split_size: int = 8192
     trace_region_size_bytes: int = 256 << 20
+    precision_config_id: str = "optimized_full_model_baseline"
+    precision_config_path: str | None = None
+    decoder_optimization_policy: DecoderOptimizationPolicy = DEFAULT_MULTICHIP_OPTIMIZATION_POLICY
+    layer_decoder_policies: tuple[tuple[int, DecoderOptimizationPolicy], ...] = ()
+    activation_dtype: ttnn.DataType = ttnn.bfloat16
+    residual_dtype: ttnn.DataType = ttnn.bfloat16
+    prefill_ccl_dtype: ttnn.DataType = ttnn.bfloat16
+    decode_ccl_dtype: ttnn.DataType = ttnn.bfloat8_b
+    sampling_dtype: ttnn.DataType = ttnn.float32
+
+    @classmethod
+    def from_precision_config(cls, path: str | Path, **overrides) -> "Gemma4FullModelConfig":
+        resolved = load_precision_config(path)
+        values = {
+            "precision_config_id": resolved.config_id,
+            "precision_config_path": str(resolved.source_path),
+            "decoder_optimization_policy": resolved.default_decoder_policy,
+            "layer_decoder_policies": resolved.layer_decoder_policies,
+            "activation_dtype": resolved.activation_dtype,
+            "residual_dtype": resolved.residual_dtype,
+            "prefill_ccl_dtype": resolved.prefill_ccl_dtype,
+            "decode_ccl_dtype": resolved.decode_ccl_dtype,
+            "lm_head_weight_dtype": resolved.lm_head_weight_dtype,
+            "lm_head_math_fidelity": resolved.lm_head_math_fidelity,
+            "logits_dtype": resolved.logits_dtype,
+            "sampling_dtype": resolved.sampling_dtype,
+        }
+        values.update(overrides)
+        return cls(**values)
 
 
 @dataclass
@@ -295,6 +327,7 @@ class Gemma4FullModel:
 
         self.decode_rope = self._build_decode_rope_caches()
         self.layers: list[MultichipDecoder] = []
+        layer_policy_overrides = dict(self.config.layer_decoder_policies)
         for layer_idx in self.layer_indices:
             layer_cache = str(Path(tensor_cache_path) / f"layer_{layer_idx}") if tensor_cache_path else None
             self.layers.append(
@@ -304,8 +337,75 @@ class Gemma4FullModel:
                     layer_idx=layer_idx,
                     mesh_device=mesh_device,
                     tensor_cache_path=layer_cache,
+                    optimization_policy=layer_policy_overrides.get(layer_idx, self.config.decoder_optimization_policy),
+                    communication_dtype=self.config.decode_ccl_dtype,
+                    prefill_communication_dtype=self.config.prefill_ccl_dtype,
+                    residual_dtype=self.config.residual_dtype,
                 )
             )
+
+    def precision_runtime_summary(self) -> dict[str, Any]:
+        layers = []
+        for layer in self.layers:
+            policy = layer.policy
+            attention_weights = layer.layer.self_attn.weights
+            mlp = layer.layer.shared_mlp
+            decode_qkv = layer.decode_wqkv if policy.attention_projection_topology == "packed" else layer.decode_wq
+            decode_gate_up = mlp.packed_gate_up_decode if mlp.packed_gate_up_decode is not None else mlp.gate_decode
+            layers.append(
+                {
+                    "layer": layer.layer_idx,
+                    "policy_name": policy.name,
+                    "weight_groups": {
+                        "attention_prefill": dtype_name(policy.attention_weight_dtype),
+                        "attention_qkv": dtype_name(policy.resolved_attention_qkv_weight_dtype),
+                        "attention_output": dtype_name(policy.resolved_attention_o_weight_dtype),
+                        "mlp_gate_up": dtype_name(policy.mlp_gate_up_weight_dtype),
+                        "mlp_down": dtype_name(policy.mlp_down_weight_dtype),
+                    },
+                    "physical_weight_dtypes": {
+                        "attention_prefill_qkv": dtype_name(attention_weights.wqkv.dtype),
+                        "attention_prefill_output": dtype_name(attention_weights.o_proj.dtype),
+                        "attention_qkv": dtype_name(decode_qkv.dtype),
+                        "attention_output": dtype_name(layer.decode_o_proj.dtype),
+                        "mlp_prefill_gate_up": dtype_name(mlp.gate_prefill.dtype),
+                        "mlp_prefill_down": dtype_name(mlp.down_prefill.dtype),
+                        "mlp_decode_gate_up": dtype_name(decode_gate_up.dtype),
+                        "mlp_decode_down": dtype_name(mlp.down_decode.dtype),
+                    },
+                    "compute_fidelities": {
+                        "attention_qkv": fidelity_name(policy.resolved_attention_qkv_math_fidelity),
+                        "attention_output": fidelity_name(policy.resolved_attention_o_math_fidelity),
+                        "mlp_gate_up": fidelity_name(policy.mlp_gate_up_math_fidelity),
+                        "mlp_down": fidelity_name(policy.mlp_down_math_fidelity),
+                    },
+                    "activation_dtype": dtype_name(self.config.activation_dtype),
+                    "residual_dtype": dtype_name(layer.residual_dtype),
+                    "ccl_dtype": {
+                        "prefill": dtype_name(layer.prefill_communication_dtype),
+                        "decode": dtype_name(layer.communication_dtype),
+                    },
+                    "qkv_split_input_dtype": dtype_name(layer.qkv_split_input_dtype),
+                    "cache_update_input_dtype": dtype_name(layer.cache_update_input_dtype),
+                    "kv_cache_dtype": dtype_name(policy.kv_cache_dtype),
+                    "program_geometry": {
+                        "mlp_packed_gate_up_in0_block_w": layer.layer.shared_mlp.packed_gate_up_in0_block_w,
+                    },
+                }
+            )
+        physical_lm_head = self.lm_head_weights[0] if self.lm_head_weights else self.lm_head_weight
+        return {
+            "config_id": self.config.precision_config_id,
+            "precision_config_path": self.config.precision_config_path,
+            "layers": layers,
+            "lm_head": {
+                "weight_dtype": dtype_name(self.config.lm_head_weight_dtype),
+                "physical_weight_dtype": dtype_name(physical_lm_head.dtype),
+                "math_fidelity": fidelity_name(self.config.lm_head_math_fidelity),
+                "logits_dtype": dtype_name(self.config.logits_dtype),
+            },
+            "sampling": {"gather_values_dtype": dtype_name(self.config.sampling_dtype)},
+        }
 
     def _lm_head_weight_memory_config(self, local_vocab_width: int) -> ttnn.MemoryConfig:
         """Width-shard each TP-local vocab projection over Blackhole DRAM banks."""
@@ -415,6 +515,10 @@ class Gemma4FullModel:
         reshaped = ttnn.reshape(gathered, shape)
         tiled = ttnn.to_layout(reshaped, ttnn.TILE_LAYOUT)
         gathered.deallocate(True)
+        if tiled.dtype != self.config.activation_dtype:
+            converted = ttnn.typecast(tiled, self.config.activation_dtype)
+            tiled.deallocate(True)
+            tiled = converted
         return tiled
 
     def allocate_paged_kv_cache(

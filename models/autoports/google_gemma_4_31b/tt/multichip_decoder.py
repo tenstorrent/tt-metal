@@ -52,6 +52,7 @@ TP_SIZE = 4
 PAGE_BLOCK_SIZE = 64
 QKV_DECODE_OUTPUT_CORES = 32
 MLP_DECODE_CORES = 14
+MLP_BFP8_PACKED_GATE_UP_BLOCK_W_MAX = 6
 MLP_PREFILL_CORES = 24
 MLP_PREFILL_1D_MAX_ROWS = 128
 PERSISTENT_CCL_CORES = 24
@@ -424,6 +425,14 @@ class _TPOptimizedSharedMLP:
             fused_activation=fused_activation,
         )
 
+    @property
+    def packed_gate_up_in0_block_w(self) -> int:
+        """Largest L1-safe packed gate/up K block for the active weight dtype."""
+        requested = self.policy.gate_up_in0_block_w
+        if self.policy.mlp_gate_up_weight_dtype == ttnn.bfloat8_b:
+            return min(requested, MLP_BFP8_PACKED_GATE_UP_BLOCK_W_MAX)
+        return requested
+
     def __call__(self, hidden_states):
         if not self.is_decode:
             rows = hidden_states.shape[-2]
@@ -505,7 +514,7 @@ class _TPOptimizedSharedMLP:
                 k=hidden,
                 n=2 * self.local_intermediate,
                 num_cores=self.policy.decode_num_cores,
-                in0_block_w=self.policy.gate_up_in0_block_w,
+                in0_block_w=self.packed_gate_up_in0_block_w,
             )
             packed_sharded = ttnn.linear(
                 sharded_input,
@@ -624,6 +633,8 @@ class MultichipDecoder(OptimizedDecoder):
         FunctionalDecoder.__init__(self, **kwargs)
         self.policy = DEFAULT_MULTICHIP_OPTIMIZATION_POLICY
         self.attention_compute = None
+        self.attention_qkv_compute = None
+        self.attention_o_compute = None
         self.decode_wqkv = None
         self.decode_wq = None
         self.decode_wk = None
@@ -654,6 +665,8 @@ class MultichipDecoder(OptimizedDecoder):
         num_links=2,
         qkv_decode_output_cores=QKV_DECODE_OUTPUT_CORES,
         communication_dtype=ttnn.bfloat8_b,
+        prefill_communication_dtype=ttnn.bfloat16,
+        residual_dtype=ttnn.bfloat16,
         use_persistent_async_ccl=True,
         topology=ttnn.Topology.Linear,
         **kwargs,
@@ -728,14 +741,24 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.ccl_manager = ccl_manager
         decoder.qkv_decode_output_cores = qkv_decode_output_cores
         decoder.communication_dtype = communication_dtype
+        decoder.prefill_communication_dtype = prefill_communication_dtype
+        decoder.residual_dtype = residual_dtype
         decoder.use_persistent_async_ccl = use_persistent_async_ccl
-        decoder.attention_compute = ttnn.init_device_compute_kernel_config(
+        decoder.attention_qkv_compute = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=optimization_policy.attention_math_fidelity,
+            math_fidelity=optimization_policy.resolved_attention_qkv_math_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        decoder.attention_o_compute = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=optimization_policy.resolved_attention_o_math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        decoder.attention_compute = decoder.attention_qkv_compute
 
         # Preserve the optimized baseline's decode dataflow with TP-local
         # packed QKV and row-local O copies, each width-sharded over all DRAM
@@ -768,7 +791,7 @@ class MultichipDecoder(OptimizedDecoder):
             packed_qkv,
             mesh_device,
             mesh_dim=3,
-            dtype=optimization_policy.attention_weight_dtype,
+            dtype=optimization_policy.resolved_attention_qkv_weight_dtype,
             memory_config=_dram_weight_memory_config(mesh_device, k=config.hidden_size, n=local_qkv_width),
         )
         if optimization_policy.attention_projection_topology == "split":
@@ -782,7 +805,7 @@ class MultichipDecoder(OptimizedDecoder):
                     source,
                     mesh_device,
                     mesh_dim=3,
-                    dtype=optimization_policy.attention_weight_dtype,
+                    dtype=optimization_policy.resolved_attention_qkv_weight_dtype,
                     memory_config=_dram_weight_memory_config(
                         mesh_device,
                         k=config.hidden_size,
@@ -797,7 +820,7 @@ class MultichipDecoder(OptimizedDecoder):
             o_source,
             mesh_device,
             mesh_dim=2,
-            dtype=optimization_policy.attention_weight_dtype,
+            dtype=optimization_policy.resolved_attention_o_weight_dtype,
             memory_config=_dram_weight_memory_config(mesh_device, k=local_o_k, n=config.hidden_size),
         )
         return decoder
@@ -851,7 +874,8 @@ class MultichipDecoder(OptimizedDecoder):
                 decode_weight,
                 memory_config=qkv_mem,
                 program_config=qkv_program,
-                compute_kernel_config=self.attention_compute,
+                compute_kernel_config=self.attention_qkv_compute,
+                dtype=self.qkv_split_input_dtype,
             )
             qkv_parts.append(ttnn.sharded_to_interleaved(qkv_sharded, ttnn.L1_MEMORY_CONFIG))
             qkv_sharded.deallocate(True)
@@ -884,6 +908,9 @@ class MultichipDecoder(OptimizedDecoder):
             sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch_size, :, :]
             q = apply_rope_decode_peruser(q, cos_b, sin_b)
             k = apply_rope_decode_peruser(k, cos_b, sin_b)
+
+        k = self._prepare_cache_update_input(k)
+        v = self._prepare_cache_update_input(v)
 
         cache_position = current_position_cache if current_position_cache is not None else current_position
         k_cache, v_cache = kv_cache
@@ -1020,7 +1047,7 @@ class MultichipDecoder(OptimizedDecoder):
             self.decode_o_proj,
             memory_config=o_output_mem,
             program_config=o_program,
-            compute_kernel_config=self.attention_compute,
+            compute_kernel_config=self.attention_o_compute,
         )
         o_input.deallocate(True)
         if self.use_persistent_async_ccl:
@@ -1153,7 +1180,7 @@ class MultichipDecoder(OptimizedDecoder):
             self.ccl_manager,
             # BFP8 async communication wins at M=1, while prefill pays for the
             # explicit casts and is faster with its native BF16 reduction.
-            communication_dtype=ttnn.bfloat16,
+            communication_dtype=self.prefill_communication_dtype,
             use_persistent_async=False,
             persistent_role="attention_o_prefill",
         )
@@ -1226,6 +1253,10 @@ class MultichipDecoder(OptimizedDecoder):
         combined = ttnn.add(residual, hidden_states)
         residual.deallocate(True)
         hidden_states.deallocate(True)
+        if combined.dtype != self.residual_dtype:
+            converted = ttnn.typecast(combined, self.residual_dtype)
+            combined.deallocate(True)
+            combined = converted
         if self.layer.layer_scalar != 1.0:
             scaled = ttnn.mul(combined, self.layer.layer_scalar)
             combined.deallocate(True)

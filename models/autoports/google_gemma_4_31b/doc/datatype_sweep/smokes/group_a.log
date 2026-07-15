@@ -1,0 +1,200 @@
+2026-07-15 05:40:10.188 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-15 05:40:14.230 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-15 05:40:14.230 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-15 05:40:14.230 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-15 05:40:14.230 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-15 05:40:14.231 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-15 05:40:14.231 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-15 05:40:14.235 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-15 05:40:14.402 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-15 05:40:14.402 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-15 05:40:14.402 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-15 05:40:14.402 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-15 05:40:14.405 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-15 05:40:14.474 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-15 05:40:15.073 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-15 05:40:15.073 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-15 05:40:15.074 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-15 05:40:15.074 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-15 05:40:15.074 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-15 05:40:15.075 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-15 05:40:15.090 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-15 05:40:15.090 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-15 05:40:15.090 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-15 05:40:15.090 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-15 05:40:15.149 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-15 05:40:15.215 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-15 05:40:15.217 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-15 05:40:15.218 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-15 05:40:15.219 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-15 05:40:15.219 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-15 05:40:15.219 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-15 05:40:15.272 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-15 05:40:15.272 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-15 05:40:15.272 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-15 05:40:15.272 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-15 05:40:15.845 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349968 GHz, device_time_at_sync=52851136506310 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-15 05:40:15.856 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349970 GHz, device_time_at_sync=52842213529632 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-15 05:40:15.857 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349970 GHz, device_time_at_sync=52843072077288 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-15 05:40:15.857 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349973 GHz, device_time_at_sync=52834515175460 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-15 05:40:32.102 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/final_norm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:33.304 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:33.305 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:33.305 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/pre_feedforward_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:33.305 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/post_feedforward_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:33.429 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/self_attn/wqkv_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 4096])
+2026-07-15 05:40:33.440 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/self_attn/o_proj_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 5376])
+2026-07-15 05:40:33.441 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/self_attn/q_norm.weight_tp4_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 8, 32])
+2026-07-15 05:40:33.441 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/self_attn/k_norm.weight_tp4_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 8, 32])
+2026-07-15 05:40:33.497 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/mlp/gate_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+2026-07-15 05:40:33.516 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/mlp/up_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+2026-07-15 05:40:33.536 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/mlp/down_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+2026-07-15 05:40:54.663 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:54.664 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:54.664 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/pre_feedforward_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:54.664 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/post_feedforward_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+2026-07-15 05:40:54.801 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/self_attn/wqkv_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5120])
+2026-07-15 05:40:54.817 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/self_attn/o_proj_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 5376])
+2026-07-15 05:40:54.817 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/self_attn/q_norm.weight_tp4_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 16, 32])
+2026-07-15 05:40:54.818 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/self_attn/k_norm.weight_tp4_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 16, 32])
+2026-07-15 05:40:54.881 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/mlp/gate_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+2026-07-15 05:40:54.900 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/mlp/up_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+2026-07-15 05:40:54.920 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/mlp/down_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+2026-07-15 05:41:22.386 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:110)
+2026-07-15 05:41:27.134 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb/12303890500843103372/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb/12303890500843103372/ncrisc/ncrisck.3566614800749101255.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb/12303890500843103372/ncrisc/ncrisck.3566614800749101255.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb/12303890500843103372/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFUSE_GAMMA='1' -DRMSNORM='1' -DROUTING_MODE='137' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,0,5376,2,1088,0,0,2,64,0,0,64 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_ex2_welford\",19}, {\"cb_ex_welford\",18}, {\"welford_fp32_alias\",0}, {\"cb_x_welford\",0}, {\"cb_out_rm\",28}, {\"cb_in_rm\",27}, {\"cb_accumulate\",26}, {\"cb_reciprocals\",25}, {\"cb_xmm\",24}, {\"cb_in\",0}, {\"welford_state_fp32_alias\",0}, {\"cb_out\",16}, {\"cb_inb\",1}, {\"cb_beta\",6}, {\"cb_scaler\",2}, {\"cb_eps\",3}, {\"cb_gamma\",5}, {\"cb_ex\",18}, {\"cb_fusion\",22}, {\"cb_xmm2\",20}, {\"cb_ex2\",19}, {\"cb_ex2pe\",21}, {\"cb_x\",23}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp:54:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   54 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb/17728237157475491942/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb/17728237157475491942/ncrisc/ncrisck.3566614800749101255.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache13793420398762238087/kernels/reader_unary_interleaved_ln_rm_gb/17728237157475491942/ncrisc/ncrisck.3566614800749101255.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_unary_interleaved_ln_rm_gb/17728237157475491942/\"" -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS='0' -DFUSE_GAMMA='1' -DRMSNORM='1' -DROUTING_MODE='137' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,0,256,2,1088,0,0,2,64,0,0,64 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_ex2_welford\",19}, {\"cb_ex_welford\",18}, {\"welford_fp32_alias\",0}, {\"cb_x_welford\",0}, {\"cb_out_rm\",28}, {\"cb_in_rm\",27}, {\"cb_accumulate\",26}, {\"cb_reciprocals\",25}, {\"cb_xmm\",24}, {\"cb_in\",0}, {\"welford_state_fp32_alias\",0}, {\"cb_out\",16}, {\"cb_inb\",1}, {\"cb_beta\",6}, {\"cb_scaler\",2}, {\"cb_eps\",3}, {\"cb_gamma\",5}, {\"cb_ex\",18}, {\"cb_fusion\",22}, {\"cb_xmm2\",20}, {\"cb_ex2\",19}, {\"cb_ex2pe\",21}, {\"cb_x\",23}, "
+In file included from ../kernel_includes.hpp:1,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:22:
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp: In function 'void kernel_main()':
+/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp:54:20: warning: variable 'beta_args' set but not used [-Wunused-but-set-variable]
+   54 |     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+      |                    ^~~~~~~~~
+2026-07-15 05:41:34.131 | critical |          Always | TT_FATAL: Data type of input tensor for paged_update_cache must be FLOAT32 or BFLOAT16; decode update repacks into the cache dtype and should not receive low-precision packed input (assert.hpp:104)
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py", line 197, in <module>
+    _main()
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py", line 193, in _main
+    run(parser.parse_args())
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py", line 159, in run
+    stats = _teacher_forcing(generator, args.reference.resolve())
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_sweep_candidate.py", line 47, in _teacher_forcing
+    generator.generate(
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/generator.py", line 902, in generate
+    logits = self.prefill_forward(
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/generator.py", line 676, in prefill_forward
+    return self.model.prefill_forward_device_logits(
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/model.py", line 712, in prefill_forward_device_logits
+    hidden = self.prefill_hidden(
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/model.py", line 625, in prefill_hidden
+    hidden = layer.prefill_forward(
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/functional_decoder.py", line 533, in prefill_forward
+    output = self._forward_device(
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/multichip_decoder.py", line 1208, in _forward_device
+    attn_output = self._prefill_attention_tp(
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/multichip_decoder.py", line 1115, in _prefill_attention_tp
+    self._fill_bounded_sliding_cache_exact(
+  File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/optimized_decoder.py", line 747, in _fill_bounded_sliding_cache_exact
+    ttnn.experimental.paged_update_cache(k_cache, k_token_sharded, **update_args)
+  File "/localdev/odjuricic/tt-metal/ttnn/ttnn/decorators.py", line 473, in __call__
+    result = self.function(*function_args, **function_kwargs)
+RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/experimental/paged_cache/device/update_cache/paged_update_cache_device_operation.cpp:297: input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16
+info:
+Data type of input tensor for paged_update_cache must be FLOAT32 or BFLOAT16; decode update repacks into the cache dtype and should not receive low-precision packed input
+backtrace:
+ --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(+0x7c2dc9) [0x7f055508fdc9]
+ --- ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::PagedUpdateCacheParams const&, ttnn::experimental::prim::PagedUpdateCacheInputs const&)
+ --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim31PagedUpdateCacheDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x184) [0x7f0555c36124]
+ --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim31PagedUpdateCacheDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x2ba) [0x7f0555c33dba]
+ --- ttnn::prim::paged_update_cache(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::vector<unsigned int, std::allocator<unsigned int> > const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<bool>, std::optional<tt::tt_metal::Tensor const> const&, unsigned int, std::optional<ttnn::ComputeKernelConfig const>, std::optional<std::set<tt::tt_metal::distributed::MeshCoordinate, std::less<tt::tt_metal::distributed::MeshCoordinate>, std::allocator<tt::tt_metal::distributed::MeshCoordinate> > const> const&, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>)
+ --- ttnn::experimental::paged_update_cache(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::vector<unsigned int, std::allocator<unsigned int> > const&, std::optional<tt::tt_metal::Tensor const> const&, std::optional<bool>, std::optional<tt::tt_metal::Tensor const> const&, unsigned int, std::optional<ttnn::ComputeKernelConfig const>, std::optional<std::set<tt::tt_metal::distributed::MeshCoordinate, std::less<tt::tt_metal::distributed::MeshCoordinate>, std::allocator<tt::tt_metal::distributed::MeshCoordinate> > const> const&, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>)
+ --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x52983f) [0x7f0556c6b83f]
+ --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7f0556a54325]
+ --- python(_PyObject_Call_Prepend+0x115) [0x55b39c741c65]
+ --- python(+0x3a2b46) [0x55b39c775b46]
+ --- python(_PyEval_EvalFrameDefault+0xa16c) [0x55b39c6a387c]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(_PyObject_Call_Prepend+0x115) [0x55b39c741c65]
+ --- python(+0x3a2b46) [0x55b39c775b46]
+ --- python(_PyEval_EvalFrameDefault+0xa16c) [0x55b39c6a387c]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x273350) [0x55b39c646350]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x3eef) [0x55b39c69d5ff]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x273350) [0x55b39c646350]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x3eef) [0x55b39c69d5ff]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x273350) [0x55b39c646350]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x3eef) [0x55b39c69d5ff]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x273350) [0x55b39c646350]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x3eef) [0x55b39c69d5ff]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x273350) [0x55b39c646350]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x3eef) [0x55b39c69d5ff]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x273350) [0x55b39c646350]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x3eef) [0x55b39c69d5ff]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x273350) [0x55b39c646350]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x3eef) [0x55b39c69d5ff]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x273350) [0x55b39c646350]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x3eef) [0x55b39c69d5ff]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x4068) [0x55b39c69d778]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x4068) [0x55b39c69d778]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x4068) [0x55b39c69d778]
+ --- python(+0x3d4a54) [0x55b39c7a7a54]
+ --- python(+0x3d27c9) [0x55b39c7a57c9]
+ --- python(+0x29259f) [0x55b39c66559f]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x4068) [0x55b39c69d778]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x2fd0b9) [0x55b39c6d00b9]
+ --- python(_PyEval_EvalFrameDefault+0x4068) [0x55b39c69d778]
+ --- python(_PyFunction_Vectorcall+0x202) [0x55b39c644352]
+ --- python(+0x1bc738) [0x55b39c58f738]
+ --- python(Py_RunMain+0x673) [0x55b39c7e9023]
+ --- python(+0x148028) [0x55b39c51b028]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7f05578d8d90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7f05578d8e40]
+ --- python(+0x34616b) [0x55b39c71916b]
+
+{"config_id": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm", "top1": 0.0, "top5": 0.0, "top100": 0.0, "decode_t/s/u": 156.62955231252013, "status": "fail_accuracy"}
+{"config_id": "attention_bfp8_hifi2", "top1": 0.0, "top5": 0.0, "top100": 0.0, "decode_t/s/u": 39.452498830826514, "status": "fail_accuracy"}
+{"config_id": "mlp_bfp4_hifi2", "top1": 0.0, "top5": 0.0, "top100": 0.0, "decode_t/s/u": 54.96539229124458, "status": "fail_accuracy"}
+{"config_id": "decode_ccl_bf16", "top1": 0.0, "top5": 0.0, "top100": 0.0, "decode_t/s/u": 238.62174968836646, "status": "fail_accuracy"}
+2026-07-15 05:41:35.356 | info     |    BuildKernels | JIT cache stats: 475/524 hits (90.6%) [475 cached, 364 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-15 05:41:35.356 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-15 05:41:35.380 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-15 05:41:35.380 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-15 05:41:36.048 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-15 05:41:36.049 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-15 05:41:36.049 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

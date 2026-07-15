@@ -8,8 +8,9 @@
   "full_model_largest_tested_batch_context": 128,
   "full_model_full_context_physical_batch_upper_bound": 3,
   "optimized_full_model_status": "complete_clean_pass",
-  "decode_status": "optimized_full_model_complete_clean_pass",
-  "stage": "optimized-full-model",
+  "datatype_sweep_status": "complete_clean_pass",
+  "decode_status": "datatype_sweep_complete_clean_pass",
+  "stage": "datatype-sweep",
   "limiting_reason": "none",
   "functional_decoder_supported_context": 262144,
   "optimized_decoder_supported_context": 262144,
@@ -172,6 +173,84 @@
       "runtime_fallback_audit": "optimized_full_model/runtime_fallback_audit.md"
     },
     "calculation_document": "optimized_full_model/README.md"
+  },
+  "datatype_sweep_plan": {
+    "status": "complete_clean_pass",
+    "target_hardware": "4x Blackhole P150b",
+    "mesh_shape": [1, 4],
+    "tensor_parallel_size": 4,
+    "selected_config_id": "lm_head_bfp8_hifi2",
+    "selected_precision_config": "datatype_sweep/selected_precision_config.json",
+    "selection_metric": "trace_verified_teacher_forcing_decode_t/s/u",
+    "selected_accuracy": {
+      "top1": 0.92,
+      "top5": 1.0,
+      "top100": 1.0,
+      "reference_tokens": 100
+    },
+    "selected_trace_verified_teacher_forcing_decode_t_per_s_per_user": 24.561083170322924,
+    "selected_trace_replays": 99,
+    "post_selection_token_out": {
+      "measurement_regime": "normal-default-path warmed token-out no-readback; 149-token prompt; 100 generated tokens; one warmup; five repeats",
+      "median_ttft_ms": 479.70715910196304,
+      "median_decode_t_per_s_per_user": 24.787375297929362,
+      "median_steady_decode_t_per_s_per_user": 34.256029973825235,
+      "model_trace_replays_per_sample": 99,
+      "sampled_token_readbacks_per_sample": 1,
+      "full_logits_readbacks_per_sample": 0
+    },
+    "weight_groups": {
+      "attention_prefill": "bfloat8_b",
+      "attention_qkv": "bfloat8_b",
+      "attention_output": "bfloat8_b",
+      "mlp_gate_up": "bfloat4_b",
+      "mlp_down": "bfloat4_b",
+      "lm_head": "bfloat8_b"
+    },
+    "compute_fidelities": {
+      "attention_qkv": "LoFi",
+      "attention_output": "LoFi",
+      "mlp_gate_up": "LoFi",
+      "mlp_down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "collective_payload_dtype": {
+      "prefill": "bfloat16",
+      "decode": "bfloat8_b"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_gather_values_dtype": "float32",
+    "per_device_physical_weight_payload_bytes": 10577814016,
+    "per_device_kv_cache_bytes_batch1_advertised_context": 2789212160,
+    "per_device_accounted_dram_total_bytes": 27342513544,
+    "per_device_usable_dram_bytes": 34225520640,
+    "per_device_accounted_dram_margin_bytes": 6883007096,
+    "full_context_physical_batch_upper_bound": 3,
+    "planned_supported_context": 262144,
+    "capability_reduction": null,
+    "non_aligned_prompt_length_tested": 149,
+    "non_aligned_layout_change": false,
+    "calculation_notes": [
+      "The selected BFP8 LM head stores the Stage 07 BF16 value count at the 1.0625/2 payload ratio, saving 330301440 bytes/device.",
+      "The selected KV cache remains BFP8 with unchanged page layout and chunking; all selected-candidate teacher forcing used the non-aligned 149-token prompt.",
+      "The BF16 KV candidate and canonical BFP8-MLP/BF16-KV control both constructed at the full advertised batch-1 context; no context capability reduction is required."
+    ],
+    "evidence": {
+      "sweep_results": "datatype_sweep/sweep_results.json",
+      "sweep_csv": "datatype_sweep/sweep_results.csv",
+      "selected_candidate": "datatype_sweep/candidates/lm_head_bfp8_hifi2.json",
+      "capacity": "datatype_sweep/context_capacity.md",
+      "top1_pareto": "datatype_sweep/top1_perf_pareto.png",
+      "top5_pareto": "datatype_sweep/top5_perf_pareto.png",
+      "post_selection_token_out": "datatype_sweep/post_selection_token_out.json",
+      "qualitative_outputs": "datatype_sweep/qualitative/vllm_qualitative_outputs.json",
+      "qualitative_degeneracy_check": "datatype_sweep/qualitative/degenerate_output_check.json",
+      "qualitative_verdict": "datatype_sweep/qualitative/verdict.md"
+    },
+    "calculation_document": "datatype_sweep/README.md"
   },
   "capability_reduction": null,
   "page_block_size": 64,

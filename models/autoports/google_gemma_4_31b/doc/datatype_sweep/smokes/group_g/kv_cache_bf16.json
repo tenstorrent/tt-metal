@@ -1,0 +1,206 @@
+{
+  "config_id": "kv_cache_bf16",
+  "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/kv_cache_bf16.json",
+  "dtype_policy": {
+    "schema_version": 1,
+    "model": "google/gemma-4-31B",
+    "config_id": "kv_cache_bf16",
+    "description": "Canonical KV-cache accuracy control; doubles cache storage relative to BFP8.",
+    "weight_groups": {
+      "attention_prefill": {
+        "dtype": "bfloat8_b",
+        "layer_ranges": [
+          [
+            0,
+            59
+          ]
+        ],
+        "phase": "prefill QKV and output projections"
+      },
+      "attention_qkv": {
+        "dtype": "bfloat8_b",
+        "layer_ranges": [
+          [
+            0,
+            59
+          ]
+        ],
+        "phase": "decode; prefill loader uses checkpoint-compatible BFP8"
+      },
+      "attention_output": {
+        "dtype": "bfloat8_b",
+        "layer_ranges": [
+          [
+            0,
+            59
+          ]
+        ],
+        "phase": "decode; prefill loader uses checkpoint-compatible BFP8"
+      },
+      "mlp_gate_up": {
+        "dtype": "bfloat4_b",
+        "layer_ranges": [
+          [
+            0,
+            59
+          ]
+        ]
+      },
+      "mlp_down": {
+        "dtype": "bfloat4_b",
+        "layer_ranges": [
+          [
+            0,
+            59
+          ]
+        ]
+      },
+      "lm_head": {
+        "dtype": "bfloat16",
+        "tied_value_source": "model.language_model.embed_tokens.weight"
+      }
+    },
+    "layer_exceptions": [],
+    "compute_fidelities": {
+      "attention_qkv": "LoFi",
+      "attention_output": "LoFi",
+      "mlp_gate_up": "LoFi",
+      "mlp_down": "LoFi",
+      "lm_head": "HiFi2"
+    },
+    "activation_dtype": "bfloat16",
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "prefill": "bfloat16",
+      "decode": "bfloat8_b"
+    },
+    "kv_cache_dtype": "bfloat16",
+    "logits_dtype": "bfloat16",
+    "sampling": {
+      "gather_values_dtype": "float32",
+      "greedy_pair_value_dtype": "bfloat16",
+      "token_dtype": "int32",
+      "assumptions": "device-side exact greedy; lowest global token wins ties; no full-vocabulary host readback"
+    }
+  },
+  "runtime_policy_summary": {
+    "config_id": "kv_cache_bf16",
+    "precision_config_path": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/kv_cache_bf16.json",
+    "layers": [
+      {
+        "layer": 0,
+        "policy_name": "kv_cache_bf16",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 5,
+        "policy_name": "kv_cache_bf16",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      }
+    ],
+    "lm_head": {
+      "weight_dtype": "bfloat16",
+      "math_fidelity": "HiFi2",
+      "logits_dtype": "bfloat16"
+    },
+    "sampling": {
+      "gather_values_dtype": "float32"
+    }
+  },
+  "accuracy": {
+    "teacher_forcing": {
+      "top1": 0.0,
+      "top5": 0.0,
+      "top100": 0.0,
+      "matches_top1": 0,
+      "matches_top5": 0,
+      "matches_top100": 0,
+      "total": 100,
+      "k": 100,
+      "ttft_ms": 2079.0103510953486,
+      "decode_tokens": 99,
+      "decode_elapsed_s": 4.697691907174885,
+      "decode_t/s/u": 21.07417897048446,
+      "elapsed_s": 6.776727188844234,
+      "e2e_t/s/u": 14.75638567310468
+    },
+    "prefill": null,
+    "thresholds": {
+      "top1": 0.9,
+      "top5": 0.98,
+      "top100": 1.0
+    }
+  },
+  "performance": {
+    "ttft_ms": 2079.0103510953486,
+    "trace_verified_teacher_forcing_decode_t/s/u": 21.07417897048446,
+    "teacher_forcing_e2e_t/s/u": 14.75638567310468,
+    "measurement_regime": "reduced-2-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens"
+  },
+  "trace_verified": true,
+  "trace_counters": {
+    "model_trace_replays": 99,
+    "token_host_refreshes": 98,
+    "position_host_refreshes": 2,
+    "rope_host_refreshes": 2,
+    "page_table_refreshes": 0,
+    "synchronizations": 3,
+    "sampled_token_readbacks": 100,
+    "full_logits_readbacks": 0
+  },
+  "pass": false,
+  "status": "fail_accuracy",
+  "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/kv_cache_bf16.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/smokes/group_g --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache --layer-indices 0 5 # candidate=kv_cache_bf16",
+  "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+  "hardware": "4x Blackhole P150b",
+  "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+  "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt"
+}

@@ -1,0 +1,6 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "attention_output_bfp4_lofi",
+  "description": "BFP4+LoFi candidate for the material attention output projection group.",
+  "weight_groups": {"attention_output": {"dtype": "bfloat4_b"}}
+}

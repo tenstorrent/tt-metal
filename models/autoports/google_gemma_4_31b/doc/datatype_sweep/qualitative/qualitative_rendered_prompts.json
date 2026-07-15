@@ -1,0 +1,118 @@
+[
+  {
+    "id": 0,
+    "prompt": "Write a haiku about machine learning.",
+    "prompt_token_ids": [
+      2,
+      6974,
+      496,
+      678,
+      20517,
+      1003,
+      5464,
+      4735,
+      236761
+    ]
+  },
+  {
+    "id": 1,
+    "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+    "prompt_token_ids": [
+      2,
+      155122,
+      506,
+      4954,
+      1534,
+      52660,
+      532,
+      124155,
+      4735,
+      528,
+      3606,
+      3755,
+      236761
+    ]
+  },
+  {
+    "id": 2,
+    "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+    "prompt_token_ids": [
+      2,
+      25146,
+      672,
+      3925,
+      236787,
+      9920,
+      3324,
+      496,
+      990,
+      236764,
+      528,
+      496,
+      236365,
+      21880,
+      236764,
+      993,
+      11742,
+      496,
+      23210,
+      3184,
+      70418,
+      1015,
+      11788
+    ]
+  },
+  {
+    "id": 3,
+    "prompt": "What are the three laws of thermodynamics?",
+    "prompt_token_ids": [
+      2,
+      3689,
+      659,
+      506,
+      1806,
+      9734,
+      529,
+      67280,
+      236881
+    ]
+  },
+  {
+    "id": 4,
+    "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+    "prompt_token_ids": [
+      2,
+      40414,
+      506,
+      2269,
+      531,
+      7830,
+      236787,
+      623,
+      9259,
+      236764,
+      1217,
+      659,
+      611,
+      3124,
+      7462
+    ]
+  },
+  {
+    "id": 5,
+    "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+    "prompt_token_ids": [
+      2,
+      6974,
+      496,
+      17856,
+      1292,
+      531,
+      9279,
+      506,
+      123466,
+      7501,
+      236761
+    ]
+  }
+]

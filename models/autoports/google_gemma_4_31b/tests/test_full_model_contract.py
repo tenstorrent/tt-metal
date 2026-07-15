@@ -197,7 +197,8 @@ def test_split_sampling_is_canonical_and_trace_owned():
     assert "sampling_cluster_axis=1" in init_source
     assert "num_gather_links=2" in init_source
     assert "use_broadcast_all_gather=True" in init_source
-    assert "gather_values_dtype=ttnn.float32" in init_source
+    assert "gather_values_dtype=self.model.config.sampling_dtype" in init_source
+    assert Gemma4FullModelConfig().sampling_dtype == ttnn.float32
     assert "min_candidate_gather_width" not in init_source
     assert "use_composite_all_gather" not in init_source
     assert "SamplingGenerator" not in init_source
@@ -294,6 +295,9 @@ def test_eager_sampler_is_keyed_to_actual_batch_without_changing_canonical_trace
         vocab_size = 262_144
         trace_state = TraceState()
 
+        class config:
+            sampling_dtype = ttnn.bfloat16
+
     generator.model = Model()
     configs = []
 
@@ -312,7 +316,7 @@ def test_eager_sampler_is_keyed_to_actual_batch_without_changing_canonical_trace
     assert configs[-1].sampling_cluster_axis == 1
     assert configs[-1].num_gather_links == 2
     assert configs[-1].use_broadcast_all_gather is True
-    assert configs[-1].gather_values_dtype == ttnn.float32
+    assert configs[-1].gather_values_dtype == generator.model.config.sampling_dtype == ttnn.bfloat16
     assert generator._get_eager_sampler(1, force_argmax=False) is batch_one
     assert len(configs) == 1
     assert generator._get_eager_sampler(2, force_argmax=False) is generator.sampler
@@ -336,6 +340,7 @@ def test_eager_sampler_is_keyed_to_actual_batch_without_changing_canonical_trace
     get_source = inspect.getsource(Gemma4Generator._get_eager_sampler)
     assert "Sampling1D.from_config" in get_source
     assert "max_batch_size=batch_size" in get_source
+    assert "gather_values_dtype=self.model.config.sampling_dtype" in get_source
     assert "return self.force_argmax_sampler if force_argmax else self.sampler" in get_source
 
 

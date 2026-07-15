@@ -25,6 +25,8 @@ from models.autoports.google_gemma_4_31b.tt.model import (
 from models.common.readiness_check.mesh_device import close_readiness_mesh_device, open_readiness_mesh_device
 from models.common.readiness_check.schema import load_reference
 
+MODEL_DIR = Path("models/autoports/google_gemma_4_31b")
+
 
 def _load_prompts(path: Path) -> list[str]:
     prompts = [entry.strip() for entry in path.read_text(encoding="utf-8").split("\n\n") if entry.strip()]
@@ -337,11 +339,21 @@ def _run_lm_head_aligned_ab(generator, prompt_token_ids: list[int], checkpoint: 
 
 
 def _model_config_from_environment() -> Gemma4FullModelConfig:
-    return Gemma4FullModelConfig(
-        lm_head_dram_sharded=os.environ.get("GEMMA4_31B_LM_HEAD_DRAM_SHARDED", "1") == "1",
-        lm_head_num_cores=int(os.environ.get("GEMMA4_31B_LM_HEAD_NUM_CORES", "4")),
-        lm_head_in0_block_w=int(os.environ.get("GEMMA4_31B_LM_HEAD_IN0_BLOCK_W", "2")),
-        lm_head_split_size=int(os.environ.get("GEMMA4_31B_LM_HEAD_SPLIT_SIZE", "8192")),
+    overrides = {
+        "lm_head_dram_sharded": os.environ.get("GEMMA4_31B_LM_HEAD_DRAM_SHARDED", "1") == "1",
+        "lm_head_num_cores": int(os.environ.get("GEMMA4_31B_LM_HEAD_NUM_CORES", "4")),
+        "lm_head_in0_block_w": int(os.environ.get("GEMMA4_31B_LM_HEAD_IN0_BLOCK_W", "2")),
+        "lm_head_split_size": int(os.environ.get("GEMMA4_31B_LM_HEAD_SPLIT_SIZE", "8192")),
+    }
+    precision_path = os.environ.get("GEMMA4_31B_PRECISION_CONFIG")
+    if precision_path is None:
+        selected = MODEL_DIR / "doc/datatype_sweep/selected_precision_config.json"
+        if selected.exists():
+            precision_path = str(selected)
+    return (
+        Gemma4FullModelConfig.from_precision_config(precision_path, **overrides)
+        if precision_path is not None
+        else Gemma4FullModelConfig(**overrides)
     )
 
 
@@ -381,9 +393,11 @@ def _run_benchmark_only(args: argparse.Namespace) -> None:
     prompt_token_ids = reference.entries[0].prompt_tokens.reshape(-1).tolist()
     mesh = open_readiness_mesh_device("P150_X4", "FABRIC_1D")
     generator = None
+    runtime_precision = None
     try:
         config = _model_config_from_environment()
         generator = build_generator(model_dir=args.model_dir, mesh_device=mesh, model_config=config)
+        runtime_precision = generator.model.precision_runtime_summary()
         for _ in range(args.benchmark_warmups):
             generator.benchmark_token_out_no_readback(prompt_token_ids, max_new_tokens=args.benchmark_tokens)
         samples = [
@@ -412,6 +426,7 @@ def _run_benchmark_only(args: argparse.Namespace) -> None:
             "lm_head_in0_block_w": config.lm_head_in0_block_w,
             "lm_head_split_size": config.lm_head_split_size,
         },
+        "runtime_precision": runtime_precision,
         "workload": {"prompt_len": len(prompt_token_ids), "gen_len": args.benchmark_tokens, "batch": 1},
         "warmups": args.benchmark_warmups,
         "repeats": args.benchmark_repeats,
@@ -466,12 +481,14 @@ def run(args: argparse.Namespace) -> None:
     generator = None
     benchmark = None
     aligned_ab = None
+    runtime_precision = None
     try:
         generator = build_generator(
             model_dir=args.model_dir,
             mesh_device=mesh,
             model_config=_model_config_from_environment(),
         )
+        runtime_precision = generator.model.precision_runtime_summary()
         if args.lm_head_aligned_ab:
             if len(rendered) <= 5:
                 raise ValueError("LM-head aligned A/B requires prompt ID 5")
@@ -511,6 +528,7 @@ def run(args: argparse.Namespace) -> None:
         "prompt_source_path": str(args.prompt_source),
         "max_new_tokens": args.max_new_tokens,
         "generation": {"do_sample": False, "num_beams": 1},
+        "runtime_precision": runtime_precision,
     }
     (args.output_dir / "qualitative_prompt_format.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8"

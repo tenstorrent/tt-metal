@@ -1,0 +1,6 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "lm_head_bfp8_hifi2",
+  "description": "Lower the decode-bound tied LM head to BFP8 while retaining HiFi2.",
+  "weight_groups": {"lm_head": {"dtype": "bfloat8_b"}}
+}

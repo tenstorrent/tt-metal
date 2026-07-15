@@ -1,0 +1,7 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "residual_activation_bfp8",
+  "description": "Lower embedding-to-stack activation and every inter-layer residual boundary to BFP8.",
+  "activation_dtype": "bfloat8_b",
+  "residual_dtype": "bfloat8_b"
+}

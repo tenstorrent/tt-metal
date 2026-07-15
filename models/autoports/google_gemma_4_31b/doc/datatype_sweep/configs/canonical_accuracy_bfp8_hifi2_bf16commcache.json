@@ -1,0 +1,14 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "canonical_accuracy_bfp8_hifi2_bf16commcache",
+  "description": "Canonical accuracy-oriented control: all decoder projections BFP8+HiFi2 with BF16 decode CCL and KV cache.",
+  "weight_groups": {"mlp_gate_up": {"dtype": "bfloat8_b"}, "mlp_down": {"dtype": "bfloat8_b"}},
+  "compute_fidelities": {
+    "attention_qkv": "HiFi2",
+    "attention_output": "HiFi2",
+    "mlp_gate_up": "HiFi2",
+    "mlp_down": "HiFi2"
+  },
+  "ccl_dtype": {"decode": "bfloat16"},
+  "kv_cache_dtype": "bfloat16"
+}

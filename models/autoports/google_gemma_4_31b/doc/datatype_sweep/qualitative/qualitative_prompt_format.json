@@ -1,0 +1,2368 @@
+{
+  "hf_model": "/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3",
+  "tokenizer_class": "GemmaTokenizer",
+  "chat_template_present": false,
+  "prompt_mode": "completion",
+  "rendering_method": "tokenizer.encode(prompt, add_special_tokens=True)",
+  "prompt_source_path": "models/common/readiness_check/vllm_prompts.txt",
+  "max_new_tokens": 64,
+  "generation": {
+    "do_sample": false,
+    "num_beams": 1
+  },
+  "runtime_precision": {
+    "config_id": "lm_head_bfp8_hifi2",
+    "precision_config_path": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/selected_precision_config.json",
+    "layers": [
+      {
+        "layer": 0,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 1,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 2,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 3,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 4,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 5,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 6,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 7,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 8,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 9,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 10,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 11,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 12,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 13,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 14,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 15,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 16,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 17,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 18,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 19,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 20,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 21,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 22,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 23,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 24,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 25,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 26,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 27,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 28,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 29,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 30,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 31,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 32,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 33,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 34,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 35,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 36,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 37,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 38,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 39,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 40,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 41,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 42,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 43,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 44,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 45,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 46,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 47,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 48,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 49,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 50,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 51,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 52,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 53,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 54,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 55,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 56,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 57,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 58,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      },
+      {
+        "layer": 59,
+        "policy_name": "lm_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention_prefill": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_gate_up": "bfloat4_b",
+          "mlp_down": "bfloat4_b"
+        },
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "compute_fidelities": {
+          "attention_qkv": "LoFi",
+          "attention_output": "LoFi",
+          "mlp_gate_up": "LoFi",
+          "mlp_down": "LoFi"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat8_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "program_geometry": {
+          "mlp_packed_gate_up_in0_block_w": 12
+        }
+      }
+    ],
+    "lm_head": {
+      "weight_dtype": "bfloat8_b",
+      "physical_weight_dtype": "bfloat8_b",
+      "math_fidelity": "HiFi2",
+      "logits_dtype": "bfloat16"
+    },
+    "sampling": {
+      "gather_values_dtype": "float32"
+    }
+  }
+}

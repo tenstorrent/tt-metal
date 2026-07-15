@@ -1,0 +1,6 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "mlp_bfp8_lofi",
+  "description": "Canonical safer MLP dtype with LoFi fidelity.",
+  "weight_groups": {"mlp_gate_up": {"dtype": "bfloat8_b"}, "mlp_down": {"dtype": "bfloat8_b"}}
+}

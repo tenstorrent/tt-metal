@@ -1,0 +1,7 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "mlp_bfp8_hifi2",
+  "description": "Canonical safer MLP dtype and HiFi2 fidelity control.",
+  "weight_groups": {"mlp_gate_up": {"dtype": "bfloat8_b"}, "mlp_down": {"dtype": "bfloat8_b"}},
+  "compute_fidelities": {"mlp_gate_up": "HiFi2", "mlp_down": "HiFi2"}
+}

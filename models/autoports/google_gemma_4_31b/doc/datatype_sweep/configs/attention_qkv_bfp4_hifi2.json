@@ -1,0 +1,6 @@
+{
+  "extends": "attention_qkv_bfp4_lofi.json",
+  "config_id": "attention_qkv_bfp4_hifi2",
+  "description": "BFP4+HiFi2 comparison for the material QKV projection group.",
+  "compute_fidelities": {"attention_qkv": "HiFi2"}
+}

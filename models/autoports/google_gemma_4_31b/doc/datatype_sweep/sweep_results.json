@@ -1,0 +1,1413 @@
+{
+  "model": "google/gemma-4-31B",
+  "thresholds": {
+    "top1": 0.9,
+    "top5": 0.98,
+    "top100": 1.0
+  },
+  "selection_metric": "trace_verified_teacher_forcing_decode_t/s/u",
+  "selected_config_id": "lm_head_bfp8_hifi2",
+  "results": [
+    {
+      "config_id": "activation_bfp8_residual_bf16",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/activation_bfp8_residual_bf16.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": "bfloat16",
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.89,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 973.5218612477183,
+      "trace_verified_teacher_forcing_decode_t/s/u": 22.982903144668448,
+      "teacher_forcing_e2e_t/s/u": 18.935422783271424,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/activation_bfp8_residual_bf16.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=activation_bfp8_residual_bf16",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": false,
+      "status": "fail_accuracy"
+    },
+    {
+      "config_id": "attention_bfp8_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_bfp8_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "HiFi2",
+        "attention_output": "HiFi2",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.9,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 449.041485786438,
+      "trace_verified_teacher_forcing_decode_t/s/u": 22.72790666056113,
+      "teacher_forcing_e2e_t/s/u": 20.81184481355104,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_bfp8_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp4_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/decode_ccl_bf16.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/residual_activation_bfp8.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=attention_bfp8_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "attention_output_bfp4_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_output_bfp4_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "HiFi2",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 449.8097221367061,
+      "trace_verified_teacher_forcing_decode_t/s/u": 23.78897391959793,
+      "teacher_forcing_e2e_t/s/u": 21.685223499812064,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_output_bfp4_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_output_bfp4_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=attention_output_bfp4_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "attention_output_bfp4_lofi",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_output_bfp4_lofi.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 848.1994490139186,
+      "trace_verified_teacher_forcing_decode_t/s/u": 23.17627224224619,
+      "teacher_forcing_e2e_t/s/u": 19.531859417341906,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_output_bfp4_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_output_bfp4_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=attention_output_bfp4_lofi",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "attention_output_bfp8_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_output_bfp8_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "HiFi2",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": "bfloat16",
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.9,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 856.934207957238,
+      "trace_verified_teacher_forcing_decode_t/s/u": 22.463623753965983,
+      "teacher_forcing_e2e_t/s/u": 18.99663831495604,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_output_bfp8_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=attention_output_bfp8_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "attention_qkv_bfp4_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_qkv_bfp4_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat4_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "HiFi2",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.89,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 457.35260797664523,
+      "trace_verified_teacher_forcing_decode_t/s/u": 22.907409368534434,
+      "teacher_forcing_e2e_t/s/u": 20.924292680125777,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_qkv_bfp4_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_qkv_bfp4_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=attention_qkv_bfp4_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": false,
+      "status": "fail_accuracy"
+    },
+    {
+      "config_id": "attention_qkv_bfp4_lofi",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_qkv_bfp4_lofi.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat4_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.89,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 856.5726079978049,
+      "trace_verified_teacher_forcing_decode_t/s/u": 23.06178425130573,
+      "teacher_forcing_e2e_t/s/u": 19.419667121738236,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_qkv_bfp4_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_qkv_bfp4_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=attention_qkv_bfp4_lofi",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": false,
+      "status": "fail_accuracy"
+    },
+    {
+      "config_id": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 898.4112311154604,
+      "trace_verified_teacher_forcing_decode_t/s/u": 23.139082344511007,
+      "teacher_forcing_e2e_t/s/u": 19.316505338204255,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_bfp8_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp4_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/decode_ccl_bf16.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/residual_activation_bfp8.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=baseline_bfp8attn_bfp4mlp_lofi_bf16lm",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "canonical_accuracy_bfp8_hifi2_bf16commcache",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/canonical_accuracy_bfp8_hifi2_bf16commcache.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat8_b",
+        "mlp_down": "bfloat8_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "HiFi2",
+        "attention_output": "HiFi2",
+        "mlp_gate_up": "HiFi2",
+        "mlp_down": "HiFi2",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 6,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.93,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 862.249962054193,
+      "trace_verified_teacher_forcing_decode_t/s/u": 17.799486294487355,
+      "teacher_forcing_e2e_t/s/u": 15.566039243092963,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/canonical_accuracy_bfp8_hifi2_bf16commcache.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=canonical_accuracy_bfp8_hifi2_bf16commcache",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "decode_ccl_bf16",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/decode_ccl_bf16.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 447.17123499140143,
+      "trace_verified_teacher_forcing_decode_t/s/u": 23.98767748862588,
+      "teacher_forcing_e2e_t/s/u": 21.861104061539923,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_bfp8_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp4_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/decode_ccl_bf16.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/residual_activation_bfp8.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=decode_ccl_bf16",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "kv_cache_bf16",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/kv_cache_bf16.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat16",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 847.9345552623272,
+      "trace_verified_teacher_forcing_decode_t/s/u": 22.83183118198013,
+      "teacher_forcing_e2e_t/s/u": 19.29005816155724,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/kv_cache_bf16.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=kv_cache_bf16",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "lm_head_bfp4_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp4_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.9,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 463.2231271825731,
+      "trace_verified_teacher_forcing_decode_t/s/u": 24.48828054650073,
+      "teacher_forcing_e2e_t/s/u": 22.19259386016038,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp4_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp4_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=lm_head_bfp4_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "lm_head_bfp4_lofi",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp4_lofi.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat4_b"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.9,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 840.904647950083,
+      "trace_verified_teacher_forcing_decode_t/s/u": 23.42764554075041,
+      "teacher_forcing_e2e_t/s/u": 19.736654006782523,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp4_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp4_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=lm_head_bfp4_lofi",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "lm_head_bfp8_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat8_b"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.92,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 453.6791406571865,
+      "trace_verified_teacher_forcing_decode_t/s/u": 24.561083170322924,
+      "teacher_forcing_e2e_t/s/u": 22.299129258559223,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=lm_head_bfp8_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "lm_head_bfp8_hifi2_attention_output_bfp4_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_hifi2_attention_output_bfp4_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat4_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat8_b"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "HiFi2",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat4_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": "bfloat8_b",
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 0.99,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 941.5832422673702,
+      "trace_verified_teacher_forcing_decode_t/s/u": 22.289408789244337,
+      "teacher_forcing_e2e_t/s/u": 18.576366302218673,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_hifi2_attention_output_bfp4_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=lm_head_bfp8_hifi2_attention_output_bfp4_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "lm_head_bfp8_hifi2_decode_ccl_bf16",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_hifi2_decode_ccl_bf16.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat8_b"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat16"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": {
+          "attention_prefill_qkv": "bfloat8_b",
+          "attention_prefill_output": "bfloat8_b",
+          "attention_qkv": "bfloat8_b",
+          "attention_output": "bfloat8_b",
+          "mlp_prefill_gate_up": "bfloat4_b",
+          "mlp_prefill_down": "bfloat4_b",
+          "mlp_decode_gate_up": "bfloat4_b",
+          "mlp_decode_down": "bfloat4_b"
+        },
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": "bfloat8_b",
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 965.3042210265994,
+      "trace_verified_teacher_forcing_decode_t/s/u": 22.512447198482423,
+      "teacher_forcing_e2e_t/s/u": 18.6466159766576,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_hifi2_decode_ccl_bf16.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=lm_head_bfp8_hifi2_decode_ccl_bf16",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "lm_head_bfp8_lofi",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_lofi.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat8_b"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "LoFi"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 894.5158361457288,
+      "trace_verified_teacher_forcing_decode_t/s/u": 23.471301971373187,
+      "teacher_forcing_e2e_t/s/u": 19.560031431977496,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/lm_head_bfp8_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=lm_head_bfp8_lofi",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "mlp_bfp4_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp4_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "HiFi2",
+        "mlp_down": "HiFi2",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.91,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 458.01297714933753,
+      "trace_verified_teacher_forcing_decode_t/s/u": 20.31345372799925,
+      "teacher_forcing_e2e_t/s/u": 18.75585869417533,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_bfp8_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp4_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/decode_ccl_bf16.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/residual_activation_bfp8.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=mlp_bfp4_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "mlp_bfp8_hifi2",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp8_hifi2.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat8_b",
+        "mlp_down": "bfloat8_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "HiFi2",
+        "mlp_down": "HiFi2",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 6,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.92,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 469.53944908455014,
+      "trace_verified_teacher_forcing_decode_t/s/u": 20.063612814848714,
+      "teacher_forcing_e2e_t/s/u": 18.505229621804865,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp8_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp8_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=mlp_bfp8_hifi2",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "mlp_bfp8_lofi",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp8_lofi.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat8_b",
+        "mlp_down": "bfloat8_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat16",
+      "residual_dtype": "bfloat16",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 6,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.92,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 948.6091770231724,
+      "trace_verified_teacher_forcing_decode_t/s/u": 21.868382439483298,
+      "teacher_forcing_e2e_t/s/u": 18.262410989516322,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp8_lofi.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp8_hifi2.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=mlp_bfp8_lofi",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": true,
+      "status": "pass"
+    },
+    {
+      "config_id": "residual_activation_bfp8",
+      "precision_config": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/residual_activation_bfp8.json",
+      "weight_groups": {
+        "attention_prefill": "bfloat8_b",
+        "attention_qkv": "bfloat8_b",
+        "attention_output": "bfloat8_b",
+        "mlp_gate_up": "bfloat4_b",
+        "mlp_down": "bfloat4_b",
+        "lm_head": "bfloat16"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "attention_qkv": "LoFi",
+        "attention_output": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "lm_head": "HiFi2"
+      },
+      "activation_dtype": "bfloat8_b",
+      "residual_dtype": "bfloat8_b",
+      "ccl_dtype": {
+        "prefill": "bfloat16",
+        "decode": "bfloat8_b"
+      },
+      "kv_cache_dtype": "bfloat8_b",
+      "logits_dtype": "bfloat16",
+      "sampling_dtype": "float32",
+      "runtime_consumption": {
+        "physical_weight_dtypes": null,
+        "qkv_split_input_dtype": "bfloat16",
+        "cache_update_input_dtype": "bfloat16",
+        "mlp_packed_gate_up_in0_block_w": 12,
+        "physical_lm_head_weight_dtype": null,
+        "sampling": {
+          "gather_values_dtype": "float32"
+        }
+      },
+      "top1": 0.01,
+      "top5": 0.01,
+      "top100": 0.05,
+      "token_count": 100,
+      "ttft_ms": 699.7070596553385,
+      "trace_verified_teacher_forcing_decode_t/s/u": 24.111928301299443,
+      "teacher_forcing_e2e_t/s/u": 20.809085134934335,
+      "trace_verified": true,
+      "trace_counters": {
+        "model_trace_replays": 99,
+        "token_host_refreshes": 98,
+        "position_host_refreshes": 2,
+        "rope_host_refreshes": 2,
+        "page_table_refreshes": 0,
+        "synchronizations": 3,
+        "sampled_token_readbacks": 100,
+        "full_logits_readbacks": 0
+      },
+      "measurement_regime": "full-60-layer batch-1 traced teacher forcing; AIME24 149-token prompt; 100 reference tokens",
+      "command": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tests/run_datatype_same_weights_group.py --model-dir /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/attention_bfp8_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/mlp_bfp4_hifi2.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/decode_ccl_bf16.json --precision-config models/autoports/google_gemma_4_31b/doc/datatype_sweep/configs/residual_activation_bfp8.json --reference models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt --output-dir models/autoports/google_gemma_4_31b/doc/datatype_sweep/candidates --tensor-cache /tmp/gemma4_31b_full_model_tensor_cache # candidate=residual_activation_bfp8",
+      "git_commit": "727b333b7bf0a62cebcd01afcc9ff64c796deffa",
+      "hardware": "4x Blackhole P150b",
+      "mesh": "MeshShape(1,4) TP4 FABRIC_1D",
+      "reference": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/full_model/readiness_aime24_plain.refpt",
+      "pass": false,
+      "status": "fail_accuracy"
+    }
+  ]
+}

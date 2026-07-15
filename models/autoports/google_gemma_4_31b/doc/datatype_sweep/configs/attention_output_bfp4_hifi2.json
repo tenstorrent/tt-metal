@@ -1,0 +1,6 @@
+{
+  "extends": "attention_output_bfp4_lofi.json",
+  "config_id": "attention_output_bfp4_hifi2",
+  "description": "BFP4+HiFi2 comparison for the material attention output projection group.",
+  "compute_fidelities": {"attention_output": "HiFi2"}
+}

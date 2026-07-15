@@ -317,7 +317,7 @@ class Gemma4Generator(Generator):
             num_gather_links=2,
             sampling_cluster_axis=1,
             use_broadcast_all_gather=True,
-            gather_values_dtype=ttnn.float32,
+            gather_values_dtype=self.model.config.sampling_dtype,
         )
         self.sampler = Sampling1D.from_config(sampling_config)
         self.force_argmax_sampler = Sampling1D.from_config(
@@ -473,7 +473,7 @@ class Gemma4Generator(Generator):
                     num_gather_links=2,
                     sampling_cluster_axis=1,
                     use_broadcast_all_gather=True,
-                    gather_values_dtype=ttnn.float32,
+                    gather_values_dtype=self.model.config.sampling_dtype,
                 )
             )
             sampler.load_device_buffers()
@@ -970,6 +970,7 @@ class Gemma4Generator(Generator):
 
 def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Gemma4Generator:
     model_config = kwargs.pop("model_config", None)
+    precision_config_path = kwargs.pop("precision_config_path", None) or os.environ.get("GEMMA4_31B_PRECISION_CONFIG")
     if model_config is None and kwargs.get("model") is not None:
         model_config = kwargs["model"].config
     if model_config is None:
@@ -978,7 +979,17 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Gemma4Gener
             if key in kwargs:
                 value = kwargs.pop(key)
                 config_fields[key] = tuple(value) if key == "layer_indices" and value is not None else value
-        model_config = Gemma4FullModelConfig(**config_fields)
+        if precision_config_path is None:
+            selected = Path(model_dir) / "doc/datatype_sweep/selected_precision_config.json"
+            if selected.exists():
+                precision_config_path = selected
+        model_config = (
+            Gemma4FullModelConfig.from_precision_config(precision_config_path, **config_fields)
+            if precision_config_path is not None
+            else Gemma4FullModelConfig(**config_fields)
+        )
+    elif precision_config_path is not None:
+        raise ValueError("precision_config_path cannot be combined with an explicit model_config")
     return Gemma4Generator(model_dir=model_dir, mesh_device=mesh_device, model_config=model_config, **kwargs)
 
 

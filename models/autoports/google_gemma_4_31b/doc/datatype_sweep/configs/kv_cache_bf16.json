@@ -1,0 +1,6 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "kv_cache_bf16",
+  "description": "Canonical KV-cache accuracy control; doubles cache storage relative to BFP8.",
+  "kv_cache_dtype": "bfloat16"
+}

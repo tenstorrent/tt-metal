@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "model": "google/gemma-4-31B",
+  "config_id": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm",
+  "description": "Stage 07 optimized-full-model default precision policy.",
+  "weight_groups": {
+    "attention_prefill": {"dtype": "bfloat8_b", "layer_ranges": [[0, 59]], "phase": "prefill QKV and output projections"},
+    "attention_qkv": {"dtype": "bfloat8_b", "layer_ranges": [[0, 59]], "phase": "decode; prefill loader uses checkpoint-compatible BFP8"},
+    "attention_output": {"dtype": "bfloat8_b", "layer_ranges": [[0, 59]], "phase": "decode; prefill loader uses checkpoint-compatible BFP8"},
+    "mlp_gate_up": {"dtype": "bfloat4_b", "layer_ranges": [[0, 59]]},
+    "mlp_down": {"dtype": "bfloat4_b", "layer_ranges": [[0, 59]]},
+    "lm_head": {"dtype": "bfloat16", "tied_value_source": "model.language_model.embed_tokens.weight"}
+  },
+  "layer_exceptions": [],
+  "compute_fidelities": {
+    "attention_qkv": "LoFi",
+    "attention_output": "LoFi",
+    "mlp_gate_up": "LoFi",
+    "mlp_down": "LoFi",
+    "lm_head": "HiFi2"
+  },
+  "activation_dtype": "bfloat16",
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": {"prefill": "bfloat16", "decode": "bfloat8_b"},
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_dtype": "bfloat16",
+  "sampling": {
+    "gather_values_dtype": "float32",
+    "greedy_pair_value_dtype": "bfloat16",
+    "token_dtype": "int32",
+    "assumptions": "device-side exact greedy; lowest global token wins ties; no full-vocabulary host readback"
+  }
+}

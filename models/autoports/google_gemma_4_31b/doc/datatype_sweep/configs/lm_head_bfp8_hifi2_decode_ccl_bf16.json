@@ -1,0 +1,8 @@
+{
+  "extends": "lm_head_bfp8_hifi2.json",
+  "config_id": "lm_head_bfp8_hifi2_decode_ccl_bf16",
+  "ccl_dtype": {
+    "decode": "bfloat16"
+  },
+  "notes": "Refined combination of the independently passing BFP8/HiFi2 LM-head and BF16 decode-CCL wins."
+}

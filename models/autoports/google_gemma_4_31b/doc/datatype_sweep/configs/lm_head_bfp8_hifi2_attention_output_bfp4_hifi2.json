@@ -1,0 +1,11 @@
+{
+  "extends": "lm_head_bfp8_hifi2.json",
+  "config_id": "lm_head_bfp8_hifi2_attention_output_bfp4_hifi2",
+  "description": "Combine selected BFP8/HiFi2 LM head with passing BFP4/HiFi2 attention output.",
+  "weight_groups": {
+    "attention_output": {"dtype": "bfloat4_b"}
+  },
+  "compute_fidelities": {
+    "attention_output": "HiFi2"
+  }
+}

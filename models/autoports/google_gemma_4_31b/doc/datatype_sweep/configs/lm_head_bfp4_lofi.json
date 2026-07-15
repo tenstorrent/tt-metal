@@ -1,0 +1,7 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "lm_head_bfp4_lofi",
+  "description": "Material lower-precision LM-head candidate; BFP4 is paired with LoFi as required.",
+  "weight_groups": {"lm_head": {"dtype": "bfloat4_b"}},
+  "compute_fidelities": {"lm_head": "LoFi"}
+}

@@ -1,0 +1,6 @@
+{
+  "extends": "baseline_bfp8attn_bfp4mlp_lofi_bf16lm.json",
+  "config_id": "decode_ccl_bf16",
+  "description": "Canonical decode collective-precision control.",
+  "ccl_dtype": {"decode": "bfloat16"}
+}
