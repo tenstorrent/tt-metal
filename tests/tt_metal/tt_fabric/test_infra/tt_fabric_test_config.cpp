@@ -432,6 +432,8 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
             fabric_setup.num_links_max = true;
         } else {
             fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
+            // 0 is reserved as the kNumLinksAll sentinel; reject it as an explicit value.
+            TT_FATAL(fabric_setup.num_links >= 1, "num_links must be >= 1, got {}.", fabric_setup.num_links);
         }
     } else {
         fabric_setup.num_links = 1;
@@ -1064,7 +1066,15 @@ ParametrizationOptionsMap YamlConfigParser::parse_parametrization_params(const Y
         if (key == "ftype" || key == "ntype") {
             options[key] = parse_scalar_sequence<std::string>(node);
         } else if (key == "size" || key == "num_packets" || key == "num_links") {
-            options[key] = parse_scalar_sequence<uint32_t>(node);
+            auto values = parse_scalar_sequence<uint32_t>(node);
+            if (key == "num_links") {
+                // 0 is reserved as the kNumLinksAll sentinel; reject it as an explicit value so a
+                // literal [0] cannot silently collide with the "all" marker.
+                for (uint32_t value : values) {
+                    TT_FATAL(value >= 1, "Parametrization option 'num_links' values must be >= 1, got {}.", value);
+                }
+            }
+            options[key] = std::move(values);
         } else {
             TT_THROW("Unsupported parametrization parameter: {}", key);
         }
