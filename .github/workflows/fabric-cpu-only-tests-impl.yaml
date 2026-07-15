@@ -66,6 +66,7 @@ jobs:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
+      # Keep every shard running even if another shard fails or times out.
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
