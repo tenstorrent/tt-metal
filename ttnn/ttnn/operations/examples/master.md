@@ -53,6 +53,12 @@ on this move faster than, writing it as 4 × 512 B faces — bigger coalesced tr
 achieved DRAM bandwidth. Reader on NoC0, writer on NoC1 to overlap.
 **Gist:** on a DRAM-bound move, move whole pages and batch barriers; don't scatter sub-tile faces.
 
+## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
+**Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
+**Situation:** you wrote a tiled matmul that produces **one output tile per block-matmul** (a `1×1` subblock), so every output tile re-loads both its A and B operand into the SRC registers; you wonder whether a bigger output subblock is worth it.
+**Measured win:** grouping output tiles into a bigger subblock is **~1.46×** (Blackhole, 1 core, sharded L1, M=N=16, Kt=1). A **wide** subblock (`1×8`) loads one A-tile into SRC once and reuses it across 8 B-tiles; a **tall** one (`8×1`) reuses one B-tile across 8 A-rows. The win tracks subblock **size**, not shape — every 8-tile subblock (`1×8`,`8×1`,`2×4`,`4×2`) lands at 1.46×, wide (reuse A) and tall (reuse B) symmetric; the 4-tile `2×2` gets 1.40× (less amortization). Ceiling is the DEST budget (8 fp16 tiles).
+**Gist:** make the output subblock as large as the DEST budget allows — it amortizes the SRC operand load across the block. Caveat: a real multi-K matmul (`Kt>1`) needs a 32-bit DEST (`fp32_dest_acc_en`), halving the budget to 4 tiles, so cap the subblock at 4 (e.g. `2×2`/`1×4`) for ~1.40×. Matters most for **short-K** matmuls (small contraction depth) where the contraction can't hide the per-tile operand-load overhead.
+
 ## ⭐⭐ T2 — [`tensix_all_reduce_compute`](tensix_all_reduce_compute/README.md)
 **Concept:** FPU destination reuse for a multi-block tile reduction already resident in L1.
 **Situation:** a reducer copies each contributor into DST, repeatedly calls
@@ -62,6 +68,12 @@ for 2 blocks and **5.92× faster** for 8 blocks (six tiles, one Wormhole B0 core
 is **6.75× faster** (**3.46 µs** versus **23.31 µs**).
 **Gist:** initialize FPU add once per DST batch, pair source blocks, accumulate directly into DST,
 and pack only the final sum. Seed DST with one copy only for an odd contributor count.
+
+## ⭐⭐ T2 — [`eltwise_l1_vs_dest_accumulate`](eltwise_l1_vs_dest_accumulate/README.md)
+**Concept:** the accumulate mechanism in a reduction loop, ranked by how much L1 traffic the running accumulator pays — L1↔DEST round-trip vs. packer L1-accumulation vs. DEST-resident accumulation.
+**Situation:** you build a running accumulator by summing a stream of tiles into it. Addition can happen at three distinct points in the pipeline — the **FPU adder** (`add_tiles(A, B)` → DEST, any FPU binary op), the **DEST accumulator** (`acc_to_dest` folds each FPU result into a held DEST tile), and the **L1 accumulator** (`pack_reconfig_l1_acc` folds DEST onto the resident L1 tile at pack). What you accumulate is incidental. The dominant cost is re-touching `acc` in L1 every step; the naive read-modify-write uses only the FPU adder, so `acc` round-trips L1 (unpack, add, pack) every step.
+**Measured win:** three mechanisms, each stripping more accumulator L1 traffic (64 fp32 single-tile steps, one Blackhole core, sharded L1). Baseline `rmw` (**975 µs**) round-trips `acc` through unpack+add+pack every tile. `pack_l1_acc` (**192 µs, 5.09×**) reads two tiles per step, sums them in DEST, and lets the **packer** fold that onto `acc` in place — `acc` is only packed, never unpacked (B/2 steps). `dest_acc` (**92 µs, 10.59×**) keeps the running sum in a sticky DEST tile and touches L1 once, at the end — the upper bound.
+**Gist:** the win tracks accumulator L1 traffic. Don't re-read `acc` every step: either **pack-L1-accumulate** onto it (`OutputLifecycle::L1AccumulationCallerManaged` — never unpacks `acc`), or if DEST is free keep the running sum **in DEST** (`BinaryFpu<…, DestAccumulation::Enabled>` → `OutputLifecycle::DestAccumulation`, one pack at the end). `dest_acc` is the upper bound — it camps DEST for the whole reduction, so it only applies when DEST isn't needed for per-step work; otherwise `pack_l1_acc` is the realistic win with `acc` resident in L1.
 
 ## ⭐⭐ T2 — [`compute_fusion`](compute_fusion/README.md)
 **Concept:** fusing a small expression through DEST vs. computing it as separate helper calls that
@@ -188,6 +200,11 @@ handles **partial** (non-tile-aligned) row/col via a masked bcast-mul on the las
 (`WaitAndPopPerTile` — DST is the accumulator, ~2 tiles resident), and **cross-call accumulate** (a raw
 partial-sum CB tile folded into the pairwise add natively by parity — no `binary_dest_reuse` — finalized only on
 the last chunk).
+## ⭐⭐⭐ T3 — [`shared_input_reuse`](shared_input_reuse/README.md)
+**Concept:** redundant-DRAM-read elimination — stream a shared input once and NoC-multicast it (the `mcast_pipe` helper) vs. every core re-reading it from DRAM.
+**Situation:** a grid of cores all need the **same** multi-MB input — a large shared matrix `[R, C]` (~2.4 MB) streamed in fixed-size chunks (larger than L1). Written the obvious way, every core streams the whole input from DRAM — `N×` the unique bytes.
+**Measured result:** reading each chunk once on a top-left injector and `mcast_pipe`-broadcasting it to the other cores is **1.71×** faster than per-core DRAM reads (Blackhole, 22 cores = 2×11, shared input = 19×16×4 = 1216 tiles ≈ 2.4 MB bf16; **135 µs → 79 µs**). The device-time win is *smaller than the ~11× DRAM-read-**count** reduction* forwarding gives, because the single injector reads the input serially and the bytes still cross the NoC.
+**Gist:** for a shared, re-read multi-MB input at grid scale, read each chunk once + `noc_async_write_multicast` to the rest (use the `mcast_pipe` `SenderPipe`/`ReceiverPipe` helper + `ttnn.Mcast2D` host wiring; sender-in-rect self-excludes; double-buffer so the injector prefetches while consumers drain). The win grows with core count and with more concurrent injectors (one per independent stream). Two orthogonal correctness notes it demonstrates: keep output ≪ input (write a tiny per-core reduction, not the block) so you measure the READ not the write; and accumulate bf16 data in **fp32** via `add_tiles(acc_to_dest)` (never `binary_dest_reuse`, which round-trips the sum through a bf16 Src register and saturates at 256).
 
 ## ⭐⭐⭐ T3 — [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/README.md)
 **Concepts:** neighbor semaphore cost and direction-sensitive NoC contention in serpentine rings.
