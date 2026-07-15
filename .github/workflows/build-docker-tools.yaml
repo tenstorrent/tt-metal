@@ -14,9 +14,12 @@ permissions:
   packages: write
 
 env:
-  # Provenance/SBOM attestations are disabled separately in manual-docker-bake
-  # (via the attest target field, not here - provenance=false/sbom=false inside
-  # output= is silently ignored by buildx bake). See tenstorrent/tt-metal#49882.
+  # Full (mode=max) provenance + SBOM attestations are enabled separately in
+  # manual-docker-bake (via the attest target field, not here - output= keys
+  # like provenance=false are silently ignored by buildx bake). This makes
+  # every pushed tag an OCI Image Index; GHCR's package page currently
+  # mishandles that shape (reported to GitHub separately - doesn't affect
+  # pulls/scanners). See tenstorrent/tt-metal#49882.
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:

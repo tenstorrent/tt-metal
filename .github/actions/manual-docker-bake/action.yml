@@ -43,18 +43,21 @@ inputs:
     description: "Validate that built images can be inspected after build"
     required: false
     default: "true"
-  disable-attestations:
+  enable-attestations:
     description: >-
-      Disable default build provenance/SBOM attestations for every target.
-      docker-container/kubernetes/remote builders (unlike the classic docker
-      driver) attach a provenance attestation by default on push, turning a
-      pushed tag into a multi-manifest OCI Image Index (real image manifest +
-      a separate "unknown/unknown" attestation-manifest). GHCR's package page
-      doesn't render that shape and drops description/label display entirely
-      (see tenstorrent/tt-metal#49882). Setting `provenance=false`/`sbom=false`
-      inside a target's `output=` string does NOT work - buildx bake ignores
-      unknown output keys silently. This must be done via the separate
-      `attest` target field instead, which is what this input controls.
+      Request full (mode=max) build provenance and a real SBOM attestation for
+      every target, via the attest target field - buildx bake ignores unknown
+      keys placed inside a target's output= string (e.g. provenance=false),
+      so this must go through attest instead. Every pushed tag therefore
+      becomes a multi-manifest OCI Image Index (real per-platform image
+      manifest + a separate "unknown/unknown" attestation-manifest); GHCR's
+      package page does not render that shape and drops description/label
+      display for the tag as a result (reported to GitHub separately - see
+      tenstorrent/tt-metal#49882). That's a registry-UI limitation, not a
+      reason to skip attestations: pulls, containerd, and scanners all
+      handle the Index/attestation-manifest shape correctly. Set to "false"
+      to instead explicitly disable attestations for a caller that wants
+      neither (e.g. to skip the extra SBOM-generator build time).
     required: false
     default: "true"
   harbor-prefix:
@@ -80,7 +83,7 @@ runs:
         INPUT_RETRY_DELAY_SECONDS: ${{ inputs.retry-delay-seconds }}
         INPUT_USE_DEFAULT_BUILDER: ${{ inputs.use-default-builder }}
         INPUT_VALIDATE_IMAGES: ${{ inputs.validate-images }}
-        INPUT_DISABLE_ATTESTATIONS: ${{ inputs.disable-attestations }}
+        INPUT_ENABLE_ATTESTATIONS: ${{ inputs.enable-attestations }}
         INPUT_HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
       run: |
         set -euo pipefail
@@ -114,7 +117,12 @@ runs:
         for s in "${SET_LINES[@]}"; do
           [ -n "$s" ] && BAKE_SETS+=(--set "$s")
         done
-        if [ "${INPUT_DISABLE_ATTESTATIONS}" = "true" ]; then
+        if [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
+          for t in "${CLEAN_TARGETS[@]}"; do
+            BAKE_SETS+=(--set "${t}.attest=type=provenance,mode=max")
+            BAKE_SETS+=(--set "${t}.attest=type=sbom")
+          done
+        else
           for t in "${CLEAN_TARGETS[@]}"; do
             BAKE_SETS+=(--set "${t}.attest=type=provenance,disabled=true")
             BAKE_SETS+=(--set "${t}.attest=type=sbom,disabled=true")
@@ -153,7 +161,12 @@ runs:
                 FALLBACK_SETS+=(--set "$stripped")
               fi
             done
-            if [ "${INPUT_DISABLE_ATTESTATIONS}" = "true" ]; then
+            if [ "${INPUT_ENABLE_ATTESTATIONS}" = "true" ]; then
+              for t in "${CLEAN_TARGETS[@]}"; do
+                FALLBACK_SETS+=(--set "${t}.attest=type=provenance,mode=max")
+                FALLBACK_SETS+=(--set "${t}.attest=type=sbom")
+              done
+            else
               for t in "${CLEAN_TARGETS[@]}"; do
                 FALLBACK_SETS+=(--set "${t}.attest=type=provenance,disabled=true")
                 FALLBACK_SETS+=(--set "${t}.attest=type=sbom,disabled=true")
