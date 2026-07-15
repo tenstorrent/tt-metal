@@ -850,28 +850,28 @@
   team: shield
 
 # Device-perf, migrated from perf-device-models (single-card-perf-test :: stable_diffusion_xl).
-- name: SDXL device-perf unet + vae (WH)
+- name: SDXL device-perf base unet (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TRACY_NO_INVARIANT_CHECK=1
-    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "(unet and not refiner) or vae"
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "unet and not refiner"
   model: sdxl-perf
   skus:
     wh_n150:
-      timeout: 35
+      timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL device-perf refiner + clip (WH)
+- name: SDXL device-perf refiner unet (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TRACY_NO_INVARIANT_CHECK=1
-    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "refiner or clip"
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "refiner"
   model: sdxl-perf
   skus:
     wh_n150:
-      timeout: 35
+      timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
@@ -889,15 +889,18 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL lora device-perf (WH)
+- name: SDXL device-perf lora + vae + clip (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     export TRACY_NO_INVARIANT_CHECK=1
-    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_perf.py -m models_device_performance_bare_metal || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "vae or clip" || exit_code=$?
+    exit $exit_code
   model: sdxl-perf
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 35
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
