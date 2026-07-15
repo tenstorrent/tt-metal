@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Unified address sequencers for data movement ops.
 //
 // Each sequencer maps output_page -> source_page. The transport loop

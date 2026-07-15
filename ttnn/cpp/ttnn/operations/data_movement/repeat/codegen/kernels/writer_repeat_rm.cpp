@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Sequential stick writer for RM interleaved tensors with repeat.
 //
 // 64B page-alignment fix (matches ops/expand's proven RM path): writes xfer_size

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Repeat-local reader for HIGHER-DIM replication on RM interleaved tensors.
 //
 // This mirrors the shared reader_repeat_higherdim_rm.cpp mapping, with

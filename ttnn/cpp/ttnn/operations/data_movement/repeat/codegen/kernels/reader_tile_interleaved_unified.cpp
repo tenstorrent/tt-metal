@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Unified batched tile reader for interleaved tensors.
 //
 // One transport loop, pluggable address sequencer selected by "seq_id".

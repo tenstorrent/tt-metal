@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Reader for last-dim (width) repeat on RM interleaved tensors.
 //
 // Each input stick has stick_size real bytes. The output stick is
