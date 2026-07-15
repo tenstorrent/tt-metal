@@ -72,6 +72,9 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     neighbor_pad_async/neighbor_pad_async.cpp
     neighbor_pad_async/device/neighbor_pad_async_device_operation.cpp
     neighbor_pad_async/device/neighbor_pad_async_program_factory.cpp
+    neighbor_pad_halo/neighbor_pad_halo.cpp
+    neighbor_pad_halo/device/neighbor_pad_halo_device_operation.cpp
+    neighbor_pad_halo/device/neighbor_pad_halo_program_factory.cpp
     slice_reshard_async/slice_reshard_async.cpp
     slice_reshard_async/device/slice_reshard_async_device_operation.cpp
     slice_reshard_async/device/slice_reshard_async_program_factory.cpp
@@ -145,6 +148,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.cpp
     send_recv_async/send_async_d2h/send_async_d2h_nanobind.cpp
     neighbor_pad_async/neighbor_pad_async_nanobind.cpp
+    neighbor_pad_halo/neighbor_pad_halo_nanobind.cpp
     slice_reshard_async/slice_reshard_async_nanobind.cpp
     deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
     all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp

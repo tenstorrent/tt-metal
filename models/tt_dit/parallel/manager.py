@@ -370,6 +370,99 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
+    def get_np_halo_buffer(self, input_shape, dim, padding, dtype=ttnn.bfloat16, dim2=None, padding2=0):
+        """Ping-pong compact halo scratch [H-top | H-bot | W-left | W-right] for the fabric halo NP.
+        H sections are outer_dim × padding × W_dev sticks; W sections are outer_dim × padding2 ×
+        (H_dev + 2*padding) sticks (extended to cover H-padded rows so corners route correctly)."""
+        outer_dim_size = 1
+        for d in range(dim):
+            outer_dim_size *= input_shape[d]
+        h_sticks = 1
+        for d in range(dim + 1, len(input_shape) - 1):
+            h_sticks *= input_shape[d]
+        w_sticks = (input_shape[dim] + 2 * padding) if dim2 is not None else 0
+        h_halo_total = outer_dim_size * 2 * padding * h_sticks
+        w_halo_total = outer_dim_size * 2 * padding2 * w_sticks if dim2 is not None else 0
+        total_sticks = h_halo_total + w_halo_total
+        C = input_shape[-1]
+
+        cache_key = ("np_halo", tuple(input_shape), dim, padding, dim2, padding2, dtype)
+        if cache_key not in self._ping_pong_buffer_cache:
+            bufs = []
+            for _ in range(2):
+                buf = ttnn.from_torch(
+                    torch.zeros([total_sticks, C]),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
+                bufs.append(buf)
+            self._ping_pong_buffer_cache[cache_key] = bufs
+            self._ping_pong_buffer_indices[cache_key] = 0
+        cur = self._ping_pong_buffer_indices[cache_key]
+        self._ping_pong_buffer_indices[cache_key] = 1 - cur
+        return self._ping_pong_buffer_cache[cache_key][cur]
+
+    def neighbor_pad_halo_full(
+        self,
+        tensor: ttnn.Tensor,
+        *,
+        dims: list,
+        pad_left: list,
+        pad_right: list,
+        axes: list,
+        neighbor_sems: list,
+        num_links: list,
+        padding_mode: str = "zeros",
+        input_pad_h: int = 0,
+        input_pad_w: int = 0,
+        logical_h: int = 0,
+        logical_w: int = 0,
+    ) -> ttnn.Tensor:
+        """Faster drop-in for neighbor_pad_persistent_buffer: fabric halo exchange (border only) with the
+        interior copied concurrently on free cores and the border scattered by the W-readers, producing the
+        full [.,H+2pH,W+2pW,.] padded buffer. Requires 2D padding (both H and W parallel). logical_h/logical_w
+        (0 = off) zero the padded output's mesh-padding region in-kernel (no separate mul-mask)."""
+        dim2 = dims[1] if len(dims) > 1 else None
+        assert dim2 is not None, "neighbor_pad_halo_full requires 2D (H+W) padding; use neighbor_pad for 1D"
+        padded = self.get_np_ping_pong_buffer(list(tensor.shape), dims, pad_left, pad_right, dtype=tensor.get_dtype())
+        barrier_sem = self.get_barrier_semaphore(axes[0])
+        padding2 = pad_left[1]
+        halo_shape = list(tensor.shape)
+        if input_pad_h:
+            halo_shape[dims[0]] -= 2 * input_pad_h
+        if input_pad_w:
+            halo_shape[dim2] -= 2 * input_pad_w
+        halo_buf = self.get_np_halo_buffer(
+            halo_shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
+        )
+        w_sem = neighbor_sems[1] if len(neighbor_sems) > 1 else neighbor_sems[0]
+        ttnn.experimental.neighbor_pad_halo(
+            tensor,
+            halo_buf,
+            np_padding_h=pad_left[0],
+            np_padding_w=pad_left[1],
+            np_cluster_axis=axes[0],
+            np_num_links=num_links[0],
+            np_topology=self.topology,
+            h_neighbor_semaphore=neighbor_sems[0],
+            barrier_semaphore=barrier_sem,
+            w_neighbor_semaphore=w_sem,
+            np_pad_dim2=dim2,
+            np_pad2_left=pad_left[1],
+            np_pad2_right=pad_right[1],
+            np_pad2_cluster_axis=axes[1] if len(axes) > 1 else 0,
+            np_pad2_num_links=num_links[1] if len(num_links) > 1 else 1,
+            padding_mode=padding_mode,
+            input_pad_h=input_pad_h,
+            input_pad_w=input_pad_w,
+            padded_output=padded,
+            logical_h=logical_h,
+            logical_w=logical_w,
+        )
+        return padded
+
     def neighbor_pad_persistent_buffer(
         self,
         tensor: ttnn.Tensor,
