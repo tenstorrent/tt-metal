@@ -373,20 +373,24 @@ Tensor group_norm(
             negative_mask,
             reciprocals);
     }
+
+    // Only reroute when per-batch H*W is tile-aligned. Otherwise tilizing would zero-pad the spatial dim
+    // (corrupting mean/variance), so leave it ROW_MAJOR for the device op to reject.
+    const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
+    const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+    const bool per_batch_hw_tile_aligned = per_batch_hw % tile_h == 0;
+
     // Legacy (non-Welford) ROW_MAJOR interleaved input whose per-core group would not fit in L1 as a resident
     // tilized block: convert it once with ttnn::tilize_with_zero_padding and run the TILE-input path
     // (composite), rather than re-gathering and re-tilizing on-core on every one of the three passes.
     // Welford ROW_MAJOR is rejected upstream, so this only applies to the legacy path.
     Tensor gn_input = input_tensor;
-    if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR) {
+    if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
         const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
         const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
-        const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
         const uint64_t base_l1 =
             input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         const uint64_t available_l1 = input_tensor.device()->l1_size_per_core() - base_l1;
-        // Match factory heuristic: shape[1] * shape[2] * shape[3] == per_batch_hw * W.
-        const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
         const bool fits = ttnn::prim::groupnorm_legacy_rm_input_fits_l1(
             Ht,
             input_padded_shape[3],
