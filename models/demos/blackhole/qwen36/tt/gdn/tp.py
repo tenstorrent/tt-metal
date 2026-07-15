@@ -73,7 +73,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         conv1d_w = torch.cat([sd[P + "q_conv.weight"], sd[P + "k_conv.weight"], sd[P + "v_conv.weight"]], dim=0)
     qkv_re = tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp)
     z_w = sd[P + "in_proj_z.weight"]
-    fused = torch.cat(
+    qkvz = torch.cat(
         [
             torch.cat([qkv_re[d * qkv_per : (d + 1) * qkv_per], z_w[d * z_per : (d + 1) * z_per]], dim=0)
             for d in range(tp)
@@ -82,7 +82,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     )
     tw = {}
     tw["qkvz"] = tpc.shard_w(
-        fused, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("qkvz"), dtype=ttnn.bfloat8_b
+        qkvz, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("qkvz"), dtype=ttnn.bfloat8_b
     )
     # ---- fused A+B (column-parallel), per-device [a(nv_per), b(nv_per)] ----
     a_w, b_w = sd[P + "in_proj_a.weight"], sd[P + "in_proj_b.weight"]
@@ -92,6 +92,27 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     )
     tw["ab"] = tpc.shard_w(
         ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat8_b
+    )
+    qkvzab = torch.cat(
+        [
+            torch.cat(
+                [
+                    qkvz[d * (qkv_per + z_per) : (d + 1) * (qkv_per + z_per)],
+                    ab[d * (2 * nv_per) : (d + 1) * (2 * nv_per)],
+                ],
+                dim=0,
+            )
+            for d in range(tp)
+        ],
+        dim=0,
+    )
+    tw["qkvzab"] = tpc.shard_w(
+        qkvzab,
+        mesh,
+        dim=-1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_path=c("qkvzab_decode"),
+        dtype=ttnn.bfloat8_b,
     )
     # ---- out projection (row-parallel) ----
     tw["out"] = tpc.shard_w(
@@ -360,14 +381,16 @@ class TPGatedDeltaNet:
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))  # [1,B,dim]
 
-        qkvz = ttnn.linear(x, tw["qkvz"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkvzab = ttnn.linear(x, tw["qkvzab"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkvz = ttnn.slice(qkvzab, (0, 0, 0), (1, B, self.qkvz_dim_tp))
         qkv = ttnn.slice(qkvz, (0, 0, 0), (1, B, self.qkv_dim_tp))
         z = ttnn.slice(qkvz, (0, 0, self.qkv_dim_tp), (1, B, self.qkvz_dim_tp))
         ttnn.deallocate(qkvz)
-        ab = ttnn.linear(x, tw["ab"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ab = ttnn.slice(qkvzab, (0, 0, self.qkvz_dim_tp), (1, B, self.qkvz_dim_tp + 2 * Nv))
         a = ttnn.slice(ab, (0, 0, 0), (1, B, Nv))
         b = ttnn.slice(ab, (0, 0, Nv), (1, B, 2 * Nv))
         ttnn.deallocate(ab)
+        ttnn.deallocate(qkvzab)
 
         # conv1d shift-register (copy(src, dst): dst is 2nd arg) + weighted sum + silu
         st = self.conv_states
