@@ -123,3 +123,10 @@ scripts/run_safe_pytest.sh --dev --run-all \
 ```
 
 The unavailable endpoint pair remains an external host-state limitation, not a stage correctness issue. Warmed performance remains unmeasured by design for this functional stage.
+
+## Local checkpoint
+
+- Repository: `/home/mvasiljevic/tt-metal`
+- Branch: `mvasiljevic/agentic-skills`
+- Functional-decoder checkpoint: `9a33ac6ee68605e4e897f2f2985dfb59aa6f7443`
+- Remote action: none; the checkpoint was not pushed.
