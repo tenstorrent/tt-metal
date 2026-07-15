@@ -27,7 +27,7 @@ public:
     GlobalSemaphoreImpl(
         IDevice* device, CoreRangeSet&& cores, std::optional<uint32_t> initial_value, BufferType buffer_type);
 
-    // Dedicated constructor for creating a global semaphore without allocation.
+    // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
     GlobalSemaphoreImpl(
         IDevice* device,

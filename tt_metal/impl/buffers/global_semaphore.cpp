@@ -104,6 +104,7 @@ void GlobalSemaphoreImpl::setup_buffer(
 }
 
 namespace experimental {
+// Forge backdoor API.
 GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device,
     const CoreRangeSet& cores,
