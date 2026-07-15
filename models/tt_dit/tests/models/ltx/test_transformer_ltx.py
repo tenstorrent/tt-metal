@@ -868,6 +868,14 @@ def test_ltx_transformer_block(
         logger.info(f"LTX_QUANT='{_quant_preset}': quantizing block for PCC gate")
         apply_quant_config_to_block(tt_block, _factory(), mesh_device.arch(), has_audio)
 
+    # LTX_KV_WINDOW=W>0 bands this block's video self-attn ring K/V gather to +-W hops (else full
+    # gather, byte-identical). Cheap single-block exercise of the one op that can hang the ring —
+    # smoke it here before an e2e sweep risks a galaxy wedge; the PCC-vs-oracle it produces also
+    # quantifies how far the band perturbs one block.
+    _kv_window = int(os.environ.get("LTX_KV_WINDOW", "0") or "0")
+    if _kv_window > 0:
+        forward_kwargs["kv_window"] = _kv_window
+
     tt_out = tt_block(**forward_kwargs)
     if has_audio:
         tt_v, tt_a = tt_out
