@@ -10,13 +10,14 @@
 // not define). LocalTensorAccessor carries no NOC machinery, so it compiles here.
 //
 // The accessor is constructed on all three TRISC threads (UNPACK/MATH/PACK) — the strongest compile
-// proof — and its full surface (get_bank_base_address / get_unsafe_ptr / operator[]) is exercised so
-// every method is instantiated. The PACK thread deposits the reported values into each output DFB
-// entry; a DM consumer carries them to DRAM for host verification.
+// proof — and its full surface (get_bank_base_address / local_mem / operator[]) is exercised so every
+// method is instantiated. The PACK thread deposits the reported values into each output DFB entry; a
+// DM consumer carries them to DRAM for host verification.
 //
 // The host checks that the reported base address equals the bound tensor's address — proving the
 // binding token reached the compute kernel and resolved to the correct local L1 shard address. The
-// get_unsafe_ptr / operator[] reports resolve to the same address (address-of avoids an actual load).
+// local_mem().get_unsafe_ptr() / operator[] reports resolve to the same address (address-of avoids an
+// actual load).
 
 #include <cstdint>
 
@@ -36,7 +37,8 @@ void kernel_main() {
     const uint32_t base_address = acc.get_bank_base_address();
     // Instantiate the element-access surface too, so it is compile-proven on TRISC. Both resolve to the
     // base address; address-of avoids an actual L1 load/store.
-    const uint32_t via_unsafe_ptr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(acc.get_unsafe_ptr()));
+    const uint32_t via_unsafe_ptr =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(acc.local_mem().get_unsafe_ptr()));
     const uint32_t via_subscript = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&acc[0]));
 
     // Also exercise the legacy (raw base-address) ctor: compile-proves it on TRISC and confirms it

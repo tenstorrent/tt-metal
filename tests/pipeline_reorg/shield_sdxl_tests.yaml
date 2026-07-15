@@ -17,13 +17,15 @@
 
 - name: ttnn nightly sdxl tests (wormhole)
   cmd: |
-    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=600
-    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=600
-    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -xv -m "not disable_fast_runtime_mode" --timeout=600
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
   skus:
-    wh_n150_civ2:
+    wh_n150:
       timeout: 90
-    wh_n300_civ2:
+    wh_n300:
       timeout: 90
   owner_id: U0ACLAM77PS # Kosta Grujcic
   team: shield
@@ -31,8 +33,10 @@
 
 - name: ttnn nightly sdxl tests (blackhole P150b)
   cmd: |
-    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=600
-    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=600
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600 || exit_code=$?
+    exit $exit_code
   skus:
     bh_p150b_civ2:
       timeout: 70
@@ -43,18 +47,20 @@
 - name: ttnn nightly sdxl demo cfg parallel test (N300)
   cmd: 'pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600'
   skus:
-    wh_n300_civ2:
+    wh_n300:
       timeout: 25
   owner_id: U0ACLAM77PS # Kosta Grujcic
   team: shield
   category: sdxl
 
 - name: nightly sdxl demo (blackhole P150b)
-  cmd: >-
-    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  cmd: |
+    exit_code=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" || exit_code=$?
+    exit $exit_code
   skus:
     bh_p150b_civ2:
       timeout: 55

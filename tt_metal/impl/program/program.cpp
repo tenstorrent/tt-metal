@@ -43,10 +43,8 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
-#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
@@ -77,9 +75,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
-#ifdef GENERATE_HASH_LOG
-#include <fstream>
-#endif
+#include "kernel_compile_utils.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -91,9 +87,9 @@
 #include "impl/allocator/allocator.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt {
-class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
 namespace tt_metal::experimental {
 class GlobalCircularBuffer;
@@ -203,29 +199,6 @@ KernelCompileDescriptor build_kernel_descriptor(
     }
 
     return desc;
-}
-
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
-    // Store the build key into the KernelCompile hash. This will be unique per command queue
-    // configuration (necessary for dispatch kernels).
-    // watcher/dprint enabled are accounted for in the build key.
-    tt::StableHasher hasher;
-    hasher.update(build_key);
-    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
-    hasher.update(kernel->compute_hash());
-    size_t compile_hash = static_cast<size_t>(hasher.digest());
-
-#ifdef GENERATE_HASH_LOG
-    static std::ofstream f("/tmp/hashlog.txt");
-    static std::mutex mutex_;
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
-          << std::flush;
-    }
-#endif
-    return compile_hash;
 }
 
 std::string ensure_kernel_binaries(
@@ -340,7 +313,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
 
         auto config = std::visit(
-            tt::stl::overloaded{
+            ttsl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
@@ -1364,7 +1337,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 }
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // If device is a MeshDevice, we need to track all its sub-devices
     std::vector<const IDevice*> devices_to_track;
@@ -1532,7 +1505,7 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
 }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
     std::optional<DeviceAddr> lowest_address =
@@ -1836,7 +1809,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
 
 void detail::ProgramImpl::set_cb_data_fmt_and_tile(
     const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
@@ -2186,7 +2159,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     const auto& build_env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
@@ -2239,7 +2212,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 kernel->name());
         }
 
-        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+        auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
 
         const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
         kernel->set_full_name(kernel_path_suffix);
@@ -2493,7 +2466,7 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
-    tt::stl::Span<ProgramImpl*> programs(programs_array);
+    ttsl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
         extract_context_id(device), device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
@@ -2509,7 +2482,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    tt::stl::Span<ProgramImpl*> programs) {
+    ttsl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
     const auto& hal = MetalContext::instance(context_id).hal();

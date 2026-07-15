@@ -53,6 +53,8 @@ def run_mla_inference(
     is_balanced,
     topology,
     tt_kvpe_cache,
+    return_indices=False,
+    inject_indices=None,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -85,6 +87,10 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
+        # Match the single-layer test cache (num_kvpe_cache_layers=1): the sparse single-shot write now
+        # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
+        # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
+        layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
@@ -120,15 +126,26 @@ def run_mla_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_output = mla_tt.forward(
+    # GLM-5.2 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
+    # feed a prior layer's to skip the indexer. Defaults leave the single-shot forward unchanged.
+    mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
         kvpe_cache=tt_kvpe_cache,
+        indexer_indices=inject_indices,
+        return_indexer_indices=return_indices,
     )
+    indices = None
+    if return_indices:
+        tt_output, indices = mla_out
+    else:
+        tt_output = mla_out
 
     ttnn.synchronize_device(mesh_device)
     ttnn.distributed_context_barrier()
 
+    if return_indices:
+        return tt_output, hidden_states, chunk_order, shard_dims, indices
     return tt_output, hidden_states, chunk_order, shard_dims
 
 

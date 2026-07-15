@@ -147,6 +147,8 @@ void FiberSchedulerImpl::install_fiber(Fiber* f) {
     __emule_self = f->owned_ctx.get();       // the single thread_local repoint
     my_x[0] = my_x[1] = f->id.phys_x;        // restore the silicon-named coords
     my_y[0] = my_y[1] = f->id.phys_y;
+    // Per-fiber ASAN state (e.g. the Object-Intent resolved-range log) lives in the ctx
+    // above, so it swaps in with __emule_self — nothing else to restore here. See tt-emule #241.
 }
 
 void FiberSchedulerImpl::worker_main(unsigned w) {
@@ -438,7 +440,9 @@ void FiberScheduler::run_until_idle() {
     }
 
     unsigned W;
-    {
+    {   // Publish counters + progress, W_, the ready queues, and ++generation_ in ONE mu_ critical
+        // section, so a worker released for a generation never pairs a new W_ with a stale generation_.
+        // See tt-emule docs/fiber-engine.md §9.4 (the workers_done_ overshoot / done_cv_ wedge it avoids).
         std::lock_guard<std::mutex> g(p_->mu_);
         p_->active_ = static_cast<unsigned>(p_->all_.size());
         if (p_->active_ == 0) {
@@ -451,9 +455,10 @@ void FiberScheduler::run_until_idle() {
         p_->abort_flag_ = false;
         p_->first_eptr_ = nullptr;
         p_->latency_parked_.clear();
+        p_->progress_.store(0);
+        p_->resumptions_.store(0);
         // Activate W = min(K, fiber count) workers; pin each fiber round-robin across [0,W).
         // Surplus workers (>= W) stay parked on start_cv_, so a tiny program pays no herd.
-        // See tt-emule docs/fiber-engine.md.
         W = std::min<unsigned>(p_->K_, p_->active_);
         p_->W_ = W;
         p_->ready_.assign(W, {});
@@ -462,22 +467,19 @@ void FiberScheduler::run_until_idle() {
             f->home = static_cast<unsigned>(i % W);
             p_->ready_[f->home].push_back(f);
         }
+        ++p_->generation_;
     }
-    p_->progress_.store(0);
-    p_->resumptions_.store(0);
     if (std::getenv("TT_EMULE_FIBER_LOG_N")) {
         std::fprintf(stderr, "[EMULE FIBER] program: %u fibers on W=%u of K=%u workers\n",
                      p_->active_, W, p_->K_);
     }
 
+    // Watchdog before notify_all so it covers the run; created after the dispatch block so a throw
+    // there can't leave a joinable thread. (A spurious start_cv_ wakeup could start a worker in the
+    // brief gap before this line — benign: the watchdog spawns at once and a hang can't complete that fast.)
     p_->run_active_.store(true, std::memory_order_release);
     std::thread wd([this] { p_->watchdog(); });
 
-    // Launch: bump the generation under mu_ (after the watchdog is up), then wake the pool.
-    {
-        std::lock_guard<std::mutex> g(p_->mu_);
-        ++p_->generation_;
-    }
     p_->start_cv_.notify_all();
     {   // Block the dispatch thread until every active worker has finished this run.
         std::unique_lock<std::mutex> lk(p_->mu_);

@@ -16,6 +16,8 @@
 
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -195,7 +197,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     KernelSpec reader{
         .unique_id = I2S_READER,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_INPUT, .accessor_name = "src"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
     };
     if (is_tile) {
         reader.source =
@@ -244,7 +246,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // Writer kernel.
     KernelSpec writer{
         .unique_id = I2S_WRITER,
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
     };
     if (dst_is_dram) {
         writer.dfb_bindings = {ConsumerOf(I2S_OUTPUT_DFB, "out")};
@@ -293,7 +295,9 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                       "eltwise_copy.cpp",
             .dfb_bindings = {ConsumerOf(I2S_INPUT_DFB, "in0"), ProducerOf(I2S_OUTPUT_DFB, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-            .hw_config = ComputeHardwareConfig{},
+            .hw_config = ttnn::to_compute_hardware_config(
+                input.device()->arch(),
+                ttnn::ComputeKernelConfig{.math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false}),
         });
     }
 
@@ -317,6 +321,9 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
 
     for (const auto& core : cores) {
         uint32_t curr_num_units_per_shard = num_units_per_shard;
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
         if (is_tile) {
             uint32_t shard_height = num_units_per_shard_height;
             uint32_t shard_width = num_units_per_shard_width;
@@ -352,33 +359,36 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             curr_num_units_per_shard = shard_height * num_units_per_shard_width;
 
             // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter).
-            reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args = {
+            AddRuntimeArgsForNode(
+                reader_rtas,
+                core,
+                {
                     {"block_height_tiles", shard_height},
                     {"block_width_tiles", shard_width},
                     {"padded_offset_bytes", padded_offset},
                     {"input_width_offset_tiles", num_units_offset},
                     {"block_num_tiles", curr_num_units_per_shard},
                     {"start_id_offset", curr_idx_h + curr_idx_w},
-                    {"start_id_base", starting_idx_h}}});
+                    {"start_id_base", starting_idx_h},
+                });
 
             // Writer run-time args
             uint32_t pad_offset = (num_units_per_shard_width - shard_width) * output_unit_size;
             if (dst_is_dram) {
-                writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = core,
-                    .args = {
+                AddRuntimeArgsForNode(
+                    writer_rtas,
+                    core,
+                    {
                         {"block_height_tiles", shard_height},
                         {"block_width_tiles", shard_width},
                         {"padded_offset", pad_offset},
                         {"block_width_padded_num_tiles", curr_num_units_per_shard},
                         {"output_width_tiles", num_units_offset},
                         {"start_id_offset", curr_idx_h + curr_idx_w},
-                        {"start_id_base", starting_idx_h}}});
+                        {"start_id_base", starting_idx_h},
+                    });
             } else {
-                writer_run.runtime_arg_values.push_back(
-                    KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
+                writer_rtas["num_units"][core] = curr_num_units_per_shard;
             }
 
             // Update indexing
@@ -452,9 +462,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter;
             // legacy slot 1 `num_units_per_row` was emitted but never read by the kernel, so it
             // is dropped here to match the kernel's actual reads).
-            reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args = {
+            AddRuntimeArgsForNode(
+                reader_rtas,
+                core,
+                {
                     {"block_height", shard_height},
                     {"block_width_bytes", shard_width},
                     {"padded_block_width_bytes", padded_offset_bytes},
@@ -462,24 +473,26 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                     {"aligned_input_width_offset_bytes", aligned_width_offset},
                     {"aligned_block_width_bytes", aligned_shard_width},
                     {"aligned_offset", aligned_offset},
-                    {"start_id", curr_idx_h}}});
+                    {"start_id", curr_idx_h},
+                });
 
             // Writer run-time args
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
                 uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
-                writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = core,
-                    .args = {
+                AddRuntimeArgsForNode(
+                    writer_rtas,
+                    core,
+                    {
                         {"block_height", shard_height},
                         {"block_width_bytes", shard_width},
                         {"padded_block_width_bytes", padded_offset_bytes},
                         {"start_id", start_id},
-                        {"output_width_in_pages", output_width_in_pages}}});
+                        {"output_width_in_pages", output_width_in_pages},
+                    });
             } else {
-                writer_run.runtime_arg_values.push_back(
-                    KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
+                writer_rtas["num_units"][core] = curr_num_units_per_shard;
             }
 
             // Update indexing
@@ -490,8 +503,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             }
         }
         if (convert_df) {
-            compute_run.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", curr_num_units_per_shard}}});
+            compute_rtas["num_units"][core] = curr_num_units_per_shard;
         }
     }
 

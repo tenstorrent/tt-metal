@@ -124,8 +124,8 @@ TEST(FaultTolerance, DisableBrokenBlock) {
     int size_val = new_world;
     std::vector<int> gathered(expected_ranks);
     ctx->all_gather(
-        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&size_val), sizeof(int)),
-        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(gathered.data()), gathered.size() * sizeof(int)));
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&size_val), sizeof(int)),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(gathered.data()), gathered.size() * sizeof(int)));
     for (int v : gathered) {
         EXPECT_EQ(v, new_world);
     }
