@@ -480,6 +480,18 @@ ALWI void matmul_block(
             // keep subblock-major so the last-block per-subblock reload reads partials contiguously.
             constexpr bool spill_row_grouped = (tile_order == OutputCBLayout::TileRowMajor) && packer_l1_acc;
 
+            // in_place (packer_l1_acc): the packer's output format (accum_cb_id) and l1_acc mode are
+            // BLOCK-invariant — every subblock of this K-block packs to accum_cb_id with the same
+            // accumulate flag — so configure the packer ONCE here, exactly like main's hand-written
+            // kernel. The per-subblock version (kept below for the fp32-only non-l1_acc path, whose
+            // last-vs-non-last pack targets differ) was redundant block-invariant work repeated
+            // num_subblocks× per K-block, costing ~30-100% on many-subblock configs (scales with
+            // subblock×K-block count; confirmed by per-RISC).
+            if constexpr (in_place) {
+                PACK((pack_reconfig_data_format(accum_cb_id)));
+                PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+            }
+
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < shape.in0_num_subblocks; in0_subblock++) {
                 if constexpr (tile_order == OutputCBLayout::TileRowMajor && !in_place) {
@@ -582,19 +594,11 @@ ALWI void matmul_block(
                             tile_regs_wait();
                         }
 
-                        if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
+                        // in_place hoists both pack reconfigs to once-per-K-block (above); only the
+                        // fp32-only (non-l1_acc) last-block Out reconfig remains per-subblock here. Its
+                        // target is pack_target_id (= out_cb_id for that path), distinct from the spill.
+                        if constexpr ((packer_l1_acc || get_fp32_dest_acc_enabled()) && !in_place) {
                             PACK((pack_reconfig_data_format(pack_target_id)));
-                        }
-
-                        if constexpr (packer_l1_acc) {
-                            if constexpr (pack_last_to_interm) {
-                                // Interm target: L1 accumulates across all blocks in the same region.
-                                PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
-                            } else {
-                                // Out target: the last block's partial was reloaded into DST, so the
-                                // pack must NOT re-accumulate.
-                                PACK((llk_pack_reconfig_l1_acc(0)));
-                            }
                         }
 
                         // Straight-to-out relu (OutWithRelu, non-l1_acc): configure the packer to relu
@@ -670,13 +674,11 @@ ALWI void matmul_block(
                         }
                         tile_regs_wait();
 
-                        if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
-                            // Pack-DF must match the accumulator's format for non-last spills, else
-                            // spills land in whatever format the previous op left (typically out's).
+                        // in_place hoists both pack reconfigs to once-per-K-block (above). Only the
+                        // fp32-only (non-l1_acc) spill reconfig remains per-subblock; its pack-DF must
+                        // match the accumulator's format else spills land in the previous op's format.
+                        if constexpr ((packer_l1_acc || get_fp32_dest_acc_enabled()) && !in_place) {
                             PACK((pack_reconfig_data_format(accum_cb_id)));
-                        }
-                        if constexpr (packer_l1_acc) {
-                            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
                         }
 
                         if constexpr (in_place && tile_order == OutputCBLayout::SubblockMajor) {
