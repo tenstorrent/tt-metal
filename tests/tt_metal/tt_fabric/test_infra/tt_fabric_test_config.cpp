@@ -2482,9 +2482,10 @@ void TestConfigBuilder::resolve_hop_sentinels(ParsedTestConfig& test) {
                 for (auto& [dir, count] : dest.hops.value()) {
                     if (count == kHopsMax) {
                         TT_FATAL(
-                            dir == RoutingDirection::N || dir == RoutingDirection::S || dir == RoutingDirection::E || dir == RoutingDirection::W,
+                            dir == RoutingDirection::N || dir == RoutingDirection::S || dir == RoutingDirection::E ||
+                                dir == RoutingDirection::W,
                             "destination.hops: 'max' is only supported for N/S/E/W (got {})",
-                            to_string(dir));
+                            enchantum::to_string(dir));
                         count = route_manager_.get_full_line_mcast_hops(dir);
                     }
                 }
