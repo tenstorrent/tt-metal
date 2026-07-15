@@ -153,6 +153,49 @@ void kernel_main() {
         cb_push_back(in0_cb, R * W * in0_blk);  // incremental: compute consumes this round's R shards
     }
     noc_async_write_barrier();
+#elif defined(DIAG_IN0_XCHG)
+    // Eager incremental direct exchange: read own shard into slot 0 and push it (compute starts), then in
+    // ONE round scatter our shard to the G-1 ahead peers' slot d, and push each of OUR slots 1..G-1 the
+    // moment its direct write lands (per-slot semaphore) -> depth-1 delivery that KEEPS the incremental
+    // compute overlap. Ring cb0 layout (slot d = shard rp-d), so in1/compute are unchanged.
+    // Runtime args: 17..17+G-2 = per-slot sem ids; 17+G-1.. = G-1 ahead peers (x,y) in d order.
+    {
+        uint32_t p = base0;
+        for (uint32_t wb = 0; wb < W; ++wb) {
+            const uint32_t sb = ring_pos * W + wb;
+            for (uint32_t m = 0; m < M_block; ++m) {
+                for (uint32_t k = 0; k < K_block; ++k) {
+                    const uint32_t l = sb * K_block + k;
+                    if (m < valid_m && l < valid_k) {
+                        noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
+                    } else {
+                        zero_tile(p);
+                    }
+                    p += tile_bytes;
+                }
+            }
+        }
+        noc_async_read_barrier();
+    }
+    cb_push_back(in0_cb, W * in0_blk);          // slot 0 ready -> compute starts
+    constexpr uint32_t XPEER = 17u + (G - 1u);  // first peer-coord arg
+    for (uint32_t d = 1; d < G; ++d) {          // scatter own shard to peer d's slot d
+        uint32_t px = get_arg_val<uint32_t>(XPEER + (d - 1) * 2), py = get_arg_val<uint32_t>(XPEER + 1 + (d - 1) * 2);
+        noc_async_write(base0, get_noc_addr(px, py, base0 + d * shard_bytes), shard_bytes);
+    }
+    noc_async_writes_flushed();  // payload lands before we signal the per-slot sem
+    for (uint32_t d = 1; d < G; ++d) {
+        uint32_t px = get_arg_val<uint32_t>(XPEER + (d - 1) * 2), py = get_arg_val<uint32_t>(XPEER + 1 + (d - 1) * 2);
+        uint32_t sem = get_semaphore(get_arg_val<uint32_t>(17 + (d - 1)));  // peer's slot-d readiness sem
+        noc_semaphore_inc(get_noc_addr(px, py, sem), 1);
+    }
+    for (uint32_t d = 1; d < G; ++d) {  // push our slots as they land, in order (incremental overlap)
+        volatile tt_l1_ptr uint32_t* sp =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(17 + (d - 1))));
+        noc_semaphore_wait_min(sp, 1);
+        cb_push_back(in0_cb, W * in0_blk);
+    }
+    noc_async_write_barrier();
 #else
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;

@@ -157,6 +157,17 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         in1valid_sem = CreateSemaphore(program, all_cores, 0u);
         in1ready_sem = CreateSemaphore(program, all_cores, 0u);
     }
+    // DIAG_IN0_XCHG: G-1 per-slot readiness semaphores so the writer pushes each in0 slot the moment its
+    // direct-exchange write lands (incremental overlap), rather than one ring counter. Created only for the
+    // xchg program so the public path's semaphore layout is unchanged.
+    const bool xchg = (diag & RegimeADiag::DIAG_IN0_XCHG) != 0u;
+    std::vector<uint32_t> xchg_slotsem;
+    if (xchg) {
+        for (uint32_t d = 1; d < geo.G; ++d) {
+            xchg_slotsem.push_back(CreateSemaphore(program, all_cores, 0u));
+        }
+        wdefs["DIAG_IN0_XCHG"] = "1";
+    }
 
     // ---- Kernels ----
     // in1 reader == consumer. compile args (in1_reader.cpp order). No TensorAccessorArgs.
@@ -310,7 +321,16 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         // in d-ahead order (ring_next^1..ring_next^{G-1}). Core scatters its own shard to peer d's cb0 slot
         // d; each peer receives from the core d-behind, reproducing the ring's cb0 layout. Appended only for
         // the scatter program (distinct hash), so the public path's arg layout is unchanged.
-        if (scatter) {
+        if (scatter || xchg) {
+            // DIAG_IN0_XCHG only: prepend the G-1 per-slot semaphore IDs (args 17..17+G-2). Then (both
+            // scatter and xchg) the G-1 ahead peers in d-ahead order (ring_next^1..). Core writes its own
+            // shard to peer d's slot d; xchg additionally signals that peer's slot-d sem so the peer can push
+            // slot d as it lands. Appended only for these programs; public-path arg layout unchanged.
+            if (xchg) {
+                for (uint32_t d = 1; d < geo.G; ++d) {
+                    wa.push_back(xchg_slotsem[d - 1]);
+                }
+            }
             uint32_t cur = i;
             for (uint32_t d = 1; d < geo.G; ++d) {
                 cur = P.cores[cur].ring_next_idx;

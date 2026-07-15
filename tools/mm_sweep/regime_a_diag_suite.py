@@ -107,7 +107,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
             maxrel = float(line.split("max_rel_err=")[1])
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128)
+    checked = mask in (0, 32, 64, 128, 256)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -324,7 +324,7 @@ def _bytes(M, K, N):
 
 
 # in0-delivery variants: (name, mask, in0 DRAM replication factor R). Replicated rings read in0 R times.
-VARIANTS = [("ring", 0, 1), ("scatter", 32, 1), ("repl2", 64, 2), ("repl4", 128, 4)]
+VARIANTS = [("ring", 0, 1), ("scatter", 32, 1), ("repl2", 64, 2), ("repl4", 128, 4), ("xchg", 256, 1)]
 
 
 def variants():

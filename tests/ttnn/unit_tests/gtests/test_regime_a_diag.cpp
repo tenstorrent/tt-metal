@@ -87,7 +87,7 @@ TEST_F(RegimeADiagFixture, Run) {
     // Correctness is checked for the public path (mask 0) AND the correct in0-delivery VARIANTS
     // (32=scatter, 64=repl2, 128=repl4), all of which must produce the exact result; the pure ablations
     // (garbage output) are not checked.
-    if (mask == 0 || mask == 32 || mask == 64 || mask == 128) {
+    if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {

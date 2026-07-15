@@ -86,32 +86,42 @@ cb0 layout (so compute/in1-pairing/reduction/output are unchanged). Note (per re
 reduce total forwarded bytes (each shard still reaches 7 consumers); it removes serial rotations / critical
 -path hops. `skipfwd`'s −25/−30% is an upper bound, not the expected scatter gain.
 
-### RESULT — direct-scatter REFUTED (do NOT port)
-Correct (PCC max_rel_err 0.0 on both targets). Benchmark (winner config, median of 3 relaunches; raw in
-`regime_a_scatter_bench.json`):
+### RESULT — in0-delivery restructuring REFUTED across FOUR variants (do NOT port; the ring wins)
+All four are correct variants (PCC max_rel_err 0.0). Benchmark at the winner config, median of 3 relaunches
+(raw: `regime_a_variants_bench.json`, all relaunches + per-RISC + logical/delivered BW retained):
 
-| shape | group | ring µs | scatter µs | scatter vs ring |
-|---|---|---|---|---|
-| 256x2048x1024 | target | 30.2 | 33.1 | **+9.8% (slower)** |
-| 256x6144x768 | target | 54.0 | 59.8 | **+10.8% (slower)** |
-| 256x6144x2304 | control | 93.5 | 97.1 | +3.8% |
-| 256x6144x4608 | control | 153.5 | 158.5 | +3.3% |
+| shape | group | ring | scatter | repl2 | repl4 | xchg (incremental) |
+|---|---|---|---|---|---|---|
+| 256x2048x1024 | target | 30.3 | +7% | **-1% (tie)** | +9% | +10% |
+| 256x6144x768 | target | 54.3 | +10% | +7% | +25% | +10% |
+| 256x6144x2304 | control | 93.3 | +5% | +4% | +14% | +4% |
+| 256x6144x4608 | control | 153.7 | +3% | +2% | +8% | +3% |
 
-Direct-scatter **regresses on every shape**, worst on the two narrow-N targets — the opposite of the
-`skipfwd` upper bound. Mechanism: the ring **overlaps forwarding with compute** — it `cb_push_back`s each
-shard as it arrives, so compute starts consuming while later shards still rotate. The barrier-style scatter
-must wait for all G-1 shards before pushing (single-count semaphore), losing that pipelining, and issues
-G-1 concurrent NoC writes per core (8×7 in flight) that contend. So the ring's "serial" rotation is not
-wasted latency — it is what hides the in0 delivery behind compute. `skipfwd` looked like headroom only
-because it removed the payload write while keeping both the per-step push pipeline AND (garbage) compute.
-**Per the ≥8–10% gate this does not clear — no production change made.**
+- **scatter** (mask 32): one direct-scatter round, barrier before push. +7-10%.
+- **repl2 / repl4** (mask 64/128): read R seed shards, rotate the R-bundle for G/R rounds — nearest-neighbor,
+  incremental per-round push preserved, depth G/R-1 (3 / 1) vs 7. repl2 ties on shallow-K, +7% on deep-K;
+  repl4 worse (extra in0 reads dominate). Delivered-BW confirms the reads are real: repl2 moves 273 vs the
+  ring's 237 GB/s on x768 yet is slower.
+- **xchg** (mask 256): eager incremental direct exchange — per-slot semaphores so each slot is pushed the
+  moment its direct write lands, KEEPING the compute overlap the barrier scatter lost, at depth 1. Still
+  +10% on both targets.
 
-**Next hypothesis (not run):** an *incremental-arrival* scatter (per-slot semaphores so each shard is
-`cb_push_back`ed the moment it lands) could remove the serial-rotation dependency while keeping the
-compute-overlap the ring relies on. This is the only remaining in0-delivery lever with a plausible path to
-the `skipfwd` headroom; everything simpler (this barrier scatter) is refuted. If it too fails to clear
-≥8–10%, narrow-N Mt=8 is at its practical floor for the current ring/compute architecture and the residual
-is the compute+ring-sync schedule (a tiny-shape kernel-path question), not an in0-delivery one.
+**No variant reaches >=8% faster on either target; the best (repl2) is a tie on shallow-K and +7% slower on
+deep-K.** Mechanism, now established across four restructurings: the ring's per-slot/per-round incremental
+`cb_push_back` OVERLAPS forwarding with compute, so the forwarding dependency depth is NOT on the critical
+path. Cutting depth therefore cannot help wall time (repl2/xchg confirm), while every alternative adds a
+real cost: extra in0 DRAM reads (repl2/4) or all-to-all NoC congestion (scatter/xchg, 8x7 concurrent
+transfers). `skipfwd`'s -25/-30% was an upper bound that removed the payload write while (wrongly) keeping
+both the push pipeline and garbage compute.
+
+### Conclusion — stop in0 delivery; the ring is the best practical mechanism (stop condition met)
+Both families the plan required — incremental direct exchange (xchg) AND 2x/4x shorter rings (repl2/4) —
+fail to improve the two narrow targets by >=8%. Per the stop condition, **in0-delivery work stops here; the
+current ring is the best delivery mechanism tested, and no production change is made.** narrow-N Mt=8 is at
+its practical floor for the current ring/compute architecture; the residual excess is the **compute-feed +
+reduction/ring-sync schedule** (compute-only floor is 1.3-1.8x the DRAM ideal at narrow-N) — a dedicated
+tiny-shape Mt=8 kernel-path question, the recommended next target if the ~37-47% narrow-N efficiency is
+worth pursuing. The wide-N (>=2304) and Mt<=4 paths are already bandwidth-healthy and left as-is.
 
 ## Notes / limitations
 - Ablations are counterfactual upper bounds, not additive; realizable gains are smaller.

@@ -48,6 +48,9 @@ enum RegimeADiag : uint32_t {
     // the in1 reader uses the SAME formula so compute is unchanged. Factory maps these to IN0_REPL=2/4.
     DIAG_IN0_REPL2 = 1u << 6,  // R=2: 2 seeds, 4 rounds, 6 forwarded shard-equiv (vs 7), depth 3
     DIAG_IN0_REPL4 = 1u << 7,  // R=4: 4 seeds, 2 rounds, 4 forwarded shard-equiv, depth 1
+    DIAG_IN0_XCHG = 1u << 8,   // eager incremental direct exchange: scatter own shard to the G-1 ahead peers
+                               // with PER-SLOT sems, push each slot as it lands (depth 1 + incremental
+                               // overlap). Ring cb0 layout (slot d = shard rp-d), so in1/compute unchanged.
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
