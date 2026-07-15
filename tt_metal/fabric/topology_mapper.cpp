@@ -17,6 +17,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -446,17 +447,13 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
-        // Build logical and physical adjacency maps
+        // Build logical adjacency, then physical adjacency from rank bindings. When MGD+PGD are available,
+        // attach each mesh's committed PGD MESH grouping pinning onto mesh_pgd_pinnings_ (fast path: keep
+        // asic_id_to_mesh_rank footprints; get_valid_groupings_for_mgd only supplies preferred pinnings).
         auto adjacency_map_logical_multi_mesh =
             ::tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph(mesh_graph_);
-        auto adjacency_map_physical_multi_mesh =
-            ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
-                physical_system_descriptor_, asic_id_to_mesh_rank);
 
-        print_logical_adjacency_map(adjacency_map_logical_multi_mesh);
-        print_physical_adjacency_map(adjacency_map_physical_multi_mesh);
-
-        // Build TopologyMappingConfig for multi-mesh solver
+        // Build TopologyMappingConfig pinnings before physical-graph enrichment so PGD<->MGD matching sees them.
         ::tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
 
         // Convert pinning constraints from fixed_asic_position_pinnings_ format to config format
@@ -475,6 +472,37 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
                 config.pinnings.emplace_back(pos, fabric_node);
             }
         }
+
+        ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph adjacency_map_physical_multi_mesh;
+        // If using an MGD, try and match with PGD to consume preferred pinnings from the PGD for better mapping
+        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            auto pgd = ::tt::tt_fabric::try_find_and_load_physical_grouping_descriptor(
+                /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
+            if (pgd.has_value()) {
+                adjacency_map_physical_multi_mesh =
+                    ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                        physical_system_descriptor_,
+                        asic_id_to_mesh_rank,
+                        *pgd,
+                        mesh_graph_.get_mesh_graph_descriptor(),
+                        std::optional{config.pinnings});
+            } else {
+                log_debug(
+                    tt::LogFabric,
+                    "No Physical Grouping Descriptor found; building rank-bound physical graph without PGD "
+                    "preferred pinnings");
+                adjacency_map_physical_multi_mesh =
+                    ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                        physical_system_descriptor_, asic_id_to_mesh_rank);
+            }
+        } else {
+            adjacency_map_physical_multi_mesh =
+                ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                    physical_system_descriptor_, asic_id_to_mesh_rank);
+        }
+
+        print_logical_adjacency_map(adjacency_map_logical_multi_mesh);
+        print_physical_adjacency_map(adjacency_map_physical_multi_mesh);
 
         // Set per-mesh validation modes based on mesh graph policy
         for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {

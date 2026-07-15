@@ -15,31 +15,36 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    all_gather_async/device/kernels/*
-    all_gather_concat_heads_fused/device/kernels/*
-    all_reduce_async/device/kernels/*
-    all_to_all_async/device/kernels/*
-    all_to_all_async_generic/device/kernels/*
-    all_to_all_dispatch_metadata/device/kernels/*
-    llama_all_gather_matmul_async/device/kernels/*
-    llama_reduce_scatter/device/kernels/*
-    llama_reduce_scatter_create_heads/device/kernels/*
-    neighbor_pad_async/device/kernels/*
-    reduce_scatter_minimal_async/device/kernels/*
-    ring_attention_all_gather_async/device/kernels/*
-    rms_allgather/device/kernels/*
-    dit_fused_distributed_rmsnorm/device/kernels/*
-    send_recv_async/send_async/device/kernels/*
-    send_recv_async/recv_async/device/kernels/*
-    send_recv_async/recv_async_h2d/device/kernels/*
-    send_recv_async/send_async_d2h/device/kernels/*
-    slice_reshard_async/device/kernels/*
-    strided_all_gather_async/device/kernels/*
-    strided_reduce_scatter_async/device/kernels/*
-    deepseek_moe_reduce_scatter/device/kernels/*
-    deepseek_b1_reduce_to_one/device/kernels/*
-    moe_compute/device/kernels/*
-    moe/selective_reduce_combine/device/kernels/*
+    all_gather_async/device/kernels/*.cpp
+    all_gather_concat_heads_fused/device/kernels/*.cpp
+    all_reduce_async/device/kernels/*.cpp
+    all_to_all_async/device/kernels/*.cpp
+    all_to_all_async_generic/device/kernels/*.cpp
+    all_to_all_dispatch_metadata/device/kernels/*.cpp
+    llama_all_gather_matmul_async/device/kernels/*.cpp
+    llama_reduce_scatter/device/kernels/*.cpp
+    llama_reduce_scatter_create_heads/device/kernels/*.cpp
+    neighbor_pad_async/device/kernels/*.cpp
+    reduce_scatter_minimal_async/device/kernels/*.cpp
+    ring_attention_all_gather_async/device/kernels/*.cpp
+    rms_allgather/device/kernels/*.cpp
+    rms_allgather/device/kernels/*.hpp
+    dit_fused_distributed_rmsnorm/device/kernels/*.cpp
+    dit_fused_distributed_rmsnorm/device/kernels/*.hpp
+    send_recv_async/send_async/device/kernels/*.cpp
+    send_recv_async/recv_async/device/kernels/*.cpp
+    send_recv_async/recv_async_h2d/device/kernels/*.cpp
+    send_recv_async/send_async_d2h/device/kernels/*.cpp
+    slice_reshard_async/device/kernels/*.cpp
+    strided_all_gather_async/device/kernels/*.cpp
+    strided_all_gather_async/device/kernels/*.hpp
+    strided_reduce_scatter_async/device/kernels/*.cpp
+    strided_reduce_scatter_async/device/kernels/*.hpp
+    deepseek_moe_reduce_scatter/device/kernels/*.cpp
+    deepseek_b1_reduce_to_one/device/kernels/*.cpp
+    moe_compute/device/kernels/*.cpp
+    moe_compute/device/kernels/*.h
+    moe/selective_reduce_combine/device/kernels/*.cpp
 )
 
 target_sources(

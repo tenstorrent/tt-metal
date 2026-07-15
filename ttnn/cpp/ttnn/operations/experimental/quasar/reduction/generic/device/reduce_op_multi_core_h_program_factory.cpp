@@ -211,8 +211,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
     TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
         const CoreCoord& core = cores[i];
         uint32_t num_cols_per_core = 0;
@@ -223,14 +223,21 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
                 {"col_start_tile_id", (num_cols_read / Wt * HtWt) + (num_cols_read % Wt)},
                 {"curr_col_in_batch", num_cols_read % Wt},
-                {"num_cols", num_cols_per_core}}});
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"num_pages", num_cols_per_core}, {"start_id", num_cols_read}}});
+                {"num_cols", num_cols_per_core},
+            });
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"num_pages", num_cols_per_core},
+                {"start_id", num_cols_read},
+            });
         num_cols_read += num_cols_per_core;
         if (i == num_cores - 1) {
             TT_FATAL(
