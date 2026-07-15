@@ -548,14 +548,20 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
             deps.insert(deps.end(), std::make_move_iterator(dep_list.begin()), std::make_move_iterator(dep_list.end()));
         }
     }
-    // Link inputs also gate reuse: a changed linker script or firmware must invalidate the ELF even
-    // when no source changed. weakened_firmware_name_ is the real on-disk path (the recipe carries
-    // only the bare filename, which the server resolves from its own cache).
+    // Link inputs also gate reuse: a changed linker script, firmware, or offline-compiled link object
+    // must invalidate the ELF even when no source changed. weakened_firmware_name_ is the real on-disk
+    // path (the recipe carries only the bare filename, which the server resolves from its own cache).
     if (!linker_script_.empty()) {
         deps.push_back(linker_script_);
     }
     if (!weakened_firmware_name_.empty()) {
         deps.push_back(weakened_firmware_name_);
+    }
+    // extra_link_objs_ are offline-built objects linked into the ELF (e.g. Quasar CRT / substitutes);
+    // hash their contents so rebuilding one at the same path invalidates the warmed ELF. Stored as a
+    // space-separated list of real on-disk paths.
+    for (auto& obj : jit_build::utils::tokenize_flags(extra_link_objs_)) {
+        deps.push_back(std::move(obj));
     }
     if (deps.empty()) {
         return;
