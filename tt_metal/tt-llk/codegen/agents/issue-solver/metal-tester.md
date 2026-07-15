@@ -76,25 +76,27 @@ runs the mapped gtest on that arch's real card, then returns the verdict. Skip S
 entirely; ttsim never dispatches (it needs no card — use Steps A+B).
 
 ```bash
+# Dispatch ALL target arches in ONE call (comma-separated): they build+run in
+# parallel on their own cards, so the wall-clock is the slowest arch, not the sum.
+# The CLI captures the worktree diff (vs origin/main), submits a kind=metal job per
+# arch (test = the gtest_filter, dispatch = slow|fast), and prints one line per arch:
+#   HW_TEST_RESULT arch=<arch> ok=<bool> ran=<bool> passed=<bool> job=<id> summary="..."
+ARCHES_CSV=$(echo $TARGET_ARCHES | tr ' ' ',')
+$HW_TEST_DISPATCH_CMD --kind metal --arch "$ARCHES_CSV" \
+      --test "$GTEST_FILTER" --dispatch "${DISPATCH:-fast}" \
+      --worktree "$WORKTREE_DIR" --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
+      --timeout "${TIMEOUT:-1800}" 2>&1 | tee "$LOG_DIR/metal_run.log"
+
 for arch in $TARGET_ARCHES; do
-  # The dispatch CLI captures the worktree diff (vs origin/main), submits a kind=metal
-  # job (test = the gtest_filter, dispatch = slow|fast), waits, and prints a final line:
-  #   HW_TEST_RESULT ok=<bool> ran=<bool> passed=<bool> job=<id> summary="..."
-  set +e
-  OUT=$($HW_TEST_DISPATCH_CMD --kind metal --arch "$arch" \
-        --test "$GTEST_FILTER" --dispatch "${DISPATCH:-fast}" \
-        --worktree "$WORKTREE_DIR" --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}" \
-        --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/metal_run_${arch}.log")
-  rc=$?
-  set -e
-  # rc: 0 => ran+passed (SUCCESS); 1 => ran+failed (TESTS_FAILED); 3 => infra (ENV_ERROR).
-  case "$rc" in
-    0) verdict=SUCCESS ;;
-    1) verdict=TESTS_FAILED ;;
-    *) verdict=ENV_ERROR ;;
+  line=$(grep "HW_TEST_RESULT arch=${arch} " "$LOG_DIR/metal_run.log" | tail -1)
+  # ok=true => SUCCESS; ran but not ok => TESTS_FAILED; neither => infra (ENV_ERROR).
+  case "$line" in
+    *"ok=true"*)  verdict=SUCCESS ;;
+    *"ran=true"*) verdict=TESTS_FAILED ;;
+    *)            verdict=ENV_ERROR ;;
   esac
   # Patch arch_results.<arch> exactly as the local path does (see Multi-Arch Dashboard
-  # Updates); parse counts from the HW_TEST_RESULT summary when present.
+  # Updates); parse counts from that arch's HW_TEST_RESULT summary when present.
 done
 ```
 
