@@ -744,9 +744,16 @@ def test_all_to_all_combine_no_trace(
     experts = experts_per_device * devices
 
     # Program cache stays enabled (see run_all_to_all_combine_test): with num_iters=2 and inputs
-    # reallocated each iter, iter 2 must be a cache HIT on a single cached program. test_skew adds
-    # a separate apply_device_delay program, matching the dispatch sibling's expectation.
-    expected_cache_entries = 2 if test_skew else 1
+    # reallocated each iter, iter 2 must be a cache HIT so the count reflects distinct programs, not
+    # dispatches. The measured (device-wide) delta counts every program-cached op run in the window:
+    #   - all_to_all_combine itself (1 entry; hits on iter 2 -- this is what the guard protects).
+    #   - the zeroed output it allocates internally via ttnn::moreh_full when no output tensor is
+    #     passed (all_to_all_combine.cpp) -- moreh_full is itself a cached device op (+1, hits on iter 2).
+    # A genuine keying regression (rebuild every realloc) would make all_to_all_combine miss twice,
+    # pushing the total to 3 (or 4 with skew) -- so this assertion still catches it. test_skew adds a
+    # separate apply_device_delay program (+1). Unlike the dispatch sibling, combine's output goes
+    # through moreh_full, which is why its baseline is one higher.
+    expected_cache_entries = 3 if test_skew else 2
 
     run_all_to_all_combine_test(
         mesh_device,
