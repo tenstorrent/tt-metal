@@ -1,6 +1,10 @@
 name: "(infra) Test Owner Escalation"
 
 on:
+  # TEMP: fire on push to smoke-test the escalation flow. REMOVE before merge.
+  push:
+    branches:
+      - tdowdall/test-owner-query
   schedule:
     # 04:00 UTC every day.
     - cron: "0 4 * * *"
