@@ -200,11 +200,17 @@ class BgeM3Attention(LightweightModule):
                 if self.config.max_batch_size in (8, 16, 32) or self.config.max_seq_len == 8192
                 else self.config.num_heads
             )
+            # DP head-fold path emits K directly as bfloat4_b from the head-split
+            # (folding the standalone ttnn.typecast(k, bf4) into the op — removes
+            # one program + the BF8 K DRAM round trip). Guarded to the exact case
+            # the head-fold branch below expects (DP, no mask, S8192).
+            fuse_kbf4 = self.config.data_parallel and attention_mask is None and seq_len == 8192
             q, k, v = bge_qkv_heads_headsplit(
                 qkv_fused,
                 num_heads=self.config.num_heads,
                 head_groups=head_groups,
                 out_memcfg=self.config.create_heads_memcfg,
+                k_out_dtype=ttnn.bfloat4_b if fuse_kbf4 else None,
             )
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -221,7 +227,9 @@ class BgeM3Attention(LightweightModule):
             q_cast = ttnn.typecast(q, dtype=self.config.score_dtype)
             ttnn.deallocate(q)
             q = q_cast
-        if self.config.score_dtype is not None and k.dtype != self.config.score_dtype:
+        # Skip the K score-dtype cast when K was already emitted as bfloat4_b by
+        # the fused head-split (its dtype intentionally differs from score_dtype).
+        if self.config.score_dtype is not None and k.dtype != self.config.score_dtype and k.dtype != ttnn.bfloat4_b:
             k_cast = ttnn.typecast(k, dtype=self.config.score_dtype)
             ttnn.deallocate(k)
             k = k_cast
@@ -292,11 +300,14 @@ class BgeM3Attention(LightweightModule):
         if head_fold:
             b0, h0, s0, dh0 = q.shape
             q = ttnn.reshape(q, [b0, h0 * _DP_HEAD_FOLD, s0 // _DP_HEAD_FOLD, dh0])
-            # K to bfloat4_b: halves K read bandwidth in SDPA. PCC 0.9422 (clears
-            # the 0.94 preferred gate) with the q128/k2048 chunking; V stays bf8.
-            k_bf4 = ttnn.typecast(k, dtype=ttnn.bfloat4_b)
-            ttnn.deallocate(k)
-            k = k_bf4
+            # K is already bfloat4_b (emitted directly by the fused head-split):
+            # halves K read bandwidth in SDPA. PCC 0.9422 (clears the 0.94
+            # preferred gate) with the q128/k2048 chunking; V stays bf8. If some
+            # other path left K non-BF4, convert here as a fallback.
+            if k.dtype != ttnn.bfloat4_b:
+                k_bf4 = ttnn.typecast(k, dtype=ttnn.bfloat4_b)
+                ttnn.deallocate(k)
+                k = k_bf4
         sdpa_program_config = _sdpa_program_config(
             sdpa_seq_len,
             self.config.mesh_device,

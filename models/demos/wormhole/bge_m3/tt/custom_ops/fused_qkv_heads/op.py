@@ -49,6 +49,19 @@ HEADSPLIT_WRITER_KERNEL_REL_PATH = (
     "models/demos/wormhole/bge_m3/tt/custom_ops/fused_qkv_heads/kernels/" "writer_qkv_heads_headsplit.cpp"
 )
 
+# Head-split K-BF4 fused-typecast kernels: K flows reader(BF8) -> compute
+# (BF8->BF4 typecast) -> writer(BF4), folding the standalone ttnn.typecast(k,
+# bfloat4_b) into the head-split op. Q/V stay on the direct BF8 path.
+HEADSPLIT_KBF4_READER_KERNEL_REL_PATH = (
+    "models/demos/wormhole/bge_m3/tt/custom_ops/fused_qkv_heads/kernels/" "reader_qkv_heads_headsplit_kbf4.cpp"
+)
+HEADSPLIT_KBF4_COMPUTE_KERNEL_REL_PATH = (
+    "models/demos/wormhole/bge_m3/tt/custom_ops/fused_qkv_heads/kernels/" "compute_k_typecast_bf4.cpp"
+)
+HEADSPLIT_KBF4_WRITER_KERNEL_REL_PATH = (
+    "models/demos/wormhole/bge_m3/tt/custom_ops/fused_qkv_heads/kernels/" "writer_qkv_heads_headsplit_kbf4.cpp"
+)
+
 TILE_H = 32
 TILE_W = 32
 
@@ -344,12 +357,177 @@ def bge_qkv_heads_tracka(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def _bge_qkv_heads_headsplit_kbf4(
+    qkv_fused: ttnn.Tensor,
+    *,
+    num_heads: int,
+    head_groups: int,
+    heads_per_group: int,
+    out_memcfg: ttnn.MemoryConfig,
+    k_out_dtype: ttnn.DataType,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Head-split with K fused-typecast to ``k_out_dtype`` (e.g. bfloat4_b).
+
+    Three-kernel program: reader (BF8 QKV -> shared Q/V CB + separate BF8 K CB),
+    compute (BF8 K -> BF4 K CB), writer (Q/V from shared CB, K from BF4 CB).
+    Q and V keep the input dtype; only K is converted. Folds the standalone
+    ``ttnn.typecast(k, bfloat4_b)`` into this op, removing one program launch
+    and the BF8 K DRAM write/read round trip per layer.
+    """
+    device = qkv_fused.device()
+    plan = _TrackAPlan.from_input(qkv_fused, num_heads)
+    q_heads_per_kv = 1  # BGE-M3 MHA: Q heads == KV heads
+    qv_dtype = qkv_fused.dtype
+
+    # ---- Pre-allocate outputs: Q/V keep input dtype, K becomes k_out_dtype ----
+    out_shape = (plan.batch, num_heads, plan.seq_len, plan.head_dim)
+    q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), qv_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
+    k_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), k_out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
+    v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), qv_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
+
+    # ---- Work split: batch * seq_tiles * head_groups total units. ----
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    num_work_units_total = plan.num_blocks_total * head_groups
+    num_cores, per_core = _split_work_to_cores(num_work_units_total, grid_x, grid_y)
+    if num_cores == 0:
+        raise RuntimeError("_bge_qkv_heads_headsplit_kbf4: nothing to do")
+
+    used_cores = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for (cx, cy, _) in per_core]
+    )
+
+    group_q_tiles = heads_per_group * q_heads_per_kv * plan.q_out_w_tiles
+    group_kv_tiles = heads_per_group * plan.q_out_w_tiles
+
+    # ---- CBs: shared Q/V (BF8), BF8 K-input, BF4 K-output. ----
+    cb_qv = 1
+    cb_k_in = 2
+    cb_k_out = 3
+    qv_tile_size = _tile_size_bytes(qv_dtype)
+    k_out_tile_size = _tile_size_bytes(k_out_dtype)
+    cb_qv_desc = ttnn.CBDescriptor(
+        total_size=group_q_tiles * 2 * qv_tile_size,  # double-buffer, sized for Q chunk
+        core_ranges=used_cores,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_qv, data_format=qv_dtype, page_size=qv_tile_size)],
+    )
+    cb_k_in_desc = ttnn.CBDescriptor(
+        total_size=group_kv_tiles * 2 * qv_tile_size,  # double-buffer BF8 K tiles
+        core_ranges=used_cores,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=cb_k_in, data_format=qv_dtype, page_size=qv_tile_size)
+        ],
+    )
+    cb_k_out_desc = ttnn.CBDescriptor(
+        total_size=group_kv_tiles * 2 * k_out_tile_size,  # double-buffer BF4 K tiles
+        core_ranges=used_cores,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=cb_k_out, data_format=k_out_dtype, page_size=k_out_tile_size)
+        ],
+    )
+
+    # ---- Reader CT args ----
+    reader_ct_args = [
+        q_heads_per_kv,
+        num_heads,  # num_kv_heads
+        plan.q_out_w_tiles,  # head_dim_tiles
+        plan.in_w_tiles,
+        plan.q_out_h_tiles,  # seq_tiles
+        head_groups,
+        heads_per_group,
+        cb_qv,
+        cb_k_in,
+    ]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(qkv_fused).get_compile_time_args())
+
+    reader_rt_per_core: list[tuple[tuple[int, int], list[int]]] = []
+    compute_rt_per_core: list[tuple[tuple[int, int], list[int]]] = []
+    work_unit_cursor = 0
+    for cx, cy, n_units in per_core:
+        reader_rt_per_core.append(((cx, cy), [qkv_fused.buffer_address(), n_units, work_unit_cursor]))
+        compute_rt_per_core.append(((cx, cy), [n_units]))
+        work_unit_cursor += n_units
+
+    reader_kd = ttnn.KernelDescriptor(
+        kernel_source=HEADSPLIT_KBF4_READER_KERNEL_REL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=used_cores,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt_per_core,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ---- Compute CT args (K typecast) ----
+    compute_kd = ttnn.KernelDescriptor(
+        kernel_source=HEADSPLIT_KBF4_COMPUTE_KERNEL_REL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=used_cores,
+        compile_time_args=[group_kv_tiles, cb_k_in, cb_k_out],
+        runtime_args=compute_rt_per_core,
+        config=ttnn.ComputeConfigDescriptor(),
+    )
+
+    # ---- Writer CT args ----
+    writer_ct_args = [
+        plan.q_out_h_tiles,
+        plan.q_out_w_tiles,
+        plan.q_out_HtWt,
+        num_heads,  # num_q_heads
+        num_heads,  # num_kv_heads
+        q_heads_per_kv,
+        head_groups,
+        heads_per_group,
+        plan.q_out_h_tiles,  # seq_tiles
+        cb_qv,
+        cb_k_out,
+    ]
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(q_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(k_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(v_tensor).get_compile_time_args())
+
+    writer_rt_per_core: list[tuple[tuple[int, int], list[int]]] = []
+    work_unit_cursor = 0
+    for cx, cy, n_units in per_core:
+        writer_rt_per_core.append(
+            (
+                (cx, cy),
+                [
+                    q_tensor.buffer_address(),
+                    k_tensor.buffer_address(),
+                    v_tensor.buffer_address(),
+                    n_units,
+                    work_unit_cursor,
+                ],
+            )
+        )
+        work_unit_cursor += n_units
+
+    writer_kd = ttnn.KernelDescriptor(
+        kernel_source=HEADSPLIT_KBF4_WRITER_KERNEL_REL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=used_cores,
+        compile_time_args=writer_ct_args,
+        runtime_args=writer_rt_per_core,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    program_descriptor = ttnn.ProgramDescriptor(
+        kernels=[reader_kd, compute_kd, writer_kd],
+        cbs=[cb_qv_desc, cb_k_in_desc, cb_k_out_desc],
+    )
+
+    io_tensors = [qkv_fused, q_tensor, k_tensor, v_tensor]
+    ttnn.generic_op(io_tensors, program_descriptor)
+    return q_tensor, k_tensor, v_tensor
+
+
 def bge_qkv_heads_headsplit(
     qkv_fused: ttnn.Tensor,
     *,
     num_heads: int,
     head_groups: int | None = None,
     out_memcfg: ttnn.MemoryConfig | None = None,
+    k_out_dtype: ttnn.DataType | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """Head-split QKV head creation.
 
@@ -375,6 +553,19 @@ def bge_qkv_heads_headsplit(
     if num_heads % head_groups != 0:
         raise ValueError(f"num_heads ({num_heads}) must be divisible by head_groups ({head_groups})")
     heads_per_group = num_heads // head_groups
+
+    # K-BF4 fused-typecast path: K output dtype differs from Q/V, requiring a
+    # compute kernel to convert BF8->BF4 on-chip. Delegated to a dedicated
+    # 3-kernel (reader/compute/writer) program builder.
+    if k_out_dtype is not None and k_out_dtype != qkv_fused.dtype:
+        return _bge_qkv_heads_headsplit_kbf4(
+            qkv_fused,
+            num_heads=num_heads,
+            head_groups=head_groups,
+            heads_per_group=heads_per_group,
+            out_memcfg=out_memcfg,
+            k_out_dtype=k_out_dtype,
+        )
 
     device = qkv_fused.device()
     plan = _TrackAPlan.from_input(qkv_fused, num_heads)
