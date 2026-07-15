@@ -722,6 +722,17 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                                            !enable_activation_reuse && (in0_num_blocks_w == 1) &&
                                            (num_blocks_weight_w_per_core == 1);
 
+    // Program A (tilize-only) EXPERIMENT: the pure tilize (conv_tilize_only_metal2.cpp) faults with ERROR_TRISC1
+    // 0x19 mid-stream (after several 4-wide blocks tilize cleanly, config identical to the PASSING standalone
+    // tilize), which matches the residual Quasar tilize DEST-bank-release LLK issue in HALF sync (syncfull=0 —
+    // the Quasar height-sharded default here). Force FULL DEST sync for the split tilize path: full sync
+    // collapses DEST to one section, eliminating the per-tile half-sync bank rotation whose release appears to
+    // stop freeing banks. This was never actually run on the conv (the earlier "half sync" try just re-set the
+    // default). If it clears the 0x19, full sync is the workaround; if not, this is a clean LLK escalation.
+    if (split_program_tilize_only) {
+        dst_full_sync_en = true;
+    }
+
     TT_FATAL(
         act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,
         "Activation matrix height in tiles ({}) must be divisible by per-core output matrix height in tiles ({})",
