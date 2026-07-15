@@ -1,7 +1,8 @@
 # Qwen3.5 / Qwen3.6 on Blackhole
 
 This directory implements Tenstorrent Blackhole inference for the hybrid
-**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. The same code path serves three checkpoints:
+**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. A single code
+path serves four checkpoints:
 
 | Model            | `HF_MODEL`             | Mesh / `MESH_DEVICE` | Parallelism            |
 | ---------------- | ---------------------- | -------------------- | ---------------------- |
@@ -12,14 +13,10 @@ This directory implements Tenstorrent Blackhole inference for the hybrid
 | Qwen3.6-35B-A3B  | `Qwen/Qwen3.6-35B-A3B` | P150x4 — `P150x4`    | 4-way TP + sparse MoE  |
 
 The **35B-A3B** is the sparse Mixture-of-Experts member of the family (`qwen3_5_moe`:
-256 routed experts, top-8, plus a gated shared expert on every layer). It shares the
-exact hybrid attention / GDN / partial-RoPE / zero-centered-RMSNorm stack as the dense
-variants — the only difference is that each layer's dense SwiGLU MLP is replaced by the
-sparse MoE block in `tt/moe/`. Dispatch is config-driven (`args.is_moe_layer`): on the
-dense 9B/27B `num_experts == 0`, so the MoE path is inert and the dense MLP is unchanged.
-The MoE experts are gemma4-style (dense routing → `sparse_matmul` experts, TP-sharded on
-the intermediate dim, reduce-scattered after `down_proj` to the same fractured-hidden
-layout the dense MLP produces).
+256 routed experts, top-8, plus a gated shared expert on every layer). Every layer's
+dense SwiGLU MLP is replaced by the sparse MoE block in `tt/moe/`; dispatch is
+config-driven (`args.is_moe_layer`), so on the dense 9B/27B `num_experts == 0` and the
+dense MLP path is byte-for-byte unchanged.
 
 - The **9B** runs on a **single Blackhole P150** device. It uses the validated
   single-device forward path (no collectives).
@@ -75,6 +72,13 @@ export HF_MODEL=Qwen/Qwen3.5-27B
 export MESH_DEVICE=P150x4
 ```
 
+**35B-A3B (P150x4, sparse MoE):**
+
+```bash
+export HF_MODEL=Qwen/Qwen3.6-35B-A3B
+export MESH_DEVICE=P150x4
+```
+
 `HF_MODEL` is the single source of truth for the checkpoint — it may be a Hugging
 Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 `MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`,
@@ -117,10 +121,11 @@ pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_4k"
 pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_64k"
 ```
 
-The **same command works for both 9B and 27B** — only the exported `HF_MODEL` /
+The **same command works for 9B, 27B, and 35B-A3B** — only the exported `HF_MODEL` /
 `MESH_DEVICE` differ. On a single device the test takes the validated 9B path; on
 the `(1,4)` mesh it routes through the TP chunk-outer traced prefill + paged
-traced decode path automatically.
+traced decode path automatically (the sparse MoE block is selected per layer from
+the config, transparent to the demo).
 
 > Long-context cases (64k+) download a public-domain corpus (Frankenstein, War
 > and Peace) on first run and cache it under `demo/sample_prompts/.context_cache`.
@@ -196,6 +201,12 @@ pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 pytest models/demos/blackhole/qwen36/tests/test_model_tp.py -svq
 pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py -v -s
 ```
+
+> The MoE-specific tests (`test_moe_tp.py`, and the MoE path in `test_model_tp.py` /
+> `test_generate_tp.py`) require the sparse checkpoint — run them with
+> `HF_MODEL=Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4`. On the dense 27B they are inert
+> (`num_experts == 0`), and the dense/MoE checkpoints must not be mixed in one run
+> (each test file `setdefault`s or expects a single `HF_MODEL`).
 
 > `test_substate.py` and `test_weight_mapping.py` are pure-CPU and need no device.
 > `test_weight_mapping.py`'s shape constants assume the 9B checkpoint.
