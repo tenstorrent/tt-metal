@@ -575,11 +575,23 @@ class Ideogram4TransformerBlock(Module):
         q_f = ttnn.unsqueeze(q_f, 0)
         k_f = ttnn.unsqueeze(k_f, 0)
         v_f = ttnn.unsqueeze(v_f, 0)
+        # per_head_norm=True: QK-RMSNorm is independent over each head's head_dim (the op
+        # default is whole-row; Ideogram4 must opt in).
         q = self.norm_q(
-            q_f, num_heads_per_device=self.n_local_heads, rope_cos=cos, rope_sin=sin, trans_mat=self.rope_trans_mat
+            q_f,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=cos,
+            rope_sin=sin,
+            trans_mat=self.rope_trans_mat,
+            per_head_norm=True,
         )
         k = self.norm_k(
-            k_f, num_heads_per_device=self.n_local_heads, rope_cos=cos, rope_sin=sin, trans_mat=self.rope_trans_mat
+            k_f,
+            num_heads_per_device=self.n_local_heads,
+            rope_cos=cos,
+            rope_sin=sin,
+            trans_mat=self.rope_trans_mat,
+            per_head_norm=True,
         )
         v, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             v_f, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False

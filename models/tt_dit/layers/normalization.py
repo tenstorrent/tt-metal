@@ -203,19 +203,16 @@ class DistributedRMSNorm(Module):
         trans_mat=None,
         dtype=None,
         dynamic_weight=None,
-        per_head_norm=None,
+        per_head_norm=False,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
         # head-split (num_heads_per_device > 1):
-        #   True  -> RMSNorm INDEPENDENTLY over each head's head_dim (FLUX.2 / Ideogram4
-        #            QK-norm). No cross-device all-gather (each head is device-local).
+        #   True  -> RMSNorm INDEPENDENTLY over each head's head_dim (per-head QK-norm, e.g.
+        #            Ideogram4). No cross-device all-gather (each head is device-local).
         #   False -> one RMSNorm over the FULL per-device row, then reshape to heads
         #            (WAN2.2 / LTX "norm before splitting heads").
-        # The two are NOT equivalent, and defaulting to whole-row silently gave head-split
-        # models (Ideogram4) the wrong normalization. Default to per-head whenever the input
-        # is head-split; whole-row callers (WAN/LTX) pass per_head_norm=False explicitly.
-        if per_head_norm is None:
-            per_head_norm = num_heads_per_device > 1
+        # The two are NOT equivalent. Default is whole-row (False); per-head models must opt
+        # in with per_head_norm=True at the call site (e.g. the Ideogram4 QK-norm).
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
             msg = (
