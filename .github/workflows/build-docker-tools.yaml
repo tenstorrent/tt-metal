@@ -14,9 +14,10 @@ permissions:
   packages: write
 
 env:
-  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
-  # Tool images are built infrequently; monitor push duration if this becomes a bottleneck.
-  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true,provenance=false,sbom=false
+  # Provenance/SBOM attestations are disabled separately in manual-docker-bake
+  # (via the attest target field, not here - provenance=false/sbom=false inside
+  # output= is silently ignored by buildx bake). See tenstorrent/tt-metal#49882.
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
   workflow_dispatch:

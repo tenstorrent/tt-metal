@@ -43,6 +43,20 @@ inputs:
     description: "Validate that built images can be inspected after build"
     required: false
     default: "true"
+  disable-attestations:
+    description: >-
+      Disable default build provenance/SBOM attestations for every target.
+      docker-container/kubernetes/remote builders (unlike the classic docker
+      driver) attach a provenance attestation by default on push, turning a
+      pushed tag into a multi-manifest OCI Image Index (real image manifest +
+      a separate "unknown/unknown" attestation-manifest). GHCR's package page
+      doesn't render that shape and drops description/label display entirely
+      (see tenstorrent/tt-metal#49882). Setting `provenance=false`/`sbom=false`
+      inside a target's `output=` string does NOT work - buildx bake ignores
+      unknown output keys silently. This must be done via the separate
+      `attest` target field instead, which is what this input controls.
+    required: false
+    default: "true"
   harbor-prefix:
     description: >-
       Harbor pull-through cache prefix (e.g. 'harbor.example.com/'). If non-empty
@@ -66,6 +80,7 @@ runs:
         INPUT_RETRY_DELAY_SECONDS: ${{ inputs.retry-delay-seconds }}
         INPUT_USE_DEFAULT_BUILDER: ${{ inputs.use-default-builder }}
         INPUT_VALIDATE_IMAGES: ${{ inputs.validate-images }}
+        INPUT_DISABLE_ATTESTATIONS: ${{ inputs.disable-attestations }}
         INPUT_HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
       run: |
         set -euo pipefail
@@ -83,11 +98,6 @@ runs:
 
         mapfile -t SET_LINES < <(printf '%s\n' "${INPUT_SET_LINES}")
 
-        BAKE_SETS=()
-        for s in "${SET_LINES[@]}"; do
-          [ -n "$s" ] && BAKE_SETS+=(--set "$s")
-        done
-
         IFS=',' read -r -a TARGETS <<< "${INPUT_TARGETS}"
         CLEAN_TARGETS=()
         for t in "${TARGETS[@]}"; do
@@ -98,6 +108,17 @@ runs:
         if [ "${#CLEAN_TARGETS[@]}" -eq 0 ]; then
           echo "No bake targets provided."
           exit 1
+        fi
+
+        BAKE_SETS=()
+        for s in "${SET_LINES[@]}"; do
+          [ -n "$s" ] && BAKE_SETS+=(--set "$s")
+        done
+        if [ "${INPUT_DISABLE_ATTESTATIONS}" = "true" ]; then
+          for t in "${CLEAN_TARGETS[@]}"; do
+            BAKE_SETS+=(--set "${t}.attest=type=provenance,disabled=true")
+            BAKE_SETS+=(--set "${t}.attest=type=sbom,disabled=true")
+          done
         fi
 
         retries="${INPUT_RETRIES}"
@@ -132,6 +153,12 @@ runs:
                 FALLBACK_SETS+=(--set "$stripped")
               fi
             done
+            if [ "${INPUT_DISABLE_ATTESTATIONS}" = "true" ]; then
+              for t in "${CLEAN_TARGETS[@]}"; do
+                FALLBACK_SETS+=(--set "${t}.attest=type=provenance,disabled=true")
+                FALLBACK_SETS+=(--set "${t}.attest=type=sbom,disabled=true")
+              done
+            fi
             docker buildx bake -f "${INPUT_BAKE_FILE}" "${FALLBACK_SETS[@]}" "${CLEAN_TARGETS[@]}" \
               && bake_success=true || last_bake_exit=$?
             if [ "$bake_success" = "true" ]; then
