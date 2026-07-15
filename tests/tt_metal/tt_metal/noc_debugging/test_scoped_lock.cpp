@@ -699,16 +699,10 @@ void run_dfb_scoped_lock_test(
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    const experimental::DataMovementHardwareConfig dm_producer_cfg =
+        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+    const experimental::DataMovementHardwareConfig dm_consumer_cfg =
+        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
 
     experimental::KernelSpec producer_spec{
         .unique_id = PRODUCER,
@@ -750,14 +744,14 @@ void run_dfb_scoped_lock_test(
     experimental::ProgramRunArgs run_args;
     experimental::ProgramRunArgs::KernelRunArgs producer_params{};
     producer_params.kernel = PRODUCER;
-    producer_params.runtime_arg_values = {
-        {core,
-         {{"src_buffer_addr", src_buffer_addr},
-          {"write_size", write_size},
-          {"self_noc_x", static_cast<uint32_t>(virtual_core.x)},
-          {"self_noc_y", static_cast<uint32_t>(virtual_core.y)},
-          {"target_entry_offset", target_entry_offset},
-          {"write_after_unlock", static_cast<uint32_t>(write_after_unlock)}}}};
+    producer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        core,
+        {{"src_buffer_addr", src_buffer_addr},
+         {"write_size", write_size},
+         {"self_noc_x", static_cast<uint32_t>(virtual_core.x)},
+         {"self_noc_y", static_cast<uint32_t>(virtual_core.y)},
+         {"target_entry_offset", target_entry_offset},
+         {"write_after_unlock", static_cast<uint32_t>(write_after_unlock)}});
     experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {producer_params, consumer_params};
@@ -832,16 +826,10 @@ void run_dfb_scoped_lock_xcore_test(
     experimental::SemaphoreSpec sem_written{
         .unique_id = SEM_WRITTEN, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
 
-    const experimental::DataMovementHardwareConfig dm_rv0{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
-    const experimental::DataMovementHardwareConfig dm_rv1{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    const experimental::DataMovementHardwareConfig dm_rv0 =
+        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+    const experimental::DataMovementHardwareConfig dm_rv1 =
+        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
 
     experimental::KernelSpec locker_spec{
         .unique_id = LOCKER,
@@ -896,21 +884,21 @@ void run_dfb_scoped_lock_xcore_test(
     experimental::ProgramRunArgs run_args;
     experimental::ProgramRunArgs::KernelRunArgs locker_params{};
     locker_params.kernel = LOCKER;
-    locker_params.runtime_arg_values = {
-        {locker_core,
-         {{"writer_noc_x", static_cast<uint32_t>(writer_vc.x)},
-          {"writer_noc_y", static_cast<uint32_t>(writer_vc.y)},
-          {"local_scratch", scratch_addr},    // this-core (locker) word to stage the entry addr
-          {"writer_inbox", scratch_addr}}}};  // writer-core word to publish the entry addr into
+    locker_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        locker_core,
+        {{"writer_noc_x", static_cast<uint32_t>(writer_vc.x)},
+         {"writer_noc_y", static_cast<uint32_t>(writer_vc.y)},
+         {"local_scratch", scratch_addr},   // this-core (locker) word to stage the entry addr
+         {"writer_inbox", scratch_addr}});  // writer-core word to publish the entry addr into
     experimental::ProgramRunArgs::KernelRunArgs writer_params{};
     writer_params.kernel = WRITER;
-    writer_params.runtime_arg_values = {
-        {writer_core,
-         {{"src_buffer_addr", src_buffer_addr},
-          {"write_size", write_size},
-          {"target_noc_x", static_cast<uint32_t>(locker_vc.x)},
-          {"target_noc_y", static_cast<uint32_t>(locker_vc.y)},
-          {"inbox", scratch_addr}}}};  // local word the locker published the entry addr into
+    writer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        writer_core,
+        {{"src_buffer_addr", src_buffer_addr},
+         {"write_size", write_size},
+         {"target_noc_x", static_cast<uint32_t>(locker_vc.x)},
+         {"target_noc_y", static_cast<uint32_t>(locker_vc.y)},
+         {"inbox", scratch_addr}});  // local word the locker published the entry addr into
     experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {locker_params, consumer_params, writer_params};
