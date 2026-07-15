@@ -32,7 +32,7 @@
       timeout: 30
     wh_n300:
       timeout: 30
-  owner_id: U03PUAKE719 # Miguel Tairum (@mtairum)
+  owner_id: U087S3K319A # Austin Ho (CODEOWNERS @tt-aho, models/demos/metal_BERT_large_11)
   team: models
 - name: resnet50 nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/resnet50
