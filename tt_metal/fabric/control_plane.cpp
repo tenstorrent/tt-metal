@@ -521,6 +521,21 @@ void ControlPlane::init_control_plane(
     this->initialize_distributed_contexts();
     this->generate_intermesh_connectivity();
 
+    // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
+    // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
+    {
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+                                                       "fabric" /
+                                                       ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
+                                                        "_of_" + std::to_string(world_size) + ".yaml");
+        try {
+            tt::tt_fabric::serialize_intermesh_port_assignment_to_file(
+                this->exit_node_directions_, this->intermesh_chan_to_peer_, intermesh_mapping_file);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Failed to export inter-mesh port assignment: {}", e.what());
+        }
+    }
+
     // Printing, only enabled with log_debug
     this->mesh_graph_->print_connectivity();
 }
@@ -620,6 +635,21 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
     this->generate_intermesh_connectivity();
+
+    // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
+    // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
+    {
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+                                                       "fabric" /
+                                                       ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
+                                                        "_of_" + std::to_string(world_size) + ".yaml");
+        try {
+            tt::tt_fabric::serialize_intermesh_port_assignment_to_file(
+                this->exit_node_directions_, this->intermesh_chan_to_peer_, intermesh_mapping_file);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Failed to export inter-mesh port assignment: {}", e.what());
+        }
+    }
 
     // Printing, only enabled with log_debug
     this->mesh_graph_->print_connectivity();
@@ -2686,62 +2716,7 @@ void ControlPlane::generate_intermesh_connectivity() {
     this->collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
     sort_intermesh_exit_peer_fabric_node_id_pairs(intermesh_exit_peer_fabric_node_id_pairs_);
 
-    // Inter-mesh routing validation against the Mesh Graph Descriptor.
-    //
-    // The count check above only compares the *total* number of assigned connections, so a single
-    // mesh boundary that resolved zero routers (e.g. every candidate cable for it was dropped by a
-    // Z/non-Z direction mismatch during port assignment) can still pass while another boundary has
-    // extra links. That leaves the control plane in a state where a requested inter-mesh connection
-    // has no resolved exit/peer routers, which only surfaces much later in a downstream consumer as a
-    // cryptic failure (e.g. generate_blitz_decode_pipeline: "No inter-mesh connection from mesh X to
-    // mesh Y"). Validate per mesh pair here, at control-plane init, so it fails against the MGD
-    // instead of progressing out of the control plane.
-    auto num_resolved_between = [this](uint32_t src_mesh, uint32_t dst_mesh) -> std::size_t {
-        auto src_it = intermesh_exit_peer_fabric_node_id_pairs_.find(MeshId(src_mesh));
-        if (src_it == intermesh_exit_peer_fabric_node_id_pairs_.end()) {
-            return 0;
-        }
-        auto dst_it = src_it->second.find(MeshId(dst_mesh));
-        return dst_it == src_it->second.end() ? 0 : dst_it->second.size();
-    };
-    const auto& requested_intermesh_ports = this->mesh_graph_->get_requested_intermesh_ports();
-    if (!requested_intermesh_ports.empty()) {
-        // Strict mode: the exact requested channel count must be resolved for every mesh pair.
-        for (const auto& [src_mesh, dst_to_ports] : requested_intermesh_ports) {
-            for (const auto& [dst_mesh, port_specs] : dst_to_ports) {
-                std::size_t requested = 0;
-                for (const auto& port_spec : port_specs) {
-                    requested += std::get<2>(port_spec);
-                }
-                const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
-                TT_FATAL(
-                    resolved == requested,
-                    "Inter-mesh routing validation failed (strict): the Mesh Graph Descriptor requests {} "
-                    "connection(s) between mesh {} and mesh {}, but {} were resolved during control plane "
-                    "initialization. Every requested inter-mesh connection must resolve routers on both ends.",
-                    requested,
-                    src_mesh,
-                    dst_mesh,
-                    resolved);
-            }
-        }
-    } else {
-        // Relaxed mode: fewer channels than requested are tolerated, but every requested mesh pair
-        // must resolve at least one connection -- zero means the meshes are disconnected.
-        for (const auto& [src_mesh, dst_to_channels] : this->mesh_graph_->get_requested_intermesh_connections()) {
-            for (const auto& [dst_mesh, requested_channels] : dst_to_channels) {
-                TT_FATAL(
-                    num_resolved_between(src_mesh, dst_mesh) > 0,
-                    "Inter-mesh routing validation failed (relaxed): the Mesh Graph Descriptor requests a connection "
-                    "({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved during control "
-                    "plane initialization (all candidate cables were dropped, e.g. by a Z/non-Z direction mismatch). "
-                    "Every requested inter-mesh connection must resolve at least one router.",
-                    requested_channels,
-                    src_mesh,
-                    dst_mesh);
-            }
-        }
-    }
+    this->validate_requested_intermesh_connections();
 }
 
 void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts() {
@@ -2976,7 +2951,21 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)});
     const auto neighbor_mesh_id = neighbor_binding.first;
 
-    const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
+    // Copy + stably sort the exit-node cables by a logical key (src chip, then src/dst channel) so the
+    // greedy NESW/Z port assignment below is independent of get_connecting_exit_nodes()'s discovery order
+    // (which comes from a hostname-keyed unordered_map and therefore varies by physical host).
+    auto exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
+    std::sort(exit_nodes.begin(), exit_nodes.end(), [this](const auto& a, const auto& b) {
+        auto ca = this->get_fabric_node_id_from_asic_id(*a.src_exit_node).chip_id;
+        auto cb = this->get_fabric_node_id_from_asic_id(*b.src_exit_node).chip_id;
+        if (ca != cb) {
+            return ca < cb;
+        }
+        if (a.eth_conn.src_chan != b.eth_conn.src_chan) {
+            return a.eth_conn.src_chan < b.eth_conn.src_chan;
+        }
+        return a.eth_conn.dst_chan < b.eth_conn.dst_chan;
+    });
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
 
     bool should_assign_z = this->mesh_graph_->should_assign_z_direction(my_mesh_id, neighbor_mesh_id);
@@ -3067,9 +3056,14 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
             return false;
         };
 
-        // Try the preferred direction class first, then fall back to Z if NESW is exhausted
-        bool assigned = try_assign_port(should_assign_z);
-        if (!assigned && !should_assign_z) {
+        // TRACE links are on-board PCB traces and must never be assigned Z. Prefer Z only when
+        // the MGD asks for it and the physical port type is Z-eligible; fall back to Z only for
+        // non-TRACE links when NESW is exhausted.
+        const bool z_eligible = exit_node.eth_conn.port_type != tt::tt_metal::PortType::TRACE;
+        const bool prefer_z = should_assign_z && z_eligible;
+
+        bool assigned = try_assign_port(prefer_z);
+        if (!assigned && !prefer_z && z_eligible) {
             if (z_fallback_count++ == 0) {
                 log_warning(
                     tt::LogFabric,
@@ -3082,10 +3076,11 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         if (!assigned) {
             log_warning(
                 tt::LogFabric,
-                "No ports available for exit node {} on mesh {} -> {}; skipping connection",
+                "No ports available for exit node {} on mesh {} -> {}; skipping connection{}",
                 exit_node_fabric_node_id,
                 *my_mesh_id,
-                *neighbor_mesh_id);
+                *neighbor_mesh_id,
+                z_eligible ? "" : " (TRACE link cannot use Z)");
         }
     }
     return ports_to_neighbor;
@@ -3110,17 +3105,28 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     std::unordered_set<port_id_t> assigned_port_ids;
     port_descriptors[my_mesh_id] = {};
 
+    // Iterate neighbors in a stable (neighbor mesh_id, hostname) order rather than get_host_neighbors()'s
+    // hostname-keyed unordered_map order. The greedy assignment consumes each chip's scarce NESW ports
+    // first-come across neighbors (assigned_port_ids accumulates), so a host-dependent neighbor order makes
+    // which boundary falls back to Z -- and thus which boundary strands -- depend on the physical host.
+    std::vector<std::pair<MeshId, std::string>> sorted_neighbors;
     for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
-        // Skip if neighbor host is not in our global logical bindings
-        if (!this->global_logical_bindings_.contains(
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})) {
+        auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)};
+        // Skip if neighbor host is not in our global logical bindings.
+        if (!this->global_logical_bindings_.contains(neighbor_rank)) {
             continue;
         }
-        auto neighbor_mesh_id =
-            this->global_logical_bindings_
-                .at(tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)})
-                .first;
+        sorted_neighbors.emplace_back(this->global_logical_bindings_.at(neighbor_rank).first, neighbor_host);
+    }
+    std::sort(sorted_neighbors.begin(), sorted_neighbors.end(), [](const auto& a, const auto& b) {
+        if (*a.first != *b.first) {
+            return *a.first < *b.first;
+        }
+        return a.second < b.second;
+    });
+
+    for (const auto& [neighbor_mesh_id, neighbor_host] : sorted_neighbors) {
         bool connection_requested = check_connection_requested(
             my_mesh_id, neighbor_mesh_id, requested_intermesh_connections, requested_intermesh_ports);
         if (!connection_requested) {
@@ -3149,43 +3155,77 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     return port_descriptors;
 }
 
-void ControlPlane::validate_requested_intermesh_connections(
-    const RequestedIntermeshConnections& requested_intermesh_connections, const PortDescriptorTable& port_descriptors) {
-    bool strict_binding = requested_intermesh_connections.empty();
-    if (strict_binding) {
-        return;
-    }
-    const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
-    for (const auto& [src_mesh, dst_mesh_map] : requested_intermesh_connections) {
-        auto src_mesh_id = MeshId(src_mesh);
-        for (const auto& [dst_mesh, num_channels] : dst_mesh_map) {
-            auto dst_mesh_id = MeshId(dst_mesh);
-            const auto& ports = port_descriptors.at(src_mesh_id).at(dst_mesh_id);
-            if (num_channels > ports.size()) {
-                std::string port_directions_str;
-                for (size_t i = 0; i < ports.size(); ++i) {
-                    if (i > 0) {
-                        port_directions_str += ", ";
-                    }
-                    port_directions_str += fmt::format("{}", enchantum::to_string(ports[i].port_id.first)) +
-                                           std::to_string(ports[i].port_id.second);
+void ControlPlane::validate_requested_intermesh_connections() const {
+    // Validate per mesh pair against the Mesh Graph Descriptor after port assignment completes.
+    //
+    // The aggregate connection count check in generate_intermesh_connectivity can pass even when an
+    // individual mesh boundary resolved zero routers (e.g. every candidate cable was dropped by a
+    // Z/non-Z direction mismatch). Fail here at control-plane init instead of surfacing later in a
+    // downstream consumer (e.g. generate_blitz_decode_pipeline).
+    auto num_resolved_between = [this](uint32_t src_mesh, uint32_t dst_mesh) -> std::size_t {
+        auto src_it = intermesh_exit_peer_fabric_node_id_pairs_.find(MeshId(src_mesh));
+        if (src_it == intermesh_exit_peer_fabric_node_id_pairs_.end()) {
+            return 0;
+        }
+        auto dst_it = src_it->second.find(MeshId(dst_mesh));
+        return dst_it == src_it->second.end() ? 0 : dst_it->second.size();
+    };
+    const auto& requested_intermesh_ports = this->mesh_graph_->get_requested_intermesh_ports();
+    if (!requested_intermesh_ports.empty()) {
+        // Strict mode (device-level MGD): exact channel count per mesh pair.
+        for (const auto& [src_mesh, dst_to_ports] : requested_intermesh_ports) {
+            for (const auto& [dst_mesh, port_specs] : dst_to_ports) {
+                std::size_t requested = 0;
+                for (const auto& port_spec : port_specs) {
+                    requested += std::get<2>(port_spec);
                 }
-                const std::string msg = fmt::format(
-                    "Requested {} channels between {} and {}, but only have {} physical links. "
-                    "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
-                    "the physical Z-link capacity (e.g. 4 for torus wrap-around). "
-                    "generate_rank_bindings does not yet validate Z vs non-Z port capacity. "
-                    "Available port directions: {}.",
-                    num_channels,
+                const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
+                TT_FATAL(
+                    resolved == requested,
+                    "Inter-mesh routing validation failed (strict): the Mesh Graph Descriptor requests {} "
+                    "connection(s) between mesh {} and mesh {}, but {} were resolved during control plane "
+                    "initialization. Every requested inter-mesh connection must resolve routers on both ends.",
+                    requested,
                     src_mesh,
                     dst_mesh,
-                    ports.size(),
-                    port_directions_str);
-                if (inter_mesh_relaxed) {
-                    log_warning(
-                        tt::LogFabric, "Inter-mesh channel request exceeds physical links (policy relaxed): {}", msg);
-                } else {
-                    TT_THROW("{}", msg);
+                    resolved);
+            }
+        }
+    } else {
+        // Relaxed mode (graph-level MGD): at least one connection per mesh pair; warn or throw when
+        // fewer channels resolve than requested.
+        const bool inter_mesh_relaxed = this->mesh_graph_->is_inter_mesh_policy_relaxed();
+        for (const auto& [src_mesh, dst_to_channels] : this->mesh_graph_->get_requested_intermesh_connections()) {
+            for (const auto& [dst_mesh, requested_channels] : dst_to_channels) {
+                const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
+                if (resolved == 0) {
+                    TT_THROW(
+                        "Inter-mesh routing validation failed (relaxed): the Mesh Graph Descriptor requests a "
+                        "connection ({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved "
+                        "during control plane initialization (all candidate cables were dropped, e.g. by a Z/non-Z "
+                        "direction mismatch). Every requested inter-mesh connection must resolve at least one router.",
+                        requested_channels,
+                        src_mesh,
+                        dst_mesh);
+                }
+                if (requested_channels > resolved) {
+                    const std::string msg = fmt::format(
+                        "Requested {} channels between {} and {}, but only {} were resolved. "
+                        "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
+                        "the physical link capacity (e.g. 4 for torus wrap-around). "
+                        "Pairing may also drop links due to Z/non-Z direction mismatches.",
+                        requested_channels,
+                        src_mesh,
+                        dst_mesh,
+                        resolved);
+                    if (inter_mesh_relaxed) {
+                        log_warning(
+                            tt::LogFabric,
+                            "Inter-mesh channel request exceeds resolved links (policy relaxed): {}",
+                            msg);
+                    } else {
+                        TT_THROW("{}", msg);
+                    }
                 }
             }
         }
@@ -3350,7 +3390,9 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
     const auto& requested_intermesh_ports = mesh_graph.get_requested_intermesh_ports();
     const auto& mesh_edge_ports_to_chip_id = mesh_graph.get_mesh_edge_ports_to_chip_id();
     const bool strict_intermesh_port_binding = !requested_intermesh_ports.empty();
-    validate_requested_intermesh_connections(requested_intermesh_connections, port_descriptors);
+
+    // Set TT_INTERMESH_DEBUG=1 to trace, per boundary and pass, why cables were reserved/filled/dropped.
+    const bool intermesh_debug = std::getenv("TT_INTERMESH_DEBUG") != nullptr;
 
     // Per-pair state, persisted across all (src_mesh, dest_mesh) iterations.
     std::set<std::pair<uint32_t, uint32_t>> processed_neighbor_pair_keys;  // skip when reverse (dst, src) is done
@@ -3415,11 +3457,28 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         return to_port;
     };
 
+    // Process (src_mesh, dst_mesh) boundaries in a deterministic, host-independent order. port_descriptors is
+    // an unordered_map whose iteration order depends on host-dependent insertion order, and the greedy
+    // shared-port allocation below is order-sensitive -- iterating unsorted made which boundary strands
+    // depend on the physical host.
+    std::vector<std::pair<MeshId, MeshId>> ordered_pairs;
     for (const auto& [src_mesh, dest_mesh_to_proposals] : port_descriptors) {
-        for (const auto& [dst_mesh, src_side_proposals] : dest_mesh_to_proposals) {
+        for (const auto& [dst_mesh, _proposals] : dest_mesh_to_proposals) {
+            ordered_pairs.emplace_back(src_mesh, dst_mesh);
+        }
+    }
+    std::sort(ordered_pairs.begin(), ordered_pairs.end(), [](const auto& a, const auto& b) {
+        if (*a.first != *b.first) {
+            return *a.first < *b.first;
+        }
+        return *a.second < *b.second;
+    });
+    for (const auto& [src_mesh, dst_mesh] : ordered_pairs) {
+        {
             if (processed_neighbor_pair_keys.contains({*dst_mesh, *src_mesh})) {
                 continue;  // Reverse pair already processed.
             }
+            const auto& src_side_proposals = port_descriptors.at(src_mesh).at(dst_mesh);
 
             // Quotas: strict mode per src exit node; relaxed mode total inter-mesh channel count.
             std::unordered_map<FabricNodeId, uint32_t> requested_ports_for_src_node;
@@ -3441,6 +3500,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
             for (const auto& dst_proposal : port_descriptors.at(dst_mesh).at(src_mesh)) {
                 dst_port_id_by_cable_hash.emplace(dst_proposal.connection_hash, dst_proposal.port_id);
             }
+            std::size_t dbg_hash_match = 0;  // diagnostics for TT_INTERMESH_DEBUG
 
             for (const auto& src_proposal : src_side_proposals) {
                 FabricNodeId src_exit_node(src_mesh, chip_id_for_port(*src_mesh, src_proposal.port_id));
@@ -3456,11 +3516,21 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                 if (dst_match == dst_port_id_by_cable_hash.end()) {
                     continue;  // No matching cable on the destination host for this hash.
                 }
+                dbg_hash_match++;
 
                 port_id_t src_port_id = src_proposal.port_id;
                 port_id_t dst_port_id = dst_match->second;
                 const bool src_is_z = (src_port_id.first == RoutingDirection::Z);
                 const bool dst_is_z = (dst_port_id.first == RoutingDirection::Z);
+
+                // Bi-directional entries share connection_hash (PSD cable key) for downstream mapping.
+                auto append_annotated_pair =
+                    [&](uint32_t from_mesh, port_id_t from_port, uint32_t to_mesh, port_id_t to_port) {
+                        annotated_intermesh.emplace_back(
+                            std::pair<uint32_t, port_id_t>{from_mesh, from_port},
+                            std::pair<uint32_t, port_id_t>{to_mesh, to_port},
+                            src_proposal.connection_hash);
+                    };
 
                 // Reconcile Z vs NESW: demote Z to NESW when allowed; else promote NESW to Z; else drop.
                 if (src_is_z != dst_is_z) {
@@ -3517,18 +3587,22 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
                 record_z_port_commit(*src_mesh, src_port_id, *dst_mesh);
                 record_z_port_commit(*dst_mesh, dst_port_id, *src_mesh);
 
-                // Bi-directional entries share connection_hash (PSD cable key) for downstream mapping.
-                auto append_annotated_pair =
-                    [&](uint32_t from_mesh, port_id_t from_port, uint32_t to_mesh, port_id_t to_port) {
-                        annotated_intermesh.emplace_back(
-                            std::pair<uint32_t, port_id_t>{from_mesh, from_port},
-                            std::pair<uint32_t, port_id_t>{to_mesh, to_port},
-                            src_proposal.connection_hash);
-                    };
                 append_annotated_pair(*src_mesh, src_port_id, *dst_mesh, dst_port_id);
                 append_annotated_pair(*dst_mesh, dst_port_id, *src_mesh, src_port_id);
                 assigned_cable_count++;
                 assigned_ports_for_src_node[src_exit_node]++;
+            }
+            if (intermesh_debug) {
+                log_warning(
+                    tt::LogFabric,
+                    "[intermesh-dbg] M{}->M{}: src_props={} dst_props={} hash_match={} assigned={} requested={}",
+                    *src_mesh,
+                    *dst_mesh,
+                    src_side_proposals.size(),
+                    port_descriptors.at(dst_mesh).at(src_mesh).size(),
+                    dbg_hash_match,
+                    assigned_cable_count,
+                    strict_intermesh_port_binding ? 0 : requested_cable_count);
             }
             processed_neighbor_pair_keys.insert({*src_mesh, *dst_mesh});
         }

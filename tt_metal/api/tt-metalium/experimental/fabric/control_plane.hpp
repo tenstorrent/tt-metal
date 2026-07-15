@@ -521,10 +521,8 @@ private:
     // Generate intermesh connections for the local host.
     AnnotatedIntermeshConnections generate_intermesh_connections_on_local_host();
 
-    // Validate that the intermesh connections requested in the MGD can be mapped to physical links.
-    void validate_requested_intermesh_connections(
-        const RequestedIntermeshConnections& requested_intermesh_connections,
-        const PortDescriptorTable& port_descriptors);
+    // Validate intermesh connections requested in the MGD against resolved exit/peer router pairs.
+    void validate_requested_intermesh_connections() const;
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;

@@ -533,6 +533,63 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     }
 }
 
+bool compare_intermesh_port_assignment_files(
+    const std::filesystem::path& generated_file, const std::filesystem::path& golden_file) {
+    if (!std::filesystem::exists(generated_file) || !std::filesystem::exists(golden_file)) {
+        return false;
+    }
+    try {
+        // Both files are pre-sorted and host-independent, so a canonical YAML re-emit + string compare is
+        // sufficient (and robust to insignificant whitespace differences).
+        YAML::Emitter gen_emitter;
+        gen_emitter << YAML::LoadFile(generated_file.string());
+        YAML::Emitter gold_emitter;
+        gold_emitter << YAML::LoadFile(golden_file.string());
+        return std::string(gen_emitter.c_str()) == std::string(gold_emitter.c_str());
+    } catch (const std::exception& e) {
+        log_error(tt::LogTest, "Failed to compare inter-mesh port assignment files: {}", e.what());
+        return false;
+    }
+}
+
+void check_intermesh_port_assignment_against_golden(const std::string& golden_name) {
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    // Only compare in mock tests (real-device port assignment is hardware-specific).
+    if (!rtoptions.get_mock_enabled()) {
+        return;
+    }
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+    // The inter-mesh port assignment file is per-rank; the golden is captured for rank 0 only.
+    if (rank != 0) {
+        return;
+    }
+
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path generated_file =
+        root_dir / "generated" / "fabric" /
+        ("intermesh_port_assignment_rank_1_of_" + std::to_string(world_size) + ".yaml");
+    std::filesystem::path golden_file =
+        root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files" / (golden_name + ".yaml");
+
+    if (!std::filesystem::exists(generated_file)) {
+        FAIL() << "Generated inter-mesh port assignment file does not exist: " << generated_file.string()
+               << ". ControlPlane init should have created it.";
+    }
+    if (!std::filesystem::exists(golden_file)) {
+        FAIL() << "Golden inter-mesh port assignment file does not exist: " << golden_file.string()
+               << ". See tests/tt_metal/tt_fabric/golden_mapping_files/README.md.";
+    }
+    bool comparison_result = compare_intermesh_port_assignment_files(generated_file, golden_file);
+    EXPECT_TRUE(comparison_result) << "Inter-mesh port assignment mismatch vs golden " << golden_name
+                                   << ". This usually means the port-determination result changed (or became "
+                                      "host-dependent).";
+    if (!comparison_result) {
+        FAIL() << "Inter-mesh port assignment mismatch detected (golden: " << golden_name << ").";
+    }
+}
+
 namespace {
 
 // Host rank for this MPI process as set by tt-run via TT_MESH_HOST_RANK (rank bindings YAML).

@@ -1,0 +1,3 @@
+intermesh_port_assignment:
+  M0->M1: [D4ch8(W)>M1D0ch8, D4ch9(W)>M1D0ch9, D5ch8(E)>M1D2ch8, D5ch9(E)>M1D2ch9, D6ch8(S)>M1D1ch8, D6ch9(S)>M1D1ch9, D7ch8(E)>M1D3ch8, D7ch9(E)>M1D3ch9]
+  M0->M79: [D0ch4(W)>M79D3ch2, D0ch5(W)>M79D3ch3, D2ch4(Z)>M79D2ch2, D2ch5(Z)>M79D2ch3, D4ch4(Z)>M79D0ch2, D4ch5(Z)>M79D0ch3, D6ch4(W)>M79D1ch2, D6ch5(W)>M79D1ch3]
