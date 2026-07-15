@@ -50,6 +50,7 @@ class _LlamaSpec:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0
+    embedding_parallel: ttml.models.EmbeddingParallelType = ttml.models.EmbeddingParallelType.FeatureParallel
 
 
 @dataclass
@@ -158,6 +159,8 @@ def _parse_llama(tc: dict) -> _LlamaSpec:
         spec.high_freq_factor = rope.get("high_freq_factor", spec.high_freq_factor)
         spec.low_freq_factor = rope.get("low_freq_factor", spec.low_freq_factor)
         spec.original_context_length = rope.get("original_context_length", spec.original_context_length)
+    if "embedding_parallel" in tc:
+        spec.embedding_parallel = ttml.models.EmbeddingParallelType.from_string(tc["embedding_parallel"])
     return spec
 
 
@@ -189,6 +192,7 @@ def _build_llama(cfg: ModelConfig, use_tp: bool) -> Model:
                 original_context_length=spec.original_context_length,
             ),
             use_tp=use_tp,
+            embedding_parallel=spec.embedding_parallel,
         )
     )
 
