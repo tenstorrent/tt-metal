@@ -150,24 +150,11 @@ behave like the Bias counter.
 
 #include <cstdint>
 
+#include "ckernel_trisc_id.h" // ckernel::TRISC_ID (compile-time thread id), used as the default addrmod thread
 #include "tensix.h"
-
-// The compute thread this kernel is compiled for. On Quasar every thread's addrmods live in one config
-// region indexed by thread id, so addr_mod_t::set() must know its own thread. This is the single source
-// of truth for the thread id (0=unpack, 1=math, 2=pack, 3=isolate-SFPU), replacing the per-namespace
-// TRISC_ID constants that used to live in c{unpack,math,pack}_common.h. It is derived from the
-// -DCOMPILE_FOR_TRISC=<n> the build already bakes into every compute compilation (metal:
-// llrt/hal/tt-2xx/hal_2xx_common.cpp; tt-llk tests: test_config.py) -- a compiler-provided macro, so it
-// needs no include and forms no cycle. ckernel_addrmod.h is only ever compiled in compute (trisc)
-// translation units, so the guard below never fires on data-movement/BRISC/NCRISC builds.
-#ifndef COMPILE_FOR_TRISC
-#error "COMPILE_FOR_TRISC must be defined for compute (trisc) builds; the addrmod thread id derives from it"
-#endif
 
 namespace ckernel
 {
-
-constexpr std::uint32_t TRISC_ID = COMPILE_FOR_TRISC;
 
 constexpr std::uint8_t ADDR_MOD_0 = 0;
 constexpr std::uint8_t ADDR_MOD_1 = 1;
