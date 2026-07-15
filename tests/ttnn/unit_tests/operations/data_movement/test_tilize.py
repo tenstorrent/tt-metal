@@ -367,7 +367,7 @@ def test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row(
     "device_params",
     [
         {
-            "trace_region_size": 1671168,
+            "trace_region_size": 8 * 1024 * 1024,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
