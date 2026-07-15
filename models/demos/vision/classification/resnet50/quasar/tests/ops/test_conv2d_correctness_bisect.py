@@ -170,25 +170,25 @@ def _report_error_pattern(golden, tt, oh, ow, c):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "math_fidelity",
-    [
-        pytest.param(ttnn.MathFidelity.LoFi, id="LoFi"),
-        pytest.param(ttnn.MathFidelity.HiFi4, id="HiFi4"),  # rules out bf16-LoFi precision as the cause
-    ],
+    [pytest.param(ttnn.MathFidelity.LoFi, id="LoFi")],  # fidelity-independent (LoFi==HiFi4 to 6 digits), 1 is enough
 )
 @pytest.mark.parametrize(
     "kernel, padding, full_inner_dim",
     [
-        # conv_3x3_p0: halo gather + tilize path (conv_bmm_tilize). full_inner_dim True/False and p0/p1
-        # were already shown identical/near-identical at ~0.85, so full_inner_dim and halo zero-pad are
-        # NOT the cause; and WH passes this at BOTH LoFi and HiFi4, so ~0.85 on Quasar is a real bug.
-        # (The mm_1x1 base-matmul variant was removed: it uses the STANDALONE bmm_large_block matmul --
-        # not the conv's matmul -- and its factory pins in0_sender + in1_sender_writer both to NOC_0,
-        # which FATALs on WH and HANGS the device on Quasar, wedging the whole run. Tracked separately.)
-        pytest.param((3, 3), 0, False, id="conv_3x3_p0"),
+        # WINDOW-DIMENSION discriminator (all halo+tilize / conv_bmm_tilize). sorted-values PCC ~= overall
+        # PCC (0.8547) proved the VALUES are wrong (not misplaced) => the K-reduction / im2col gather is
+        # dropping or mis-reading part of the window, uniformly. ~0.85 ~= losing ~1 of 3 window-rows.
+        #   - 1x3 wrong, 3x1 right  => WIDTH-tap gather bug (within-stick / same shard row)
+        #   - 3x1 wrong, 1x3 right  => HEIGHT-tap gather bug (cross-row / halo-neighbour reads)
+        #   - both wrong ~= 3x3      => general reduction (tilize / matmul_block K-accumulate / weight K-order)
+        #   - 2x2 datapoint helps separate "per extra tap" scaling.
+        pytest.param((3, 3), 0, False, id="k3x3"),
+        pytest.param((3, 1), 0, False, id="k3x1_height"),
+        pytest.param((1, 3), 0, False, id="k1x3_width"),
+        pytest.param((2, 2), 0, False, id="k2x2"),
     ],
 )
 def test_conv2d_correctness_bisect(mesh_device, kernel, padding, full_inner_dim, math_fidelity):
-    # WH: conv_3x3_p0 PASSES at LoFi and HiFi4. Quasar (prior LoFi): 0.8547. So a real Quasar conv bug.
-    # The _report_error_pattern output localizes it: boundary-row PCC dips => halo gather; uniform =>
-    # tilize / matmul_block / pack; specific channels => weight-column / pack addressing.
+    # WH passes all of these. Quasar 3x3 = 0.8547, values genuinely wrong (sorted-PCC 0.8547 too), uniform,
+    # fidelity-independent. The kernel-shape PCCs localize which window dimension's taps are corrupted.
     _run(mesh_device, kernel=kernel, padding=padding, full_inner_dim=full_inner_dim, math_fidelity=math_fidelity)
