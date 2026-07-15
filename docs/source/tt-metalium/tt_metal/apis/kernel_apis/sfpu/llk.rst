@@ -258,6 +258,8 @@ available:
   * SM32 - (vSMag), 32-bit sign-magnitude integer
   * SM16 - (vSMag16), 16-bit sign-magnitude integer
   * M32 - (vMag), 32-bit magnitude only integer
+  * LO16 - zero extend low 16 bits
+  * HI16 - high 16 bits (store will transfer 32-bits that are uint16_t-swapped)
 
 On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
@@ -327,6 +329,31 @@ the ``RoundMode`` operand is optional, and the following are provided:
   * ``NearestStochastic`` - round to nearest, ties round stochastically (default)
   * ``Zero`` - round to zero (not Wormhole)
   * ``Nearest`` - Alias for ``NearestAway``, or ``NearestEven``
+
+Not all conversions are supported (columns are the source type, rows
+are the result type):
+
+| Result    | vFloat | vInt | vUInt | vSMag | vMag |
+|-----------|:------:|:----:|:-----:|:-----:|:----:|
+| vFloat    |   -    | YES  |       | YES   | YES  |
+| vInt      |  QSR   |  -   |       | YES   | YES  |
+| vUInt     |        |      |       |       |      |
+| vSMag     |  QSR   | YES  |       |   -   | YES  |
+| vMag      |        |      |       |       |  -   |
+| vFloat16a |  YES   | YES  |       | YES   | YES  |
+| vFloat16b |  YES   | YES  |       | YES   | YES  |
+| vUInt16   |  YES   |      |       |       |      |
+| vUInt8    |  YES   |      |       |       |      |
+| vSMag16   |  YES   |      |       |       |      |
+| vSMag8    |  YES   |      |       |       |      |
+
+The restricted types (``vFloat16a``, ``vSMag16``, etc can be converted
+from, the same as their unrestricted variant (``vFloat``, ``vSMag`` etc).
+
+Note: The older ``int32_to_float`` and vice verse actually converted
+between sign-magnitude and float representations. Thus code using them
+should now use a ``vSMag`` source or result type, (or it was malfunctioning).
+
 
 Operators
 ^^^^^^^^^
@@ -450,6 +477,30 @@ may be ``All`` or ``IgnoreSign`` (treats bit 31 as zero).
 
 .. code-block:: c++
 
+   impl_::FloatInt round (vFloat v);
+
+Round v to nearest integer, ties round to nearest even. This returns a
+tuple that may be implicitly converted to either ``vFloat`` or
+``vInt``, if you want exactly one result object.  Or it may be used in
+a structured binding, if you want both:
+
+.. code-block:: c++
+
+   auto [f, i] = round (v);
+   vFloat f = round (v);
+   vInt i = round (v);
+
+.. code-block:: c++
+
+   vFloat ldexp (vFloat in, int scale, LdexpMode = LdexpMode::Correct);
+   vFloat ldexp (vFloat in, vInt scale, LdexpMode = LdexpMode::Correct);
+
+Scale ``in`` by 2^``scale``. You may select an ``LdexpMode::Fast``,
+which for the vector case can be slightly faster at the expense of not
+dealing with exponent over, or underflow.
+
+.. code-block:: c++
+
     vUInt shft(vUInt v, int amt, ShiftMode = ShiftMode::Logical);
     vUInt shft(vUInt v, vInt amt, ShiftMode = ShiftMode::Logical);
     vInt shft(vInt v, int amt, ShiftMode = ShiftMode::Arithmetic);
@@ -486,6 +537,14 @@ available on Wormhole.
 
 .. code-block:: c++
 
+   vFloat polynomial (vFloat x, T0 Coeff0, T1 Coeff1, T2 Coeff2, ...);
+
+Compute the polynomial expansion ``Coeff0 + Coeff1 * x + Coeff2 * x^2
++ ...``.  Coefficients may be any ``vFloat`` type, or scalar ``float``,
+they need not be the same type.
+
+.. code-block:: c++
+
     void swap(vType &a, vType &b);
 
 Swaps the values of ``a`` and ``b``.  Note that this uses the
@@ -495,11 +554,11 @@ Swaps the values of ``a`` and ``b``.  Note that this uses the
 .. code-block:: c++
 
     {vFloat,vSMag} min({vFloat,vSMag} a, {vFloat,vSmag} b);
-    vFloat min(vFloat a, float b);
+    {vFloat,vUInt} min({vFloat,vUInt} a, {float,unsigned} b);
     {vFloat,vSMag} max({vFloat,vSMag} a, {vFloat,vSmag} b);
-    vFloat max(vFloat a, float b);
+    {vFloat,vUInt} max({vFloat,vUInt} a, {float,unsigned} b);
     {vFloat,vSMag} clamp({vFloat,vSMag} a, {vFloat,vSmag} lower, {vFloat,vSmag} upper);
-    vFloat clamp(vFloat a, float lower, float upper);
+    {vFloat,vUInt} clamp({vFloat,vUInt} a, {float,unsigned} lower, {float,unsigned} upper);
     vFloat symmetric_clamp(vFloat a, float bound);
 
 Return the minimum, maximum or clamped value.  ``symmetric_clamp``
