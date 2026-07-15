@@ -109,14 +109,13 @@ struct ComputeGen1Config {
     //  - This is the fastest option on Wormhole and Blackhole.
     //
     // UnpackToDest should be used (on Gen1 architectures) only if:
-    //  - The data format has 32-bit precision
+    //  - The data format has 32-bit precision, AND enable_32_bit_dest is set to true
     //  - You want to preserve the full precision
     //  - The data will be consumed by the SFPU (not the FPU)
-    //  - You have set enable_32_bit_dest to true
     //
-    // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is usually assumed.
+    // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is assumed.
     // However, if enable_32_bit_dest is true and the DFB carries a 32-bit format, you must
-    // EXPLICITLY specify an UnpackMode for that DFB. (Enforced by ProgramSpec validation.)
+    // EXPLICITLY specify an UnpackMode for that DFB. (Enforced by validation checks.)
     //
     ComputeUnpackModes unpack_modes;
 };
