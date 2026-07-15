@@ -121,7 +121,7 @@ static void run_dfb_size_override_test(
     const auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, workload * data_entry_size / sizeof(uint32_t));
 
-    using NodeRuntimeArgs = experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
+    const experimental::NodeCoord node{0, 0};
     uint32_t eff_entry_size = entry_size_spec;
     uint32_t eff_num_entries = num_entries_spec;
 
@@ -138,11 +138,11 @@ static void run_dfb_size_override_test(
 
         experimental::ProgramRunArgs run_params;
         experimental::ProgramRunArgs::KernelRunArgs producer_params{.kernel = PRODUCER};
-        producer_params.runtime_arg_values = {
-            NodeRuntimeArgs{experimental::NodeCoord{0, 0}, {{"chunk_offset", 0u}, {"entries_per_core", workload}}}};
+        producer_params.runtime_arg_values =
+            experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
         experimental::ProgramRunArgs::KernelRunArgs consumer_params{.kernel = CONSUMER};
-        consumer_params.runtime_arg_values = {
-            NodeRuntimeArgs{experimental::NodeCoord{0, 0}, {{"chunk_offset", 0u}, {"entries_per_core", workload}}}};
+        consumer_params.runtime_arg_values =
+            experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
         run_params.kernel_run_args = {producer_params, consumer_params};
         run_params.tensor_args = {
             {IN_TENSOR, experimental::TensorArgument{in_tensor}},
