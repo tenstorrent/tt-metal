@@ -23,12 +23,16 @@
  * @param full_ct_dim   Number of tiles in a full row of the input tensor.
  * @param block_ct_dim  Number of tiles per MOP invocation (defaults to 1).
  */
+template <bool unpack_to_dest = false>
 inline void llk_unpack_tilize_init(
     const std::uint32_t operand, const std::uint32_t full_ct_dim, const std::uint32_t block_ct_dim = 1) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(operand_id, full_ct_dim, block_ct_dim, tensor_shape);
+    // unpack_to_dest routes the tilized tile straight into DEST (UNP_DEST) instead of SrcA (UNP_A); the
+    // internal init programs the same UNPACK_TILIZE strides for both (see llk_unpack_tilize.h:94).
+    constexpr std::uint32_t UNP_SEL = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
+    _llk_unpack_tilize_init_<UNP_SEL, DST_ACCUM_MODE>(operand_id, full_ct_dim, block_ct_dim, tensor_shape);
 }
 
 /**
@@ -41,6 +45,7 @@ inline void llk_unpack_tilize_init(
  * @param block_c_tiles    Number of tiles in one block row (must match BLOCK_CT_DIM from init).
  * @param input_tile_index Starting tile index (encodes row offset via block_c_tiles stride).
  */
+template <bool unpack_to_dest = false>
 inline void llk_unpack_tilize_block(
     const std::uint32_t operand, const std::uint32_t block_c_tiles, const std::uint32_t input_tile_index = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -55,10 +60,34 @@ inline void llk_unpack_tilize_block(
     // BLOCK_CT_DIM is currently hardcoded to 1 in tilize_init (see compute/tilize.h), so the MOP
     // emits one SrcA dvalid per invocation. Loop to match the per-tile math consumption same
     // structural pattern as BH/WH llk_unpack_tilize_block
+    // NB: with unpack_to_dest the single-tile UNP_DEST unpack lands every tile in DEST slot 0, so this
+    // up-front block-unpack is only correct for UNP_A (SrcA). The unpack_to_dest path uses the interleaved
+    // per-tile llk_unpack_tilize_to_dest below instead.
+    constexpr std::uint32_t UNP_SEL = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     const std::uint32_t l1_base_idx = (rd_entry_idx + input_tile_index) * faces_per_entry;
     for (std::uint32_t t = 0; t < block_c_tiles; t++) {
-        _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + t);
+        _llk_unpack_tilize_<UNP_SEL>(l1_base_idx + t);
     }
+}
+
+/**
+ * @brief Tilizes a SINGLE tile from L1 row-major layout directly into DEST (UNP_DEST) for the
+ *        unpack-to-dest tilize path. Matches the per-tile L1 face index used by llk_unpack_tilize_block
+ *        (l1_base_idx + t). The tilized tile lands in DEST slot 0 (the UNP_DEST single-tile primitive
+ *        resets the DEST counter each call), so the caller must pack it before the next call overwrites it.
+ *
+ * @param operand          The input dataflow buffer identifier.
+ * @param input_tile_index Block-start tile index (encodes the row offset via block_c_tiles stride).
+ * @param t                Tile position within the block row.
+ */
+inline void llk_unpack_tilize_to_dest(
+    const std::uint32_t operand, const std::uint32_t input_tile_index, const std::uint32_t t) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
+    const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
+    const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
+    _llk_unpack_tilize_<p_unpacr::UNP_DEST>((rd_entry_idx + input_tile_index) * faces_per_entry + t);
 }
 
 /**

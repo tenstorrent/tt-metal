@@ -68,8 +68,21 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // TODO(SK) #42757: Quasar unpack tilize could issue block_ct_dim tiles per MOP invocation, but scheduling
     // block_ct_dim against full_ct_dim would need a compute-API-level workaround since BH/WH operate
     // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
+#ifdef QSR_TILIZE_UNPACK_TO_DEST
+    // UnpackToDestEn bypass (tt-metal #49445): route the tilize unpacker into DEST (UNP_DEST) so the
+    // per-tile MATH A2D datacopy issues NO MOP (sync-only forwarder) — sidestepping the Quasar tilize
+    // datacopy DEST-section-release fault (ERROR_TRISC1 0x19). The math init is skipped for unpack_to_dest
+    // (llk_math_unary_datacopy_api.h:47). Enabled only for the conv Program-A tilize (factory-injected define).
+    UNPACK((llk_unpack_tilize_init<true /*unpack_to_dest*/>(icb, block /*full_ct_dim*/)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          true /*unpack_to_dest*/>(icb)));
+#else
     UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+#endif
 #endif
 }
 
@@ -247,6 +260,25 @@ ALWI void tilize_block(
         (uint32_t)get_operand_num_faces(icb),
         (uint32_t)get_operand_face_r_dim(icb)));
 #endif
+#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
+    // UnpackToDestEn bypass (tt-metal #49445): the unpacker tilizes each tile DIRECTLY into DEST (UNP_DEST).
+    // Per the Quasar UNP_DEST contract (llk_unpack_tilize.h:36,45 — "data goes directly to DEST WITHOUT
+    // involving the math thread; the section_done signal handles sync"), this uses the UNPACK<->PACK
+    // DEST-dvalid section-done handshake, NOT the MATH semaphore. So MATH is bypassed entirely and the
+    // faulting per-tile A2D datacopy MOP (ERROR_TRISC1 0x19, Quasar DEST-section leak) is never issued.
+    // The single-tile UNP_DEST unpack lands each tile in DEST slot 0, so unpack+pack INTERLEAVE per tile
+    // (pack drains slot 0 before the next tile overwrites it) — unlike the UNP_A path's up-front block-unpack.
+    for (uint32_t t = 0; t < block; t++) {
+        UNPACK((llk_unpack_tilize_to_dest(icb, input_tile_index, t)));   // tile t -> DEST slot 0
+        UNPACK((llk_unpack_dest_dvalid_section_done<DST_SYNC_MODE>()));  // mark DEST section valid for PACK
+        PACK(DPRINT("TZPK t={} l1idx={}\n", (uint32_t)t, (uint32_t)(t + output_tile_index)));
+        PACK((llk_pack<true /*out_of_order*/>(
+            0 /*tile index*/, ocb, t + output_tile_index)));                         // PACR waits on DEST dvalid
+        PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));  // clear dvalid, free DEST bank
+    }
+    return;
+#endif
+
     UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
 
     for (uint32_t t = 0; t < block; t++) {

@@ -86,6 +86,18 @@ inline bool should_reconfig_src_reg_df(std::uint32_t old_operand, std::uint32_t 
 }
 
 /**
+ * @brief Signals that the unpacker has finished writing a DEST section in the unpack-to-dest (UNP_DEST) path,
+ *        making it available to PACK. Used when the unpacker writes DEST directly and the math thread is
+ *        bypassed (no MATH<->PACK semaphore); pairs with llk_pack_dest_dvalid_section_done on T2.
+ *
+ * @tparam DST: Destination register buffering mode, values = <DstSync::SyncHalf/DstSync::SyncFull>
+ */
+template <DstSync DST>
+inline void llk_unpack_dest_dvalid_section_done() {
+    _llk_unpack_dest_dvalid_section_done_<DST>();
+}
+
+/**
  * Reprograms unpacker THCON OUT_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
  */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>
