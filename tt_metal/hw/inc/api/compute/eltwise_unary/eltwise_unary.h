@@ -15,7 +15,18 @@
 
 namespace ckernel {
 
-ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+// Legacy combined hardware + pipeline init for eltwise-unary / SFPU ops. The current programming
+// model is: compute_kernel_hw_startup(icb, ocb) once at the start of MAIN, then copy_init(icb).
+//
+// NOTE: the body is kept verbatim (full one-time HW config + the dual SrcA/Pack state_configure)
+// instead of forwarding to compute_kernel_hw_startup + copy_init. Old callers invoke this mid-kernel
+// as an op-to-op reconfig and rely on the full HW configuration; compute_kernel_hw_startup is unsafe
+// mid-kernel and records no reconfig diff. Keeping the body verbatim preserves both the SrcA+Pack
+// reconfig diff the compute-kernel sentinel asserts and the HW config old callers depend on.
+[[deprecated(
+    "Use compute_kernel_hw_startup(icb, ocb) once at kernel start, then copy_init(icb). This will be removed after "
+    "15-09-2026.")]] ALWI void
+unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
@@ -50,7 +61,12 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
 #endif
 }
 
-ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+// Legacy SFPU init; forwards to unary_op_init_common. Superseded by
+// compute_kernel_hw_startup(icb, ocb) + copy_init(icb).
+[[deprecated(
+    "Use compute_kernel_hw_startup(icb, ocb) once at kernel start, then copy_init(icb). This will be removed after "
+    "15-09-2026.")]] ALWI void
+init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     unary_op_init_common(icb, ocb, call_line);
 }
 
