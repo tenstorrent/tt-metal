@@ -220,6 +220,21 @@ tests:
   40:
     name: "DRAM Packet Sizes 2.0"
 
+  41:
+    name: "DRAM Directed Ideal 2.0"
+
+  42:
+    name: "DRAM Core Locations 2.0"
+
+  43:
+    name: "DRAM Channels 2.0"
+
+  44:
+    name: "Loopback Packet Sizes 2.0"
+
+  45:
+    name: "Loopback Directed Ideal 2.0"
+
   50:
     name: "One to One Directed Ideal"
 
@@ -307,6 +322,30 @@ tests:
   87:
     name: "DRAM Sharded Read Transaction ID Directed Ideal"
 
+  90:
+    name: "One Packet Read Sizes 2.0"
+
+  91:
+    name: "One Packet Write Sizes 2.0"
+
+  92:
+    name: "One Packet Read Directed Ideal 2.0"
+
+  93:
+    name: "One Packet Write Directed Ideal 2.0"
+
+  94:
+    name: "DRAM Sharded Read Directed Ideal 2.0"
+
+  95:
+    name: "DRAM Sharded Read Tile Numbers 2.0"
+
+  96:
+    name: "DRAM Sharded Read Bank Numbers 2.0"
+
+  97:
+    name: "DRAM Sharded Read Transaction ID Directed Ideal 2.0"
+
   100:
     name: "Multicast Schemes (Loopback Enabled)"
 
@@ -391,6 +430,18 @@ tests:
     name: "Multi Interleaved 6x6 Write Sizes"
     bandwidth_mode: "combined"
 
+  128:
+    name: "Multi Interleaved Grid Sweep Sizes"
+    bandwidth_mode: "combined"
+
+  129:
+    name: "Multi Interleaved Read Grid Sweep Sizes"
+    bandwidth_mode: "combined"
+
+  130:
+    name: "Multi Interleaved Write Grid Sweep Sizes"
+    bandwidth_mode: "combined"
+
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
 
@@ -447,6 +498,24 @@ tests:
 
   159:
     name: "One from One Packet Sizes 2.0"
+
+  160:
+    name: "One to One Directed Ideal 2.0"
+
+  161:
+    name: "One from One Directed Ideal 2.0"
+
+  162:
+    name: "One from All Packet Sizes 2.0"
+
+  163:
+    name: "One from All Directed Ideal 2.0"
+
+  164:
+    name: "One from All Virtual Channels 2.0"
+
+  165:
+    name: "One from All Custom 2.0"
 
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
@@ -528,66 +597,137 @@ tests:
 
   309:
     name: "All to All Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_to_all"
 
   310:
-    name: "All from All Directed Ideal"
+    name: "All to All Directed Ideal 2.0"
 
   311:
+    name: "All to All 2x2 to 1x1 Directed Ideal 2.0"
+
+  312:
+    name: "All to All 4x4 to 1x1 Directed Ideal 2.0"
+
+  313:
+    name: "All to All 1x1 to 2x2 Directed Ideal 2.0"
+
+  314:
+    name: "All to All 1x1 to 4x4 Directed Ideal 2.0"
+
+  315:
+    name: "All to All 2x2 to 2x2 Directed Ideal 2.0"
+
+  316:
+    name: "All to All Grid Sweep Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_to_all"
+    bandwidth_mode: "combined"
+
+  320:
+    name: "All from All Directed Ideal"
+
+  321:
     name: "All from All Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
 
-  312:
+  322:
     name: "All from All 2x2 From 1x1 Directed Ideal"
 
-  313:
+  323:
     name: "All from All 4x4 From 1x1 Directed Ideal"
 
-  314:
+  324:
     name: "All from All 1x1 From 2x2 Directed Ideal"
 
-  315:
+  325:
     name: "All from All 1x1 From 4x4 Directed Ideal"
 
-  316:
+  326:
     name: "All from All 2x2 From 2x2 Directed Ideal"
 
-  317:
+  327:
     name: "All from All Virtual Channels"
 
-  318:
+  328:
     name: "All from All Custom"
 
-  319:
+  329:
+    name: "All from All Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
+
+  330:
+    name: "All from All Directed Ideal 2.0"
+
+  331:
+    name: "All from All 2x2 From 1x1 Directed Ideal 2.0"
+
+  332:
+    name: "All from All 4x4 From 1x1 Directed Ideal 2.0"
+
+  333:
+    name: "All from All 1x1 From 2x2 Directed Ideal 2.0"
+
+  334:
+    name: "All from All 1x1 From 4x4 Directed Ideal 2.0"
+
+  335:
+    name: "All from All 2x2 From 2x2 Directed Ideal 2.0"
+
+  336:
+    name: "All from All Grid Sweep Packet Sizes 2.0"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
+    bandwidth_mode: "combined"
+
+  340:
     name: "Atomic Semaphore Adjacent Bandwidth Sweep"
 
-  320:
+  341:
     name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
 
-  321:
+  342:
     name: "Single source Multicast Atomic Increment"
 
-  322:
+  343:
     name: "Multi source Multicast Atomic Increment"
 
-  323:
+  344:
     name: "Single source Multicast Atomic Increment - NOC 1"
 
-  324:
+  345:
     name: "Multi source Multicast Atomic Increment - NOC 1"
 
-  325:
+  346:
     name: "Multicast Atomic Larger Increment"
 
-  326:
+  347:
     name: "Multicast Atomic Larger Increment - NOC 1"
 
-  327:
-    name: "Single source Multicast Atomic Increment 2.0 API"
+  348:
+    name: "Single source Multicast Atomic Increment 2.0"
 
-  328:
-    name: "Multicast Atomic Larger Increment 2.0 API"
+  349:
+    name: "Multicast Atomic Larger Increment 2.0"
+
+  350:
+    name: "Multi source Multicast Atomic Increment 2.0"
+
+  351:
+    name: "Single source Multicast Atomic Increment - NOC 1 2.0"
+
+  352:
+    name: "Multi source Multicast Atomic Increment - NOC 1 2.0"
+
+  353:
+    name: "Multicast Atomic Larger Increment - NOC 1 2.0"
 
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
@@ -648,13 +788,23 @@ tests:
       Evaluates the performance impact of stateful versus stateless approaches under scenarios
       involving both identical and differing values and destinations.
 
+  502:
+    name: "DRAM Neighbour Directed Ideal"
+
   503:
     name: "Number of Pages Sweep for DRAM Closest Neighbour"
+    bandwidth_mode: "combined"
+
+  504:
+    name: "Number of Banks Sweep for DRAM Closest Neighbour"
     bandwidth_mode: "combined"
 
   505:
     name: "Number of Pages Sweep for Single Row DRAM"
     bandwidth_mode: "combined"
+
+  507:
+    name: "Inline Direct Write Multicast"
 
   508:
     name: "Number of Pages Sweep for DRAM One Hop"
@@ -705,6 +855,21 @@ tests:
       has an input and output port. We have a core that is sending and receiving data at the same time,
       with packets circulating around the torus. This does not happen in Read After Write tests because
       the read requests get stuck behind the larger write requests.
+
+  620:
+    name: "Transaction ID - Read After Write 2.0"
+
+  621:
+    name: "Transaction ID - Read After Write One Packet 2.0"
+
+  622:
+    name: "Transaction ID - Read After Write One Packet Stateful 2.0"
+
+  630:
+    name: "Transaction ID - Write After Read 2.0"
+
+  631:
+    name: "Transaction ID - Write After Read One Packet Stateful 2.0"
 
   700:
     name: "NOC API Latency - Unicast Write"

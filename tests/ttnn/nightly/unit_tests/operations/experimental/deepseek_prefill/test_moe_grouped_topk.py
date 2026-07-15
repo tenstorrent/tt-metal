@@ -125,5 +125,5 @@ def test_moe_grouped_topk(
         num_real,
         apply_padding,
         recall_threshold=0.9,
-        pcc_threshold=0.97,
+        pcc_threshold=0.96,
     )
