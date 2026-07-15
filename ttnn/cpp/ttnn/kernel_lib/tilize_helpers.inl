@@ -166,6 +166,10 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     // Construct DataflowBuffer objects for sync operations
     DataflowBuffer in_dfb(input_dfb);
     DataflowBuffer out_dfb(output_dfb);
+#ifdef ARCH_QUASAR  // DBG-LLK-NOCB: CB ops gated out below on Quasar; suppress unused-variable -Werror
+    (void)in_dfb;
+    (void)out_dfb;
+#endif
 
     // Upfront wait (when requested)
     if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
@@ -184,10 +188,14 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
 
         if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
+#ifndef ARCH_QUASAR  // DBG-LLK-NOCB: comment out CB flow-control on Quasar (0x19 debug)
             in_dfb.wait_front(input_pages);
+#endif
         }
 
+#ifndef ARCH_QUASAR  // DBG-LLK-NOCB
         out_dfb.reserve_back(block_width_tiles);
+#endif
 
         if constexpr (use_fast) {
 #ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
@@ -201,8 +209,10 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             tilize_block(input_dfb, block_width_tiles, output_dfb);
         }
 
+#ifndef ARCH_QUASAR  // DBG-LLK-NOCB: comment out CB flow-control on Quasar (0x19 debug)
         out_dfb.push_back(block_width_tiles);
         in_dfb.pop_front(input_pages);
+#endif
 
         if (asymmetric_dfb_pages) {
             pages_left -= input_pages;

@@ -119,7 +119,7 @@ void kernel_main() {
     // Split reader configuration
     if constexpr (split_reader_enabled) {
 #ifdef CONFIG_TENSOR_IN_DRAM
-        cb_reader_indices_obj.wait_front(1);
+        // DBG-LLK-NOCB cb_reader_indices_obj.wait_front(1);
 #endif
     }
 
@@ -189,7 +189,7 @@ void kernel_main() {
                 reader_idx = start_reader_idx;
 
                 if constexpr (!activation_reuse_enabled) {
-                    cb_act_second_obj.reserve_back(act_block_num_tiles);
+                    // DBG-LLK-NOCB cb_act_second_obj.reserve_back(act_block_num_tiles);
                     l1_write_addr_act = cb_act_second_obj.get_write_ptr();
                     read_sticks<
                         dilation_w,
@@ -200,7 +200,7 @@ void kernel_main() {
                         weight_size_w,
                         stride_w>(noc, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
                     noc.async_read_barrier();
-                    cb_act_second_obj.push_back(act_block_num_tiles);
+                    // DBG-LLK-NOCB cb_act_second_obj.push_back(act_block_num_tiles);
 
                     reader_offset += window_outer_offset;
                 } else {
@@ -241,7 +241,7 @@ void kernel_main() {
 #endif
 
             // Do weights read + mcast
-            cb_weight_obj.reserve_back(weight_block_num_tiles);
+            // DBG-LLK-NOCB cb_weight_obj.reserve_back(weight_block_num_tiles);
             if (bh == 0) {
                 uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset;
 
@@ -305,14 +305,14 @@ void kernel_main() {
                 weight_current_block_start_tile_id += weight_next_block_stride_h;
             }
 
-            cb_weight_obj.push_back(weight_block_num_tiles);
+            // DBG-LLK-NOCB cb_weight_obj.push_back(weight_block_num_tiles);
         }  // for num_blocks_weight_h
         weight_h_offset += weight_inner_block_stride_h;
 
 #ifdef FUSE_BIAS
         if constexpr (fuse_bias) {
             if (load_bias) {
-                cb_bias_obj.reserve_back(bias_ntiles);
+                // DBG-LLK-NOCB cb_bias_obj.reserve_back(bias_ntiles);
 
                 uint32_t bias_write_offset = 0;
                 uint32_t bias_block_size_bytes = 0;
@@ -363,7 +363,7 @@ void kernel_main() {
                     false);
 #endif
 
-                cb_bias_obj.push_back(bias_ntiles);
+                // DBG-LLK-NOCB cb_bias_obj.push_back(bias_ntiles);
                 load_bias = false;
             }
         }
