@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 
@@ -38,8 +39,8 @@ inline void gelu_init() {
     // 3.0 > x >= 2.0
     // lreg11_lo =  0.5402 (0x3852)
     // lreg14_lo = -0.1194 (0xAFA4)
-    _sfpu_load_config32_(0xB, 0x3800, 0x3852);
-    _sfpu_load_config32_(0xE, 0x7C00, 0xAFA4);
+    ckernel::math::_sfpu_load_config32_(0xB, 0x3800, 0x3852);
+    ckernel::math::_sfpu_load_config32_(0xE, 0x7C00, 0xAFA4);
 
     // 2.0 > x >= 1.5
     // lreg10_hi =  0.6099 (0x38E1)
@@ -47,8 +48,8 @@ inline void gelu_init() {
     // 1.5 > x >= 1.0
     // lreg10_lo =  0.6189 (0x38F3)
     // lreg13_lo = -0.2797 (0xB479)
-    _sfpu_load_config32_(0xA, 0x38E1, 0x38F3);
-    _sfpu_load_config32_(0xD, 0xB437, 0xB479);
+    ckernel::math::_sfpu_load_config32_(0xA, 0x38E1, 0x38F3);
+    ckernel::math::_sfpu_load_config32_(0xD, 0xB437, 0xB479);
 
     // 1.0 > x >= 0.5
     // lreg9_hi  =  0.4939 (0x37E7)
@@ -56,8 +57,8 @@ inline void gelu_init() {
     // 0.5 > x >= 0.0
     // lreg9_lo  =  0.1928 (0x322B)
     // lreg12_lo = -0.0150 (0xA3AE)
-    _sfpu_load_config32_(0x9, 0x37E7, 0x322B);
-    _sfpu_load_config32_(0xC, 0xB122, 0xA3AE);
+    ckernel::math::_sfpu_load_config32_(0x9, 0x37E7, 0x322B);
+    ckernel::math::_sfpu_load_config32_(0xC, 0xB122, 0xA3AE);
 }
 
 template <bool APPROXIMATION_MODE = true, int ITERATIONS = SFPU_ITERATIONS>
