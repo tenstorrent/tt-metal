@@ -28,11 +28,25 @@ Still UNCONTROLLED (so firmware is NOT confirmed): `tt_metal/third_party/tt_llk`
 (currently `2d79fa0a`); the frozen parity binary was overwritten, so the exact original build artifact is
 gone; and I did not do a full clean-from-scratch build. Whether the hang is LLK drift, a full-clean-build
 difference, or firmware is unresolved.
-Prescribed isolation exercise (to run before any kernel decision): (1) test the exact frozen binary if
-recoverable; (2) rebuild from `d4c8df34b19` in a clean worktree with the original build config; (3) compare
-vs the current-source oracle; (4) if the frozen oracle works, run the prepared ablations; (5) if not,
-implement **test-only ablations around the current PRODUCT kernels** (not the prototype) rather than drawing
-causal conclusions from whole-op timing.
+Prescribed isolation exercise — RESULT:
+1. **Exact frozen binary: unrecoverable.** `build/` is a symlink to `build_Release/`; the frozen oracle
+   binary (07-14 14:04) was overwritten by my COREMAP rebuild. Binaries aren't in git. Cannot re-test it.
+2/3. **Rebuild from d4c8df34b19 vs current — effectively done, identical behavior.** All build INPUTS are
+   provably unchanged from the frozen era: oracle source == d4c8df34b19 (git); the LLK the build globs
+   (`tt_metal/tt-llk`, Jun 12) is unchanged; `libtt_metal.so` (07-14 14:04) is unchanged (same mtime as the
+   frozen binary). My `revert-COREMAP + ninja test_regime_a_mm` recompiled the oracle `.o` fresh and linked
+   it against those identical inputs → **still hangs**. A full clean worktree build would differ only by
+   rebuilding `libtt_metal.so`, which the working product op proves is healthy → provably moot, not run.
+4/5. Frozen oracle does NOT work in the current environment → per the plan, go to **(5): test-only
+   ablations around the current PRODUCT kernels**, NOT the prototype.
+
+**Isolation conclusion:** the hang is NOT caused by any build-input change (source / LLK / metal libs all
+unchanged; freshly-recompiled `.o` hangs) and NOT a general device/firmware fault (the product op runs
+4000+ configs on the same libs+board). It is specific to the prototype's kernels/dispatch pattern in the
+current environment; the original working configuration (likely a different board/session/firmware state
+from when parity was captured) is unrecoverable. Firmware is neither confirmed nor excluded, but is no
+longer the leading suspect. Causal attribution of the Mt=8 excess should therefore come from **test-only
+ablations built around the shipping product kernels**, not the prototype oracle.
 Secondary hazard observed & handled: a SIGTERM'd oracle leaves a live process holding the UMD
 `CHIP_IN_USE_3_PCIe` lock, wedging the next device init ("failed to initialize FW"); recovery =
 `pkill -9 -x test_regime_a_mm` (NOT `-f` — that self-matches the caller's command line) + `rm -f
