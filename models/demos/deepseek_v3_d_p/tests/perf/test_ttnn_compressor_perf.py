@@ -24,7 +24,7 @@ _CMD = f"pytest {_TEST_PATH} -k 'b1-seq512'"
 def test_hca_compressor_perf():
     run_model_device_perf_test_with_merge(
         command=_CMD,
-        expected_device_perf_ns_per_iteration=179_276,
+        expected_device_perf_ns_per_iteration=255_569,
         subdir="deepseek_v4_hca_compressor",
         model_name="deepseek_v4_hca_compressor",
         num_iterations=1,

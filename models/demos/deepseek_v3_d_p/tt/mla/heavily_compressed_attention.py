@@ -142,10 +142,13 @@ class TtHCACompressor(LightweightModule):
             gate = ttnn.add(gate, self.position_bias)
             weights = ttnn.softmax(gate, dim=2, numeric_stable=True)
 
-            # host boundary: weighted sum + RMSNorm on host (fp32); RoPE on device
-            weights = ttnn.to_torch(weights).float()
-            kv = ttnn.to_torch(kv)[:, 0, :usable].float().view(batch, n_windows, self.compress_rate, self.head_dim)
-            pooled = (kv * weights).sum(dim=2)
+            # device: weighted sum over the window axis
+            kv = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
+            kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, self.head_dim])
+            pooled = ttnn.sum(ttnn.multiply(kv, weights), dim=2)
+
+            # host boundary: RMSNorm on host (fp32); RoPE on device
+            pooled = ttnn.to_torch(pooled).float()
             compressed = rms_norm(pooled, self.kv_norm_weight.to(pooled.dtype), self.rms_norm_eps)
 
             # RoPE (device) on the trailing rope_head_dim channels only (op caps head_dim <= 256).
