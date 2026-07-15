@@ -971,12 +971,10 @@ class WanResample(Module):
     ) -> tuple[ttnn.Tensor, int, int]:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanResample expects ROW_MAJOR input, got {x_BTHWC.layout}"
         B, T, H, W, C = x_BTHWC.shape
-        # logger.info(f"WanResample.forward: mode={self.mode}, input T={T}, shape={x_BTHWC.shape}, cached={feat_cache is not None}")
         if self.is_3d and self.is_upsample:  # upsample3d
             if feat_cache is not None:
                 idx = feat_idx[0]
                 if feat_cache[idx] is None:
-                    # logger.info(f"WanResample upsample3d: first chunk (cache empty), T={T}, will output T={1 + 2*(T-1) if T > 1 else 1}")
                     feat_idx[0] += 1
                     if T > 2:
                         # Frame 0 passes through; frames 1+ get time_conv + temporal doubling
@@ -1001,9 +999,6 @@ class WanResample(Module):
                     else:
                         feat_cache[idx] = "Rep"
                 else:
-                    logger.info(
-                        f"WanResample upsample3d: subsequent chunk (cache exists), T={T}, will output T={2*T}, is_rep={isinstance(feat_cache[idx], str)}"
-                    )
                     t_start = x_BTHWC.shape[1] - CACHE_T
                     cache_x_BTHWC = x_BTHWC[:, t_start:, :, :, :]
                     is_rep = isinstance(feat_cache[idx], str) and feat_cache[idx] == "Rep"
@@ -1033,7 +1028,6 @@ class WanResample(Module):
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
                     x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
             else:
-                # logger.info(f"WanResample upsample3d: full-T mode (no cache), T={T}, will output T={1 + 2*(T-1) if T > 1 else 1}")
                 # Replicate cached path's "Rep" boundary behavior:
                 # - Frame 0: output directly (no time_conv), like when feat_cache is None → "Rep"
                 # - Frames 1..T-1: time_conv with zero-padded boundary
@@ -1054,9 +1048,6 @@ class WanResample(Module):
 
         if self.is_upsample:
             T2 = x_BTHWC.shape[1]
-            logger.info(
-                f"WanResample: spatial upsample 2x, T={T2}, logical_h={logical_h}->{logical_h*2}, logical_w={logical_w}->{logical_w*2 if logical_w > 0 else 0}"
-            )
             x_NHWC = ttnn.reshape(x_BTHWC, (B * T2, H, W, C))
             x_upsamped_NHWC = ttnn.upsample(x_NHWC, scale_factor=2)
             logical_h *= 2
@@ -1066,9 +1057,6 @@ class WanResample(Module):
             x_BTHWC = ttnn.reshape(x_upsamped_NHWC, (B, T2, H2, W2, C))
             x_conv_BTHWC = self.conv(x_BTHWC, logical_h, logical_w=logical_w)
         else:
-            logger.info(
-                f"WanResample: spatial downsample 2x, T={x_BTHWC.shape[1]}, logical_h={logical_h}->{logical_h//2}, logical_w={logical_w}->{logical_w//2 if logical_w > 0 else 0}"
-            )
             x_conv_BTHWC = self.conv(x_BTHWC, logical_h, logical_w=logical_w)
             x_conv_BTHWC = x_conv_BTHWC[
                 :, :, 1::2, 1::2, :
@@ -1082,13 +1070,9 @@ class WanResample(Module):
             if feat_cache is not None:
                 idx = feat_idx[0]
                 if feat_cache[idx] is None:
-                    logger.info(
-                        f"WanResample downsample3d: first chunk (cache empty), storing T={x_conv_BTHWC.shape[1]} frames as cache"
-                    )
                     feat_cache[idx] = ttnn.clone(x_conv_BTHWC)
                     feat_idx[0] += 1
                 else:
-                    logger.info(f"WanResample downsample3d: subsequent chunk, applying time_conv with cached context")
                     cache_x_BTHWC = ttnn.clone(x_conv_BTHWC[:, -1:, :, :, :])
                     x_conv_BTHWC = self.time_conv(
                         ttnn.concat([feat_cache[idx][:, -1:, :, :, :], x_conv_BTHWC], dim=1),
@@ -1098,8 +1082,6 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
-                logger.info(f"WanResample downsample3d: full-T mode, T={x_conv_BTHWC.shape[1]}")
-
                 # Full-T mode: frame 0 passes through without time_conv (matches
                 # the cached path's first-iteration behavior), remaining frames
                 # get the strided temporal conv with frame 0 prepended as context.
@@ -1108,9 +1090,8 @@ class WanResample(Module):
                 #     x_rest_input = ttnn.concat([x_first, x_conv_BTHWC[:, 1:, :, :, :]], dim=1)
                 #     x_rest_output = self.time_conv(x_rest_input, logical_h, logical_w=logical_w)
                 #     x_conv_BTHWC = ttnn.concat([x_first, x_rest_output], dim=1)
-        logger.info(
-            f"WanResample.forward: output shape={x_conv_BTHWC.shape}, logical_h={logical_h}, logical_w={logical_w}"
-        )
+                pass
+
         return x_conv_BTHWC, logical_h, logical_w
 
 
@@ -1367,26 +1348,17 @@ class WanDecoder3d(Module):
             x_BTHWC = self.conv_in(x_BTHWC, logical_h, logical_w=logical_w)
 
         x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
-        logger.info(f"WanDecoder3d: after conv_in shape={x_BTHWC.shape}, logical_h={logical_h}, logical_w={logical_w}")
 
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
-        logger.info(f"WanDecoder3d: after mid_block shape={x_BTHWC.shape}")
 
         ## upsamples
-        for i, up_block in enumerate(self.up_blocks):
-            logger.info(
-                f"WanDecoder3d: entering up_block[{i}] upsample_mode={up_block.upsample_mode}, input shape={x_BTHWC.shape}, feat_idx={feat_idx[0] if feat_idx else None}"
-            )
+        for _, up_block in enumerate(self.up_blocks):
             x_BTHWC, logical_h, logical_w = up_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
-            logger.info(
-                f"WanDecoder3d: after up_block[{i}] shape={x_BTHWC.shape}, logical_h={logical_h}, logical_w={logical_w}"
-            )
 
         ## head
         x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
         x_BTHWC = ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-        logger.info(f"WanDecoder3d: after norm_out shape={x_BTHWC.shape}")
 
         if feat_cache is not None:
             idx = feat_idx[0]
@@ -1400,7 +1372,6 @@ class WanDecoder3d(Module):
             feat_idx[0] += 1
         else:
             x_BTHWC = self.conv_out(x_BTHWC, logical_h, logical_w=logical_w)
-        logger.info(f"WanDecoder3d: after conv_out shape={x_BTHWC.shape}")
         return x_BTHWC, logical_h, logical_w
 
 
@@ -1546,13 +1517,9 @@ class WanDecoder(Module):
             logical_w = W
 
         self.clear_cache()
-        logger.info(
-            f"WanDecoder: input shape={z_BTHWC.shape}, logical_h={logical_h}, logical_w={logical_w}, t_chunk_size={t_chunk_size}"
-        )
         z_tile_BTHWC = ttnn.to_layout(z_BTHWC, ttnn.TILE_LAYOUT)
         x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-        logger.info(f"WanDecoder: after post_quant_conv shape={x_BTHWC.shape}")
 
         if t_chunk_size is None or t_chunk_size >= T:
             # No-cache full-T single-pass mode
@@ -1575,11 +1542,6 @@ class WanDecoder(Module):
             # and skip doubling the non-boundary frames, dropping output frames.
             chunk_bounds = [(0, 1)] + [(s, min(s + t_chunk_size, T)) for s in range(1, T, t_chunk_size)]
             for chunk_idx, (t_start, t_end) in enumerate(chunk_bounds):
-                logger.info(f"{'='*80}")
-                logger.info(
-                    f"  CHUNK {chunk_idx} | t_start={t_start}, t_end={t_end}, T={T}, t_chunk_size={t_chunk_size}"
-                )
-                logger.info(f"{'='*80}")
                 self._conv_idx = [0]
                 out_BTHWC, new_logical_h, new_logical_w = self.decoder(
                     x_BTHWC[:, t_start:t_end, :, :, :],
@@ -1588,8 +1550,6 @@ class WanDecoder(Module):
                     feat_idx=self._conv_idx,
                     logical_w=logical_w,
                 )
-                logger.info(f"  CHUNK {chunk_idx} DONE | output shape={out_BTHWC.shape}")
-                logger.info(f"{'-'*80}")
                 out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
                 if output_BCTHW is None:
                     output_BCTHW = out_BCTHW
@@ -1600,9 +1560,6 @@ class WanDecoder(Module):
         output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
-        logger.info(
-            f"WanDecoder: final output shape={output_BCTHW.shape}, logical_h={new_logical_h}, logical_w={new_logical_w}"
-        )
         return (output_BCTHW, new_logical_h, new_logical_w)
 
 
@@ -1779,9 +1736,9 @@ class WanEncoder3D(Module):
             x_BTHWC = self.conv_in(x_BTHWC, logical_h, logical_w=logical_w)
 
         x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
-        logger.info(f"Initial shape {x_BTHWC.shape}")
+
         ## downsamples
-        for idx, down_block in enumerate(self.down_blocks):
+        for _, down_block in enumerate(self.down_blocks):
             if isinstance(down_block, WanResample):
                 x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
                 x_BTHWC, logical_h, logical_w = down_block(
@@ -1798,7 +1755,6 @@ class WanEncoder3D(Module):
                 x_BTHWC = down_block(x_BTHWC, logical_h, logical_w=logical_w)
             else:
                 raise ValueError(f"Unsupported downblock type: {type(down_block)}")
-            logger.info(f"After block {idx}: {type(down_block)} shape {x_BTHWC.shape}")
 
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)

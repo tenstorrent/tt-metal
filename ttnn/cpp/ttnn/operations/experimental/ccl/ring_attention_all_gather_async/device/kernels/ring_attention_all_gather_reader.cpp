@@ -280,12 +280,6 @@ void kernel_main() {
             }
         }
     }
-
-    // Flush non-posted atomics from op_signaler before kernel exit (mirrors the writer's barrier).
-    if constexpr (fuse_op) {
-        noc_obj.async_atomic_barrier();
-    }
-
     // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
