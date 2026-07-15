@@ -232,12 +232,13 @@ ALWI void tilize_block(
         (uint32_t)block,
         (uint32_t)output_tile_index));
     PACK(DPRINT(
-        "TZCFG-OUT ocb={} out_nf={} out_frdim={} out_narrow={} dstacc={}\n",
+        "TZCFG-OUT ocb={} out_nf={} out_frdim={} out_narrow={} dstacc={} syncfull={}\n",
         (uint32_t)ocb,
         (uint32_t)get_output_num_faces(ocb),
         (uint32_t)get_output_face_r_dim(ocb),
         (uint32_t)get_output_narrow_tile(ocb),
-        (uint32_t)DST_ACCUM_MODE));
+        (uint32_t)DST_ACCUM_MODE,
+        (uint32_t)(DST_SYNC_MODE == DstSync::SyncFull)));
     UNPACK(DPRINT(
         "TZCFG-IN icb={} in_srcfmt={} in_dstfmt={} in_nf={} in_frdim={}\n",
         (uint32_t)icb,

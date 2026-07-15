@@ -336,7 +336,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // Numerically identical; localized perf cost on this conv only.
     // Also force it on height-sharded to route WH/BH off the racy fast_tilize path onto regular tilize_block
     // (the fixed-latency PACK nop race-guard could not mask the fast_tilize dest handshake race).
-    if (block_sharded || height_sharded) {
+    //
+    // EXPERIMENT (Quasar height-sharded): do NOT force full DEST sync here. On Quasar the height-sharded
+    // conv still 0x19s (Risc IB interrupt on MATH) in the per-tile tilize datacopy<->pack DEST[0] reuse.
+    // Full sync uses a single DEST section, so tile t+1's datacopy MOP collides with tile t's pack drain;
+    // half sync double-buffers DEST across two sections, which can hide that reuse. Full sync was only
+    // forced on height-sharded to route WH/BH off fast_tilize -- Quasar has no fast_tilize (can_use_fast
+    // is already false), so the force serves no purpose on Quasar and may be causing the race. Let Quasar
+    // height-sharded fall back to half sync. WH/BH and block-sharded keep full sync.
+    if (block_sharded || (height_sharded && !arch_is_quasar)) {
         dst_full_sync_en = true;
     }
 
