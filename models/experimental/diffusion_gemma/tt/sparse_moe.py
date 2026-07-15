@@ -230,7 +230,11 @@ _FUSED2_PLAN_CACHE = {}
 
 
 def _dispatch_fused2_enabled():
-    return os.environ.get("DG_MOE_DISPATCH_FUSED2", "0") != "0"
+    # Default ON: bit-identical to the impl on the kept [0:EC] columns (verify_dispatch_fused.py),
+    # denoise-only (S=256/E=128/C=256/top_k=8 — the sole DG shape; prefill uses the ragged path),
+    # device-proven +2.3% @48 / +5.2% @12 with matching committed_sha (bench_lever_e2e frozen A/B).
+    # Set DG_MOE_DISPATCH_FUSED2=0 to fall back to the pure-ttnn dispatch tail.
+    return os.environ.get("DG_MOE_DISPATCH_FUSED2", "1") != "0"
 
 
 def _round_up(x, m):

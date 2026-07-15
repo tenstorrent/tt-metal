@@ -417,3 +417,29 @@ Guard 2 eager-faithful firing (scheme A exact; scheme B commit correct under con
 scheme A is the default), honest #48291 no-op framing, self-consistent overhead/break-even arithmetic,
 and the dg-08 commit adds NOTHING to `models/demos/gemma4/`. (Reviewer noted a pre-existing 1-line
 `experts/operations.py` dealloc from dg-04 #47464 — out of dg-08 scope, flagged to that owner.)
+
+## 2026-07-15 — FUSED2 default-on (bit-identical) + raw-denoise-vs-serving reframing
+
+Traced A/B on the full 30L model (`bench_lever_e2e.py --levers frozen,frozen_fused2 --budgets 48,12`,
+canonical prompt, frozen-prefix capture-once so steady blocks are pure replay; `/tmp/dg_fused2_ab.json`):
+
+| lever | @48 | @12 | committed_sha |
+|---|---|---|---|
+| frozen (baseline) | 49.63 t/s (block 5.158 s) | 104.41 t/s (block 2.452 s) | 304e8023.. / 7dd2e2d9.. |
+| frozen + FUSED2 | **50.76 t/s** (+2.3%) | **109.81 t/s** (+5.2%) | 304e8023.. / 7dd2e2d9.. (identical) |
+
+`committed_sha` matches exactly → `DG_MOE_DISPATCH_FUSED2` is bit-identical end-to-end (adds to the
+existing `verify_dispatch_fused.py` [0:EC] gate). It is denoise-only (`build_capacity_dispatch` is
+called only by `sparse_experts_forward`; the ragged prefill path does not use it) and DG runs a single
+fixed MoE shape (S=256/E=128/C=256/top_k=8), so **flipped default ON** (`sparse_moe.py:_dispatch_fused2_enabled`;
+`DG_MOE_DISPATCH_FUSED2=0` to revert).
+
+**Reframing (important for where the remaining headroom is):** the raw traced denoise is already fast —
+**~50 t/s @48 / ~104 t/s @12** at short context. The vLLM live sweep's 11–17 t/s
+(`doc/vllm_integration/live_context_*_20260715.json`) is ~3.5× slower per block at similar/longer
+context, i.e. the serving slowness is dominated by (a) per-step attention scaling with the frozen-prefix
+length (the diffusion recompute reads the whole [prefix+256] every step) and (b) the vLLM
+plumbing/commit overhead per block — NOT the denoise step compute. Per-step micro-levers (FUSED2 +2–5%,
+skip-double-topk untried, entropy-accept chain) are incremental; the larger serving wins are early-halt
+(now default-on, fires ~9–17/48 on real content) and the dg-09 vLLM-overhead / long-context attention
+surface.

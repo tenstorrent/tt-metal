@@ -55,9 +55,21 @@ LEVER_ENV = {
     "norm_moe": {"DG_NORM_FULLCANVAS": "1", "DG_MOE_L1": "both"},
     "selfcond_l1_off": {"DG_SELFCOND_LOGITS_L1": "off"},
     "selfcond_l1": {"DG_SELFCOND_LOGITS_L1": "chain"},
+    # capture-once (frozen prefix) isolates per-step replay compute from per-block recapture;
+    # fused2 is the bit-identical dispatch-tail kernel. Compare frozen vs frozen_fused2 for the
+    # per-step win AND committed_sha match (bit-identity).
+    "fused2": {"DG_MOE_DISPATCH_FUSED2": "1"},
+    "frozen": {"DG_DENOISE_FROZEN_PREFIX": "1"},
+    "frozen_fused2": {"DG_DENOISE_FROZEN_PREFIX": "1", "DG_MOE_DISPATCH_FUSED2": "1"},
 }
 # flags we toggle across levers — cleared before applying each lever so configs don't leak
-_TOGGLE = ("DG_NORM_FULLCANVAS", "DG_MOE_L1", "DG_SELFCOND_LOGITS_L1")
+_TOGGLE = (
+    "DG_NORM_FULLCANVAS",
+    "DG_MOE_L1",
+    "DG_SELFCOND_LOGITS_L1",
+    "DG_MOE_DISPATCH_FUSED2",
+    "DG_DENOISE_FROZEN_PREFIX",
+)
 
 
 def _required_trace_region_size() -> int:
