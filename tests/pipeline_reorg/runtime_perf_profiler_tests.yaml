@@ -30,6 +30,9 @@
     if [ "$ARCH_NAME" = "blackhole" ]; then
       GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_blackhole_golden.json
     fi
+    # The post-proc imports the profiler team's parser (tracy.process_device_log), which
+    # lives under tools/. Put tools/ (plus repo root and ttnn) on PYTHONPATH so it resolves.
+    export PYTHONPATH="${TT_METAL_HOME}/tools:${TT_METAL_HOME}:${TT_METAL_HOME}/ttnn${PYTHONPATH:+:${PYTHONPATH}}"
     python3 tests/tt_metal/tt_metal/perf_microbenchmark/op_to_op_latency/op_to_op_postprocess.py \
       --min-prog-id 3 --golden "$GOLDEN"
   skus:
