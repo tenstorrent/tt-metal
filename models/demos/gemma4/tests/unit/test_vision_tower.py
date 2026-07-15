@@ -60,7 +60,7 @@ def test_vision_tower_inference(
     dtype = ttnn.bfloat8_b
     pcc = 0.99 if num_layers and num_layers <= 3 else 0.91
     batch_size = 1  # prefill only supports batch_size = 1
-    seq_len = ((token_budget // 128) + 1) * 128
+    seq_len = ((token_budget // 2048) + 1) * 2048  # pad to a multiple of MAX_QKV_MM_SEQ_LEN (2048)
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     if num_layers:

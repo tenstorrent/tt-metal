@@ -5,17 +5,17 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.tt.vision.vision_block import VisionBlock
-from models.demos.gemma4.tt.vision.vision_patch_embedder import VisionPatchEmbedder
 from models.demos.gemma4.tt.vision.vision_rotary_embedding import VisionRotaryEmbedding
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 
 class VisionTransformer(LightweightModule):
     """
-    Gemma-4 vision tower (encoder).
+    Gemma-4 vision encoder.
 
-    Runs the full on-device pipeline: patch embedding -> 2D rotary cos/sin generation ->
-    transformer blocks. Patch merging / pooling is done outside this class.
+    Runs the on-device transformer stack: 2D rotary cos/sin generation -> transformer blocks.
+    Patch embedding is done upstream in ``VisionTower``; patch merging / pooling is done
+    downstream. This module operates on already-embedded patch hidden states.
     """
 
     def __init__(
@@ -56,15 +56,7 @@ class VisionTransformer(LightweightModule):
             )
         }
 
-        # Patch embedder (input_proj + 2D positional embeddings) and rotary cos/sin generator.
-        self.patch_embedder = VisionPatchEmbedder(
-            mesh_device=args.mesh_device,
-            args=args,
-            state_dict=state_dict,
-            state_dict_prefix=f"{args.get_state_dict_prefix('VisionTransformer')}.patch_embedder.",
-            weight_cache_path=weight_cache_path,
-            dtype=ttnn.bfloat16,
-        )
+        # Rotary cos/sin generator (patch embedding lives upstream in ``VisionTower``).
         self.rotary_embedding = VisionRotaryEmbedding(
             mesh_device=args.mesh_device,
             args=args,
@@ -88,20 +80,19 @@ class VisionTransformer(LightweightModule):
 
     def forward(
         self,
-        pixel_values,
+        inputs_embeds,
         pixel_position_ids,
-        padding_positions,
         unpadded_seq_len,
         seq_len,
     ):
         """
-        Full vision-tower forward: patch embed -> rotary cos/sin -> transformer blocks.
+        Vision encoder forward: rotary cos/sin -> transformer blocks.
 
         Args:
-            pixel_values (ttnn.Tensor): Flattened patch pixels ``[1, batch, num_patches, 3*patch_size^2]``.
+            inputs_embeds (ttnn.Tensor): Embedded patch hidden states ``[1, batch, num_patches, hidden_dim]``
+                (produced upstream by ``VisionTower``'s patch embedder).
             pixel_position_ids (ttnn.Tensor): Patch (x, y) positions ``[batch, num_patches, 2]``
                 (int32, ROW_MAJOR; padding patches are ``(-1, -1)``).
-            padding_positions (ttnn.Tensor): ``[batch, num_patches]`` (uint32/int32, nonzero = padding).
             unpadded_seq_len (int): True number of patches (output is sliced back to this).
             seq_len (int): Padded sequence length the blocks run at.
 
@@ -110,10 +101,12 @@ class VisionTransformer(LightweightModule):
         """
         num_patches = pixel_position_ids.shape[1]
 
-        # Patch embedding (projected patches + 2D positional embeddings), then pad seq -> seq_len.
-        x = self.patch_embedder(pixel_values, pixel_position_ids, padding_positions)  # [1, B, num_patches, H]
+        # Pad the embedded sequence seq -> seq_len. When padding, ``ttnn.pad`` allocates a new
+        # tensor, so free the caller's input here; in the no-pad case the first block frees it.
+        x = inputs_embeds
         if seq_len > num_patches:
             x = ttnn.pad(x, [(0, 0), (0, 0), (0, seq_len - num_patches), (0, 0)], value=0.0)
+            ttnn.deallocate(inputs_embeds)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         # Rotary cos/sin (Meta interleaved). The rotary matmul needs a float position tensor, so we

@@ -22,7 +22,7 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4), "P150x4": (1, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -42,8 +42,8 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
             [3, 110, 85],
         ),  # 300 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2550x3300
         (
-            560 * 9,
-            [3, 66, 54],
+            280 * 9,
+            [3, 50, 50],
         ),  # 240 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2048x1300
     ],
     ids=["300dpi", "240dpi"],
@@ -102,13 +102,14 @@ def test_vision_model_inference(
     ref_seq_len = pixel_position_ids.shape[1]
     logger.info(f"num_patches={ref_seq_len}, valid_patches={(~padding_positions).sum().item()}")
 
-    # Reference: patch embed -> encoder (patch embed + rotary now happen on device in the TT model).
+    # Reference: patch embed -> encoder. Patch embedding lives in VisionTower now, so the encoder
+    # (both reference and TT) is fed already-embedded patch hidden states.
     inputs_embeds = reference_model.patch_embedder(pt_pixel_values, pixel_position_ids, padding_positions)
     reference_output = reference_model.encoder(
         inputs_embeds=inputs_embeds, pixel_position_ids=pixel_position_ids, attention_mask=None
     ).last_hidden_state
 
-    # Initialize TT model (patch embed + rotary + transformer blocks, all on device)
+    # Initialize TT model (rotary + transformer blocks, all on device)
     tt_model = VisionTransformer(
         args=model_args,
         tt_ccl=TT_CCL(mesh_device),
@@ -117,10 +118,11 @@ def test_vision_model_inference(
         dtype=dtype,
     )
 
-    # Upload raw patch pixels + position metadata as ttnn tensors.
+    # Upload the (host-computed) patch embeddings + position metadata as ttnn tensors. The encoder
+    # no longer performs patch embedding, so it is fed already-embedded hidden states directly.
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
-    tt_pixel_values = ttnn.from_torch(
-        pt_pixel_values.unsqueeze(0),  # [1, batch, num_patches, in_dim]
+    tt_inputs_embeds = ttnn.from_torch(
+        inputs_embeds.unsqueeze(0),  # [1, batch, num_patches, hidden]
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
@@ -135,20 +137,11 @@ def test_vision_model_inference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=replicate,
     )
-    tt_padding_positions = ttnn.from_torch(
-        padding_positions.to(torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=replicate,
-    )
 
     # Run TT model
     tt_out = tt_model(
-        tt_pixel_values,
+        tt_inputs_embeds,
         tt_position_ids,
-        tt_padding_positions,
         unpadded_seq_len=ref_seq_len,
         seq_len=seq_len,
     )

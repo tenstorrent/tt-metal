@@ -1690,12 +1690,8 @@ class Gemma4Model:
         x,
         rot_mats_global=None,
         rot_mats_local=None,
-        rot_mats_global=None,
-        rot_mats_local=None,
         user_id=0,
         page_table=None,
-        chunk_page_table=None,
-        chunk_start_idx=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
@@ -1933,7 +1929,6 @@ class Gemma4Model:
         kv_cache=None,
         on_device_logits=False,
         pli_combined=None,
-        page_tables_per_layer=None,
         page_tables_per_layer=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.

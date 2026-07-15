@@ -7,8 +7,8 @@
 Mirrors HF ``Gemma4VisionModel``: the full image encoder that maps raw patch pixels to pooled
 soft tokens. The pipeline is
 
-    patch embed -> transformer encoder  (``VisionTransformer``, fully on device)
-    -> spatial average pooling          (``VisionPooler``)
+    patch embed (``VisionPatchEmbedder``) -> transformer encoder  (``VisionTransformer``)
+    -> spatial average pooling                (``VisionPooler``)
     -> (optional) ``standardize`` affine ``(x - std_bias) * std_scale`` per hidden dim
 
 This module composes those pieces. ``standardize`` is enabled for Gemma-4 (``config.standardize``
@@ -27,6 +27,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.tt.vision.vision_encoder import VisionTransformer
+from models.demos.gemma4.tt.vision.vision_patch_embedder import VisionPatchEmbedder
 from models.demos.gemma4.tt.vision.vision_pooler import VisionPooler
 
 
@@ -54,6 +55,16 @@ class VisionTower(LightweightModule):
         vision_config = args.hf_config.vision_config
         self.pooling_kernel_size = vision_config.pooling_kernel_size
 
+        # Patch embedder (input_proj + 2D positional embeddings): projects raw patch pixels to
+        # hidden states before the transformer encoder.
+        self.patch_embedder = VisionPatchEmbedder(
+            mesh_device=self.mesh_device,
+            args=args,
+            state_dict=state_dict,
+            state_dict_prefix=f"{args.get_state_dict_prefix('VisionTransformer')}.patch_embedder.",
+            weight_cache_path=weight_cache_path,
+            dtype=ttnn.bfloat16,
+        )
         self.encoder = VisionTransformer(
             args=args,
             dtype=dtype,
@@ -136,18 +147,21 @@ class VisionTower(LightweightModule):
             mesh_mapper=mapper,
         )
 
-        # Encoder: patch embed + rotary + transformer blocks. Output is sliced back to the true
-        # patch count (padding patches included; the pooler masks them out).
+        # Patch embedding (projected patches + 2D positional embeddings).
+        inputs_embeds = self.patch_embedder(pixel_values_tt, position_ids_tt, padding_positions_tt)
+        ttnn.deallocate(pixel_values_tt)
+        ttnn.deallocate(padding_positions_tt)
+
+        # Encoder: rotary + transformer blocks. Consumes ``inputs_embeds`` (freed internally).
+        # Output is sliced back to the true patch count (padding patches included; the pooler
+        # masks them out).
         encoder_output = self.encoder(
-            pixel_values_tt,
+            inputs_embeds,
             position_ids_tt,
-            padding_positions_tt,
             unpadded_seq_len=num_patches,
             seq_len=seq_len,
         )
-        ttnn.deallocate(pixel_values_tt)
         ttnn.deallocate(position_ids_tt)
-        ttnn.deallocate(padding_positions_tt)
 
         # Pooler builds its weights on host from the (torch) position metadata.
         pooled, mask = self.pooler(
