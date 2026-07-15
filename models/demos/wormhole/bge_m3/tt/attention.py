@@ -282,11 +282,7 @@ class BgeM3Attention(LightweightModule):
         # (no mask). q [B,H,S,DH] -> [B, H*G, S/G, DH] with head h*G+j = head h's
         # j-th seq chunk; kv head h broadcasts to query heads h*G..h*G+G-1.
         dp_reshape_g = 0
-        if (
-            os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1"
-            and sdpa_mask is None
-            and seq_len == 8192
-        ):
+        if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1" and sdpa_mask is None and seq_len == 8192:
             dp_reshape_g = int(os.environ.get("BGE_DP_SDPA_QRESHAPE", "2"))
         if dp_reshape_g >= 2:
             b0, h0, s0, dh0 = q.shape
@@ -387,9 +383,14 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False):
                 # of k-passes and the online-softmax rescaling overhead.
                 return 512, 512
             if os.environ.get("BGE_M3_DATA_PARALLEL", "0") == "1":
-                # Data-parallel: full Sq=8192, Sk=8192, B=6, no dense mask.
-                # Re-tuned for this shape (DP autoresearch).
-                return 512, 512
+                # Data-parallel + query head-fold: SDPA sees Sq=4096, Sk=8192, B6.
+                # q256/k1024 preserves the score-tile footprint of q512/k512
+                # (8x32 == 16x16 == 256 tiles, so score CB doesn't grow) while
+                # halving k-chunks (8 vs 16) => fewer online-softmax merges.
+                # Standalone device-kernel probe: 32.63ms->30.59ms/op (-6.2%),
+                # lossless BF8. Stock q512/k1024 OOMs; this footprint-preserving
+                # pair fits. (DP autoresearch #215.)
+                return 256, 1024
             # Dense-mask S8192 needs the lower-L1 k256 configuration.
             return 512, 256
         # B8: q=256 k=256 (swept q{64..512} x k{128,256,512}; 256x256 is the min,
