@@ -102,6 +102,11 @@ struct DeviceStorage {
     // Throws if the DeviceStorage is deallocated.
     const distributed::MeshBuffer& get_mesh_buffer() const;
 
+    // Get the root mesh buffer that owns the device memory. For a view, this
+    // differs from get_mesh_buffer(), whose address-based buffer has no backing buffer.
+    // Throws if the root DeviceStorage is deallocated.
+    const distributed::MeshBuffer& get_root_mesh_buffer() const;
+
     // Get the underlying MeshTensor, throws if the DeviceStorage is deallocated.
     const MeshTensor& get_mesh_tensor() const;
 
