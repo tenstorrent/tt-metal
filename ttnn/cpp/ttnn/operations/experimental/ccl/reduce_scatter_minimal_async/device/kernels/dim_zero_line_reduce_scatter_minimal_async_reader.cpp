@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -49,7 +50,7 @@ void kernel_main() {
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    Semaphore<> fwd_bwd_sem(get_arg_val<uint32_t>(arg_idx++));
     const bool is_forward = get_arg_val<uint32_t>(arg_idx++);
     const bool is_first_device_in_direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_targets_in_direction = get_arg_val<uint32_t>(arg_idx++);
@@ -265,8 +266,7 @@ void kernel_main() {
             while (tiles_read < tiles_to_read) {
                 // Wait for FWD writer to signal that it has done its final reduction
                 if (detail::do_accumulate_output(is_forward)) {
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
+                    fwd_bwd_sem.wait_min(++fwd_sync_cnt);
                 }
 
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
