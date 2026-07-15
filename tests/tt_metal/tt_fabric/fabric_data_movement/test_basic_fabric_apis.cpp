@@ -195,8 +195,14 @@ void RunGetFabricRouteInfoTest(BaseFabricFixture* fixture) {
             const auto forwarding_links = get_forwarding_link_indices(src_node, dst_node);
             ASSERT_FALSE(forwarding_links.empty());
 
-            const auto default_route_info = get_fabric_route_info(src_node, dst_node);
-            const auto first_route_info = get_fabric_route_info(src_node, dst_node, forwarding_links.front());
+            const auto default_route_info = get_fabric_route_info(*src_device, src_node, dst_node);
+            const auto default_context_route_info = get_fabric_route_info(src_node, dst_node);
+            const auto first_route_info =
+                get_fabric_route_info(*src_device, src_node, dst_node, forwarding_links.front());
+            EXPECT_EQ(default_route_info.connection_node_id, default_context_route_info.connection_node_id);
+            EXPECT_EQ(default_route_info.direction, default_context_route_info.direction);
+            EXPECT_EQ(default_route_info.link_index, default_context_route_info.link_index);
+            EXPECT_EQ(default_route_info.hop_count, default_context_route_info.hop_count);
             EXPECT_EQ(default_route_info.connection_node_id, first_route_info.connection_node_id);
             EXPECT_EQ(default_route_info.direction, first_route_info.direction);
             EXPECT_EQ(default_route_info.link_index, first_route_info.link_index);
@@ -208,7 +214,7 @@ void RunGetFabricRouteInfoTest(BaseFabricFixture* fixture) {
             constexpr uint32_t buffer_index_semaphore_id = 6;
             if (!checked_rejected_link) {
                 const auto expect_link_rejected = [&](uint32_t rejected_link_index) {
-                    EXPECT_ANY_THROW(get_fabric_route_info(src_node, dst_node, rejected_link_index));
+                    EXPECT_ANY_THROW(get_fabric_route_info(*src_device, src_node, dst_node, rejected_link_index));
                     EXPECT_ANY_THROW(tt::tt_metal::internal::compute_fabric_connection_rt_args(
                         src_node,
                         {dst_node},
@@ -249,7 +255,7 @@ void RunGetFabricRouteInfoTest(BaseFabricFixture* fixture) {
             EXPECT_EQ(default_connection_args[3], buffer_index_semaphore_id);
 
             for (const uint32_t link_index : forwarding_links) {
-                const auto route_info = get_fabric_route_info(src_node, dst_node, link_index);
+                const auto route_info = get_fabric_route_info(*src_device, src_node, dst_node, link_index);
                 EXPECT_EQ(
                     route_info.direction, control_plane.routing_direction_to_eth_direction(*forwarding_direction));
                 EXPECT_EQ(route_info.link_index, link_index);

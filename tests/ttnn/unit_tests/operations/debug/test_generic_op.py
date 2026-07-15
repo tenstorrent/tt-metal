@@ -39,7 +39,7 @@ def test_eltwise_exp(device, num_tiles):
 
     max_core = ttnn.CoreCoord(7, 7)
     all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), max_core)])
-    (_, core_grid, core_group_1, core_group_2, work_per_core1, _) = ttnn.split_work_to_cores(all_cores, num_tiles)
+    _, core_grid, core_group_1, core_group_2, work_per_core1, _ = ttnn.split_work_to_cores(all_cores, num_tiles)
     assert (
         len(core_group_2.ranges()) == 0
     ), "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp kernel has number of tiles to compile as compile time arg, does not support 2 core groups"
@@ -132,6 +132,46 @@ def test_eltwise_exp(device, num_tiles):
     matching = torch.allclose(torch_golden, torch_output)
     logger.info(f"Tensors are matching: {matching}")
     assert matching
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_get_fabric_route_info_binding(mesh_device):
+    source_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, 0))
+    destination_node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, 1))
+
+    legacy_route = ttnn.get_fabric_route_info(source_node, destination_node)
+    omitted_link_route = ttnn.get_fabric_route_info(mesh_device, source_node, destination_node)
+    none_link_route = ttnn.get_fabric_route_info(mesh_device, source_node, destination_node, None)
+    explicit_link_route = ttnn.get_fabric_route_info(
+        mesh_device, source_node, destination_node, omitted_link_route.link_index
+    )
+
+    expected_fields = (
+        omitted_link_route.connection_node_id,
+        omitted_link_route.direction,
+        omitted_link_route.link_index,
+        omitted_link_route.hop_count,
+    )
+    for route_info in (legacy_route, omitted_link_route, none_link_route, explicit_link_route):
+        assert isinstance(route_info, ttnn.FabricRouteInfo)
+        assert (
+            route_info.connection_node_id,
+            route_info.direction,
+            route_info.link_index,
+            route_info.hop_count,
+        ) == expected_fields
+
+    assert isinstance(omitted_link_route.connection_node_id, ttnn.FabricNodeId)
+    assert isinstance(omitted_link_route.direction, int)
+    assert isinstance(omitted_link_route.link_index, int)
+    assert isinstance(omitted_link_route.hop_count, int)
+    assert omitted_link_route.hop_count >= 1
+    assert repr(omitted_link_route) == (
+        f"FabricRouteInfo(connection_node_id={omitted_link_route.connection_node_id!r}, "
+        f"direction={omitted_link_route.direction}, "
+        f"link_index={omitted_link_route.link_index}, hop_count={omitted_link_route.hop_count})"
+    )
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)

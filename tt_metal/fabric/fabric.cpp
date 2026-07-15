@@ -92,6 +92,52 @@ ResolvedFabricLink resolve_fabric_link(
     return ResolvedFabricLink{.link_index = selected_link_index, .channel = candidate_channels[selected_link_index]};
 }
 
+tt::tt_fabric::FabricRouteInfo resolve_fabric_route_info(
+    const tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+    std::optional<uint32_t> link_index) {
+    const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    TT_FATAL(
+        forwarding_direction.has_value(),
+        "Could not determine forwarding direction from {} to {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto resolved_link = resolve_fabric_link(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value(), link_index);
+    const auto route = control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, resolved_link.channel);
+    TT_FATAL(!route.empty(), "Could not resolve a fabric route from {} to {}", src_fabric_node_id, dst_fabric_node_id);
+
+    tt::tt_fabric::FabricNodeId current_node = src_fabric_node_id;
+    std::optional<tt::tt_fabric::FabricNodeId> connection_node_id;
+    uint32_t hop_count = 0;
+    for (const auto& route_entry : route) {
+        const auto& route_node = route_entry.first;
+        if (route_node == current_node) {
+            continue;
+        }
+        if (!connection_node_id.has_value()) {
+            connection_node_id = route_node;
+        }
+        current_node = route_node;
+        ++hop_count;
+    }
+    TT_FATAL(connection_node_id.has_value(), "Resolved fabric route from {} has no hops", src_fabric_node_id);
+    TT_FATAL(
+        current_node == dst_fabric_node_id,
+        "Resolved fabric route from {} ended at {} instead of {}",
+        src_fabric_node_id,
+        current_node,
+        dst_fabric_node_id);
+
+    return tt::tt_fabric::FabricRouteInfo{
+        .connection_node_id = connection_node_id.value(),
+        .direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value()),
+        .link_index = resolved_link.link_index,
+        .hop_count = hop_count};
+}
+
 }  // namespace
 
 namespace tt::tt_fabric {
@@ -515,45 +561,17 @@ FabricRouteInfo get_fabric_route_info(
     const FabricNodeId& dst_fabric_node_id,
     std::optional<uint32_t> link_index) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-    TT_FATAL(
-        forwarding_direction.has_value(),
-        "Could not determine forwarding direction from {} to {}",
-        src_fabric_node_id,
-        dst_fabric_node_id);
+    return resolve_fabric_route_info(control_plane, src_fabric_node_id, dst_fabric_node_id, link_index);
+}
 
-    const auto resolved_link = resolve_fabric_link(
-        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value(), link_index);
-    const auto route = control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, resolved_link.channel);
-    TT_FATAL(!route.empty(), "Could not resolve a fabric route from {} to {}", src_fabric_node_id, dst_fabric_node_id);
-
-    FabricNodeId current_node = src_fabric_node_id;
-    std::optional<FabricNodeId> connection_node_id;
-    uint32_t hop_count = 0;
-    for (const auto& route_entry : route) {
-        const auto& route_node = route_entry.first;
-        if (route_node == current_node) {
-            continue;
-        }
-        if (!connection_node_id.has_value()) {
-            connection_node_id = route_node;
-        }
-        current_node = route_node;
-        ++hop_count;
-    }
-    TT_FATAL(connection_node_id.has_value(), "Resolved fabric route from {} has no hops", src_fabric_node_id);
-    TT_FATAL(
-        current_node == dst_fabric_node_id,
-        "Resolved fabric route from {} ended at {} instead of {}",
-        src_fabric_node_id,
-        current_node,
-        dst_fabric_node_id);
-
-    return FabricRouteInfo{
-        .connection_node_id = connection_node_id.value(),
-        .direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value()),
-        .link_index = resolved_link.link_index,
-        .hop_count = hop_count};
+FabricRouteInfo get_fabric_route_info(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    std::optional<uint32_t> link_index) {
+    const auto context_id = tt::tt_metal::extract_context_id(&mesh_device);
+    const auto& control_plane = tt::tt_metal::MetalContext::instance(context_id).get_control_plane();
+    return resolve_fabric_route_info(control_plane, src_fabric_node_id, dst_fabric_node_id, link_index);
 }
 
 tt::tt_fabric::Topology get_fabric_topology() {

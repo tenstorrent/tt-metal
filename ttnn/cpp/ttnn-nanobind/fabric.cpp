@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
@@ -16,6 +17,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/internal/fabric.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
@@ -163,12 +165,37 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_fabric_route_info",
-        &tt::tt_fabric::get_fabric_route_info,
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+           std::optional<uint32_t> link_index) {
+            return tt::tt_fabric::get_fabric_route_info(src_fabric_node_id, dst_fabric_node_id, link_index);
+        },
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_fabric_node_id"),
         nb::arg("link_index") = nb::none(),
         R"(
-            Resolves a fabric connection through the active control plane.
+            Resolves a fabric connection through the default control plane.
+
+            Returns the adjacent connection node, selected forwarding
+            direction and link index, and the number of physical inter-node
+            hops in the resolved route.
+        )");
+
+    mod.def(
+        "get_fabric_route_info",
+        [](const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+           std::optional<uint32_t> link_index) {
+            return tt::tt_fabric::get_fabric_route_info(
+                *mesh_device, src_fabric_node_id, dst_fabric_node_id, link_index);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        nb::arg("link_index") = nb::none(),
+        R"(
+            Resolves a fabric connection through a mesh device's control plane.
 
             Returns the adjacent connection node, selected forwarding
             direction and link index, and the number of physical inter-node

@@ -123,9 +123,16 @@ struct FabricRouteInfo {
 };
 
 // Resolves the adjacent connection node, direction, link, and physical hop
-// count through the active control-plane routing tables. When link_index is
-// unspecified, the first available forwarding link is selected.
+// count through the control-plane routing tables. When link_index is
+// unspecified, the first available forwarding link is selected. The overload
+// without a MeshDevice uses the default runtime context for compatibility.
 FabricRouteInfo get_fabric_route_info(
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    std::optional<uint32_t> link_index = std::nullopt);
+
+FabricRouteInfo get_fabric_route_info(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     std::optional<uint32_t> link_index = std::nullopt);
