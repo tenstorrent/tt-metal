@@ -385,16 +385,105 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
     return sigs, raw
 
 
-def _coverage_layers(repo_root: Path, mcp_env: dict, devices: str, node, case, n_layers: int = 52):
-    """MODEL-AGNOSTIC profiling-window sizing: grow TT_PERF_LAYERS until the set of distinct ttnn op
-    signatures SATURATES (a deeper window adds no new op type) — so the tracy 2-layer-style slice actually
-    covers EVERY block type, not just whatever falls in the first N layers. Homogeneous models saturate at
-    1-2; heterogeneous ones (mamba/attention/MoE interleaved) grow until all types appear. No per-model
-    layer maps. Returns (layer_count_or_None, facts) — facts from the deepest probe feed the scorecard.
-    Disable via PERF_MCP_COVERAGE_SIZING=0."""
+_LAYER_PATTERN_ATTRS = ("hybrid_override_pattern", "layer_types", "layers_block_type", "block_types")
+
+
+def _config_layer_kinds(model_name: str):
+    """Enumerate distinct layer KINDS from the model's HF-config-declared per-layer pattern, WITHOUT
+    building or running the model. Returns (k, n_kinds) where the first k layers already include one of
+    EVERY kind (so profiling that slice is representative), or (None, 0) when the config declares no
+    per-layer pattern (a homogeneous model, or one that doesn't expose it) so the caller falls back to
+    the observed climb. Reading the DECLARED pattern catches a kind that first appears DEEP in the stack
+    (past any shallow-probe ceiling) — the exact case an observation-only climb silently misses."""
+    if not model_name:
+        return None, 0
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+    except Exception:  # noqa: BLE001
+        return None, 0
+    pat = None
+    for attr in _LAYER_PATTERN_ATTRS:
+        v = getattr(cfg, attr, None)
+        if v:
+            pat = v
+            break
+    seq = list(pat) if pat else []
+    if not seq:
+        return None, 0
+    first: dict = {}
+    for i, sym in enumerate(seq):
+        first.setdefault(sym, i)
+    n_layers = int(getattr(cfg, "num_hidden_layers", 0) or len(seq)) or len(seq)
+    return min(max(first.values()) + 1, n_layers), len(first)
+
+
+def _coverage_cache_path(repo_root: Path) -> Path:
+    return repo_root / CC_DIR / ".coverage_cache.json"
+
+
+def _coverage_fingerprint(node) -> str:
+    try:
+        base = Path(str(node).split("::", 1)[0])
+        mt = max((f.stat().st_mtime for f in base.parent.rglob("*.py")), default=0.0)
+        return str(int(mt))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _coverage_cache_get(repo_root: Path, node, case):
+    try:
+        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{node}|{case}")
+        if entry and entry.get("fp") == _coverage_fingerprint(node):
+            return int(entry["k"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _coverage_cache_put(repo_root: Path, node, case, k: int) -> None:
+    try:
+        path = _coverage_cache_path(repo_root)
+        data = json.loads(path.read_text()) if path.is_file() else {}
+        data[f"{node}|{case}"] = {"k": int(k), "fp": _coverage_fingerprint(node)}
+        path.write_text(json.dumps(data, indent=1))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _coverage_layers(
+    repo_root: Path, mcp_env: dict, devices: str, node, case, n_layers: int = 52, model_name: str = ""
+):
+    """MODEL-AGNOSTIC profiling-window sizing = the smallest layer depth that still covers EVERY distinct
+    layer kind, so the profiled slice is representative and a fix to a shared per-kind block reaches all
+    its instances. PRIMARY path reads the kinds from the model's HF-config-declared per-layer pattern —
+    no forward pass, no memory pressure, and it sees a kind that first appears deep in the stack. FALLBACK
+    (no declared pattern) is the observed climb: grow the depth until the distinct op-signature set stops
+    growing. Result is cached per model (invalidated by source mtime). Disable via PERF_MCP_COVERAGE_SIZING=0."""
     facts: dict = {}
     if os.environ.get("PERF_MCP_COVERAGE_SIZING", "1") != "1" or not node:
         return None, facts
+    cached = _coverage_cache_get(repo_root, node, case)
+    if cached is not None:
+        print(f"  [optimize/cc] coverage (cached): TT_PERF_LAYERS={cached}")
+        return cached, facts
+    k, n_kinds = _config_layer_kinds(model_name)
+    if k is not None:
+        print(
+            f"  [optimize/cc] coverage (config pattern): {n_kinds} distinct layer kind(s), deepest first "
+            f"appears at layer {k - 1} -> TT_PERF_LAYERS={k}"
+        )
+        if k > 16:
+            print(
+                f"  [optimize/cc] note: deepest kind at layer {k - 1} exceeds the fit-safe depth (16) — profiling it may need more memory/mesh"
+            )
+        _fk = min(k, 16)
+        sigs, raw = _run_op_sigs(repo_root, mcp_env, devices, node, case, _fk)
+        if sigs is not None:
+            facts = _parse_facts(raw, sigs)
+        _coverage_cache_put(repo_root, node, case, k)
+        return k, facts
     results: list = []
     for k in (2, 4, 8, 16):
         k = min(k, n_layers)
@@ -411,10 +500,9 @@ def _coverage_layers(repo_root: Path, mcp_env: dict, devices: str, node, case, n
     max_sigs = max((s for _, s in results), key=len)
     if results[-1][1] == max_sigs and len(results) >= 2 and results[-2][1] != max_sigs and results[-1][0] >= n_layers:
         print("  [optimize/cc] coverage still growing at the depth cap — op coverage may be incomplete")
-    for k, s in results:
-        if s == max_sigs:
-            return k, facts
-    return results[-1][0], facts
+    _cov = next((k for k, s in results if s == max_sigs), results[-1][0])
+    _coverage_cache_put(repo_root, node, case, _cov)
+    return _cov, facts
 
 
 def _print_scorecard(
@@ -730,9 +818,11 @@ def _emit_summary(
         residual=residual,
         before_ms=before_ms,
         after_ms=after_ms,
-        baseline_profile=json.loads(Path(report_csv).parent.joinpath("baseline_profile.json").read_text())
-        if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
-        else None,
+        baseline_profile=(
+            json.loads(Path(report_csv).parent.joinpath("baseline_profile.json").read_text())
+            if report_csv and Path(report_csv).parent.joinpath("baseline_profile.json").is_file()
+            else None
+        ),
     )
     print("\n" + text + "\n")
     md = _latest_manifest(repo_root / PERF_DIR)
@@ -809,7 +899,9 @@ def optimize_pipeline(
         pass
     cfg = _mcp_config(repo_root, manifest_path, pipe, devices, kernel_log)
     _cov_env = cfg["mcpServers"]["perf-mcp"]["env"]
-    _cov, _cov_facts = _coverage_layers(repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"))
+    _cov, _cov_facts = _coverage_layers(
+        repo_root, _cov_env, devices, pipe.get("perf_test"), pipe.get("case"), model_name=model_name
+    )
     if _cov:
         _cov_env["TT_PERF_LAYERS"] = str(_cov)
         print(f"  [optimize/cc] coverage-sized profiling window: TT_PERF_LAYERS={_cov} (covers all block types)")
