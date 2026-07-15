@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_device_operation.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/repeat_interleave/codegen/repeat_interleave_codegen_supported.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
@@ -16,12 +17,23 @@ RepeatInterleaveCodegenDeviceOperation::select_program_factory(
 }
 
 void RepeatInterleaveCodegenDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input;
     TT_FATAL(
         input_tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
         "Operands to repeat_interleave need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+
+    // rep_dim is stored 4D-padded (left-pad by 4 - ndim); recover the original, tensor-relative dim
+    // to check against the same normalized-attribute predicate the host free function gates on.
+    const uint32_t ndim = input_tensor.logical_shape().rank();
+    const uint32_t original_dim = operation_attributes.rep_dim - (4 - ndim);
+    TT_FATAL(
+        ttnn::operations::data_movement::repeat_interleave::supported_by_codegen(
+            input_tensor, operation_attributes.num_repeats, static_cast<int32_t>(original_dim)),
+        "repeat_interleave: unsupported by codegen for the given input/attrs (rep_dim={}, num_repeats={})",
+        operation_attributes.rep_dim,
+        operation_attributes.num_repeats);
 }
 
 RepeatInterleaveCodegenDeviceOperation::spec_return_value_t
@@ -29,7 +41,9 @@ RepeatInterleaveCodegenDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     auto output_shape = input_tensor.logical_shape();
-    output_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
+    const uint32_t ndim = output_shape.rank();
+    const uint32_t original_dim = operation_attributes.rep_dim - (4 - ndim);
+    output_shape[original_dim] *= operation_attributes.num_repeats;
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
