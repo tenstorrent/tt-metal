@@ -152,13 +152,13 @@ void tilize_in(
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
 inline void tilize_single_block(DataflowBuffer in_cb) {
-    // DBG-LLK-NOCB in_cb.wait_front(in_block_w);
+    in_cb.wait_front(in_block_w);
 #ifndef ARCH_QUASAR  // Quasar has no fast tilize; these helpers are only reached on the split_reader/
                      // activation_reuse path, which the resnet conv factories force OFF. Guard the
                      // raw fast_tilize_* names out so the template body parses on Quasar (dead there).
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
 #endif
-    // DBG-LLK-NOCB in_cb.pop_front(in_block_w);
+    in_cb.pop_front(in_block_w);
 }
 
 template <uint32_t in_cb_id, uint32_t window_reuse_offset>
@@ -196,7 +196,7 @@ inline void tilize_in_reuse_split_reader(
     DataflowBuffer out_cb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
-    // DBG-LLK-NOCB out_cb.reserve_back(out_cb_tiles);
+    out_cb.reserve_back(out_cb_tiles);
 #ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
 #endif
@@ -254,7 +254,7 @@ inline void tilize_in_reuse_split_reader(
 #ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr_init));
 #endif
-    // DBG-LLK-NOCB out_cb.push_back(out_cb_tiles);
+    out_cb.push_back(out_cb_tiles);
 #ifndef ARCH_QUASAR  // Quasar has no fast tilize (split_reader/activation_reuse path, off for resnet)
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 #endif
@@ -270,11 +270,11 @@ inline void reblock_and_untilize(
     const uint32_t interm_cb_id = interm_cb.get_id();
     const uint32_t out_cb_id = out_cb.get_id();
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
-    // DBG-LLK-NOCB interm_cb.wait_front(num_tiles_in_row_of_subblocks);
+    interm_cb.wait_front(num_tiles_in_row_of_subblocks);
     uint32_t within_block_index = 0;
     for (uint32_t h = 0; h < out_subblock_h; h++) {
         uint32_t block_offset = 0;
-        // DBG-LLK-NOCB out_cb.reserve_back(out_block_w);
+        out_cb.reserve_back(out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < out_subblock_w; w++) {
@@ -287,10 +287,10 @@ inline void reblock_and_untilize(
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
-        // DBG-LLK-NOCB out_cb.push_back(out_block_w);
+        out_cb.push_back(out_block_w);
         within_block_index += out_subblock_w;
     }
-    // DBG-LLK-NOCB interm_cb.pop_front(num_tiles_in_row_of_subblocks);
+    interm_cb.pop_front(num_tiles_in_row_of_subblocks);
 }
 
 void kernel_main() {
@@ -410,20 +410,6 @@ void kernel_main() {
     DataflowBuffer cb_bias(bias_cb_id);
 #endif
     DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
-    // DBG-LLK-NOCB: CB flow-control (wait_front/pop_front/reserve_back/push_back) commented out on the
-    // conv path to test the LLK team's hypothesis that the 0x19 is a CB-op fault. Suppress unused-variable
-    // -Werror for CBs whose only uses were those (now-commented) ops. Revert this whole change to restore.
-    (void)cb_in0;
-    (void)cb_tilized_in0;
-    (void)cb_mm_in0;
-    (void)cb_in1;
-    (void)cb_matmul_partials;
-    (void)cb_mm_out;
-    (void)cb_out;
-    (void)cb_untilize_mode_out;
-#ifdef FUSE_BIAS
-    (void)cb_bias;
-#endif
 
     // WH fast_tilize RACE-GUARD (DPRINT-independent; do NOT remove without the LLK fix). The WH fast_tilize
     // dest/semaphore handshake has a timing-sensitive race that deadlocks the tilize on the PACK thread
@@ -442,18 +428,7 @@ void kernel_main() {
     });
 #endif
 
-#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_ORIENTED_HW_STARTUP)
-    // OPTION B PROBE (env TT_METAL_QSR_CONV_TILIZE_HW_STARTUP): give the in-kernel tilize a TILIZE-oriented
-    // one-time hw_configure (unpack=act, pack=act_tilized), exactly like the standalone tilize op that
-    // PASSES on Quasar -- instead of the matmul-oriented startup that makes the tilize's MATH datacopy MOP
-    // get rejected (ERROR_TRISC1 0x19). The matmul below runs with only matmul_block_init (its hw_configure
-    // is NOT set here), so it may fault / mis-compute -- that is EXPECTED for this probe. The goal is to
-    // confirm the TILIZE clears the 0x19 under a tilize-oriented startup, which validates splitting tilize
-    // and matmul into two device programs (each with its own hw_startup) -- the real Option B fix.
-    compute_kernel_hw_startup(in0_cb_id, tilized_in0_cb_id);
-#else
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
-#endif
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -636,17 +611,17 @@ void kernel_main() {
                     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
-                // DBG-LLK-NOCB cb_mm_in0.wait_front(in0_block_num_tiles);
+                cb_mm_in0.wait_front(in0_block_num_tiles);
 
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
                 if (skip_compute) {
-                    // DBG-LLK-NOCB cb_mm_in0.pop_front(in0_block_num_tiles);
+                    cb_mm_in0.pop_front(in0_block_num_tiles);
                     continue;
                 }
 #endif
 
-                // DBG-LLK-NOCB cb_in1.wait_front(in1_block_num_tiles);
+                cb_in1.wait_front(in1_block_num_tiles);
 
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
@@ -692,7 +667,7 @@ void kernel_main() {
                             reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
                             copy_tile_to_dst_init_short(matmul_partials_cb);
 #endif
-                            // DBG-LLK-NOCB cb_matmul_partials.wait_front(out_subblock_num_tiles);
+                            cb_matmul_partials.wait_front(out_subblock_num_tiles);
                             tile_regs_acquire();
 
                             uint32_t start_dst_index = 0;
@@ -700,7 +675,7 @@ void kernel_main() {
                             copy_block_matmul_partials(
                                 matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
-                            // DBG-LLK-NOCB cb_matmul_partials.pop_front(out_subblock_num_tiles);
+                            cb_matmul_partials.pop_front(out_subblock_num_tiles);
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
                             matmul_block_init(
                                 mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -739,7 +714,7 @@ void kernel_main() {
                         {
                             DataflowBuffer curr_out_cb =
                                 curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
-                            // DBG-LLK-NOCB curr_out_cb.reserve_back(out_subblock_num_tiles);
+                            curr_out_cb.reserve_back(out_subblock_num_tiles);
                             tile_regs_wait();
 
                             if constexpr (packer_l1_acc) {
@@ -796,7 +771,7 @@ void kernel_main() {
 #endif
 
                             tile_regs_release();
-                            // DBG-LLK-NOCB curr_out_cb.push_back(out_subblock_num_tiles);
+                            curr_out_cb.push_back(out_subblock_num_tiles);
                         }
 
                         in1_index_subblock_offset += out_subblock_w;
@@ -812,7 +787,7 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     if constexpr (fuse_bias) {
                         if (in0_block_w_i < in0_num_blocks_w - 1) {
-                            // DBG-LLK-NOCB cb_matmul_partials.wait_front(out_block_num_tiles);
+                            cb_matmul_partials.wait_front(out_block_num_tiles);
 #ifdef ARCH_QUASAR
                             // TEN-4746: a bare pop_front right after wait_front traps the Quasar unpacker (HW
                             // expects TDMA activity between). Interpose a dummy op as the documented quick
@@ -820,7 +795,7 @@ void kernel_main() {
                             // Quasar spill path (force_conv_no_spill disabled).
                             UNPACK(TTI_NOP);
 #endif
-                            // DBG-LLK-NOCB cb_matmul_partials.pop_front(out_block_num_tiles);
+                            cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, matmul_partials_cb));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, matmul_partials_cb));
@@ -829,12 +804,12 @@ void kernel_main() {
                         enable_reload = false;
                     } else {
                         if (in0_block_w_i < in0_num_blocks_w - 2) {
-                            // DBG-LLK-NOCB cb_matmul_partials.wait_front(out_block_num_tiles);
+                            cb_matmul_partials.wait_front(out_block_num_tiles);
 #ifdef ARCH_QUASAR
                             // TEN-4746 (see above): TDMA interpose between bare wait_front/pop_front.
                             UNPACK(TTI_NOP);
 #endif
-                            // DBG-LLK-NOCB cb_matmul_partials.pop_front(out_block_num_tiles);
+                            cb_matmul_partials.pop_front(out_block_num_tiles);
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, matmul_partials_cb));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, matmul_partials_cb));
@@ -864,8 +839,8 @@ void kernel_main() {
                     }
                 }
 
-                // DBG-LLK-NOCB cb_mm_in0.pop_front(in0_block_num_tiles);
-                // DBG-LLK-NOCB cb_in1.pop_front(in1_block_num_tiles);
+                cb_mm_in0.pop_front(in0_block_num_tiles);
+                cb_in1.pop_front(in1_block_num_tiles);
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, matmul_partials_cb));
@@ -901,8 +876,8 @@ void kernel_main() {
                     (uint32_t)in0_block_h_i,
                     (uint32_t)untilize_mode_out_cb_id,
                     (uint32_t)cb_untilize_mode_out.get_write_ptr()));
-                // DBG-LLK-NOCB cb_bias.wait_front(bias_ntiles_w);
-                // DBG-LLK-NOCB cb_matmul_partials.wait_front(out_block_num_tiles);
+                cb_bias.wait_front(bias_ntiles_w);
+                cb_matmul_partials.wait_front(out_block_num_tiles);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
@@ -923,9 +898,9 @@ void kernel_main() {
                         }
 #endif
                         tile_regs_commit();
-                        // DBG-LLK-NOCB cb_matmul_partials.pop_front(out_subblock_num_tiles);
+                        cb_matmul_partials.pop_front(out_subblock_num_tiles);
 
-                        // DBG-LLK-NOCB cb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
+                        cb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
 #ifdef ARCH_QUASAR
@@ -942,7 +917,7 @@ void kernel_main() {
 #endif
                         }
                         tile_regs_release();
-                        // DBG-LLK-NOCB cb_untilize_mode_out.push_back(out_subblock_num_tiles);
+                        cb_untilize_mode_out.push_back(out_subblock_num_tiles);
 
                         in1_index_subblock_offset += out_subblock_w;
                     }  // for in1_num_subblocks

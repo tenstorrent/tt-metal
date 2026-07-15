@@ -83,22 +83,10 @@ public:
     uint32_t get_total_num_entries() const;
 
     // Explicit sync APIs
-#ifdef ARCH_QUASAR
-    // DBG-LLK-NOCB: bodies gutted on Quasar to test the LLK team's hypothesis that the 0x19 is a CB-op
-    // fault. Every DataflowBuffer flow-control call (wait_tiles/pop_tiles/push_tiles/reserve) becomes a
-    // no-op at the SOURCE, so no call site (incl. ones in shared helpers we may have missed) can trigger
-    // it. This neutralizes ALL Quasar DFB flow-control globally -- fine for the conv-only test; REVERT
-    // this block (restore the _impl calls) afterwards.
-    void reserve_back(uint16_t num_entries) { (void)num_entries; }
-    void push_back(uint16_t num_entries) { (void)num_entries; }
-    void wait_front(uint16_t num_entries) { (void)num_entries; }
-    void pop_front(uint16_t num_entries) { (void)num_entries; }
-#else
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }
     void push_back(uint16_t num_entries) { push_back_impl(num_entries); }
     void wait_front(uint16_t num_entries) { wait_front_impl(num_entries); }
     void pop_front(uint16_t num_entries) { pop_front_impl(num_entries); }
-#endif
     // Explicit sync APIs end
 
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)

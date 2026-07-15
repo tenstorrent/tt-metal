@@ -1701,13 +1701,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         if (has_bias) {
             compute_kernel_spec.compiler_options.defines.insert({"FUSE_BIAS", "1"});
         }
-        // OPTION B PROBE (env TT_METAL_QSR_CONV_TILIZE_HW_STARTUP): on the Quasar height-sharded path, tell the
-        // compute kernel to use a TILIZE-oriented compute_kernel_hw_startup so the in-kernel tilize runs under
-        // the same engine config as the passing standalone tilize op (validates the two-program Option B split;
-        // the matmul is expected to mis-run under this probe). Off by default; WH/BH unaffected.
-        if (arch_is_quasar && height_sharded && (std::getenv("TT_METAL_QSR_CONV_TILIZE_HW_STARTUP") != nullptr)) {
-            compute_kernel_spec.compiler_options.defines.insert({"QSR_TILIZE_ORIENTED_HW_STARTUP", "1"});
-        }
         if (block_sharded) {
             // Only the block-sharded (mcast) path binds dfb::act_row_major on compute; the define guards
             // the kernel's in0_pretilize_cb_id = dfb::act_row_major reference (height-sharded has no

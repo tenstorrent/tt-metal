@@ -55,7 +55,7 @@ void kernel_main() {
         constexpr uint32_t config_page_size = get_arg(args::config_page_size);
         Noc().async_read(config_accessor, cb_reader_idx, config_page_size, {.page_id = core_index}, {});
         Noc().async_read_barrier();
-        // DBG-LLK-NOCB cb_reader_idx.push_back(1);
+        cb_reader_idx.push_back(1);
     }
 #else
     packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -134,7 +134,7 @@ void kernel_main() {
             reader_idx = start_reader_idx;
 
             if constexpr (!activation_reuse_enabled) {
-                // DBG-LLK-NOCB cb_act.reserve_back(act_block_num_tiles);
+                cb_act.reserve_back(act_block_num_tiles);
                 l1_write_addr_act = cb_act.get_write_ptr();
 
                 // read_activation_data branches on sliced_inner_dim:
@@ -181,7 +181,7 @@ void kernel_main() {
                     (uint32_t)cb_act.get_entry_size(),
                     (uint32_t)act_block_num_tiles);
 
-                // DBG-LLK-NOCB cb_act.push_back(act_block_num_tiles);
+                cb_act.push_back(act_block_num_tiles);
             } else {
                 read_sticks_activation_reuse<
                     coalesced_read_bytes,

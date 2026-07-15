@@ -99,7 +99,7 @@ void kernel_main() {
     // Split reader configuration
     if constexpr (split_reader_enabled) {
 #ifdef CONFIG_TENSOR_IN_DRAM
-        // DBG-LLK-NOCB cb_reader_indices_obj.wait_front(1);
+        cb_reader_indices_obj.wait_front(1);
 #endif
     }
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
@@ -146,7 +146,7 @@ void kernel_main() {
                 reader_idx = start_reader_idx;
 
                 if constexpr (!activation_reuse_enabled) {
-                    // DBG-LLK-NOCB cb_act_second_obj.reserve_back(act_block_num_tiles);
+                    cb_act_second_obj.reserve_back(act_block_num_tiles);
                     l1_write_addr_act = cb_act_second_obj.get_write_ptr();
                     read_sticks<
                         dilation_w,
@@ -157,7 +157,7 @@ void kernel_main() {
                         weight_size_w,
                         stride_w>(noc, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
                     noc.async_read_barrier();
-                    // DBG-LLK-NOCB cb_act_second_obj.push_back(act_block_num_tiles);
+                    cb_act_second_obj.push_back(act_block_num_tiles);
 
                     reader_offset += window_outer_offset;
                 } else {
@@ -198,7 +198,7 @@ void kernel_main() {
 #endif
 
             // Receive weights
-            // DBG-LLK-NOCB cb_weight_obj.reserve_back(weight_block_num_tiles);
+            cb_weight_obj.reserve_back(weight_block_num_tiles);
             if (bh == 0) {
                 // Set weights semaphore value to INVALID
                 weights_mcast_receiver_sem.set(INVALID);
@@ -211,13 +211,13 @@ void kernel_main() {
                 weights_mcast_receiver_sem.wait(VALID);
             }
 
-            // DBG-LLK-NOCB cb_weight_obj.push_back(weight_block_num_tiles);
+            cb_weight_obj.push_back(weight_block_num_tiles);
         }
 
 #ifdef FUSE_BIAS
         if constexpr (fuse_bias) {
             if (load_bias) {
-                // DBG-LLK-NOCB cb_bias_obj.reserve_back(bias_ntiles);
+                cb_bias_obj.reserve_back(bias_ntiles);
 
                 // Set weights semaphore value to INVALID
                 weights_mcast_receiver_sem.set(INVALID);
@@ -228,7 +228,7 @@ void kernel_main() {
                 // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
                 weights_mcast_receiver_sem.wait(VALID);
 
-                // DBG-LLK-NOCB cb_bias_obj.push_back(bias_ntiles);
+                cb_bias_obj.push_back(bias_ntiles);
                 load_bias = false;
             }
         }
