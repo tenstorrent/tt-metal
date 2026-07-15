@@ -299,3 +299,47 @@ def test_bge_m3_tracy_perf_b12_s8192_dp2(mesh_device):
     ttnn.synchronize_device(mesh_device)
     signpost("stop")
     ttnn.deallocate(out)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 1)], indirect=True, ids=["dp2_n300"])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 50_000_000,
+            "num_command_queues": 1,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+def test_bge_m3_tracy_perf_b12_s8192_dp2_traced(mesh_device):
+    """Profile the TRACED DP2 replay so device-kernel timestamps reflect the
+    real trace (minimal inter-op host gaps). Compare device-timeline span to the
+    wall-clock metric to see how much of the 1247ms wall is on-device vs host."""
+    if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") != "1":
+        pytest.fail("TT_METAL_DEVICE_PROFILER=1 is required for device kernel profiling.")
+    if os.environ.get("BGE_M3_DATA_PARALLEL", "0") != "1":
+        pytest.fail("BGE_M3_DATA_PARALLEL=1 is required for DP2 profiling.")
+
+    from models.demos.wormhole.bge_m3.tests.perf.dp2_perf import _to_batchsharded_tensors
+
+    model_args, model, _ = create_tt_model(
+        mesh_device=mesh_device, max_batch_size=12, max_seq_len=SEQ_LEN_8192, dtype=ttnn.bfloat8_b
+    )
+    host_inputs = prepare_inputs(model_args.tokenizer, 12, SEQ_LEN_8192, model_args.pad_token_id)
+    device_inputs = _to_batchsharded_tensors(host_inputs, mesh_device, device=True)
+
+    out = model.forward(**device_inputs)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(out)
+
+    model.capture_trace(**device_inputs, mesh_device=mesh_device, cq_id=0)
+    for _ in range(3):
+        model.execute_trace(blocking=True)
+
+    logger.info("Running signed TRACED DP2 replay")
+    signpost("start")
+    model.execute_trace(blocking=True)
+    signpost("stop")
+    model.release_trace()
