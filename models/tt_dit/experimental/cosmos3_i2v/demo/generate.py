@@ -227,10 +227,11 @@ def open_mesh(mesh_shape: tuple[int, int]):
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
     )
-    # 512 MB covers the proj_in output tensor [N_gen, hidden_size] at 189f 720p (≈452 MB).
-    # The old 200 MB default assumed gen_seq was passed in pre-allocated; with device proj_in
-    # the trunk creates that tensor inside the trace and it must fit in the trace region.
-    trace_region_size = int(os.environ.get("TT_COSMOS3_TRACE_REGION_SIZE", str(512 * 1024 * 1024)))
+    # With device proj_in the trunk CREATES [N_gen, hidden_size] inside the trace (452 MB at
+    # 189f 720p) rather than receiving it as a pre-allocated input. Additional trace buffers
+    # (QKV projections, layer intermediates) add another ~500 MB, so 2 GB is needed to avoid
+    # trace-region overflow that corrupts intermediate activations and produces noisy output.
+    trace_region_size = int(os.environ.get("TT_COSMOS3_TRACE_REGION_SIZE", str(2 * 1024 * 1024 * 1024)))
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
         trace_region_size=trace_region_size,
