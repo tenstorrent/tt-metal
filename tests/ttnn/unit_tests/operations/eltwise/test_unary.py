@@ -1119,6 +1119,35 @@ def test_remainder_uint32_with_activations(device, input_shapes, value_ranges, s
     assert torch.equal(output_tensor, torch_output_tensor)
 
 
+def test_remainder_divisor_guard(device, expect_error):
+    uint32_tensor = ttnn.from_torch(
+        torch.tensor([[5, 7, 10, 100]], dtype=torch.int64).to(torch.uint32),
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    float_tensor = ttnn.from_torch(
+        torch.rand((32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # uint32 requires a positive integer divisor: zero and negative divisors are rejected.
+    for bad_divisor in [0, -5]:
+        with expect_error(RuntimeError, "Divisor must be positive"):
+            ttnn.remainder(uint32_tensor, bad_divisor)
+
+    # a float divisor on a uint32 tensor is rejected (it would silently truncate).
+    with expect_error(RuntimeError, "integer scalar divisor"):
+        ttnn.remainder(uint32_tensor, 3.0)
+
+    # float path uses 1/divisor, so a zero divisor (int or float) is rejected as well.
+    for bad_divisor in [0, 0.0]:
+        with expect_error(RuntimeError, "Divisor must be non-zero"):
+            ttnn.remainder(float_tensor, bad_divisor)
+
+
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])

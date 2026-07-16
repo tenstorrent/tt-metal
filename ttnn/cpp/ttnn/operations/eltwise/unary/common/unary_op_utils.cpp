@@ -4,6 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
+#include <concepts>
 #include <optional>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -337,11 +338,16 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     (uint)params[0])};
         case UnaryOpType::REMAINDER:
             if (input_dtype == DataType::UINT32) {
-                TT_FATAL(static_cast<uint32_t>(param0_raw) != 0, "divisor must be non-zero");
+                if constexpr (std::floating_point<T>) {
+                    TT_FATAL(false, "Expected integer scalar divisor (uint32 or int32)");
+                } else {
+                    TT_FATAL(param0_raw > 0, "Divisor must be positive, got {}", param0_raw);
+                }
                 return {
                     "remainder_tile_uint32_init();",
                     fmt::format("remainder_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
             }
+            TT_FATAL(param0 != 0.0f, "Divisor must be non-zero");
             return {
                 fmt::format(
                     "remainder_tile_init({:#x}u, {:#x}u);",
