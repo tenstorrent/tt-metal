@@ -100,6 +100,11 @@ private:
     // offending core so we can see whether it is an active or idle core. Key: (ContextKey<<3)|risc.
     std::unordered_map<uint64_t, int32_t> lane_depth_;
     uint64_t orphan_end_count_ = 0;
+    // Of the orphan ends, how many were the lane's FIRST-EVER event (i.e. the zone was already open
+    // before our capture window began, so its START predates the drain and was never seen). These are
+    // benign capture-start boundary straddles. orphan_end_count_ - orphan_boundary_count_ = the ends
+    // that arrived AFTER balanced traffic on the lane => a genuine pairing/drain bug worth chasing.
+    uint64_t orphan_boundary_count_ = 0;
     std::unordered_set<uint64_t> orphan_lanes_;  // distinct (chip,core,risc) lanes that saw an orphan end
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
     tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;

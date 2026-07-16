@@ -143,11 +143,13 @@ void RealtimeProfilerTracyHandler::RemoveDevice([[maybe_unused]] uint32_t chip_i
     if (orphan_end_count_ > 0 || starts_open > 0) {
         log_warning(
             tt::LogMetal,
-            "[Real-time profiler] SUMMARY: {} orphan ZONE_END(s) across {} lane(s); {} unmatched "
-            "ZONE_START(s) still open across {} lane(s). (ends>>starts => start lost upstream; "
-            "ends~=starts => start mis-routed to wrong lane)",
+            "[Real-time profiler] SUMMARY: {} orphan ZONE_END(s) across {} lane(s) [{} benign "
+            "capture-start boundary, {} MID-RUN imbalance]; {} unmatched ZONE_START(s) still open "
+            "across {} lane(s). (mid-run>0 => real pairing/drain bug; boundary-only => clean)",
             orphan_end_count_,
             orphan_lanes_.size(),
+            orphan_boundary_count_,
+            orphan_end_count_ - orphan_boundary_count_,
             starts_open,
             open_lanes);
     }
@@ -382,15 +384,29 @@ void RealtimeProfilerTracyHandler::HandleWorkerZone(
     if (zone.is_start) {
         lane_depth_[lane_key]++;
     } else {
-        auto& depth = lane_depth_[lane_key];
+        // A lane only enters lane_depth_ via a START (above). So if this END finds no entry at all,
+        // it is the lane's FIRST-EVER event => the matching START predates our capture window (the
+        // zone was already open when the drain began) => a benign boundary straddle, NOT a lost START.
+        // An END that finds an existing entry at depth<=0 means the lane had balanced traffic and then
+        // an EXTRA end => a genuine pairing/drain bug.
+        auto it = lane_depth_.find(lane_key);
+        const bool never_opened = (it == lane_depth_.end());
+        const int32_t depth = never_opened ? 0 : it->second;
         if (depth <= 0) {
             ++orphan_end_count_;
             orphan_lanes_.insert(lane_key);
+            if (never_opened) {
+                ++orphan_boundary_count_;
+            }
             if (orphan_end_count_ <= 25) {
                 log_warning(
                     tt::LogMetal,
-                    "[Real-time profiler] orphan ZONE_END (no open zone on lane) dropped: chip {} "
-                    "noc0=({},{}) risc {} name '{}' id 0x{:x} -- would SEGV tracy-capture; #{}",
+                    "[Real-time profiler] orphan ZONE_END dropped ({}): chip {} noc0=({},{}) risc {} "
+                    "name '{}' id 0x{:x} -- would SEGV tracy-capture; #{}",
+                    never_opened ? "capture-start boundary: zone open before drain, START never seen -- benign"
+                                 : "reader ring over-run under back-pressure: producer got >RING_CAP ahead of "
+                                   "the busy reader, the lap guard clamped head=tail-RING_CAP and dropped the "
+                                   "oldest words (the FW START) -- see reader LAP-DROPPED telemetry; benign, dropped",
                     zone.chip_id,
                     zone.core_noc0_x,
                     zone.core_noc0_y,
@@ -401,7 +417,7 @@ void RealtimeProfilerTracyHandler::HandleWorkerZone(
             }
             return;
         }
-        --depth;
+        --it->second;
     }
 
     {

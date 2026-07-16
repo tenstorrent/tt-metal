@@ -1948,12 +1948,20 @@ void RealtimeProfilerManager::shutdown() {
                     uint64_t wall = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xC0 + rh * 8);
                     uint64_t passes = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xD0 + rh * 8);
                     uint64_t polls = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0xE0 + rh * 8);
+                    // Reader lap-guard drop counter (profzone RES(0x50+h*8) == params+0x90+h*8). The reader
+                    // clamps head to tail-RING_CAP when the producer got >512 words ahead, DROPPING the
+                    // oldest words -- and the oldest word in a dispatch is the FW ZONE_START. If this is
+                    // NONZERO the "producer always blocks so tail-head<=512" invariant is being violated
+                    // under back-pressure, and the reader-side drop is the root cause of the orphan ENDs.
+                    uint64_t lap_dropped =
+                        dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x90 + rh * 8);
                     uint64_t markers = bulk_words / 2;
                     double wall_ms = wall / 1e6;
                     log_info(
                         tt::LogMetal,
                         "[Real-time profiler] Device {}: reader {}: wall={} ms, {} markers => {} k/s; {} passes, "
-                        "{} core-polls ({} ns/poll); {} segments (avg {} words/seg)",
+                        "{} core-polls ({} ns/poll); {} segments (avg {} words/seg); LAP-DROPPED {} words "
+                        "(want 0 -- nonzero => reader dropped oldest markers/STARTs under back-pressure)",
                         dev_state.chip_id,
                         rh,
                         (uint64_t)wall_ms,
@@ -1963,7 +1971,8 @@ void RealtimeProfilerManager::shutdown() {
                         polls,
                         polls ? wall / polls : 0,
                         segs,
-                        segs ? bulk_words / segs : 0);
+                        segs ? bulk_words / segs : 0,
+                        lap_dropped);
                 }
                 dev_state.x280_driver->assert_reset();
             } catch (const std::exception& e) {

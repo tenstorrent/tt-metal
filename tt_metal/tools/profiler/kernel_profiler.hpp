@@ -243,6 +243,9 @@ inline __attribute__((always_inline)) void mark_sticky_meta() {
     }
     const uint32_t cx = my_x[0] & 0x3F;  // 6-bit coords: Blackhole NoC coords exceed 15, so 4 bits
     const uint32_t cy = my_y[0] & 0x3F;  // truncated -> host virt->noc0 miss -> uncalibrated ctx -> crash
+    // The sibling-ring writes below are the ONLY producer writes that bypass ring_ensure_room's block.
+    // Refresh the X280-updated consumer heads once so the per-sibling room check reads a current value.
+    invalidate_l1_cache();
     for (uint32_t r = 0; r < PROCESSOR_COUNT; r++) {
         // w0: [31]=valid [30:28]=type(STICKY_META) [27:22]=core_x(6) [21:16]=core_y(6) [15:10]=risc(6) [9:0]=unused
         const uint32_t w0 = 0x80000000u | ((STICKY_META & 0x7u) << 28) | (cx << 22) | (cy << 16) | ((r & 0x3F) << 10);
@@ -253,9 +256,19 @@ inline __attribute__((always_inline)) void mark_sticky_meta() {
             ring_write_word(hostZoneId);
             publish_tail();
         } else {
-            // Sibling ring (that RISC has not started emitting): write at its producer tail directly, then
-            // publish (release) so the X280 sees the context ahead of that RISC's own markers.
-            uint32_t t = profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + r];
+            // Sibling ring (that RISC has not started emitting): BRISC writes at its producer tail directly.
+            // This is the one write that skips ring_ensure_room, so it MUST honor the ring capacity itself:
+            // if the sibling ring is near-full (the round-robin X280 reader hasn't revisited it yet, so its
+            // head lags), the unchecked +2 would push tail past head+RING_CAPACITY, overwrite the oldest
+            // unread slot (a FW ZONE_START) and trip the reader's lap guard -> dropped START -> orphan END.
+            // Gate on >=2 words free; skip this sibling's sticky otherwise (a stale/too-old head only
+            // over-estimates fullness => we skip conservatively, never over-run). Skipping is cheap: the
+            // host drops STICKY_META today, and forward-fills the prior op-ID on a missed sticky.
+            const uint32_t head = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + r];
+            const uint32_t t = profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + r];
+            if ((uint32_t)(t - head) > (RING_CAPACITY - PROFILER_L1_MARKER_UINT32_SIZE)) {
+                continue;  // sibling ring full -> skip rather than over-run it
+            }
             profiler_data_buffer[r].data[t % RING_CAPACITY] = w0;
             profiler_data_buffer[r].data[(t + 1) % RING_CAPACITY] = hostZoneId;
             asm volatile("fence" ::: "memory");  // marker words visible before the tail advance
