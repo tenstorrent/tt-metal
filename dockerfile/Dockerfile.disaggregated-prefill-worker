@@ -21,7 +21,8 @@ FROM ${BASE_IMAGE} AS llm-build
 USER root
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TT_LLM_ENGINE_REF=main
-
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # Deps the migration CMake needs beyond the base: protobuf (the client
 # (de)serializes the KV chunk-table proto) + Python dev headers (nanobind).
 # fmt/spdlog/nanobind/enchantum/tt-logger/nlohmann are CPM-fetched (network).
@@ -61,7 +62,7 @@ FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 LABEL org.opencontainers.image.source=https://github.com/tenstorrent/tt-metal
 LABEL org.opencontainers.image.description="disaggregated-prefill worker (tt-metal built from local source) with tt-llm-engine _migration_client baked in"
-
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 ARG TT_METAL_HOME=/home/user/tt-metal
 
 # Runtime env (mirrors this repo's release-models stage). The old prebuilt worker
