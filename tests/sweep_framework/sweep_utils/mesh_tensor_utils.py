@@ -291,6 +291,23 @@ def _guarded_close_mesh_device(device, *args, **kwargs):
 ttnn.close_mesh_device = _guarded_close_mesh_device
 
 
+_orig_set_fabric_config = getattr(ttnn, "set_fabric_config", None)
+
+
+def _guarded_set_fabric_config(*args, **kwargs):
+    """A fabric config change requires ALL devices closed. Modules that change
+    fabric (e.g. conv2d heavy<->light: close -> set_fabric_config -> reopen) call
+    ttnn.close_mesh_device first, but that is deferred for the cached job device —
+    so really close it here before the reconfig, or metal asserts 'SetFabricConfig
+    not allowed while devices are still open'. create_mesh_device reopens after."""
+    close_job_device()
+    return _orig_set_fabric_config(*args, **kwargs)
+
+
+if _orig_set_fabric_config is not None:
+    ttnn.set_fabric_config = _guarded_set_fabric_config
+
+
 def clear_job_device_program_cache() -> None:
     """Clear the cached job device's program cache — call at each module boundary
     so a new module doesn't collide with an earlier module's cached programs /
