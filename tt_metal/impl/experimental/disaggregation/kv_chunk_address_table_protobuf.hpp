@@ -16,7 +16,7 @@
 
 #include <tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp>
 
-namespace tt::tt_metal::internal::disaggregation {
+namespace tt::tt_metal::experimental::disaggregation {
 
 // --- Binary wire format ---
 
@@ -32,4 +32,4 @@ void export_to_protobuf_text_file(const KvChunkAddressTable& table, const std::s
 KvChunkAddressTable import_from_protobuf_text(const std::string& text);
 KvChunkAddressTable import_from_protobuf_text_file(const std::string& path);
 
-}  // namespace tt::tt_metal::internal::disaggregation
+}  // namespace tt::tt_metal::experimental::disaggregation

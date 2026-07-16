@@ -14,9 +14,9 @@
 // reader (umd_dram_reader.cpp::read_dram_umd) split it the same way, so the
 // decode lives in one place. Mirrors tt-llm-engine
 // disaggregation/migration/src/worker/include/noc_addr.hpp.
-namespace tt::tt_metal::internal::disaggregation {
+namespace tt::tt_metal::experimental::disaggregation {
 
 inline uint32_t addr_channel(uint64_t noc_addr) { return static_cast<uint32_t>(noc_addr >> 32); }
 inline uint32_t addr_local(uint64_t noc_addr) { return static_cast<uint32_t>(noc_addr & 0xFFFFFFFFull); }
 
-}  // namespace tt::tt_metal::internal::disaggregation
+}  // namespace tt::tt_metal::experimental::disaggregation

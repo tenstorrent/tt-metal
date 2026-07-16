@@ -37,7 +37,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #pragma GCC diagnostic pop
 
-namespace tt::tt_metal::internal::disaggregation {
+namespace tt::tt_metal::experimental::disaggregation {
 
 namespace {
 
@@ -136,4 +136,4 @@ std::vector<uint8_t> read_dram_umd(uint64_t unique_id, uint64_t noc_addr, uint32
     return buf;
 }
 
-}  // namespace tt::tt_metal::internal::disaggregation
+}  // namespace tt::tt_metal::experimental::disaggregation
