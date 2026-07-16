@@ -98,22 +98,22 @@ PATCH_EMBED_CONV_CONFIGS: dict[str, dict[str, Any]] = {
         "enable_weights_double_buffer": False,
         "reallocate_halo_output": False,
     },
-    # Final-layer winners were tuned at grid=8; block+ABH64+ADB+WDB OOMs at
-    # production H×W once the backbone already owns L1. Prefer safer auto/width.
+    # grid=8 id=block_abh64_adb1_da0_wdb1 best_us=309.0 (sweep 2026-07-16)
     "final_in_conv": {
-        "shard_layout": "auto",
-        "act_block_h_override": 0,
-        "enable_act_double_buffer": False,
-        "deallocate_activation": True,
-        "enable_weights_double_buffer": False,
-        "reallocate_halo_output": True,
+        "shard_layout": "block",
+        "act_block_h_override": 64,
+        "enable_act_double_buffer": True,
+        "deallocate_activation": False,
+        "enable_weights_double_buffer": True,
+        "reallocate_halo_output": False,
     },
+    # grid=8 id=block_abh64_adb1_da1_wdb1 best_us=143.6 (sweep 2026-07-16)
     "final_out_conv": {
-        "shard_layout": "width",
-        "act_block_h_override": 0,
+        "shard_layout": "block",
+        "act_block_h_override": 64,
         "enable_act_double_buffer": True,
         "deallocate_activation": True,
-        "enable_weights_double_buffer": False,
+        "enable_weights_double_buffer": True,
         "reallocate_halo_output": True,
     },
     # Align with final_out_conv (width); never dealloc x_flat (skip input).
