@@ -96,10 +96,10 @@ void kernel_main() {
 
     // ---- Phase 1: Y pass ----
     // Generate Y scalar tiles.  Compute will wait_front, use them, then pop.
-    generate_bcast_unary_scalar(cb_wr, get_arg_val<uint32_t>(1));
-    generate_bcast_unary_scalar(cb_wg, get_arg_val<uint32_t>(2));
-    generate_bcast_unary_scalar(cb_wb, get_arg_val<uint32_t>(3));
-    generate_bcast_unary_scalar(cb_off, get_arg_val<uint32_t>(4));
+    generate_bcast_unary_scalar(CircularBuffer(cb_wr), get_arg_val<uint32_t>(1));
+    generate_bcast_unary_scalar(CircularBuffer(cb_wg), get_arg_val<uint32_t>(2));
+    generate_bcast_unary_scalar(CircularBuffer(cb_wb), get_arg_val<uint32_t>(3));
+    generate_bcast_unary_scalar(CircularBuffer(cb_off), get_arg_val<uint32_t>(4));
 
     for (uint32_t batch = 0; batch < y_batches; batch++) {
         uint32_t base_spatial = y_start + batch * TILE_H;
@@ -133,10 +133,10 @@ void kernel_main() {
 
         // Push new scalar tiles for this UV plane.
         // Compute will have popped the previous set, freeing space in these CBs.
-        generate_bcast_unary_scalar(cb_wr, get_arg_val<uint32_t>(coeff_base + 0));
-        generate_bcast_unary_scalar(cb_wg, get_arg_val<uint32_t>(coeff_base + 1));
-        generate_bcast_unary_scalar(cb_wb, get_arg_val<uint32_t>(coeff_base + 2));
-        generate_bcast_unary_scalar(cb_off, get_arg_val<uint32_t>(coeff_base + 3));
+        generate_bcast_unary_scalar(CircularBuffer(cb_wr), get_arg_val<uint32_t>(coeff_base + 0));
+        generate_bcast_unary_scalar(CircularBuffer(cb_wg), get_arg_val<uint32_t>(coeff_base + 1));
+        generate_bcast_unary_scalar(CircularBuffer(cb_wb), get_arg_val<uint32_t>(coeff_base + 2));
+        generate_bcast_unary_scalar(CircularBuffer(cb_off), get_arg_val<uint32_t>(coeff_base + 3));
 
         uint32_t uv_batches = (uv_count + TILE_H - 1) / TILE_H;
 
