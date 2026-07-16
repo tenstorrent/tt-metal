@@ -41,6 +41,8 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
+
     ProgramDescriptor desc;
 
     // Sharded input CB — aliased to the input shard buffer for zero-copy read.
@@ -52,6 +54,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = tile_descriptor,
         });
         cb_src0.buffer = src_buffer;
         desc.cbs.push_back(std::move(cb_src0));
@@ -70,6 +73,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = tile_descriptor,
         });
         if (!output_is_interleaved) {
             cb_output.buffer = dst_buffer;

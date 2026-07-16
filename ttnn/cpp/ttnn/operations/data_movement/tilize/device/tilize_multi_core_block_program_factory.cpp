@@ -31,7 +31,8 @@ void push_cb_pair(
     tt::DataFormat input_cb_data_format,
     tt::DataFormat output_cb_data_format,
     uint32_t dram_alignment,
-    uint32_t tile_height) {
+    uint32_t tile_height,
+    const TileDescriptor& tile_descriptor) {
     // c_1 is a per-row staging buffer used by the reader when the DRAM source row and the
     // L1 destination have different alignment offsets: the reader rounds the source address
     // down to a dram_alignment boundary, issues one noc_async_read of (row_bytes + dram_alignment)
@@ -59,6 +60,7 @@ void push_cb_pair(
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
     desc.cbs.push_back(CBDescriptor{
@@ -68,6 +70,7 @@ void push_cb_pair(
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 }
@@ -138,6 +141,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
 
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
+
     ProgramDescriptor desc;
 
     if (!core_range.empty()) {
@@ -150,7 +155,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             input_cb_data_format,
             output_cb_data_format,
             dram_alignment,
-            tile_height);
+            tile_height,
+            tile_descriptor);
     }
     if (has_cliff_col && has_cliff_row) {
         push_cb_pair(
@@ -162,7 +168,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             input_cb_data_format,
             output_cb_data_format,
             dram_alignment,
-            tile_height);
+            tile_height,
+            tile_descriptor);
     }
     if (has_cliff_row) {
         push_cb_pair(
@@ -174,7 +181,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             input_cb_data_format,
             output_cb_data_format,
             dram_alignment,
-            tile_height);
+            tile_height,
+            tile_descriptor);
     }
     if (has_cliff_col) {
         push_cb_pair(
@@ -186,7 +194,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             input_cb_data_format,
             output_cb_data_format,
             dram_alignment,
-            tile_height);
+            tile_height,
+            tile_descriptor);
     }
 
     // reader

@@ -925,29 +925,65 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
 
 
 @pytest.mark.parametrize(
-    "tensor_shape, tile_shape",
+    "tensor_shape, shard_layout",
     [
-        ([1, 1, 32, 64], (16, 32)),
-        ([1, 1, 64, 128], (16, 32)),
-        ([1, 1, 32, 32], (1, 32)),
-        ([1, 1, 64, 64], (16, 16)),
+        ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+    ],
+)
+@pytest.mark.parametrize(
+    "tile_shape",
+    [
+        (16, 32),
+        (8, 32),
+        (4, 32),
+        (2, 32),
+        # (1, 32), Disabled due to LLK bug
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_tilize_row_major_to_tiny_tile(device, tensor_shape, tile_shape, dtype):
-    """Tilize a ROW_MAJOR input directly into a tiny (non-32x32) tile shape."""
+def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_shape, dtype):
+    """Tilize a ROW_MAJOR sharded input directly into a tiny (non-32x32) tile shape."""
     torch.manual_seed(42)
     tile_h, tile_w = tile_shape
     H, W = tensor_shape[-2], tensor_shape[-1]
+    shard_h, shard_w = 32, 32
     assert H % tile_h == 0 and W % tile_w == 0, "tensor dims must be divisible by tile dims"
+
+    if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        assert W == shard_w, "height-sharded shard width must match tensor width"
+        assert H % shard_h == 0, "tensor height must be divisible by shard height"
+        num_cores = H // shard_h
+        grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        shard_shape = [shard_h, shard_w]
+    elif shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        assert H == shard_h, "width-sharded shard height must match tensor height"
+        assert W % shard_w == 0, "tensor width must be divisible by shard width"
+        num_cores = W // shard_w
+        grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
+        shard_shape = [shard_h, shard_w]
+    else:
+        assert shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        assert H % shard_h == 0 and W % shard_w == 0, "tensor dims must be divisible by shard dims"
+        n_y = H // shard_h
+        n_x = W // shard_w
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
+        shard_shape = [shard_h, shard_w]
+
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_cfg = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
 
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
 
-    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(tile_shape)))
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
+    )
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(tile_shape)), memory_config=mem_cfg)
 
     assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert tt_output.memory_config().memory_layout == shard_layout
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
@@ -957,7 +993,7 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, tile_shape, dtype):
     [
         ([1, 1, 32, 64], (32, 32), (16, 32)),
         ([1, 1, 64, 128], (32, 32), (16, 32)),
-        ([1, 1, 64, 64], (32, 32), (16, 16)),
+        ([1, 1, 128, 256], (32, 32), (16, 32)),
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

@@ -55,6 +55,8 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
+
     desc.cbs.push_back(CBDescriptor{
         .total_size = ntiles_per_block * input_single_tile_size,
         .core_ranges = all_cores,
@@ -62,6 +64,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -72,6 +75,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
