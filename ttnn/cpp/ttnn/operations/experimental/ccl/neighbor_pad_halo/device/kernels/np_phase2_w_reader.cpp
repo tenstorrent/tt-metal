@@ -5,9 +5,9 @@
 // Phase 2 W-fabric reader for neighbor_pad_halo.
 //
 // Reads W-boundary sticks from the input tensor (interior rows) and the compact halo
-// buffer (H-padded rows) into a CB that the paired writer ships over the W fabric. The
-// per-batch progress-sem signalling path is inert here (progress_t_batch_size == 0, no
-// per-batch consumer) and compiles out.
+// buffer (H-padded rows) into a CB that the paired writer ships over the W fabric. H must
+// finish first: the reader takes the H->W barrier once (upfront, or at the interior->corner
+// transition on the interior-first path) before touching any H-halo corner row.
 
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
@@ -27,31 +27,21 @@ constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
 // Input tensor TensorAccessorArgs follow the halo buffer args
 constexpr auto src_args = TensorAccessorArgs<ct_after_dst>();
 constexpr uint32_t ct_after_src = src_args.next_compile_time_args_offset();
-// Granularity (in T-input frames) for per-batch progress-sem signals. 0 in this op — no per-batch
-// consumer — which compiles out the signalling path.
-constexpr uint32_t progress_t_batch_size = get_compile_time_arg_val(ct_after_src);
-
-// Global two-pass gate, set per-shape by the program factory (lockstep with np_writer via the same
-// factory value; OFF in this op). ON: defer all corners past H's finish (NP-bound win, regresses a
-// compute-bound consumer).
-// Follows progress_t_batch_size (ct_after_src) in the W-reader arg layout.
-constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_src + 1);
-
 // W-send bank-major coalesce factor (0 = per-stick). When > 0 (halo-only, pw==1, 8-aligned bases), a
 // middle device gathers same-dst-bank sticks (rel, rel+8, ...) into the CB so the writer ships N of them
 // as one N*page fabric packet. BH has 8 interleaved DRAM banks.
-constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_src + 2);
+constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_src);
 // Uniform-mux mode: all W devices (incl. edges) use the coalesce path so the recv-sem targeting is
 // consistent across the whole W chain. Edge devices skip the send-gather for their no-neighbor direction.
-constexpr uint32_t W_MUX_MODE = get_compile_time_arg_val(ct_after_src + 3);
+constexpr uint32_t W_MUX_MODE = get_compile_time_arg_val(ct_after_src + 1);
 // Padded-output border mode: after this core has observed its compact rows (W-recv + H->W barrier),
 // it writes the padded BORDER for those rows directly — visibility-safe, since it only reads compact
 // sections it waited on. dir==0 cores write W-left + H-top/H-bot (pad rows); dir==1 write W-right. The
-// interior is written by the free-core scatter. With no per-batch consumer, common[3]/[4+] (consumer
-// count/coords) are free and reused: [3]=padded_addr, [4]=wleft_base, [5]=wright_base, [6]=pad2_right.
-constexpr uint32_t SCATTER_BORDER = get_compile_time_arg_val(ct_after_src + 4);
-constexpr uint32_t SCATTER_SCRATCH_CB = get_compile_time_arg_val(ct_after_src + 5);  // private L1 scratch
-constexpr auto padded_args = TensorAccessorArgs<ct_after_src + 6>();
+// interior is written by the free-core scatter. The CRTA [3]/[4+] slots carry the border args:
+// [3]=padded_addr, [4]=wleft_base, [5]=wright_base, [6]=pad2_right.
+constexpr uint32_t SCATTER_BORDER = get_compile_time_arg_val(ct_after_src + 2);
+constexpr uint32_t SCATTER_SCRATCH_CB = get_compile_time_arg_val(ct_after_src + 3);  // private L1 scratch
+constexpr auto padded_args = TensorAccessorArgs<ct_after_src + 4>();
 constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
 
 void kernel_main() {
@@ -59,9 +49,7 @@ void kernel_main() {
     const address_t output_tensor_address = get_common_arg_val<address_t>(0);
     const uint32_t barrier_sem_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t w_neighbor_sem_addr = get_common_arg_val<uint32_t>(2);
-    // [3] num_reader_cores: per-batch consumer cores to signal (0 in this op).
-    // [4+]: their NOC coords. In padded-output border mode these slots are reused — see SCATTER_BORDER.
-    const uint32_t num_reader_cores = get_common_arg_val<uint32_t>(3);
+    // CRTA [3]/[4+] carry the padded-output border args when SCATTER_BORDER is set — read there, not here.
 
     // Per-core runtime args
     uint32_t arg_idx = 0;
@@ -91,40 +79,13 @@ void kernel_main() {
     auto in_page = [&](uint32_t t, uint32_t h_in, uint32_t w_col) -> uint32_t {
         return t * (input_H_dev + 2 * input_pad_h) * in_Wp + (h_in + input_pad_h) * in_Wp + (w_col + input_pad_w);
     };
-    // Per-batch region progress sem for this (W-direction, link). A per-batch consumer waits on
-    // just this link's count, race-free across links (one producer per (region,link) -> monotonic).
-    const uint32_t w_region_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t h_total = input_H_dev + 2 * padding_h;  // padded H rows per frame (aka Hp)
-
-    // Per-batch corner H-gate: each corner W-stick read waits only the H-batch it needs (no upfront
-    // H->W barrier). H-region sems for all H-links live in CRTA after the reader coords: HT[0..3],
-    // HB[0..3], h_batches_per_link, num_h_links, h_total_batches.
-    uint32_t htop_sem[4] = {0, 0, 0, 0};
-    uint32_t hbot_sem[4] = {0, 0, 0, 0};
-    uint32_t h_batches_per_link = 0, num_h_links = 0, h_total_batches = 0;
-    if constexpr (progress_t_batch_size > 0) {
-        const uint32_t h_base = 4 + 2 * num_reader_cores;
-        for (uint32_t l = 0; l < 4; l++) {
-            htop_sem[l] = get_common_arg_val<uint32_t>(h_base + l);
-            hbot_sem[l] = get_common_arg_val<uint32_t>(h_base + 4 + l);
-        }
-        h_batches_per_link = get_common_arg_val<uint32_t>(h_base + 8);
-        num_h_links = get_common_arg_val<uint32_t>(h_base + 9);
-        h_total_batches = get_common_arg_val<uint32_t>(h_base + 10);
-    }
 
     const auto input_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
-    // output_row_width and pad2_left are unused here; they stay in the RTA layout only to keep it
-    // stable across the kernel's call sites.
+    // output_row_width is unused here; it stays in the RTA layout only to keep it stable across call sites.
     (void)output_row_width;
-    (void)pad2_left;
-
-    if constexpr (progress_t_batch_size > 0) {
-        (void)barrier_sem_addr;
-        (void)barrier_count;
-    }
 
     volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);
@@ -215,22 +176,18 @@ void kernel_main() {
         }
     };
 
-    // outer_dim runs over T_in * h_total; one progress-sem batch = progress_t_batch_size * h_total sticks.
-    const uint32_t sticks_per_batch = progress_t_batch_size * h_total;
     // Frames in this core's slice (link-local; the partial last batch lives here when T % N != 0).
     const uint32_t slice_frames = (h_total > 0) ? (outer_dim_size / h_total) : 0;
     // Interior-first layout: rows [0, interior_rows) are H-independent (read from INPUT), then corner
-    // rows [interior_rows, ...) (read from the halo H-section). Signal / barrier at the transition.
+    // rows [interior_rows, ...) (read from the halo H-section). Barrier taken at the transition.
     const uint32_t interior_rows = slice_frames * input_H_dev;
-    const uint32_t corner_rows_per_batch = progress_t_batch_size * 2 * padding_h;
 
-    // H->W ordering (progress==0, halo-only, no conv):
+    // H->W ordering:
     //   Fast path (interior_first_p0): frames align to this core's slice, so np_reorder_batch below emits
     //   ALL interior rows first (overlapping the H exchange), then ALL corners. The H->W barrier is then
     //   taken ONCE at the interior->corner transition (outer_dim == interior_rows) below.
     //   Fallback (partial last frame): reorder can't cover a partial frame safely, so read linearly and
     //   take the H->W barrier upfront here.
-    // (progress>0 fused path gates corners per-batch on HT/HB and ignores this barrier.)
     // Coalescing (middle device) uses the upfront barrier (bank-major mixes interior+corner), so it
     // opts out of interior-first.
     // Coalesce for middle devices always; in uniform-mux mode, edge devices coalesce too.
@@ -239,13 +196,12 @@ void kernel_main() {
     // direction-swapped by the factory, so the send condition is uniformly !is_last_chip. Edge devices
     // skip the gather for their no-neighbor direction (paired mux writer also skips) so the CB isn't left full.
     const bool has_send_neighbor = !is_last_chip;
-    const bool interior_first_p0 = (progress_t_batch_size == 0) && (barrier_count > 0) &&
-                                   (outer_dim_size == slice_frames * h_total) && !w_coalesce_active;
-    if constexpr (progress_t_batch_size == 0) {
-        if (!interior_first_p0 && barrier_count > 0) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
-        }
+    const bool interior_first_p0 =
+        (barrier_count > 0) && (outer_dim_size == slice_frames * h_total) && !w_coalesce_active;
+    // Fallback path (not interior-first): take the whole H->W barrier upfront before any corner read.
+    if (!interior_first_p0 && barrier_count > 0) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
     }
 
     // Coalesced bank-major gather (middle device): read the W-edge stick for rows in dst-bank order
@@ -310,13 +266,7 @@ void kernel_main() {
         // its corners) for FULL batches; linear for the partial last batch (and when not batching).
         uint32_t t_idx;
         uint32_t h_padded;
-        bool use_reorder;
-        if constexpr (progress_t_batch_size > 0) {
-            use_reorder = W_TWO_PASS;
-        } else {
-            use_reorder = interior_first_p0;
-        }
-        if (use_reorder) {
+        if (interior_first_p0) {
             // Interior rows first (H-independent), corners last. W does interior work while H produces.
             uint32_t frame_in_slice;
             np_reorder_batch(outer_dim, slice_frames, input_H_dev, padding_h, frame_in_slice, h_padded);
@@ -328,37 +278,10 @@ void kernel_main() {
         }
         const bool h_interior = (h_padded >= padding_h && h_padded < padding_h + input_H_dev);
 
-        // progress==0 fast path: take the H->W barrier ONCE at the first corner row (all interior done).
-        if constexpr (progress_t_batch_size == 0) {
-            if (interior_first_p0 && outer_dim == interior_rows) {
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
-                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
-            }
-        }
-
-        // A non-interior row is a corner stick built from H-halo. Before reading it, wait this
-        // frame's H batch committed across ALL H-links (the W-reader's frames span the H partition).
-        // Top-pad → HT, bot-pad → HB. addr 0 = no H neighbor on that side → skip (zero-pad).
-        if constexpr (progress_t_batch_size > 0) {
-            if (!h_interior && h_batches_per_link > 0) {
-                uint32_t need = t_idx / progress_t_batch_size + 1;
-                if (need > h_total_batches) {
-                    need = h_total_batches;
-                }
-                uint32_t hlink = (need - 1) / h_batches_per_link;
-                if (hlink >= num_h_links) {
-                    hlink = num_h_links - 1;
-                }
-                const uint32_t* hsem = (h_padded < padding_h) ? htop_sem : hbot_sem;
-                for (uint32_t l = 0; l <= hlink; l++) {
-                    if (hsem[l] == 0) {
-                        continue;
-                    }
-                    const uint32_t end_b = (l + 1) * h_batches_per_link;
-                    const uint32_t thr = (need < end_b ? need : end_b) - l * h_batches_per_link;
-                    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hsem[l]), thr);
-                }
-            }
+        // Interior-first path: take the H->W barrier ONCE at the first corner row (all interior done).
+        if (interior_first_p0 && outer_dim == interior_rows) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), barrier_count);
+            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr), 0);
         }
 
         if (is_first_chip) {
@@ -422,76 +345,14 @@ void kernel_main() {
                 cb_push_back(cb_output_id, 1);
             }
         }
-
-        // Per-batch progress-signalling (progress>0 path only). Receiver signals a consumer's region sem
-        // after wait_min(w_neighbor_sem, outer_dim+1) confirms this batch's remote fabric write landed.
-        // This op (progress==0) has no per-batch consumer, so it skips all of this and does a single
-        // receive-completion wait at the end (see tail below).
-        if constexpr (progress_t_batch_size > 0) {
-            bool do_signal;
-            if constexpr (W_TWO_PASS) {
-                do_signal = (outer_dim >= interior_rows) && (corner_rows_per_batch > 0) &&
-                            ((outer_dim + 1 - interior_rows) % corner_rows_per_batch == 0);
-            } else {
-                do_signal = ((outer_dim + 1) % sticks_per_batch == 0);
-            }
-            if (!is_first_chip && do_signal) {
-                noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim + 1);
-                noc_async_write_barrier();
-                for (uint32_t i = 0; i < num_reader_cores; i++) {
-                    const uint32_t rx = get_common_arg_val<uint32_t>(4 + i * 2);
-                    const uint32_t ry = get_common_arg_val<uint32_t>(4 + i * 2 + 1);
-                    noc_semaphore_inc(get_noc_addr(rx, ry, w_region_sem_addr), 1);
-                }
-                noc_async_atomic_barrier();
-            }
-        }
     }
 
-    if constexpr (progress_t_batch_size > 0) {
-        // progress>0 path: tail progress-signal for the partial last batch (receiver side only).
-        bool tail_signal;
-        if constexpr (W_TWO_PASS) {
-            tail_signal =
-                (corner_rows_per_batch > 0) && ((outer_dim_size - interior_rows) % corner_rows_per_batch != 0);
-        } else {
-            tail_signal = (outer_dim_size % sticks_per_batch != 0);
-        }
-        if (!is_first_chip && tail_signal) {
-            noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim_size);
-            noc_async_write_barrier();
-            for (uint32_t i = 0; i < num_reader_cores; i++) {
-                const uint32_t rx = get_common_arg_val<uint32_t>(4 + i * 2);
-                const uint32_t ry = get_common_arg_val<uint32_t>(4 + i * 2 + 1);
-                noc_semaphore_inc(get_noc_addr(rx, ry, w_region_sem_addr), 1);
-            }
-            noc_async_atomic_barrier();
-        }
-    } else {
-        // No per-batch consumer. The op's output IS the halo buffer, so the receiver must wait for ALL
-        // incoming W-halo rows to land in DRAM before the kernel exits — otherwise the host reads an
-        // in-flight buffer. One receive-completion wait replaces the per-batch progress signalling.
-        if (!is_first_chip) {
-            noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim_size);
-        }
-    }
-    // Single end-of-kernel reset; sem was monotonically increasing across the loop.
+    // The op's output IS the halo buffer, so the receiver must wait for ALL incoming W-halo rows to land
+    // in DRAM before the kernel exits — otherwise the host reads an in-flight buffer.
     if (!is_first_chip) {
-        noc_semaphore_set(w_neighbor_sem_ptr, 0);
+        noc_semaphore_wait_min(w_neighbor_sem_ptr, outer_dim_size);
+        noc_semaphore_set(w_neighbor_sem_ptr, 0);  // monotonic across the loop; single end-of-kernel reset
     }
-    // Non-coalesce completion: signal scatter cores (coalesce path already returned above).
+    // Non-coalesce completion: scatter the padded border (the coalesce path already returned above).
     scatter_border_rows();
-    // Trace-safe self-reset of the H-region sems this core consumed in the corner gate above: the H
-    // producer increments HT/HB on the W-reader cores too, and the per-batch corner waits guarantee
-    // those increments have landed, so zero them for the next dispatch without a host-side reset.
-    if constexpr (progress_t_batch_size > 0) {
-        for (uint32_t l = 0; l < num_h_links && l < 4; l++) {
-            if (htop_sem[l] != 0) {
-                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(htop_sem[l]), 0);
-            }
-            if (hbot_sem[l] != 0) {
-                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hbot_sem[l]), 0);
-            }
-        }
-    }
 }

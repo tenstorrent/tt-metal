@@ -51,24 +51,18 @@ constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_dst + 1);
 constexpr bool handle_incoming_writes = get_compile_time_arg_val(ct_after_dst + 2);
 constexpr bool is_w_fabric_writer = get_compile_time_arg_val(ct_after_dst + 3);
 constexpr uint32_t ring_size = get_compile_time_arg_val(ct_after_dst + 4);
-// Per-batch progress-sem signalling granularity (in T-input frames).
-constexpr uint32_t progress_t_batch_size = get_compile_time_arg_val(ct_after_dst + 5);
 // CB the fabric-send loop drains. H writer: dedicated batched send ring (c_in2). W writer: c_in0.
-constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_dst + 6);
-
-// Global two-pass gate, set per-shape by the program factory (lockstep with np_phase2_w_reader via
-// the same factory value). Follows send_cb_id (ct_after_dst + 6) in the W-writer/H-writer arg layout.
-constexpr bool W_TWO_PASS = get_compile_time_arg_val(ct_after_dst + 7);
+constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_dst + 5);
 
 // H-writer corner-first send (H-writer path only): raise the recv sem after the corner sticks, before
 // the bulk middle, so the neighbor's recv-wait clears after ~pad2 sticks instead of the whole row. Set
-// per-shape by the program factory; unused on the W writer. Follows W_TWO_PASS in the arg layout.
-constexpr bool H_CORNER_FIRST = get_compile_time_arg_val(ct_after_dst + 8);
+// per-shape by the program factory; unused on the W writer.
+constexpr bool H_CORNER_FIRST = get_compile_time_arg_val(ct_after_dst + 6);
 
 // W-send bank-major coalesce factor (0 = per-stick). Lockstep with np_phase2_w_reader: a middle W
 // device ships N same-dst-bank sticks (base+r, base+r+8, ...) as one N*page fabric write to the
-// neighbor's interleaved DRAM. Follows H_CORNER_FIRST in the arg layout. BH: 8 DRAM banks.
-constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_dst + 9);
+// neighbor's interleaved DRAM. BH: 8 DRAM banks.
+constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_dst + 7);
 constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
 
 void kernel_main() {
@@ -80,10 +74,6 @@ void kernel_main() {
     const address_t output_tensor_address = get_common_arg_val<address_t>(1);
     const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
     const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
-    // Per-batch consumer cores to signal (0 in this op) and their NOC (x,y) coordinates.
-    // Packed as: [num_reader_cores, x0, y0, x1, y1, ...]
-    const uint32_t num_reader_cores = get_common_arg_val<uint32_t>(4);
-    // Reader core NOC coords start at CRTA index 5: x0=5, y0=6, x1=7, y1=8, ...
 
     // Per-core runtime args
     uint32_t arg_idx = 0;
@@ -125,14 +115,6 @@ void kernel_main() {
 
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
-
-    const uint32_t outer_dim_offset_start_t = get_arg_val<uint32_t>(static_cast<uint32_t>(arg_for_fab));
-    // This (direction,link)'s H-region sem (H-top/H-bot), signalled per-batch from
-    // handle_incoming_writes when a per-batch consumer exists. Inert in this op (progress==0).
-    uint32_t h_region_sem_addr = 0;
-    if constexpr (progress_t_batch_size > 0) {
-        h_region_sem_addr = get_arg_val<uint32_t>(static_cast<uint32_t>(arg_for_fab) + 1);
-    }
 
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
 
@@ -308,8 +290,7 @@ void kernel_main() {
         return iter < pad2_right_sticks || iter >= (num_sticks_to_read - pad2_left_sticks);
     };
 
-    // W-path interior-first reorder dims (common args [4],[5], W-writer only). Parsed for every W-writer
-    // (the factory always sets [4],[5]); used by W_TWO_PASS (progress>0) and the progress==0 halo path.
+    // W-path interior-first reorder dims (common args [4],[5], W-writer only; the factory always sets them).
     uint32_t w_input_H = 0, w_pad_h = 0, w_h_total = 1, w_row_stride = 0, w_slice_frames = 0;
     bool w_interior_first_p0 = false;
     if constexpr (is_w_fabric_writer) {
@@ -318,8 +299,8 @@ void kernel_main() {
         w_h_total = w_input_H + 2 * w_pad_h;
         w_row_stride = num_sticks_per_halo_dim * output_halo_dim_size;
         w_slice_frames = (w_h_total > 0) ? (outer_dim_size / w_h_total) : 0;
-        // Lockstep with np_phase2_w_reader: progress==0 reorders interior-first when frames align.
-        w_interior_first_p0 = (progress_t_batch_size == 0) && (outer_dim_size == w_slice_frames * w_h_total);
+        // Lockstep with np_phase2_w_reader: reorder interior-first when frames align to the slice.
+        w_interior_first_p0 = (outer_dim_size == w_slice_frames * w_h_total);
     }
 
     // Coalesced W-send (middle device): ship g (<= W_COALESCE) same-dst-bank sticks as one g*page fabric
@@ -377,9 +358,7 @@ void kernel_main() {
         // Interior-first reorder: ALL interior rows then ALL corners (lockstep with the W reader).
         uint32_t eff_offset = outer_dim_offset;
         bool w_use_reorder = false;
-        if constexpr (is_w_fabric_writer && progress_t_batch_size > 0) {
-            w_use_reorder = W_TWO_PASS;
-        } else if constexpr (is_w_fabric_writer) {
+        if constexpr (is_w_fabric_writer) {
             w_use_reorder = w_interior_first_p0;
         }
         if (w_use_reorder) {
@@ -650,50 +629,12 @@ void kernel_main() {
                     }
                 }
                 inc_offset += num_sticks_per_halo_dim * output_halo_dim_size;
-
-                if constexpr (progress_t_batch_size > 0) {
-                    if ((outer_dim_offset_start_t + outer_dim + 1) % progress_t_batch_size == 0) {
-                        noc_async_write_barrier();
-                        for (uint32_t i = 0; i < num_reader_cores; i++) {
-                            const uint32_t rx = get_common_arg_val<uint32_t>(5 + i * 2);
-                            const uint32_t ry = get_common_arg_val<uint32_t>(5 + i * 2 + 1);
-                            noc_semaphore_inc(get_noc_addr(rx, ry, h_region_sem_addr), 1);
-                        }
-                        for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
-                            noc_semaphore_inc(get_noc_addr(signal_noc_x[st], signal_noc_y[st], h_region_sem_addr), 1);
-                        }
-                        noc_async_atomic_barrier();
-                    }
-                }
             }
         }
     }
 
     // Ensure all DRAM writes from main loop are complete.
     noc_async_write_barrier();
-
-    // Partial-last-batch tail: the partial last batch never hit a (od+1)%pb boundary in the loop
-    // above, so its HT/HB sem was never bumped — fire it once here, else consumers waiting
-    // ceil(link_dims/pb) deadlock on the missing count. Recv+commit of incoming H-halo is interleaved
-    // per-od into the send loop above, so this only handles the trailing partial batch.
-    if constexpr (handle_incoming_writes) {
-        if (!is_first_chip) {
-            if constexpr (progress_t_batch_size > 0) {
-                if ((outer_dim_offset_start_t + outer_dim_size) % progress_t_batch_size != 0) {
-                    noc_async_write_barrier();
-                    for (uint32_t i = 0; i < num_reader_cores; i++) {
-                        const uint32_t rx = get_common_arg_val<uint32_t>(5 + i * 2);
-                        const uint32_t ry = get_common_arg_val<uint32_t>(5 + i * 2 + 1);
-                        noc_semaphore_inc(get_noc_addr(rx, ry, h_region_sem_addr), 1);
-                    }
-                    for (uint32_t st = 0; st < num_phase2_signal_targets; st++) {
-                        noc_semaphore_inc(get_noc_addr(signal_noc_x[st], signal_noc_y[st], h_region_sem_addr), 1);
-                    }
-                    noc_async_atomic_barrier();
-                }
-            }
-        }
-    }
 
     // Close fabric connection.
     if (fabric_opened) {

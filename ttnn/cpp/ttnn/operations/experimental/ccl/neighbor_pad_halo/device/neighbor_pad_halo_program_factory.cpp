@@ -153,10 +153,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     // H corner-first (PCC-neutral): the H-writer sends the W-boundary corner sticks to the neighbor's L1
     // recv buffer + raises the recv sem BEFORE the bulk middle row, so the neighbor's H recv-wait clears
     // after ~2 sticks instead of the full row. Requires padding==1 (the kernel's corner-first path).
-    // W two-pass is the progress>0 gate; this op uses its own interior-first reorder (below)
-    // instead, so keep it OFF here.
     const uint32_t use_corner_first = (op.np_padding_h == 1) ? 1u : 0u;
-    const uint32_t use_w_two_pass = 0u;
 
     // Compact H-section rows are exactly W_dev wide: W-padding lives in a separate W-section, so
     // H rows carry no extra columns and the H and W sections stay independent.
@@ -523,10 +520,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         h_writer_kernel_config.compile_args.push_back(h_use_l1);         // handle_incoming_writes (0 when H-coalescing)
         h_writer_kernel_config.compile_args.push_back(0);                // is_w_fabric_writer (false for H)
         h_writer_kernel_config.compile_args.push_back(op.np_ring_size);  // ring_size
-        // Per-batch progress-sem granularity is always passed; 0 disables the per-batch path.
-        h_writer_kernel_config.compile_args.push_back(progress_t_batch_size);
-        h_writer_kernel_config.compile_args.push_back(hsend_cb_index);  // send_cb_id (batched H send)
-        h_writer_kernel_config.compile_args.push_back(use_w_two_pass);  // unused on H writer; keeps arg layout aligned
+        h_writer_kernel_config.compile_args.push_back(hsend_cb_index);   // send_cb_id (batched H send)
         h_writer_kernel_config.compile_args.push_back(use_corner_first);  // H-writer corner-first gate
         h_writer_kernel_config.compile_args.push_back(h_coalesce_n);  // coalesce factor (H-writer uses the H branch)
         h_writer_kernel_id = CreateKernel(
@@ -960,8 +954,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             std::vector<uint32_t> mux_reader_ct = {sender_cb_index, is_padding_zeros, page_size};
             TensorAccessorArgs(*halo_buffer).append_to(mux_reader_ct);
             TensorAccessorArgs(*input_buffer).append_to(mux_reader_ct);
-            mux_reader_ct.push_back(progress_t_batch_size);
-            mux_reader_ct.push_back(use_w_two_pass);
             mux_reader_ct.push_back(w_coalesce_n);
             mux_reader_ct.push_back(1);  // W_MUX_MODE: coalesce for edge devices too
             auto mux_reader_cfg = ReaderDataMovementConfig{};
@@ -1008,9 +1000,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 CreateCircularBuffer(program, worker_crset, cb_mux_w);
             }
 
-            mux_reader_ct.push_back(scatter_border ? 1u : 0u);  // SCATTER_BORDER (ct_after_src + 4)
-            mux_reader_ct.push_back(w_scatter_scratch_cb);      // SCATTER_SCRATCH_CB (ct_after_src + 5)
-            // Padded accessor at +6 must always exist (constructed unconditionally); filler when unused.
+            mux_reader_ct.push_back(scatter_border ? 1u : 0u);  // SCATTER_BORDER (ct_after_src + 2)
+            mux_reader_ct.push_back(w_scatter_scratch_cb);      // SCATTER_SCRATCH_CB (ct_after_src + 3)
+            // Padded accessor at +4 must always exist (constructed unconditionally); filler when unused.
             TensorAccessorArgs(scatter_border ? *padded_buf_w : *halo_buffer).append_to(mux_reader_ct);
             if (scatter_border) {
                 w_border_scratch_cb(worker_crset);
@@ -1104,8 +1096,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                             op.np_padding_h,
                             outer_dim_size * op.np_padding_h * num_sticks_per_halo_dim,
                             op.input_pad_h,
-                            op.input_pad_w,
-                            0u};
+                            op.input_pad_w};
                         SetRuntimeArgs(program, w_reader_kernel_id, {wc}, r_rt);
                         // Writer RT args: per-core (base,rows,sem xy,dir,route) then mux conn (0..16).
                         // sem targets = the neighbor's reader worker core (NOC coords are device-independent),
@@ -1145,14 +1136,11 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             w_reader_kernel_config.compile_args = {sender_cb_index, is_padding_zeros, page_size};
             TensorAccessorArgs(*halo_buffer).append_to(w_reader_kernel_config.compile_args);
             TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
-            // Per-batch signal granularity (0 here — no consumer to signal per batch).
-            w_reader_kernel_config.compile_args.push_back(progress_t_batch_size);
-            w_reader_kernel_config.compile_args.push_back(use_w_two_pass);  // global two-pass gate (lockstep w/ writer)
-            w_reader_kernel_config.compile_args.push_back(w_coalesce_n);    // W-send bank-major coalesce factor (0=off)
-            w_reader_kernel_config.compile_args.push_back(0);               // W_MUX_MODE off (standard 1-worker path)
+            w_reader_kernel_config.compile_args.push_back(w_coalesce_n);  // W-send bank-major coalesce factor (0=off)
+            w_reader_kernel_config.compile_args.push_back(0);             // W_MUX_MODE off (standard 1-worker path)
             w_reader_kernel_config.compile_args.push_back(scatter_border ? 1u : 0u);  // SCATTER_BORDER
             w_reader_kernel_config.compile_args.push_back(w_scatter_scratch_cb);      // SCATTER_SCRATCH_CB
-            // Padded accessor at +6 must always exist (constructed unconditionally); filler when unused.
+            // Padded accessor at +4 must always exist (constructed unconditionally); filler when unused.
             TensorAccessorArgs(scatter_border ? *padded_buf_w : *halo_buffer)
                 .append_to(w_reader_kernel_config.compile_args);
             if (scatter_border) {
@@ -1186,13 +1174,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
             w_writer_kernel_config.compile_args.push_back(0);            // handle_incoming_writes
             w_writer_kernel_config.compile_args.push_back(1);            // is_w_fabric_writer
             w_writer_kernel_config.compile_args.push_back(w_ring_size);  // ring_size
-            // progress_t_batch_size: W-writer doesn't per-batch-signal in 2D (gated by
-            // num_phase2_signal_targets > 0 at runtime), but the CT arg must be present to
-            // match np_writer.cpp's arg layout.
-            w_writer_kernel_config.compile_args.push_back(progress_t_batch_size);
             w_writer_kernel_config.compile_args.push_back(
                 sender_cb_index);  // send_cb_id: W keeps the c_in0 per-stick path
-            w_writer_kernel_config.compile_args.push_back(use_w_two_pass);  // global two-pass gate (lockstep w/ reader)
             w_writer_kernel_config.compile_args.push_back(
                 use_corner_first);  // unused on W writer; keeps arg layout aligned
             w_writer_kernel_config.compile_args.push_back(w_coalesce_n);  // W-send bank-major coalesce factor (0=off)
@@ -1265,9 +1248,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     // Padded-input strides for the W-edge interior reads (0 = contiguous).
                     w_reader_rt_args.push_back(op.input_pad_h);
                     w_reader_rt_args.push_back(op.input_pad_w);
-                    // No conv W-edge consumer: push 0 for the (unused) per-batch region progress sem addr
-                    // to keep the W-reader's per-core arg layout stable.
-                    w_reader_rt_args.push_back(0u);
                     SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
                     // W writer runtime args — addresses the W-section of the compact buffer.
