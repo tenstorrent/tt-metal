@@ -4,9 +4,11 @@
 **Group:** Reduction ops from the do-list — **7 op families / 12 factory-variant rows / 34 in-scope kernel files** (incl. 3 cross-op donor kernels + 7 in-tree `kernel_lib`/donor headers)
 **Audit spec:** `plan-quasar-dfb-audit/cb_dfb_kernel_audit_helper.md`
 
-## Group verdict: RED (mechanical GATE only)
+## Group verdict: YELLOW
 
-**Bottom line:** The reduction group is **RED solely because of 3 `get_local_cb_interface(...).fifo_page_size` reads** — the exact "mechanical getter swap" GATE the spec flags at **P4** for `reduction/generic`, eltwise readers, and `*_interleaved_start_id*` kernels. Each is a one-line swap to `DataflowBuffer::get_entry_size()`. **Two of the three hits live in shared eltwise/unary donor kernels** (`writer_unary_interleaved_start_id.cpp`, `reader_unary_interleaved_start_id.cpp`) that most reduction ops pull in — so the GATE is *inherited*, not authored in the reduction tree. The third is `reader_unary_reduce_rm.cpp` (generic RM path). Clearing these three lines flips the whole group to **GREEN**, except the **reduce-H sharded reader** which is **YELLOW** (one **LTA** prerequisite — borrowed input shard).
+> **Rollup policy (Reading B):** a `get_local_cb_interface(cb).fifo_page_size` / `.fifo_num_pages` **read** where the DFB getter already exists (`get_entry_size()` / `get_total_num_entries()`, both merged) is a **mechanical NEEDS-FIX → YELLOW (Portable, note fix)**, not RED. It is still a **GATE-clear required before merge** (silent-wrong on Quasar until swapped). RED is reserved for no-getter fields, structural blockers, and unresolved design decisions.
+
+**Bottom line:** The reduction group is **YELLOW** — driven by **3 `get_local_cb_interface(...).fifo_page_size` reads** (the "mechanical getter swap" the spec flags at **P4** for `reduction/generic`, eltwise readers, and `*_interleaved_start_id*` kernels) plus **one LTA prerequisite**. Each field read is a one-line swap to `DataflowBuffer::get_entry_size()`. **Two of the three hits live in shared eltwise/unary donor kernels** (`writer_unary_interleaved_start_id.cpp`, `reader_unary_interleaved_start_id.cpp`) that most reduction ops pull in — so the GATE-clear is *inherited*, not authored in the reduction tree. The third is `reader_unary_reduce_rm.cpp` (generic RM path). Clearing these three lines flips those ops to **GREEN**; the **reduce-H sharded reader** stays **YELLOW** via its **LTA** prerequisite (borrowed input shard).
 
 Everything else is clean: **no** silent-wrong (`get_cb_tiles_*_ptr`), **no** `read_tile_value`/`get_tile_address` (Welford is **NOT** Quasar-blocked here — the W-combine runs as CPU float math in `writer_welford_hw.cpp`, not LLK tile reads), **no** `get_pointer_to_cb_data`, **no** `fifo_wr_ptr`/`fifo_rd_ptr`/`push_back_hold` ptr surgery anywhere. `accumulation`, `ema`, `argmax` (both factories), and `moe` are fully GREEN.
 
@@ -30,13 +32,13 @@ Everything else is clean: **no** silent-wrong (`get_cb_tiles_*_ptr`), **no** `re
 | `accumulation/ema` | EmaProgramFactory | CircularBuffer | 1 + 5 (self-loop scratch) | **GREEN** |
 | `argmax` | ArgMaxMultiCoreProgramFactory | CircularBuffer | 6 (scratch + semaphores) | **GREEN** |
 | `argmax` | ArgMaxSingleCoreProgramFactory | CircularBuffer | 6 (scratch) | **GREEN** |
-| `generic` ReduceDeviceOp | ReduceMultiCoreH | CB (+DFB donor) | 1, 6, **GATE**; sharded→6 LTA | **RED** (mech. GATE); sharded variant YELLOW |
-| `generic` ReduceDeviceOp | ReduceMultiCoreW | CB (+DFB donor) | 1, 6, **GATE** | **RED** (mech. GATE) |
-| `generic` ReduceDeviceOp | ReduceSingleCoreHw | CB (+DFB donor) | 1, **GATE** | **RED** (mech. GATE) |
-| `generic` WelfordReduceDeviceOp | WelfordReduceProgramFactory | CircularBuffer (+DFB donor) | 1, **GATE** (W/H variant) | **RED** (mech. GATE); HW variant clean |
+| `generic` ReduceDeviceOp | ReduceMultiCoreH | CB (+DFB donor) | 1, 6, **GATE**; sharded→6 LTA | **YELLOW** (mech. GATE-clear); sharded variant YELLOW |
+| `generic` ReduceDeviceOp | ReduceMultiCoreW | CB (+DFB donor) | 1, 6, **GATE** | **YELLOW** (mech. GATE-clear) |
+| `generic` ReduceDeviceOp | ReduceSingleCoreHw | CB (+DFB donor) | 1, **GATE** | **YELLOW** (mech. GATE-clear) |
+| `generic` WelfordReduceDeviceOp | WelfordReduceProgramFactory | CircularBuffer (+DFB donor) | 1, **GATE** (W/H variant) | **YELLOW** (mech. GATE-clear); HW variant clean |
 | `moe` | MoeProgramFactory | CircularBuffer | 1 + 6 (index fill) | **GREEN** |
-| `prod` ProdAllDeviceOp | ProdAllProgramFactory | DFB donors | 1, **GATE** (both donors) | **RED** (mech. GATE) |
-| `prod` ProdNcDeviceOp | ProdNcProgramFactory | CB (+DFB donor) | 1, 6 (fill), **GATE** | **RED** (mech. GATE) |
+| `prod` ProdAllDeviceOp | ProdAllProgramFactory | DFB donors | 1, **GATE** (both donors) | **YELLOW** (mech. GATE-clear) |
+| `prod` ProdNcDeviceOp | ProdNcProgramFactory | CB (+DFB donor) | 1, 6 (fill), **GATE** | **YELLOW** (mech. GATE-clear) |
 
 > `argmax_nc` (ArgMaxNcDeviceOperation: `argmax_nc_program_factory.cpp`, kernels `reader_argmax_nc.cpp`/`writer_argmax_nc.cpp`/`argmax_nc_compute.cpp`) exists in the tree but is **NOT on the do-list** — not audited. A quick pre-scan showed no GATE/blocker in it.
 
@@ -90,9 +92,9 @@ Everything else is clean: **no** silent-wrong (`get_cb_tiles_*_ptr`), **no** `re
 | `cb_in0` (`c_0`) | 1 | universal/transpose readers, compute | Portable | linear FIFO | Portable | — |
 | `cb_scaler` (`c_2`) | 1 | readers (`prepare_reduce_scaler`), compute | Portable | scaler tile pushed once, canonical | Portable | — |
 | `cb_out` (`output_cb_index`) | 1 | compute, writers | Portable | linear FIFO → writer | Portable | — |
-| `cb_id_rm` (`c_24`) | 1 | `reader_unary_reduce_rm.cpp`, compute (`reduce_rm.cpp`) | **Blocked** | **GATE:** `reader_unary_reduce_rm.cpp:82` `get_local_cb_interface(cb_id_rm).fifo_page_size` — swap to `get_entry_size()`; buffer itself is canonical Class 1 | **Blocked** | same GATE (mechanical) |
+| `cb_id_rm` (`c_24`) | 1 | `reader_unary_reduce_rm.cpp`, compute (`reduce_rm.cpp`) | Portable | **NEEDS-FIX (mechanical):** `reader_unary_reduce_rm.cpp:82` `get_local_cb_interface(cb_id_rm).fifo_page_size` — swap to `get_entry_size()`; buffer itself is canonical Class 1. **GATE-clear before merge.** | Portable | same swap; silent-wrong on Quasar until fixed |
 | `cb_clear_value` (`c_4`) | 6 | `reader_unary_reduce_rm.cpp` | Portable | RM identity-pad template: filled once via `get_write_ptr()`, `push_back(1)` w/ no consumer, reused as persistent NOC-source via `get_read_ptr()`. Private-L1 → **ScratchpadSpec** | Portable | autoportable: **ScratchpadSpec** |
-| `cb_out` (donor writer, `c_16`/`output_cb_index`) | 1 | `writer_unary_interleaved_start_id.cpp` (interleaved H/W/Hw paths) | **Blocked** | **GATE (donor):** `writer_unary_interleaved_start_id.cpp:19` `get_local_cb_interface(cb_id_out).fifo_page_size` — CB is already a `DataflowBuffer`; swap to `dfb.get_entry_size()`. Fix belongs to eltwise/unary donor | **Blocked** | same GATE (mechanical) |
+| `cb_out` (donor writer, `c_16`/`output_cb_index`) | 1 | `writer_unary_interleaved_start_id.cpp` (interleaved H/W/Hw paths) | Portable | **NEEDS-FIX (mechanical, donor):** `writer_unary_interleaved_start_id.cpp:19` `get_local_cb_interface(cb_id_out).fifo_page_size` — CB is already a `DataflowBuffer`; swap to `dfb.get_entry_size()`. Fix belongs to eltwise/unary donor | Portable | same swap; silent-wrong on Quasar until fixed |
 | `cb_out` (sharded writer) | 1/6 | `writer_unary_sharded.cpp` (reduce-H sharded output) | Portable | resident output shard; `wait_front`/`pop_front` readiness handshake only, no data move | Portable | `borrowed_from` DFB or scratchpad |
 | `cb_in1` (sharded input) | 6 | `reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp` | Portable (prereq: LTA) | sync-free **borrowed input shard**: `reserve_back(num_tiles)` once, then read via `get_write_ptr()` + offset as self-unicast NOC source, no per-tile FIFO handoff → **LocalTensorAccessor** | Portable (prereq: LTA) | same |
 
@@ -107,7 +109,7 @@ Everything else is clean: **no** silent-wrong (`get_cb_tiles_*_ptr`), **no** `re
 | `cb_partial` (`c_21`) | 1 | compute → `writer_welford_hw.cpp` | Portable | compute packs mean/var partials; writer consumes via `wait_front`/`get_read_ptr()` (bare L1 read, CPU float combine) → `pop_front`. **No `read_tile_value`** | Portable | — |
 | `cb_combined` (`c_22`) | 1 | `writer_welford_hw.cpp` → compute | Portable | writer produces combined scalar via `get_write_ptr()` write + `push_back`; compute reads back. Canonical FIFO | Portable | — |
 | `cb_out` (`c_16`) | 1 | compute → writer | Portable | HW: `writer_welford_hw.cpp` NOC-writes; canonical | Portable | — |
-| `cb_out` (donor writer) | 1 | `writer_unary_interleaved_start_id.cpp` (W/H variants) | **Blocked** | **GATE (donor):** `writer_unary_interleaved_start_id.cpp:19` `.fifo_page_size` → `dfb.get_entry_size()` (mechanical) | **Blocked** | same GATE |
+| `cb_out` (donor writer) | 1 | `writer_unary_interleaved_start_id.cpp` (W/H variants) | Portable | **NEEDS-FIX (mechanical, donor):** `writer_unary_interleaved_start_id.cpp:19` `.fifo_page_size` → `dfb.get_entry_size()` (mechanical) | Portable | same swap; silent-wrong on Quasar until fixed |
 
 ## CB portability — `moe` (MoeProgramFactory)
 
@@ -127,8 +129,8 @@ Everything else is clean: **no** silent-wrong (`get_cb_tiles_*_ptr`), **no** `re
 
 | CB | Class | Kernel(s) | 1xx status | 1xx notes | 2xx status | 2xx notes |
 |----|-------|-----------|------------|-----------|------------|-----------|
-| `input_cb` (`c_0`) | 1 | donor reader, compute | **Blocked** | **GATE (donor):** `reader_unary_interleaved_start_id.cpp:20` `get_local_cb_interface(cb_id_in0).fifo_page_size` → `dfb.get_entry_size()` (mechanical). Buffer itself canonical Class 1 | **Blocked** | same GATE |
-| `final_output_cb` (`c_3`) | 1 | compute, donor writer | **Blocked** | **GATE (donor):** `writer_unary_interleaved_start_id.cpp:19` `.fifo_page_size` → `dfb.get_entry_size()` (mechanical) | **Blocked** | same GATE |
+| `input_cb` (`c_0`) | 1 | donor reader, compute | Portable | **NEEDS-FIX (mechanical, donor):** `reader_unary_interleaved_start_id.cpp:20` `get_local_cb_interface(cb_id_in0).fifo_page_size` → `dfb.get_entry_size()` (mechanical). Buffer itself canonical Class 1 | Portable | same swap; silent-wrong on Quasar until fixed |
+| `final_output_cb` (`c_3`) | 1 | compute, donor writer | Portable | **NEEDS-FIX (mechanical, donor):** `writer_unary_interleaved_start_id.cpp:19` `.fifo_page_size` → `dfb.get_entry_size()` (mechanical) | Portable | same swap; silent-wrong on Quasar until fixed |
 
 ## CB portability — `prod` ProdNcDeviceOperation (ProdNcProgramFactory)
 
@@ -138,7 +140,7 @@ Everything else is clean: **no** silent-wrong (`get_cb_tiles_*_ptr`), **no** `re
 |----|-------|-----------|------------|-----------|------------|-----------|
 | `cb_in0` (`c_0`) | 1 | reader, compute | Portable | linear FIFO | Portable | — |
 | scaler/fill CB | 6→1 | reader (`utils.hpp` `fill_cb_with_value`) | Portable | value tile built via `CoreLocalMem(get_write_ptr())`, `reserve_back`/`push_back(1)` — canonical producer | Portable | — |
-| `cb_out0` (`c_3`) | 1 | compute, donor writer | **Blocked** | **GATE (donor):** `writer_unary_interleaved_start_id.cpp:19` `.fifo_page_size` → `dfb.get_entry_size()` (mechanical) | **Blocked** | same GATE |
+| `cb_out0` (`c_3`) | 1 | compute, donor writer | Portable | **NEEDS-FIX (mechanical, donor):** `writer_unary_interleaved_start_id.cpp:19` `.fifo_page_size` → `dfb.get_entry_size()` (mechanical) | Portable | same swap; silent-wrong on Quasar until fixed |
 
 ---
 
@@ -156,7 +158,7 @@ All three are `get_local_cb_interface(...).fifo_page_size` → **mechanical gett
 
 ## Notes & follow-ups
 
-- **Why RED despite being trivial:** per the spec, any `get_local_cb_interface(...).field` read is a hard GATE (Blocked → RED) until cleared, regardless of how easy the fix is. Here every GATE is the lowest-severity kind — a mechanical `fifo_page_size` → `get_entry_size()` swap. After the 3 line-level swaps, the group is **GREEN** except the one **YELLOW** (LTA) below.
+- **Why YELLOW not RED (Reading B):** every GATE here is the lowest-severity kind — a mechanical `fifo_page_size` → `get_entry_size()` swap where the getter already exists — so per the rollup policy it is **NEEDS-FIX → YELLOW (Portable, GATE-clear before merge)**, not RED. After the 3 line-level swaps, those ops are **GREEN**; the one **YELLOW** (LTA) below remains until the LocalTensorAccessor migration.
 - **2 of 3 GATEs are inherited from shared donors.** `writer_unary_interleaved_start_id.cpp` (and its sibling reader) are used across the whole repo; the reduction ops themselves author only 1 GATE line (`reader_unary_reduce_rm.cpp`). Fixing the donors clears the GATE for `prod`, most of `generic` Reduce, and the Welford W/H writer path simultaneously. This matches the spec NEEDS-FIX table entry for `*_interleaved_start_id*.cpp`.
 - **One LTA prerequisite (YELLOW):** the reduce-H **sharded** input CB `cb_in1` in `reader_unary_transpose_wh_interleaved_input_cols_partitioned_sharded.cpp` is a sync-free borrowed input shard → must migrate to **LocalTensorAccessor** in the port (host `TensorBinding` + kernel ctor). This variant has **no GATE** — it is YELLOW, not RED, on its own.
 - **Self-loop candidates (2xx, informational):** `CB_ACC` (accumulation) and `trp_cb` (ema) are canonical PACK→UNPACK accumulators on a single compute kernel — flag as **SELF-LOOP-CANDIDATE** for Quasar compute self-loop binding. Neither uses ptr surgery, so both are cleanly Portable on 1xx too.

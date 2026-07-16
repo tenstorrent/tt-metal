@@ -5,9 +5,11 @@
 **Audit spec:** `plan-quasar-dfb-audit/cb_dfb_kernel_audit_helper.md`
 **Repo state:** #49392 ("Migrate Data Movement Kernels to DataflowBuffer") has **not** landed. Data-movement kernels are already on the **Device 2.0 object API** (`CircularBuffer` / `experimental::CB` / `Noc`) with canonical FIFO ops (`.reserve_back/.push_back/.wait_front/.pop_front`), but not yet renamed to `DataflowBuffer`. The remaining port is the mechanical Class-1 `CircularBuffer`→`DataflowBuffer` rename.
 
-## Group verdict: RED
+## Group verdict: YELLOW
 
-**Bottom line:** All **17 data-movement ops' own kernels are 100% clean** — canonical Class-1 linear FIFOs plus a small set of pointer-only / private-L1 scratch buffers (Class 6), every one of which is **Portable** or **Portable (workaround)** → GREEN. The group is dragged to **RED by exactly two shared cross-op donor kernels** owned by **`eltwise/unary`** that still read a legacy `LocalCBInterface` field while already declaring a `DataflowBuffer` — a hard **GATE** that is **silent-wrong on Quasar** (get_local_cb_interface returns `LocalCBInterface`; the DFB uses `LocalDFBInterface`). These donors are pulled in by **3 factory variants** (bcast `MultiCoreHW`, copy `DefaultTilized`, pad `PadTileCore`). The fix is a **one-line getter swap** (`get_local_cb_interface(cb).fifo_page_size` → `dfb.get_entry_size()`) owned by the eltwise group, and it clears all three ops (and many other ops repo-wide) at once. No silent-wrong `get_cb_tiles_*`, no `read_tile_value`/`get_tile_address` Quasar-runtime dependency, and no LTA prerequisite (`get_pointer_to_cb_data`) anywhere in the group.
+> **Rollup policy (Reading B):** a `get_local_cb_interface(cb).fifo_page_size` / `.fifo_num_pages` **read** where the DFB getter already exists (`get_entry_size()` / `get_total_num_entries()`, both merged) is a **mechanical NEEDS-FIX → YELLOW (Portable, note fix)**, not RED. It is still a **GATE-clear required before merge** (silent-wrong on Quasar until swapped). RED is reserved for no-getter fields, structural blockers, and unresolved design decisions.
+
+**Bottom line:** All **17 data-movement ops' own kernels are 100% clean** — canonical Class-1 linear FIFOs plus a small set of pointer-only / private-L1 scratch buffers (Class 6), every one of which is **Portable** or **Portable (workaround)** → GREEN. The only non-GREEN signal is **two shared cross-op donor kernels** owned by **`eltwise/unary`** that read a legacy `LocalCBInterface` field while already declaring a `DataflowBuffer` — **silent-wrong on Quasar** (get_local_cb_interface returns `LocalCBInterface`; the DFB uses `LocalDFBInterface`). These donors are pulled in by **3 factory variants** (bcast `MultiCoreHW`, copy `DefaultTilized`, pad `PadTileCore`). The fix is a **one-line getter swap** (`get_local_cb_interface(cb).fifo_page_size` → `dfb.get_entry_size()`) owned by the eltwise group, and it clears all three ops (and many other ops repo-wide) at once → **YELLOW (mechanical GATE-clear before merge)**. No silent-wrong `get_cb_tiles_*`, no `read_tile_value`/`get_tile_address` Quasar-runtime dependency, and no LTA prerequisite (`get_pointer_to_cb_data`) anywhere in the group.
 
 ## Group-wide classification scan
 
@@ -31,9 +33,9 @@ Run over all 76 own kernel files + 12 referenced cross-op donor kernels + 6 shar
 
 | Op | Factories | Kernel CB summary | Verdict |
 |----|-----------|-------------------|---------|
-| `bcast` | 5 | Class 1 own kernels (readers/compute/writer). **`MultiCoreHW` pulls GATE donor `writer_unary_interleaved_start_id.cpp`** | **RED** (donor GATE; other 4 variants GREEN) |
+| `bcast` | 5 | Class 1 own kernels (readers/compute/writer). **`MultiCoreHW` pulls mechanical-GATE donor `writer_unary_interleaved_start_id.cpp`** | **YELLOW** (donor getter-swap; other 4 variants GREEN) |
 | `clone` | 1 | Class 1 (read/compute/write, RM+tiled+sharded) | GREEN |
-| `copy` | 3 | Class 1 own kernels. **`DefaultTilized` pulls GATE donors `reader_`+`writer_unary_interleaved_start_id.cpp`** | **RED** (donor GATE; RowMajor + SameMemoryConfig GREEN) |
+| `copy` | 3 | Class 1 own kernels. **`DefaultTilized` pulls mechanical-GATE donors `reader_`+`writer_unary_interleaved_start_id.cpp`** | **YELLOW** (donor getter-swap; RowMajor + SameMemoryConfig GREEN) |
 | `fill_pad` | 2 | Class 1 (reader/compute/writer, interleaved+L1-sharded) | GREEN |
 | `fill_rm` | 1 | Class 1 producer (reserve/push) | GREEN |
 | `fold` | 2 | Class 1 readers + Class 6 pointer-only cb2s writer; writers use sanctioned `WRITE_PTR` NOC source | GREEN (workaround) |
@@ -43,7 +45,7 @@ Run over all 76 own kernel files + 12 referenced cross-op donor kernels + 6 shar
 | `moe_routing_remap` | 1 | Class 1 consumer CBs + one private-L1 scratch CB (`local_weights_cb`) | GREEN (workaround) |
 | `move` | 2 | `Move` Class 1; `MoveOverlap` adds Class 6 pointer-only in-place L1 copy | GREEN (workaround) |
 | `non_zero_indices` | 1 | Class 1 `input_cb` + 2 Class 6 private-L1 staging CBs (`WRITE_PTR`) | GREEN (workaround) |
-| `pad` | 6 | RM/sharded/tile factories Class 1 + one fake-CB scratch (`cb_out1`). **`PadTileCore` pulls GATE donor `reader_unary_interleaved_start_id.cpp`** | **RED** (donor GATE; other 5 variants GREEN) |
+| `pad` | 6 | RM/sharded/tile factories Class 1 + one fake-CB scratch (`cb_out1`). **`PadTileCore` pulls mechanical-GATE donor `reader_unary_interleaved_start_id.cpp`** | **YELLOW** (donor getter-swap; other 5 variants GREEN) |
 | `repeat` | 2 | Class 1 (reserve/push, RM+tiled, interleaved+sharded) | GREEN |
 | `sharded_to_interleaved_partial` | 1 | **no own kernels** — all clean Class 1 donors (see notes) | GREEN |
 | `sort` | 3 | Class 1 reader/compute/writer + coordinator `WRITE_PTR` NOC source + one credit-only `push_back` on unused CB | GREEN (workaround) |
@@ -60,7 +62,7 @@ Scope: `bcast_multi_core_hw_program_factory.cpp` → own `reader_bcast_hw_interl
 | CB | Class | Kernel(s) | 1xx status | 1xx notes | 2xx status | 2xx notes |
 |----|-------|-----------|------------|-----------|------------|-----------|
 | `cb_in0`, `cb_in1` | 1 | `reader_bcast_hw_interleaved.cpp`, `bcast_hw.cpp` | Portable | linear FIFO → `DataflowBuffer` | Portable | — |
-| `cb_out0` (donor DFB) | 1 | **donor** `writer_unary_interleaved_start_id.cpp` | **Blocked** | **GATE:** `get_local_cb_interface(cb_id_out).fifo_page_size` (line 19) — kernel already uses `DataflowBuffer dfb` but reads legacy field; fix → `dfb.get_entry_size()` | **Blocked** | same field read is **silent-wrong on Quasar** (wrong interface struct) |
+| `cb_out0` (donor DFB) | 1 | **donor** `writer_unary_interleaved_start_id.cpp` | Portable | **NEEDS-FIX (mechanical):** `get_local_cb_interface(cb_id_out).fifo_page_size` (line 19) — kernel already uses `DataflowBuffer dfb` but reads legacy field; swap → `dfb.get_entry_size()`. **GATE-clear required before merge.** | Portable | same swap; **silent-wrong on Quasar** (wrong interface struct) until fixed |
 
 *(bcast's other 4 variants — MultiCoreH, MultiCoreW, ShardedHOptimised, ShardedH — use only own Class-1 kernels → GREEN.)*
 
@@ -70,8 +72,8 @@ Scope: `copy_default_tilized_program_factory.cpp` → **donors** `eltwise/unary/
 
 | CB | Class | Kernel(s) | 1xx status | 1xx notes | 2xx status | 2xx notes |
 |----|-------|-----------|------------|-----------|------------|-----------|
-| `cb_id_in0` (donor DFB) | 1 | **donor** `reader_unary_interleaved_start_id.cpp` | **Blocked** | **GATE:** `get_local_cb_interface(cb_id_in0).fifo_page_size` (line 20) → `dfb.get_entry_size()` | **Blocked** | silent-wrong on Quasar |
-| `cb_id_out` (donor DFB) | 1 | **donor** `writer_unary_interleaved_start_id.cpp` | **Blocked** | **GATE:** `get_local_cb_interface(cb_id_out).fifo_page_size` (line 19) → `dfb.get_entry_size()` | **Blocked** | silent-wrong on Quasar |
+| `cb_id_in0` (donor DFB) | 1 | **donor** `reader_unary_interleaved_start_id.cpp` | Portable | **NEEDS-FIX (mechanical):** `get_local_cb_interface(cb_id_in0).fifo_page_size` (line 20) → `dfb.get_entry_size()`. **GATE-clear required before merge.** | Portable | same swap; silent-wrong on Quasar until fixed |
+| `cb_id_out` (donor DFB) | 1 | **donor** `writer_unary_interleaved_start_id.cpp` | Portable | **NEEDS-FIX (mechanical):** `get_local_cb_interface(cb_id_out).fifo_page_size` (line 19) → `dfb.get_entry_size()`. **GATE-clear required before merge.** | Portable | same swap; silent-wrong on Quasar until fixed |
 | compute CBs | 1 | `eltwise_copy.cpp` | Portable | canonical copy pipeline | Portable | — |
 
 *(copy's DefaultRowMajor + SameMemoryConfig variants use own Class-1 kernels — `reader/writer_unary_start_id.cpp`, `reader/writer_unary_stick_start_id.cpp`, `redistribute_pages_row_major_*` — all clean → GREEN.)*
@@ -82,7 +84,7 @@ Scope: `pad_tile_program_factory.cpp` → **donor** `eltwise/unary/.../reader_un
 
 | CB | Class | Kernel(s) | 1xx status | 1xx notes | 2xx status | 2xx notes |
 |----|-------|-----------|------------|-----------|------------|-----------|
-| `cb_id_in0` (donor DFB) | 1 | **donor** `reader_unary_interleaved_start_id.cpp` | **Blocked** | **GATE:** `get_local_cb_interface(cb_id_in0).fifo_page_size` (line 20) → `dfb.get_entry_size()` | **Blocked** | silent-wrong on Quasar |
+| `cb_id_in0` (donor DFB) | 1 | **donor** `reader_unary_interleaved_start_id.cpp` | Portable | **NEEDS-FIX (mechanical):** `get_local_cb_interface(cb_id_in0).fifo_page_size` (line 20) → `dfb.get_entry_size()`. **GATE-clear required before merge.** | Portable | same swap; silent-wrong on Quasar until fixed |
 | `cb_out0` | 1 | `writer_pad_tiled.cpp` | Portable | canonical wait/pop | Portable | — |
 | `cb_out1` | 6 | `writer_unary_pad_dims_interleaved.cpp` (variant `PadRmReaderWriter*`) | Portable (workaround) | **undesirable but OK hack:** fake CB — `reserve_back(1)` with no `push_back` (comment: "not pushing anything into CBs, just using the space"); `get_write_ptr()` filled with pad value, DMA'd via `CoreLocalMem`. Uplift: **ScratchpadSpec**. | Portable | autoportable: private-L1 → **ScratchpadSpec** |
 | `cb_out0` (sharded) | 6 | `writer_pad_dims_rm_sharded.cpp` | Portable | pointer-only `get_write_ptr()` into output shard as NOC dst (bare L1 cursor — already-portable class); `cb_pad` scratch → **ScratchpadSpec** | Portable | same |
@@ -155,7 +157,7 @@ Both are **cross-op donor kernels owned by `eltwise/unary`**, already migrated t
 
 ## Notes & follow-ups
 
-- **Group RED is entirely donor-driven.** 14 of 17 ops are GREEN. The other 3 (bcast, copy, pad) are GREEN in their own code and go RED only via specific factory variants that borrow the two `eltwise/unary` `*_unary_interleaved_start_id.cpp` donors. Fixing those two donor lines (getter swap) clears bcast `MultiCoreHW`, copy `DefaultTilized`, and pad `PadTileCore` simultaneously — and those donors are shared by a large number of ops repo-wide, so the fix is high-leverage and belongs to the eltwise/unary owner, not data_movement.
+- **Group YELLOW is entirely donor-driven.** 14 of 17 ops are GREEN. The other 3 (bcast, copy, pad) are GREEN in their own code and go YELLOW only via specific factory variants that borrow the two `eltwise/unary` `*_unary_interleaved_start_id.cpp` donors (mechanical getter-swap GATE-clear; see rollup policy at top). Fixing those two donor lines (getter swap) clears bcast `MultiCoreHW`, copy `DefaultTilized`, and pad `PadTileCore` simultaneously — and those donors are shared by a large number of ops repo-wide, so the fix is high-leverage and belongs to the eltwise/unary owner, not data_movement.
 - **`use<...AddrSelector::WRITE_PTR>` is not a GATE.** It is the sanctioned Device 2.0 API to use a CB/DFB's write pointer as a NOC source address (maps to `dfb.get_write_ptr()`). It appears in fold, non_zero_indices, and sort; all classified Portable / Portable (workaround). Distinct from the moreh_arange fake-CB pattern only in that most here also pair `push_back`.
 - **No fake-CB pattern like moreh_arange in the strict sense except pad `cb_out1`.** pad's `writer_unary_pad_dims_interleaved.cpp` `cb_out1` is the one true `reserve_back`-without-`push_back` private-L1 staging buffer → ScratchpadSpec (autoportable).
 - **Cross-op donor kernels referenced by data_movement factories** (all scanned; only the two eltwise readers/writers above carry a GATE):

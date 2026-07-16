@@ -7,18 +7,20 @@
 
 ## Group verdict: RED
 
-**Bottom line:** Two ops are clean (**full**, **point_to_point** → GREEN) and one has no CB at all (**debug** → N/A). The group is dragged **RED** by three ops:
+> **Rollup policy (Reading B):** a `get_local_cb_interface(cb).fifo_page_size` / `.fifo_num_pages` **read** where the DFB getter already exists is a **mechanical NEEDS-FIX → YELLOW** (Portable, GATE-clear before merge), not RED. RED is reserved for no-getter fields, structural blockers, and unresolved design decisions.
 
-- **example** — its two data kernels are shared **eltwise/unary donor** kernels that read `get_local_cb_interface(cb).fifo_page_size` → **GATE** (mechanical getter swap, but a hard stop until cleared).
-- **halo** — Class 3 scatter into the output shard (`out_cb`), sync-free borrowed config-CB reads (LTA prereq), and a delicately-balanced split-reader shared input shard. 1xx is largely WEIRD-OK; **2xx needs a scatter design decision**.
-- **prefetcher** — a **remote / global CB** (`c_31`) driven by `experimental::remote_cb_*` APIs (a non-DFB primitive whose backing header does `fifo_wr_ptr`/`fifo_rd_ptr` surgery on both remote and local CB interfaces), plus a hand-rolled ring buffer with wrap-around pointer + trid credit decoupling. **Structural — no DFB equivalent today.**
+**Bottom line:** Two ops are clean (**full**, **point_to_point** → GREEN), one has no CB at all (**debug** → N/A), and one is **YELLOW** (**example** — mechanical GATE-clear). The group is **RED** because of **two ops with genuine blockers**:
+
+- **example** (**YELLOW**) — its two data kernels are shared **eltwise/unary donor** kernels that read `get_local_cb_interface(cb).fifo_page_size` → mechanical getter swap to `get_entry_size()` (getter exists today). GATE-clear required before merge, but per Reading B this is **YELLOW, not RED**.
+- **halo** (**RED**) — Class 3 scatter into the output shard (`out_cb`), sync-free borrowed config-CB reads (LTA prereq), and a delicately-balanced split-reader shared input shard. 1xx is largely WEIRD-OK; **2xx needs a scatter design decision** (strided multi-producer DFB vs alternatives) — an unresolved design decision, hence RED.
+- **prefetcher** (**RED**) — a **remote / global CB** (`c_31`) driven by `experimental::remote_cb_*` APIs (a non-DFB primitive whose backing header does `fifo_wr_ptr`/`fifo_rd_ptr` surgery on both remote and local CB interfaces), plus a hand-rolled ring buffer with wrap-around pointer + trid credit decoupling. **Structural — no DFB equivalent today.**
 
 ## Per-op rollup
 
 | Op | Factory/-ies audited | CBs | Worst class | 1xx | 2xx | Verdict |
 |----|----------------------|-----|-------------|-----|-----|---------|
 | `full` | Interleaved / Sharded / NDSharded | 1 (`cb_value`) | 6 (DM self-loop) | Portable (workaround) | Portable (ScratchpadSpec) | **GREEN** |
-| `examples/example` | MultiCore, SingleCore | 2 | 1 + **GATE** | Blocked (GATE) | Blocked (GATE) | **RED** |
+| `examples/example` | MultiCore, SingleCore | 2 | 1 + mech. GATE | Portable | Portable | **YELLOW** (mech. GATE-clear) |
 | `sliding_window/halo` | UntilizeWithHalo | 6 | 3 (scatter) | Portable (workaround) | Blocked (needs-design) | **RED** |
 | `prefetcher` | DramPrefetcher | 4 | 6 (remote CB) | Portable (workaround) | Blocked (structural) | **RED** |
 | `point_to_point` | Send, Receive, LocalCopy | 5 | 6 (fabric scratch) | Portable / workaround | Portable / workaround | **GREEN** |
@@ -51,16 +53,16 @@ All three writer kernels are structurally identical: a **single DM kernel** does
 **Op root:** `ttnn/cpp/ttnn/operations/examples/example/`
 **Scope:** `ExampleDeviceOperation::MultiCore` + `SingleCore` → **cross-op donor kernels** (eltwise/unary): `reader_unary_interleaved_start_id.cpp`, `writer_unary_interleaved_start_id.cpp`, `compute/eltwise_sfpu.cpp`. The op's own `device/kernels/**` (`blank.cpp`, `reader_unary.cpp`, `reader_binary_diff_lengths.cpp`, `writer_unary.cpp`, `compute/eltwise_sfpu.cpp`) are **unreferenced** (informational — not scanned/gated).
 
-### Overall verdict: RED
+### Overall verdict: YELLOW
 
-The CBs are canonical Class 1 linear FIFOs (compute already uses `DataflowBuffer` cleanly), **but** both donor data kernels read the page size via `get_local_cb_interface(cb).fifo_page_size` — a **GATE** hit. Fix is mechanical (`get_entry_size()` exists today), but per spec a non-empty unresolved GATE list rolls up **RED** and must clear before the port merges. This is exactly the P4 "eltwise … 1 + GATE (field read) — mechanical getter swap" case.
+The CBs are canonical Class 1 linear FIFOs (compute already uses `DataflowBuffer` cleanly), **but** both donor data kernels read the page size via `get_local_cb_interface(cb).fifo_page_size`. Fix is a mechanical getter swap (`get_entry_size()` exists today); per Reading B this is **NEEDS-FIX → YELLOW (Portable, GATE-clear before merge)**, not RED. This is exactly the P4 "eltwise … 1 + GATE (field read) — mechanical getter swap" case.
 
 ### CB portability
 
 | CB | Class | Kernel(s) | 1xx status | 1xx notes | 2xx status | 2xx notes |
 |----|-------|-----------|------------|-----------|------------|-----------|
-| `cb_id_in0` (`c_0`) | 1 | `reader_unary_interleaved_start_id.cpp`, `eltwise_sfpu.cpp` | Blocked | **GATE:** `get_local_cb_interface(cb_id_in0).fifo_page_size` (reader:20) — swap to `get_entry_size()` before port merges | Blocked | same |
-| `cb_output` (`c_2`) | 1 | `eltwise_sfpu.cpp`, `writer_unary_interleaved_start_id.cpp` | Blocked | **GATE:** `get_local_cb_interface(cb_id_out).fifo_page_size` (writer:19) — swap to `get_entry_size()` | Blocked | same |
+| `cb_id_in0` (`c_0`) | 1 | `reader_unary_interleaved_start_id.cpp`, `eltwise_sfpu.cpp` | Portable | **NEEDS-FIX (mechanical):** `get_local_cb_interface(cb_id_in0).fifo_page_size` (reader:20) — swap to `get_entry_size()`. **GATE-clear before merge.** | Portable | same swap; silent-wrong on Quasar until fixed |
+| `cb_output` (`c_2`) | 1 | `eltwise_sfpu.cpp`, `writer_unary_interleaved_start_id.cpp` | Portable | **NEEDS-FIX (mechanical):** `get_local_cb_interface(cb_id_out).fifo_page_size` (writer:19) — swap to `get_entry_size()`. **GATE-clear before merge.** | Portable | same swap; silent-wrong on Quasar until fixed |
 
 ### GATE hits (must be empty to merge)
 - `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp:20` — `get_local_cb_interface(cb_id_in0).fifo_page_size` → `get_entry_size()`
