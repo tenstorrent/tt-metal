@@ -755,9 +755,35 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
         stdout=_lf,
         stderr=subprocess.STDOUT,
     )
+    try:
+        _pgid = os.getpgid(proc.pid)
+    except Exception:  # noqa: BLE001
+        _pgid = None
+
+    def _liveness():
+        # A slow-but-WORKING round advances one of these even before it commits: the agent transcript
+        # grows (agent thinking / choosing tools) or the process group accrues CPU (a long tracy profile
+        # compiling kernels + running device ops -- GLM's 8-chip mesh profile alone is ~6 min). Only a
+        # TRULY FROZEN round (wedged device: everything blocked on I/O) advances NEITHER -- that is the
+        # real wedge. Watching only git/kernel-log killed legit multi-minute profiles as false wedges.
+        try:
+            amt = os.path.getmtime(agent_log)
+        except OSError:
+            amt = 0.0
+        cpu = 0
+        if _pgid is not None:
+            try:
+                from agent.probes import _pgroup_cpu_jiffies
+
+                cpu = _pgroup_cpu_jiffies(_pgid)
+            except Exception:  # noqa: BLE001
+                cpu = 0
+        return (amt, cpu)
+
     last_tok = _progress_token(repo_root, kernel_log)
-    last_change = time.monotonic()
-    _t0 = last_change
+    last_live = _liveness()
+    last_active = time.monotonic()
+    _t0 = last_active
     try:
         while True:
             try:
@@ -767,9 +793,12 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
                 _now = time.monotonic()
                 print(f"  · optimizing… {int(_now - _t0)}s (agent transcript → {agent_log})", flush=True)
                 tok = _progress_token(repo_root, kernel_log)
-                if tok != last_tok:
-                    last_tok, last_change = tok, _now
-                elif _now - last_change > stall_sec:
+                live = _liveness()
+                # reset the stall clock on REAL progress (commit / kernel attempt) OR any sign of life:
+                # transcript grew, or >~2s (200 jiffies) of group CPU burned since the last reset.
+                if tok != last_tok or live[0] != last_live[0] or (live[1] - last_live[1]) > 200:
+                    last_tok, last_live, last_active = tok, live, _now
+                elif _now - last_active > stall_sec:
                     break
     finally:
         try:
@@ -787,8 +816,9 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
         pass
     rst = _reclaim_device(devices)
     print(
-        "  [optimize/cc] WATCHDOG: round stalled %ds with no forward progress (likely device wedge) — "
-        "killed the round + %s; next round starts a FRESH mcp server on the reset mesh." % (stall_sec, rst)
+        "  [optimize/cc] WATCHDOG: round FROZEN %ds — no commit, no kernel attempt, no device CPU, and no "
+        "agent activity (real wedge, not a slow profile) — killed the round + %s; next round starts a "
+        "FRESH mcp server on the reset mesh." % (stall_sec, rst)
     )
     return True
 
