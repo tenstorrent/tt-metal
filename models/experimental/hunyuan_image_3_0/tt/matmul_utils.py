@@ -458,22 +458,33 @@ def l1_sharded_linear(
     program_config=None,
     decode: bool = False,
     batch_rows: int | None = None,
+    allow_width_shard: bool = True,
 ) -> ttnn.Tensor:
-    """ttnn.linear with L1 output and a tuned matmul program config."""
+    """ttnn.linear with L1 output and a tuned matmul program config.
+
+    ``allow_width_shard=False`` forces the plain DRAM path (skipping the small-M
+    width-sharded schedules) while keeping the large-M 2D-mcast config. Set by the
+    attention o_proj, where width-sharding measured slower than plain DRAM
+    interleaved for its decode shape (32x2048x4096: 75us width-shard vs 38us DRAM).
+    """
     m, k, n = infer_matmul_mkn(x, weight)
     small_m = math.ceil(m / TILE_SIZE) <= 1
 
-    if decode or (
-        _l1_sharded_matmul_enabled()
-        and weight.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        and small_m
+    if allow_width_shard and (
+        decode
+        or (
+            _l1_sharded_matmul_enabled()
+            and weight.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            and small_m
+        )
     ):
         return decode_width_sharded_linear(
             x, weight, bias=bias, batch_rows=batch_rows, compute_kernel_config=compute_kernel_config
         )
 
     if (
-        _l1_sharded_matmul_enabled()
+        allow_width_shard
+        and _l1_sharded_matmul_enabled()
         and small_m
         and weight.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
     ):
