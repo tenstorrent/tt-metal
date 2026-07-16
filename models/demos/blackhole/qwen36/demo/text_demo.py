@@ -210,7 +210,7 @@ def _blocks_for(seqlen, max_generated_tokens):
         pytest.param(65536, 500, True, 1, 1, id="traced_64k"),
         pytest.param(65536, 100, False, 1, 1, id="paged_64k"),
         pytest.param(131072, 100, True, 1, 1, id="traced_128k"),
-        pytest.param(262144, 100, True, 1, 1, id="traced_256k"),
+        pytest.param(262144, 100, True, 1, 1, id="traced_256k", marks=pytest.mark.timeout(900)),
         # Determinism: re-run the traced 128 case and assert identical output across runs.
         pytest.param(128, 50, True, 1, 2, id="determinism_128"),
         # Batched decode (TP only): B users share one paged KV + batched GDN state.

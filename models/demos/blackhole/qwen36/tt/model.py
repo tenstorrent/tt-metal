@@ -1594,14 +1594,23 @@ class Qwen36Model:
 
         import os
 
-        # QWEN_BATCHED_GDN_DEV_ASSEMBLE (default on): assemble each replay's B=1 GDN state into the
-        # batched decode buffer via device-side clones + concat instead of a to_torch snapshot +
-        # from_torch re-upload. For short prompts (bucket=128) the trace replay is tiny, so the
-        # per-user host round-trip (~B*48*(1+K) blocking mesh transfers) dominates TTFT and grows
-        # with B — the exact cost that hurts higher-batch short-prompt serving. Bit-identical (the
-        # to_torch(ConcatMesh,0)/from_torch(ShardMesh,0) round-trip is a mesh identity), so per-user
-        # coherence with DIFFERENT prompts is unchanged. Set =0 to force the legacy host path (A/B).
-        dev_assemble = os.environ.get("QWEN_BATCHED_GDN_DEV_ASSEMBLE", "1") != "0"
+        # QWEN_BATCHED_GDN_DEV_ASSEMBLE (default OFF — CONFIRMED BROKEN, do not enable without a
+        # real fix): was meant to assemble each replay's B=1 GDN state into the batched decode
+        # buffer via device-side ttnn.clone()+concat instead of a to_torch/from_torch host round
+        # trip, to cut the per-user host transfer cost that dominates short-prompt batched TTFT.
+        # Root-caused: ttnn.clone()'s output is allocated from the general/ephemeral device memory
+        # pool. The captured bucket trace's OWN internal intermediate tensors (freed-and-reused
+        # scratch during capture, but with fixed addresses baked into every replay) draw from that
+        # SAME pool. Once the allocator hands one of those addresses to a clone, the very next
+        # user's execute_trace() silently overwrites it — confirmed by checksumming the SAME
+        # Python-held clone tensor immediately after creation (matches the live state exactly) vs.
+        # right before assembly (diverges) for user 0, with no code writing to it in between; not a
+        # race (a synchronize_device() right after the clone made no difference — deterministic
+        # identical wrong PCC every run). A correct device-only fix needs snapshot buffers that are
+        # pre-allocated and pinned OUTSIDE the general allocator (like the trace's own persistent
+        # i/o buffers, e.g. _bucket_token_buf) rather than a fresh ttnn.clone() per replay. Until
+        # that's built, force the host round trip (correct, verified bit-identical, just slower).
+        dev_assemble = os.environ.get("QWEN_BATCHED_GDN_DEV_ASSEMBLE", "0") == "1"
 
         # Per-user logits are read to HOST during the loop and re-uploaded at the end: each replay
         # overwrites the persistent trace output, and the post-loop assembly churns device memory.
@@ -2271,7 +2280,10 @@ class Qwen36Model:
                 dtype=k_cache.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # L1, matching the real k/v tensors forward_prefill_paged slices: apply_partial_rope_prefill
+                # pins its q/k output to L1 (roped q/k feed SDPA directly), so a DRAM-resident warmup
+                # tensor here hashes to a different program-cache key and misses at request time.
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
             for w in range(1, num_blocks_in_seq(bucket, block_size) + 1):

@@ -141,7 +141,7 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
-        g.forward_prefill(replicate_to_device(mesh_device, xp[u]), chunk_size=T, capture_state=True)
+        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
 
@@ -149,7 +149,9 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     rec_list, conv_list = [], []
     for u in range(B):
-        _, rec_u, conv_u = gb.forward_prefill(replicate_to_device(mesh_device, xp[u]), chunk_size=T, return_state=True)
+        _, rec_u, conv_u = gb.forward_prefill(
+            shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, return_state=True
+        )
         rec_list.append(rec_u)
         conv_list.append(conv_u)
     gb.assemble_batched_state(rec_list, conv_list)
@@ -207,7 +209,7 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
-        g.forward_prefill(replicate_to_device(mesh_device, xp[u]), chunk_size=Tmax, capture_state=True)
+        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=Tmax, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
 
@@ -217,7 +219,7 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     x_pad = torch.zeros(B, Tmax, args.dim, dtype=torch.bfloat16)
     for u in range(B):
         x_pad[u, : lens[u], :] = xp[u][0, 0]
-    gb.forward_prefill_batched(replicate_to_device(mesh_device, x_pad), chunk_size=Tmax, valid_lens=lens)
+    gb.forward_prefill_batched(shard_to_device(mesh_device, x_pad, dim=-1), chunk_size=Tmax, valid_lens=lens)
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim]
     out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
     out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
@@ -262,7 +264,7 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     gref = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     gref.reset_state()
     gref._stable_state = True
-    gref.forward_prefill_batched(replicate_to_device(mesh_device, x.unsqueeze(0)), chunk_size=C)
+    gref.forward_prefill_batched(shard_to_device(mesh_device, x.unsqueeze(0), dim=-1), chunk_size=C)
     out_ref = ttnn.to_torch(gref.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
 
     # ---- test: two CARRIED chunks ----
@@ -270,8 +272,8 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     g.reset_state()
     g._stable_state = True
     g.reset_state_inplace()  # zero state + clear the batched conv carry at sequence start
-    g.forward_prefill_batched(replicate_to_device(mesh_device, x[:, :C].unsqueeze(0)), chunk_size=C, carry=True)
-    g.forward_prefill_batched(replicate_to_device(mesh_device, x[:, C:].unsqueeze(0)), chunk_size=C, carry=True)
+    g.forward_prefill_batched(shard_to_device(mesh_device, x[:, :C].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
+    g.forward_prefill_batched(shard_to_device(mesh_device, x[:, C:].unsqueeze(0), dim=-1), chunk_size=C, carry=True)
     out_t = ttnn.to_torch(g.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)
 
     thr = get_pcc_threshold(request, default=0.99)

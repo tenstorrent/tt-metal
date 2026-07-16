@@ -30,11 +30,6 @@ set(TTNN_OP_TRANSFORMER_SRCS
     gated_delta_attn/device/gated_delta_attn_device_operation.cpp
     gated_delta_attn/device/gated_delta_attn_program_factory.cpp
     gated_delta_attn/gated_delta_attn.cpp
-    chunk_gated_delta_rule/device/chunk_gated_delta_rule_device_operation.cpp
-    chunk_gated_delta_rule/device/chunk_gated_delta_rule_program_factory.cpp
-    chunk_gated_delta_rule/device/chunk_gdn_phased.cpp
-    chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp
-    chunk_gated_delta_rule/chunk_gated_delta_rule.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

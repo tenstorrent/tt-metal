@@ -192,13 +192,6 @@ class TPGatedDeltaNet:
         )
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
-        # Pre-build the fused-op constant tiles once here (eager, before any trace capture). Owned by
-        # this layer so their lifetime tracks the model (freed before the device closes) and passed
-        # into ttnn.transformer.chunk_gated_delta_rule, so the op holds no device-tensor cache of its
-        # own (a process-lifetime C++ static would deallocate after the device is gone and segfault).
-        from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import _FUSED_CHUNK_SIZE, build_fused_const_tiles
-
-        self._fused_const_tiles = build_fused_const_tiles(mesh, _FUSED_CHUNK_SIZE)
         self.conv_states = None
         self.rec_state = None
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
@@ -438,19 +431,7 @@ class TPGatedDeltaNet:
         g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"]))), (1, T, Nv))
         ttnn.deallocate(a)
 
-        # Fused-op path (default for prefill): the single-op ttnn.transformer.chunk_gated_delta_rule
-        # replaces the Python/ttnn preprocessing + gated_delta_attn_seq scan. Masked buckets
-        # (valid_len set) fall back to the seq adapter, which the fused op doesn't handle yet.
-        from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import (
-            chunk_gated_delta_rule_fused_adapter,
-            fused_chunk_enabled,
-        )
-
-        _use_fused = fused_chunk_enabled() and valid_len is None
-        _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        # const_tiles only applies to the fused op; the seq adapter has no such param.
-        _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
-        o, final_state = _delta_fn(
+        o, final_state = chunk_gated_delta_rule_seq_adapter(
             q,
             k,
             v,
@@ -464,7 +445,6 @@ class TPGatedDeltaNet:
             valid_len=valid_len,
             qkv_head_dims=_qkv_head_dims,
             return_o_bh=self._gdn_fuse_out,
-            **_extra,
         )
         B, D = 1, self.qkv_dim_tp
         captured = None
@@ -532,6 +512,8 @@ class TPGatedDeltaNet:
                 x_out, tw["out"], self.tt_ccl, self.cfg, self.args.ccl_topology(), self.args.num_devices, ttnn.float32
             )
             ttnn.deallocate(gated)
+            if return_state:
+                return out, captured[0], captured[1]
             return out
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
