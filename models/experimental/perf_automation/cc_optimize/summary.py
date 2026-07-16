@@ -240,6 +240,27 @@ def render_summary(
             note = " ".join((a.get("note") or "").split())[:200] or "(no reason recorded)"
             lines.append(f"{sig:<34} {lever:>10} {ms_s:>9} {gain_s:>13}  {res:<10} {note}")
 
+    # --- Code changes: the actual source diff for EVERY attempt tried (win or fail) ---
+    if any(isinstance(a, dict) and (a.get("diff") or "").strip() for a in attempts):
+        lines.append("")
+        lines.append("Code changes — every attempt (win or fail):")
+        lines.append("=" * 43)
+        for i, a in enumerate(attempts, 1):
+            if not isinstance(a, dict):
+                continue
+            d = (a.get("diff") or "").strip()
+            if not d:
+                continue
+            sig = _op_label(a.get("op_signature", "?"))
+            lever = _level_of(a.get("kernel_kind", "")) or (a.get("kernel_kind") or "?")
+            res = "win" if a.get("beat_baseline") else "no gain"
+            ms = a.get("measured_ms")
+            gain = f"  {baseline_ms - ms:+.2f} ms" if (baseline_ms and isinstance(ms, (int, float))) else ""
+            lines.append("")
+            lines.append(f"[#{i}] {sig} · {lever} · {res}{gain}")
+            for dl in d.splitlines():
+                lines.append("    " + dl)
+
     # --- Limitations / suggested manual next steps (#5c) ---
     _won_ops = {a.get("op_signature") for a in attempts if isinstance(a, dict) and a.get("beat_baseline")}
     _no_gain = sorted({o for o in by_op} - {o for o in _won_ops if o})

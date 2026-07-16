@@ -1129,6 +1129,36 @@ def git_revert(sha: str) -> dict:
     return {"reverted_to": sha}
 
 
+def _capture_attempt_diff(max_lines: int = 40) -> str:
+    """Best-effort snapshot of the SOURCE change THIS attempt made, for the RUN_REPORT code-change log.
+    A rejected (no-gain) attempt is still in the working tree at record time (revert happens AFTER) ->
+    `git diff HEAD`; a banked win is already committed -> `git show HEAD`. Scoped to the model dir,
+    truncated to max_lines. Never raises."""
+    try:
+        repo = gitio.repo_root(_MODEL_ROOT)
+        try:
+            pathspec = str(_MODEL_ROOT.relative_to(repo))
+        except ValueError:
+            pathspec = "."
+        out = ""
+        for cmd in (
+            ["git", "-C", str(repo), "diff", "HEAD", "--", pathspec],
+            ["git", "-C", str(repo), "show", "--format=", "HEAD", "--", pathspec],
+        ):
+            r = _sp.run(cmd, capture_output=True, text=True, timeout=30)
+            if r.returncode == 0 and r.stdout.strip():
+                out = r.stdout
+                break
+        if not out.strip():
+            return ""
+        all_lines = out.splitlines()
+        if len(all_lines) > max_lines:
+            all_lines = all_lines[:max_lines] + [f"... (truncated, {len(out.splitlines()) - max_lines} more lines)"]
+        return "\n".join(all_lines)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 @mcp.tool()
 def record_kernel_attempt(
     op_signature: str, kernel_kind: str, measured_ms: float, beat_baseline: bool, note: str = "", stages_json: str = ""
@@ -1187,6 +1217,7 @@ def record_kernel_attempt(
         "stages": stages,
         "kernel_detected_in_source": detected,
         "evidence": ev,
+        "diff": _capture_attempt_diff(),
     }
     attempts.append(rec)
     _save_attempts(attempts)
