@@ -1,0 +1,1 @@
+/localdev/mmoscicki/tt-dm-codegen/ops/i2s/templates/reader_stick_strided_i2s.cpp
