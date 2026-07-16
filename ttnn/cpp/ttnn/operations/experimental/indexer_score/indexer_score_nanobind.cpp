@@ -82,8 +82,11 @@ void bind_indexer_score(nb::module_& mod) {
                 The per-shard chunk length (chunk_size_global / sp). Cross-checked
                 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
                 tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp>1 (seq sharded
-                across BOTH axes) is allowed only with cluster_axis=None (flat row-major
-                linearization over all devices); with a named cluster_axis it is rejected.
+                across BOTH axes) has two forms: with cluster_axis=None it uses flat
+                row-major linearization over all devices (linear-approximate under a
+                mid-slab start); with a named cluster_axis it must also pass
+                seq_subshard_axis naming the TP axis, which gives the rotation-exact 2D
+                geometry (see seq_subshard_axis above).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",

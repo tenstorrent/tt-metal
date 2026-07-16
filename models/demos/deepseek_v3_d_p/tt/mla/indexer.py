@@ -621,8 +621,14 @@ class TtIndexer:
         # contract so mla.py / sparse_sdpa are unchanged (both DeepSeek and GLM ride this one path).
         tpsp = self._blockcyclic and self.tp_factor > 1
         if tpsp:
+            q_full, weights_full = (
+                q_dev,
+                weights,
+            )  # release the full-S slabs once TP-split (mesh_partition allocates new)
             q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),D_idx]
             weights = ttnn.mesh_partition(weights, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),1]
+            ttnn.deallocate(q_full)
+            ttnn.deallocate(weights_full)
             sq_local = seq_len // self.tp_factor
             qc = 64 if sq_local % 64 == 0 else 32  # q_chunk must divide the per-chip query tile count
         else:
@@ -695,7 +701,9 @@ class TtIndexer:
         # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
         # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
         if tpsp:
+            idx_local = idx  # the TP-sharded top-k; all_gather allocates the regathered [1,1,S/sp,k] replacement
             idx = self._tp_all_gather(idx, dim=2)
+            ttnn.deallocate(idx_local)
         return idx
 
 
