@@ -53,6 +53,12 @@ ENV LD_LIBRARY_PATH=/opt/tt-metal/build/lib
 # the layout above must be preserved.
 COPY tools/scaleout/cabling_generator/merge_cluster_configs.py ./tools/scaleout/cabling_generator/merge_cluster_configs.py
 
+# run_cabling_generator writes transient output to <repo>/out/scaleout, relative to
+# its working directory (/opt/tt-metal). Pre-create it world-writable so the tool
+# works when the container is run with an arbitrary --user (e.g. the host uid/gid)
+# without needing a `--tmpfs /opt/tt-metal/out` mount at runtime.
+RUN mkdir -p /opt/tt-metal/out/scaleout && chmod -R 777 /opt/tt-metal/out
+
 # Fail the build early if any required shared library is unresolved or the binary
 # cannot start.
 RUN ldd ./build/tools/scaleout/run_cabling_generator | tee /tmp/ldd.txt \
