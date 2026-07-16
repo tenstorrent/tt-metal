@@ -1,0 +1,749 @@
+[
+ {
+  "id": "ltx_m1216_k4096_n8_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 1216,
+  "K": 4096,
+  "N": 8,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage1"
+  ],
+  "notes": "isolated MM for ltx_m1216_k4096_n8"
+ },
+ {
+  "id": "ltx_m1216_k4096_n512_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 1216,
+  "K": 4096,
+  "N": 512,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage1"
+  ],
+  "notes": "isolated MM for ltx_m1216_k4096_n512"
+ },
+ {
+  "id": "ltx_m1216_k4096_n1024_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 1216,
+  "K": 4096,
+  "N": 1024,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage1"
+  ],
+  "notes": "isolated MM for ltx_m1216_k4096_n1024"
+ },
+ {
+  "id": "ltx_m1216_k4096_n1024_ac_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 1216,
+  "K": 4096,
+  "N": 1024,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {
+   "use_addcmul": true,
+   "scalar": 1.0,
+   "math_approx_mode": true
+  },
+  "tags": [
+   "ltx",
+   "stage1"
+  ],
+  "notes": "isolated MM for ltx_m1216_k4096_n1024_ac"
+ },
+ {
+  "id": "ltx_m1216_k4096_n3072_c3_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 1216,
+  "K": 4096,
+  "N": 3072,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {
+   "chunks": 3,
+   "math_approx_mode": true
+  },
+  "tags": [
+   "ltx",
+   "stage1"
+  ],
+  "notes": "isolated MM for ltx_m1216_k4096_n3072_c3"
+ },
+ {
+  "id": "ltx_m1216_k4096_n4096_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 1216,
+  "K": 4096,
+  "N": 4096,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage1"
+  ],
+  "notes": "isolated MM for ltx_m1216_k4096_n4096"
+ },
+ {
+  "id": "ltx_m1216_k2048_n1024_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 1216,
+  "K": 2048,
+  "N": 1024,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage1"
+  ],
+  "notes": "isolated MM for ltx_m1216_k2048_n1024"
+ },
+ {
+  "id": "ltx_m4864_k4096_n8_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 4864,
+  "K": 4096,
+  "N": 8,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage2"
+  ],
+  "notes": "isolated MM for ltx_m4864_k4096_n8"
+ },
+ {
+  "id": "ltx_m4864_k4096_n512_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 4864,
+  "K": 4096,
+  "N": 512,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage2"
+  ],
+  "notes": "isolated MM for ltx_m4864_k4096_n512"
+ },
+ {
+  "id": "ltx_m4864_k4096_n1024_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 4864,
+  "K": 4096,
+  "N": 1024,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage2"
+  ],
+  "notes": "isolated MM for ltx_m4864_k4096_n1024"
+ },
+ {
+  "id": "ltx_m4864_k4096_n1024_ac_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 4864,
+  "K": 4096,
+  "N": 1024,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {
+   "use_addcmul": true,
+   "scalar": 1.0,
+   "math_approx_mode": true
+  },
+  "tags": [
+   "ltx",
+   "stage2"
+  ],
+  "notes": "isolated MM for ltx_m4864_k4096_n1024_ac"
+ },
+ {
+  "id": "ltx_m4864_k4096_n3072_c3_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 4864,
+  "K": 4096,
+  "N": 3072,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {
+   "chunks": 3,
+   "math_approx_mode": true
+  },
+  "tags": [
+   "ltx",
+   "stage2"
+  ],
+  "notes": "isolated MM for ltx_m4864_k4096_n3072_c3"
+ },
+ {
+  "id": "ltx_m4864_k4096_n4096_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 4864,
+  "K": 4096,
+  "N": 4096,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage2"
+  ],
+  "notes": "isolated MM for ltx_m4864_k4096_n4096"
+ },
+ {
+  "id": "ltx_m4864_k2048_n1024_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 4864,
+  "K": 2048,
+  "N": 1024,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "stage2"
+  ],
+  "notes": "isolated MM for ltx_m4864_k2048_n1024"
+ },
+ {
+  "id": "ltx_m32_k2048_n8_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 32,
+  "K": 2048,
+  "N": 8,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "shared"
+  ],
+  "notes": "isolated MM for ltx_m32_k2048_n8"
+ },
+ {
+  "id": "ltx_m32_k2048_n512_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 32,
+  "K": 2048,
+  "N": 512,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "shared"
+  ],
+  "notes": "isolated MM for ltx_m32_k2048_n512"
+ },
+ {
+  "id": "ltx_m32_k2048_n512_ac_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 32,
+  "K": 2048,
+  "N": 512,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {
+   "use_addcmul": true,
+   "scalar": 1.0,
+   "math_approx_mode": true
+  },
+  "tags": [
+   "ltx",
+   "shared"
+  ],
+  "notes": "isolated MM for ltx_m32_k2048_n512_ac"
+ },
+ {
+  "id": "ltx_m32_k2048_n1536_c3_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 32,
+  "K": 2048,
+  "N": 1536,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {
+   "chunks": 3,
+   "math_approx_mode": true
+  },
+  "tags": [
+   "ltx",
+   "shared"
+  ],
+  "notes": "isolated MM for ltx_m32_k2048_n1536_c3"
+ },
+ {
+  "id": "ltx_m32_k2048_n2048_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 32,
+  "K": 2048,
+  "N": 2048,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "ltx",
+   "shared"
+  ],
+  "notes": "isolated MM for ltx_m32_k2048_n2048"
+ },
+ {
+  "id": "ltx_m256_k2048_n1024_c2_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8",
+  "M": 256,
+  "K": 2048,
+  "N": 1024,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {
+   "chunks": 2,
+   "math_approx_mode": true
+  },
+  "tags": [
+   "ltx",
+   "shared"
+  ],
+  "notes": "isolated MM for ltx_m256_k2048_n1024_c2"
+ },
+ {
+  "id": "flux_m32_k256_n6144_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 32,
+  "K": 256,
+  "N": 6144,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m32_k256_n6144"
+ },
+ {
+  "id": "flux_m32_k6144_n6144_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 32,
+  "K": 6144,
+  "N": 6144,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m32_k6144_n6144"
+ },
+ {
+  "id": "flux_m32_k6144_n4608_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 32,
+  "K": 6144,
+  "N": 4608,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m32_k6144_n4608"
+ },
+ {
+  "id": "flux_m32_k6144_n2304_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 32,
+  "K": 6144,
+  "N": 2304,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m32_k6144_n2304"
+ },
+ {
+  "id": "flux_m512_k15360_n768_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 512,
+  "K": 15360,
+  "N": 768,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m512_k15360_n768"
+ },
+ {
+  "id": "flux_m1024_k6144_n2304_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 1024,
+  "K": 6144,
+  "N": 2304,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m1024_k6144_n2304"
+ },
+ {
+  "id": "flux_m512_k6144_n2304_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 512,
+  "K": 6144,
+  "N": 2304,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m512_k6144_n2304"
+ },
+ {
+  "id": "flux_m1024_k6144_n768_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 1024,
+  "K": 6144,
+  "N": 768,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m1024_k6144_n768"
+ },
+ {
+  "id": "flux_m512_k6144_n768_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 512,
+  "K": 6144,
+  "N": 768,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m512_k6144_n768"
+ },
+ {
+  "id": "flux_m1024_k6144_n4608_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 1024,
+  "K": 6144,
+  "N": 4608,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m1024_k6144_n4608"
+ },
+ {
+  "id": "flux_m1024_k2304_n6144_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 1024,
+  "K": 2304,
+  "N": 6144,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m1024_k2304_n6144"
+ },
+ {
+  "id": "flux_m512_k6144_n4608_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 512,
+  "K": 6144,
+  "N": 4608,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m512_k6144_n4608"
+ },
+ {
+  "id": "flux_m512_k2304_n6144_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 512,
+  "K": 2304,
+  "N": 6144,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m512_k2304_n6144"
+ },
+ {
+  "id": "flux_m32_k6144_n1536_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 32,
+  "K": 6144,
+  "N": 1536,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m32_k6144_n1536"
+ },
+ {
+  "id": "flux_m1024_k6144_n128_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 1024,
+  "K": 6144,
+  "N": 128,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m1024_k6144_n128"
+ },
+ {
+  "id": "flux_m1024_k3072_n6144_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 1024,
+  "K": 3072,
+  "N": 6144,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m1024_k3072_n6144"
+ },
+ {
+  "id": "flux_m512_k3072_n6144_mm",
+  "op_type": "mm",
+  "device_config": "bh_4x8_ring8",
+  "M": 512,
+  "K": 3072,
+  "N": 6144,
+  "grid": [
+   12,
+   9
+  ],
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi2",
+  "fusion": {},
+  "tags": [
+   "flux"
+  ],
+  "notes": "isolated MM for flux_m512_k3072_n6144"
+ }
+]

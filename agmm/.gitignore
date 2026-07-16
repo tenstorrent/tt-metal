@@ -12,5 +12,13 @@ sweeps/
 !sweep_history.csv
 !sweep_latest.csv
 
-# Re-include the dashboard builder (root .gitignore has a broad build_* rule)
+# Isolated AG / MM sweep records + fused-vs-isolated comparison (tracking data)
+!isolated_ag_history.csv
+!isolated_ag_latest.csv
+!isolated_mm_history.csv
+!isolated_mm_latest.csv
+!comparison.csv
+
+# Re-include the builders (root .gitignore has a broad build_* rule)
 !build_dashboard.py
+!build_comparison.py

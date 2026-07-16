@@ -31,6 +31,8 @@ DEFAULT_LATEST = os.path.join(_THIS_DIR, "sweep_latest.csv")
 DEFAULT_HISTORY = os.path.join(_THIS_DIR, "sweep_history.csv")
 DEFAULT_SKIP = os.path.join(_THIS_DIR, "skip_shapes.txt")
 DEFAULT_HTML = os.path.join(_THIS_DIR, "agmm_db.html")
+DEFAULT_ISO_AG = os.path.join(_THIS_DIR, "isolated_ag_latest.csv")
+DEFAULT_ISO_MM = os.path.join(_THIS_DIR, "isolated_mm_latest.csv")
 
 # Per device_config: ring size (cluster-axis length) and fabric links. Keep in
 # sync with DEVICE_CONFIGS in models/tt_dit/utils/sweep_mm_block_sizes.py.
@@ -63,8 +65,23 @@ def _fail_reason(shape_id, latest_row, last_status, skip):
     return "not measured"
 
 
+def _load_iso_us(path):
+    """shape_id -> best_duration_us for OK rows of an isolated (AG or MM) sweep CSV."""
+    out = {}
+    if os.path.exists(path):
+        for r in csv.DictReader(open(path)):
+            if r.get("status") == "OK" and r.get("best_duration_us"):
+                out[r["shape_id"]] = float(r["best_duration_us"])
+    return out
+
+
 def build_rows(
-    spec_path=DEFAULT_SPEC, latest_path=DEFAULT_LATEST, history_path=DEFAULT_HISTORY, skip_path=DEFAULT_SKIP
+    spec_path=DEFAULT_SPEC,
+    latest_path=DEFAULT_LATEST,
+    history_path=DEFAULT_HISTORY,
+    skip_path=DEFAULT_SKIP,
+    iso_ag_path=DEFAULT_ISO_AG,
+    iso_mm_path=DEFAULT_ISO_MM,
 ):
     """Return the list of dashboard row dicts (one per spec shape)."""
     spec = json.load(open(spec_path))
@@ -76,6 +93,11 @@ def build_rows(
         for r in csv.DictReader(open(history_path)):
             last_status[r["shape_id"]] = r["status"]  # later rows win -> most recent
     skip = set(open(skip_path).read().split()) if os.path.exists(skip_path) else set()
+    # Isolated all-gather is deduped by (device_config, M, K); isolated matmul is
+    # keyed by the AGMM shape id + "_mm". Both are measured on the healthy 2-link
+    # galaxy; see build_comparison.py for the fused-vs-serial join.
+    iso_ag = _load_iso_us(iso_ag_path)
+    iso_mm = _load_iso_us(iso_mm_path)
 
     rows = []
     for s in spec:
@@ -101,9 +123,19 @@ def build_rows(
             "t_fabric": round(base["t_fabric_us"], 1),
             "ideal": round(base["ideal_us"], 1),
             "limiter": base["limiter"],
+            "ag_us": None,
+            "mm_us": None,
             "m": None,
             "fail": None,
         }
+
+        # Isolated timings: AG deduped by (device_config, M, K), MM by id + "_mm".
+        ag = iso_ag.get(f"ag_{cfg}_m{s['M']}_k{s['K']}")
+        mm = iso_mm.get(s["id"] + "_mm")
+        if ag is not None:
+            row["ag_us"] = round(ag, 1)
+        if mm is not None:
+            row["mm_us"] = round(mm, 1)
 
         lr = latest.get(s["id"])
         if lr and lr.get("status") == "OK" and lr.get("best_duration_us"):
@@ -152,9 +184,11 @@ def _rows_to_js(rows):
                 )
             )
         fail = "null" if d["fail"] is None else json.dumps(d["fail"])
+        ag = "null" if d["ag_us"] is None else d["ag_us"]
+        mm = "null" if d["mm_us"] is None else d["mm_us"]
         out.append(
             "   {id:%s,M:%d,K:%d,N:%d,fusion:%s,tag:%s,ring:%d,t_compute:%s,t_dram:%s,"
-            "t_fabric:%s,ideal:%s,limiter:%s,m:%s,fail:%s},"
+            "t_fabric:%s,ideal:%s,limiter:%s,ag:%s,mm:%s,m:%s,fail:%s},"
             % (
                 json.dumps(d["id"]),
                 d["M"],
@@ -168,6 +202,8 @@ def _rows_to_js(rows):
                 d["t_fabric"],
                 d["ideal"],
                 json.dumps(d["limiter"]),
+                ag,
+                mm,
                 mjs,
                 fail,
             )

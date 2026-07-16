@@ -163,16 +163,27 @@
   .rf-bar{position:absolute;left:0;top:0;height:100%;border-radius:5px;}
   .rf-val{position:absolute;top:50%;transform:translateY(-50%);font-size:11.5px;font-family:var(--mono);font-weight:650;padding-left:7px;white-space:nowrap;}
   .rf-plot{position:relative;}
-  .mk{position:absolute;top:-4px;bottom:16px;width:0;z-index:3;}
-  .mk .ln{position:absolute;inset:0;}
+  /* markers live inside .rf-plot, which reserves a top lane (inline padding-top)
+     for the tags so they never overlap the first bar's header; the vertical line
+     (.ln) and headroom band (.band) start at the lane bottom (top set inline). */
+  .mk{position:absolute;top:0;bottom:0;width:0;z-index:3;}
+  .mk .ln{position:absolute;left:0;bottom:0;}
   .mk.ideal .ln{border-left:2px dashed var(--baseline);}
   .mk.meas .ln{background:var(--ink);width:2px;}
-  .mk .tag{position:absolute;top:-3px;transform:translateX(-50%);white-space:nowrap;font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;}
+  .mk .tag{position:absolute;white-space:nowrap;font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;}
   .mk.ideal .tag{color:var(--ink-2);background:var(--surface-2);border:1px solid var(--border);}
   .mk.meas .tag{color:var(--surface-1);background:var(--ink);}
   .rf-axis{position:relative;height:16px;margin-top:2px;}
   .rf-axis .tk{position:absolute;top:2px;transform:translateX(-50%);font-size:10px;color:var(--muted);font-family:var(--mono);}
-  .band{position:absolute;top:-4px;bottom:16px;background:var(--band);border-radius:2px;z-index:1;}
+  .band{position:absolute;bottom:0;background:var(--band);border-radius:2px;z-index:1;}
+  /* isolated AG + MM breakdown */
+  .iso-bar{display:flex;align-items:center;gap:10px;margin:6px 0;}
+  .iso-lab{font-size:12px;color:var(--ink-2);width:86px;flex:none;}
+  .iso-track{position:relative;flex:1;height:15px;background:var(--track);border-radius:5px;display:flex;overflow:hidden;}
+  .iso-seg{height:100%;}
+  .iso-seg + .iso-seg{border-left:2px solid var(--surface-1);}
+  .iso-num{font-family:var(--mono);font-size:12px;font-weight:650;min-width:44px;text-align:right;color:var(--ink);}
+  .dl dt .sw{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:6px;vertical-align:middle;}
   .mtr{margin-bottom:14px;}
   .mtr-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;}
   .mtr-val{font-size:12px;font-family:var(--mono);font-weight:650;} .mtr-val span{color:var(--muted);font-weight:500;}
@@ -244,49 +255,49 @@
 
 <script>
 (function(){
-  var PEAK_TFLOPS=298.6, PEAK_DRAM=512, PEAK_LINK=50, AXMAX_PAD=1.08;
+  var PEAK_TFLOPS=298.6, PEAK_DRAM=512, PEAK_LINK=25, AXMAX_PAD=1.08;
   var RES=['compute','dram','fabric'];
   var RESVAR={compute:'--r-compute',dram:'--r-dram',fabric:'--r-fabric'};
   function cv(v){return getComputedStyle(document.querySelector('.viz-root')).getPropertyValue(v).trim();}
 
   var DATA=[
-   {id:"ltx_m1216_k4096_n8",M:1216,K:4096,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.3,t_dram:19.6,t_fabric:74.7,ideal:74.7,limiter:"fabric",m:{measured:161.6,speedup:2.16,blocking:"M4 K8 N2 sb(2,2)",flop:0.2,dram:12.1,fabric:46.2,tflops:0.5,dram_gbps:62.1,fabric_gbps:11.6},fail:null},
-   {id:"ltx_m1216_k4096_n512",M:1216,K:4096,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:17.1,t_dram:27.6,t_fabric:74.7,ideal:74.7,limiter:"fabric",m:{measured:162.8,speedup:2.18,blocking:"M4 K8 N4 sb(2,2)",flop:10.5,dram:17.0,fabric:45.9,tflops:31.3,dram_gbps:86.9,fabric_gbps:11.5},fail:null},
-   {id:"ltx_m1216_k4096_n1024",M:1216,K:4096,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:34.2,t_dram:35.8,t_fabric:74.7,ideal:74.7,limiter:"fabric",m:{measured:167.1,speedup:2.24,blocking:"M4 K8 N4 sb(2,2)",flop:20.4,dram:21.4,fabric:44.7,tflops:61.0,dram_gbps:109.8,fabric_gbps:11.2},fail:null},
-   {id:"ltx_m1216_k4096_n1024_ac",M:1216,K:4096,N:1024,fusion:"addcmul",tag:"ltx",ring:4,t_compute:34.2,t_dram:35.8,t_fabric:74.7,ideal:74.7,limiter:"fabric",m:{measured:176.5,speedup:2.36,blocking:"M6 K8 N4 sb(2,2)",flop:19.4,dram:20.3,fabric:42.3,tflops:57.8,dram_gbps:104.0,fabric_gbps:10.6},fail:null},
-   {id:"ltx_m1216_k4096_n3072_c3",M:1216,K:4096,N:3072,fusion:"chunks3",tag:"ltx",ring:4,t_compute:102.5,t_dram:68.6,t_fabric:74.7,ideal:102.5,limiter:"compute",m:{measured:251.5,speedup:2.45,blocking:"M4 K8 N11 sb(4,1)",flop:40.7,dram:27.3,fabric:29.7,tflops:121.7,dram_gbps:139.7,fabric_gbps:7.4},fail:null},
-   {id:"ltx_m1216_k4096_n4096",M:1216,K:4096,N:4096,fusion:"\u2014",tag:"ltx",ring:4,t_compute:136.6,t_dram:85.0,t_fabric:74.7,ideal:136.6,limiter:"compute",m:{measured:311.5,speedup:2.28,blocking:"M4 K8 N10 sb(2,2)",flop:43.9,dram:27.3,fabric:24.0,tflops:131.0,dram_gbps:139.7,fabric_gbps:6.0},fail:null},
-   {id:"ltx_m1216_k2048_n1024",M:1216,K:2048,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:17.1,t_dram:17.9,t_fabric:37.4,ideal:37.4,limiter:"fabric",m:{measured:101.8,speedup:2.72,blocking:"M4 K8 N6 sb(2,2)",flop:16.8,dram:17.6,fabric:36.7,tflops:50.1,dram_gbps:90.2,fabric_gbps:9.2},fail:null},
-   {id:"ltx_m4864_k4096_n8",M:4864,K:4096,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:1.1,t_dram:78.0,t_fabric:298.8,ideal:298.8,limiter:"fabric",m:{measured:518.0,speedup:1.73,blocking:"M8 K8 N2 sb(2,2)",flop:0.2,dram:15.0,fabric:57.7,tflops:0.6,dram_gbps:77.0,fabric_gbps:14.4},fail:null},
-   {id:"ltx_m4864_k4096_n512",M:4864,K:4096,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:68.3,t_dram:86.0,t_fabric:298.8,ideal:298.8,limiter:"fabric",m:{measured:523.7,speedup:1.75,blocking:"M8 K8 N2 sb(2,2)",flop:13.0,dram:16.4,fabric:57.1,tflops:39.0,dram_gbps:84.1,fabric_gbps:14.3},fail:null},
-   {id:"ltx_m4864_k4096_n1024",M:4864,K:4096,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:136.6,t_dram:94.2,t_fabric:298.8,ideal:298.8,limiter:"fabric",m:{measured:531.2,speedup:1.78,blocking:"M8 K8 N4 sb(2,2)",flop:25.7,dram:17.7,fabric:56.3,tflops:76.8,dram_gbps:90.8,fabric_gbps:14.1},fail:null},
-   {id:"ltx_m4864_k4096_n1024_ac",M:4864,K:4096,N:1024,fusion:"addcmul",tag:"ltx",ring:4,t_compute:136.6,t_dram:94.2,t_fabric:298.8,ideal:298.8,limiter:"fabric",m:{measured:589.6,speedup:1.97,blocking:"M16 K8 N4 sb(2,2)",flop:23.2,dram:16.0,fabric:50.7,tflops:69.2,dram_gbps:81.8,fabric_gbps:12.7},fail:null},
-   {id:"ltx_m4864_k4096_n3072_c3",M:4864,K:4096,N:3072,fusion:"chunks3",tag:"ltx",ring:4,t_compute:409.9,t_dram:127.0,t_fabric:298.8,ideal:409.9,limiter:"compute",m:{measured:719.0,speedup:1.75,blocking:"M10 K4 N12 sb(2,2)",flop:57.0,dram:17.7,fabric:41.6,tflops:170.2,dram_gbps:90.4,fabric_gbps:10.4},fail:null},
-   {id:"ltx_m4864_k4096_n4096",M:4864,K:4096,N:4096,fusion:"\u2014",tag:"ltx",ring:4,t_compute:546.6,t_dram:143.4,t_fabric:298.8,ideal:546.6,limiter:"compute",m:{measured:949.5,speedup:1.74,blocking:"M8 K8 N10 sb(2,2)",flop:57.6,dram:15.1,fabric:31.5,tflops:171.9,dram_gbps:77.3,fabric_gbps:7.9},fail:null},
-   {id:"ltx_m4864_k2048_n1024",M:4864,K:2048,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:68.3,t_dram:47.1,t_fabric:149.4,ideal:149.4,limiter:"fabric",m:{measured:309.4,speedup:2.07,blocking:"M8 K4 N6 sb(2,2)",flop:22.1,dram:15.2,fabric:48.3,tflops:65.9,dram_gbps:77.9,fabric_gbps:12.1},fail:null},
-   {id:"ltx_m32_k2048_n8",M:32,K:2048,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.0,t_dram:0.3,t_fabric:1.0,ideal:1.0,limiter:"fabric",m:{measured:42.8,speedup:43.52,blocking:"M10 K8 N4 sb(2,2)",flop:0.0,dram:0.7,fabric:2.3,tflops:0.0,dram_gbps:3.8,fabric_gbps:0.6},fail:null},
-   {id:"ltx_m32_k2048_n512",M:32,K:2048,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.2,t_dram:4.4,t_fabric:1.0,ideal:4.4,limiter:"dram",m:{measured:42.8,speedup:9.82,blocking:"M2 K8 N6 sb(2,2)",flop:0.5,dram:10.2,fabric:2.3,tflops:1.6,dram_gbps:52.1,fabric_gbps:0.6},fail:null},
-   {id:"ltx_m32_k2048_n512_ac",M:32,K:2048,N:512,fusion:"addcmul",tag:"ltx",ring:4,t_compute:0.2,t_dram:4.4,t_fabric:1.0,ideal:4.4,limiter:"dram",m:{measured:44.2,speedup:10.16,blocking:"M2 K8 N2 sb(2,2)",flop:0.5,dram:9.8,fabric:2.2,tflops:1.5,dram_gbps:50.4,fabric_gbps:0.6},fail:null},
-   {id:"ltx_m32_k2048_n1536_c3",M:32,K:2048,N:1536,fusion:"chunks3",tag:"ltx",ring:4,t_compute:0.7,t_dram:12.5,t_fabric:1.0,ideal:12.5,limiter:"dram",m:{measured:64.1,speedup:5.11,blocking:"M2 K4 N10 sb(2,2)",flop:1.1,dram:19.6,fabric:1.5,tflops:3.1,dram_gbps:100.2,fabric_gbps:0.4},fail:null},
-   {id:"ltx_m32_k2048_n2048",M:32,K:2048,N:2048,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.9,t_dram:16.6,t_fabric:1.0,ideal:16.6,limiter:"dram",m:{measured:76.7,speedup:4.61,blocking:"M4 K4 N10 sb(2,2)",flop:1.2,dram:21.7,fabric:1.3,tflops:3.5,dram_gbps:111.0,fabric_gbps:0.3},fail:null},
-   {id:"ltx_m256_k2048_n1024_c2",M:256,K:2048,N:1024,fusion:"chunks2",tag:"ltx",ring:4,t_compute:3.6,t_dram:10.2,t_fabric:7.9,ideal:10.2,limiter:"dram",m:{measured:53.1,speedup:5.19,blocking:"M2 K8 N14 sb(2,2)",flop:6.8,dram:19.3,fabric:14.8,tflops:20.2,dram_gbps:98.7,fabric_gbps:3.7},fail:null},
-   {id:"flux_m32_k256_n6144",M:32,K:256,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:0.3,t_dram:6.2,t_fabric:0.1,ideal:6.2,limiter:"dram",m:{measured:68.7,speedup:11.12,blocking:"M2 K1 N14 sb(2,2)",flop:0.5,dram:9.0,fabric:0.2,tflops:1.5,dram_gbps:46.0,fabric_gbps:0.1},fail:null},
-   {id:"flux_m32_k6144_n6144",M:32,K:6144,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:8.1,t_dram:148.2,t_fabric:3.4,ideal:148.2,limiter:"dram",m:{measured:467.7,speedup:3.16,blocking:"M6 K6 N8 sb(2,2)",flop:1.7,dram:31.7,fabric:0.7,tflops:5.2,dram_gbps:162.3,fabric_gbps:0.2},fail:null},
-   {id:"flux_m32_k6144_n4608",M:32,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:6.1,t_dram:111.4,t_fabric:3.4,ideal:111.4,limiter:"dram",m:{measured:354.5,speedup:3.18,blocking:"M6 K6 N8 sb(2,2)",flop:1.7,dram:31.4,fabric:1.0,tflops:5.1,dram_gbps:160.8,fabric_gbps:0.2},fail:null},
-   {id:"flux_m32_k6144_n2304",M:32,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:3.0,t_dram:56.1,t_fabric:3.4,ideal:56.1,limiter:"dram",m:{measured:185.4,speedup:3.31,blocking:"M4 K6 N8 sb(2,2)",flop:1.6,dram:30.2,fabric:1.9,tflops:4.9,dram_gbps:154.9,fabric_gbps:0.5},fail:null},
-   {id:"flux_m512_k15360_n768",M:512,K:15360,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:40.5,t_dram:76.8,t_fabric:137.6,ideal:137.6,limiter:"fabric",m:{measured:302.9,speedup:2.2,blocking:"M2 K20 N3 sb(1,3)",flop:13.4,dram:25.4,fabric:45.4,tflops:39.9,dram_gbps:129.8,fabric_gbps:11.4},fail:null},
-   {id:"flux_m1024_k6144_n2304",M:1024,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:79.9,t_fabric:110.1,ideal:110.1,limiter:"fabric",m:{measured:279.3,speedup:2.54,blocking:"M3 K6 N12 sb(1,4)",flop:34.8,dram:28.6,fabric:39.4,tflops:103.8,dram_gbps:146.4,fabric_gbps:9.9},fail:null},
-   {id:"flux_m512_k6144_n2304",M:512,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:48.5,t_dram:67.6,t_fabric:55.1,ideal:67.6,limiter:"dram",m:{measured:224.3,speedup:3.32,blocking:"M4 K8 N14 sb(2,2)",flop:21.6,dram:30.1,fabric:24.5,tflops:64.6,dram_gbps:154.3,fabric_gbps:6.1},fail:null},
-   {id:"flux_m1024_k6144_n768",M:1024,K:6144,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:32.4,t_dram:43.0,t_fabric:110.1,ideal:110.1,limiter:"fabric",m:{measured:205.9,speedup:1.87,blocking:"M3 K8 N4 sb(1,4)",flop:15.7,dram:20.9,fabric:53.5,tflops:46.9,dram_gbps:106.9,fabric_gbps:13.4},fail:null},
-   {id:"flux_m512_k6144_n768",M:512,K:6144,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:16.2,t_dram:30.7,t_fabric:55.1,ideal:55.1,limiter:"fabric",m:{measured:148.4,speedup:2.7,blocking:"M4 K12 N3 sb(4,1)",flop:10.9,dram:20.7,fabric:37.1,tflops:32.6,dram_gbps:106.0,fabric_gbps:9.3},fail:null},
-   {id:"flux_m1024_k6144_n4608",M:1024,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:194.2,t_dram:135.2,t_fabric:110.1,ideal:194.2,limiter:"compute",m:{measured:435.4,speedup:2.24,blocking:"M3 K3 N16 sb(1,4)",flop:44.6,dram:31.0,fabric:25.3,tflops:133.2,dram_gbps:158.9,fabric_gbps:6.3},fail:null},
-   {id:"flux_m1024_k2304_n6144",M:1024,K:2304,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:64.5,t_fabric:41.3,ideal:97.1,limiter:"compute",m:{measured:253.5,speedup:2.61,blocking:"M3 K3 N14 sb(3,1)",flop:38.3,dram:25.4,fabric:16.3,tflops:114.4,dram_gbps:130.3,fabric_gbps:4.1},fail:null},
-   {id:"flux_m512_k6144_n4608",M:512,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:122.9,t_fabric:55.1,ideal:122.9,limiter:"dram",m:{measured:374.4,speedup:3.05,blocking:"M4 K4 N16 sb(2,2)",flop:25.9,dram:32.8,fabric:14.7,tflops:77.4,dram_gbps:168.1,fabric_gbps:3.7},fail:null},
-   {id:"flux_m512_k2304_n6144",M:512,K:2304,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:48.5,t_dram:59.9,t_fabric:20.6,ideal:59.9,limiter:"dram",m:{measured:207.0,speedup:3.46,blocking:"M2 K3 N14 sb(2,2)",flop:23.5,dram:28.9,fabric:10.0,tflops:70.0,dram_gbps:148.2,fabric_gbps:2.5},fail:null},
-   {id:"flux_m32_k6144_n1536",M:32,K:6144,N:1536,fusion:"\u2014",tag:"flux",ring:8,t_compute:2.0,t_dram:37.6,t_fabric:3.4,ideal:37.6,limiter:"dram",m:{measured:140.6,speedup:3.74,blocking:"M4 K8 N6 sb(2,2)",flop:1.4,dram:26.8,fabric:2.4,tflops:4.3,dram_gbps:137.1,fabric_gbps:0.6},fail:null},
-   {id:"flux_m1024_k6144_n128",M:1024,K:6144,N:128,fusion:"\u2014",tag:"flux",ring:8,t_compute:5.4,t_dram:27.6,t_fabric:110.1,ideal:110.1,limiter:"fabric",m:{measured:204.8,speedup:1.86,blocking:"M6 K8 N2 sb(2,2)",flop:2.6,dram:13.5,fabric:53.8,tflops:7.9,dram_gbps:69.1,fabric_gbps:13.4},fail:null},
-   {id:"flux_m1024_k3072_n6144",M:1024,K:3072,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:129.5,t_dram:86.0,t_fabric:55.1,ideal:129.5,limiter:"compute",m:{measured:302.5,speedup:2.34,blocking:"M6 K6 N11 sb(3,1)",flop:42.8,dram:28.4,fabric:18.2,tflops:127.8,dram_gbps:145.6,fabric_gbps:4.5},fail:null},
-   {id:"flux_m512_k3072_n6144",M:512,K:3072,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:64.7,t_dram:79.9,t_fabric:27.5,ideal:79.9,limiter:"dram",m:{measured:260.0,speedup:3.26,blocking:"M4 K4 N14 sb(2,2)",flop:24.9,dram:30.7,fabric:10.6,tflops:74.3,dram_gbps:157.3,fabric_gbps:2.6},fail:null},
+   {id:"ltx_m1216_k4096_n8",M:1216,K:4096,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.3,t_dram:19.6,t_fabric:74.7,ideal:74.7,limiter:"fabric",ag:105.5,mm:54.5,m:{measured:161.6,speedup:2.16,blocking:"M4 K8 N2 sb(2,2)",flop:0.2,dram:12.1,fabric:46.2,tflops:0.5,dram_gbps:62.1,fabric_gbps:11.6},fail:null},
+   {id:"ltx_m1216_k4096_n512",M:1216,K:4096,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:17.1,t_dram:27.6,t_fabric:74.7,ideal:74.7,limiter:"fabric",ag:105.5,mm:59.8,m:{measured:162.8,speedup:2.18,blocking:"M4 K8 N4 sb(2,2)",flop:10.5,dram:17.0,fabric:45.9,tflops:31.3,dram_gbps:86.9,fabric_gbps:11.5},fail:null},
+   {id:"ltx_m1216_k4096_n1024",M:1216,K:4096,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:34.2,t_dram:35.8,t_fabric:74.7,ideal:74.7,limiter:"fabric",ag:105.5,mm:81.7,m:{measured:167.1,speedup:2.24,blocking:"M4 K8 N4 sb(2,2)",flop:20.4,dram:21.4,fabric:44.7,tflops:61.0,dram_gbps:109.8,fabric_gbps:11.2},fail:null},
+   {id:"ltx_m1216_k4096_n1024_ac",M:1216,K:4096,N:1024,fusion:"addcmul",tag:"ltx",ring:4,t_compute:34.2,t_dram:35.8,t_fabric:74.7,ideal:74.7,limiter:"fabric",ag:105.5,mm:80.8,m:{measured:176.5,speedup:2.36,blocking:"M6 K8 N4 sb(2,2)",flop:19.4,dram:20.3,fabric:42.3,tflops:57.8,dram_gbps:104.0,fabric_gbps:10.6},fail:null},
+   {id:"ltx_m1216_k4096_n3072_c3",M:1216,K:4096,N:3072,fusion:"chunks3",tag:"ltx",ring:4,t_compute:102.5,t_dram:68.6,t_fabric:74.7,ideal:102.5,limiter:"compute",ag:105.5,mm:193.9,m:{measured:251.5,speedup:2.45,blocking:"M4 K8 N11 sb(4,1)",flop:40.7,dram:27.3,fabric:29.7,tflops:121.7,dram_gbps:139.7,fabric_gbps:7.4},fail:null},
+   {id:"ltx_m1216_k4096_n4096",M:1216,K:4096,N:4096,fusion:"\u2014",tag:"ltx",ring:4,t_compute:136.6,t_dram:85.0,t_fabric:74.7,ideal:136.6,limiter:"compute",ag:105.5,mm:242.3,m:{measured:311.5,speedup:2.28,blocking:"M4 K8 N10 sb(2,2)",flop:43.9,dram:27.3,fabric:24.0,tflops:131.0,dram_gbps:139.7,fabric_gbps:6.0},fail:null},
+   {id:"ltx_m1216_k2048_n1024",M:1216,K:2048,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:17.1,t_dram:17.9,t_fabric:37.4,ideal:37.4,limiter:"fabric",ag:59.7,mm:48.2,m:{measured:101.8,speedup:2.72,blocking:"M4 K8 N6 sb(2,2)",flop:16.8,dram:17.6,fabric:36.7,tflops:50.1,dram_gbps:90.2,fabric_gbps:9.2},fail:null},
+   {id:"ltx_m4864_k4096_n8",M:4864,K:4096,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:1.1,t_dram:78.0,t_fabric:298.8,ideal:298.8,limiter:"fabric",ag:389.4,mm:156.2,m:{measured:518.0,speedup:1.73,blocking:"M8 K8 N2 sb(2,2)",flop:0.2,dram:15.0,fabric:57.7,tflops:0.6,dram_gbps:77.0,fabric_gbps:14.4},fail:null},
+   {id:"ltx_m4864_k4096_n512",M:4864,K:4096,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:68.3,t_dram:86.0,t_fabric:298.8,ideal:298.8,limiter:"fabric",ag:389.4,mm:164.8,m:{measured:523.7,speedup:1.75,blocking:"M8 K8 N2 sb(2,2)",flop:13.0,dram:16.4,fabric:57.1,tflops:39.0,dram_gbps:84.1,fabric_gbps:14.3},fail:null},
+   {id:"ltx_m4864_k4096_n1024",M:4864,K:4096,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:136.6,t_dram:94.2,t_fabric:298.8,ideal:298.8,limiter:"fabric",ag:389.4,mm:215.1,m:{measured:531.2,speedup:1.78,blocking:"M8 K8 N4 sb(2,2)",flop:25.7,dram:17.7,fabric:56.3,tflops:76.8,dram_gbps:90.8,fabric_gbps:14.1},fail:null},
+   {id:"ltx_m4864_k4096_n1024_ac",M:4864,K:4096,N:1024,fusion:"addcmul",tag:"ltx",ring:4,t_compute:136.6,t_dram:94.2,t_fabric:298.8,ideal:298.8,limiter:"fabric",ag:389.4,mm:215.5,m:{measured:589.6,speedup:1.97,blocking:"M16 K8 N4 sb(2,2)",flop:23.2,dram:16.0,fabric:50.7,tflops:69.2,dram_gbps:81.8,fabric_gbps:12.7},fail:null},
+   {id:"ltx_m4864_k4096_n3072_c3",M:4864,K:4096,N:3072,fusion:"chunks3",tag:"ltx",ring:4,t_compute:409.9,t_dram:127.0,t_fabric:298.8,ideal:409.9,limiter:"compute",ag:389.4,mm:558.9,m:{measured:719.0,speedup:1.75,blocking:"M10 K4 N12 sb(2,2)",flop:57.0,dram:17.7,fabric:41.6,tflops:170.2,dram_gbps:90.4,fabric_gbps:10.4},fail:null},
+   {id:"ltx_m4864_k4096_n4096",M:4864,K:4096,N:4096,fusion:"\u2014",tag:"ltx",ring:4,t_compute:546.6,t_dram:143.4,t_fabric:298.8,ideal:546.6,limiter:"compute",ag:389.4,mm:750.3,m:{measured:949.5,speedup:1.74,blocking:"M8 K8 N10 sb(2,2)",flop:57.6,dram:15.1,fabric:31.5,tflops:171.9,dram_gbps:77.3,fabric_gbps:7.9},fail:null},
+   {id:"ltx_m4864_k2048_n1024",M:4864,K:2048,N:1024,fusion:"\u2014",tag:"ltx",ring:4,t_compute:68.3,t_dram:47.1,t_fabric:149.4,ideal:149.4,limiter:"fabric",ag:199.0,mm:129.4,m:{measured:309.4,speedup:2.07,blocking:"M8 K4 N6 sb(2,2)",flop:22.1,dram:15.2,fabric:48.3,tflops:65.9,dram_gbps:77.9,fabric_gbps:12.1},fail:null},
+   {id:"ltx_m32_k2048_n8",M:32,K:2048,N:8,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.0,t_dram:0.3,t_fabric:1.0,ideal:1.0,limiter:"fabric",ag:7.0,mm:15.1,m:{measured:42.8,speedup:43.52,blocking:"M10 K8 N4 sb(2,2)",flop:0.0,dram:0.7,fabric:2.3,tflops:0.0,dram_gbps:3.8,fabric_gbps:0.6},fail:null},
+   {id:"ltx_m32_k2048_n512",M:32,K:2048,N:512,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.2,t_dram:4.4,t_fabric:1.0,ideal:4.4,limiter:"dram",ag:7.0,mm:21.1,m:{measured:42.8,speedup:9.82,blocking:"M2 K8 N6 sb(2,2)",flop:0.5,dram:10.2,fabric:2.3,tflops:1.6,dram_gbps:52.1,fabric_gbps:0.6},fail:null},
+   {id:"ltx_m32_k2048_n512_ac",M:32,K:2048,N:512,fusion:"addcmul",tag:"ltx",ring:4,t_compute:0.2,t_dram:4.4,t_fabric:1.0,ideal:4.4,limiter:"dram",ag:7.0,mm:21.2,m:{measured:44.2,speedup:10.16,blocking:"M2 K8 N2 sb(2,2)",flop:0.5,dram:9.8,fabric:2.2,tflops:1.5,dram_gbps:50.4,fabric_gbps:0.6},fail:null},
+   {id:"ltx_m32_k2048_n1536_c3",M:32,K:2048,N:1536,fusion:"chunks3",tag:"ltx",ring:4,t_compute:0.7,t_dram:12.5,t_fabric:1.0,ideal:12.5,limiter:"dram",ag:7.0,mm:33.3,m:{measured:64.1,speedup:5.11,blocking:"M2 K4 N10 sb(2,2)",flop:1.1,dram:19.6,fabric:1.5,tflops:3.1,dram_gbps:100.2,fabric_gbps:0.4},fail:null},
+   {id:"ltx_m32_k2048_n2048",M:32,K:2048,N:2048,fusion:"\u2014",tag:"ltx",ring:4,t_compute:0.9,t_dram:16.6,t_fabric:1.0,ideal:16.6,limiter:"dram",ag:7.0,mm:45.1,m:{measured:76.7,speedup:4.61,blocking:"M4 K4 N10 sb(2,2)",flop:1.2,dram:21.7,fabric:1.3,tflops:3.5,dram_gbps:111.0,fabric_gbps:0.3},fail:null},
+   {id:"ltx_m256_k2048_n1024_c2",M:256,K:2048,N:1024,fusion:"chunks2",tag:"ltx",ring:4,t_compute:3.6,t_dram:10.2,t_fabric:7.9,ideal:10.2,limiter:"dram",ag:22.3,mm:27.3,m:{measured:53.1,speedup:5.19,blocking:"M2 K8 N14 sb(2,2)",flop:6.8,dram:19.3,fabric:14.8,tflops:20.2,dram_gbps:98.7,fabric_gbps:3.7},fail:null},
+   {id:"flux_m32_k256_n6144",M:32,K:256,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:0.3,t_dram:6.2,t_fabric:0.1,ideal:6.2,limiter:"dram",ag:8.0,mm:24.5,m:{measured:68.7,speedup:11.12,blocking:"M2 K1 N14 sb(2,2)",flop:0.5,dram:9.0,fabric:0.2,tflops:1.5,dram_gbps:46.0,fabric_gbps:0.1},fail:null},
+   {id:"flux_m32_k6144_n6144",M:32,K:6144,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:8.1,t_dram:148.2,t_fabric:3.4,ideal:148.2,limiter:"dram",ag:15.3,mm:282.5,m:{measured:467.7,speedup:3.16,blocking:"M6 K6 N8 sb(2,2)",flop:1.7,dram:31.7,fabric:0.7,tflops:5.2,dram_gbps:162.3,fabric_gbps:0.2},fail:null},
+   {id:"flux_m32_k6144_n4608",M:32,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:6.1,t_dram:111.4,t_fabric:3.4,ideal:111.4,limiter:"dram",ag:15.3,mm:211.4,m:{measured:354.5,speedup:3.18,blocking:"M6 K6 N8 sb(2,2)",flop:1.7,dram:31.4,fabric:1.0,tflops:5.1,dram_gbps:160.8,fabric_gbps:0.2},fail:null},
+   {id:"flux_m32_k6144_n2304",M:32,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:3.0,t_dram:56.1,t_fabric:3.4,ideal:56.1,limiter:"dram",ag:15.3,mm:113.4,m:{measured:185.4,speedup:3.31,blocking:"M4 K6 N8 sb(2,2)",flop:1.6,dram:30.2,fabric:1.9,tflops:4.9,dram_gbps:154.9,fabric_gbps:0.5},fail:null},
+   {id:"flux_m512_k15360_n768",M:512,K:15360,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:40.5,t_dram:76.8,t_fabric:137.6,ideal:137.6,limiter:"fabric",ag:185.0,mm:124.1,m:{measured:302.9,speedup:2.2,blocking:"M2 K20 N3 sb(1,3)",flop:13.4,dram:25.4,fabric:45.4,tflops:39.9,dram_gbps:129.8,fabric_gbps:11.4},fail:null},
+   {id:"flux_m1024_k6144_n2304",M:1024,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:79.9,t_fabric:110.1,ideal:110.1,limiter:"fabric",ag:149.8,mm:146.0,m:{measured:279.3,speedup:2.54,blocking:"M3 K6 N12 sb(1,4)",flop:34.8,dram:28.6,fabric:39.4,tflops:103.8,dram_gbps:146.4,fabric_gbps:9.9},fail:null},
+   {id:"flux_m512_k6144_n2304",M:512,K:6144,N:2304,fusion:"\u2014",tag:"flux",ring:8,t_compute:48.5,t_dram:67.6,t_fabric:55.1,ideal:67.6,limiter:"dram",ag:84.1,mm:120.1,m:{measured:224.3,speedup:3.32,blocking:"M4 K8 N14 sb(2,2)",flop:21.6,dram:30.1,fabric:24.5,tflops:64.6,dram_gbps:154.3,fabric_gbps:6.1},fail:null},
+   {id:"flux_m1024_k6144_n768",M:1024,K:6144,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:32.4,t_dram:43.0,t_fabric:110.1,ideal:110.1,limiter:"fabric",ag:149.8,mm:82.4,m:{measured:205.9,speedup:1.87,blocking:"M3 K8 N4 sb(1,4)",flop:15.7,dram:20.9,fabric:53.5,tflops:46.9,dram_gbps:106.9,fabric_gbps:13.4},fail:null},
+   {id:"flux_m512_k6144_n768",M:512,K:6144,N:768,fusion:"\u2014",tag:"flux",ring:8,t_compute:16.2,t_dram:30.7,t_fabric:55.1,ideal:55.1,limiter:"fabric",ag:84.1,mm:57.4,m:{measured:148.4,speedup:2.7,blocking:"M4 K12 N3 sb(4,1)",flop:10.9,dram:20.7,fabric:37.1,tflops:32.6,dram_gbps:106.0,fabric_gbps:9.3},fail:null},
+   {id:"flux_m1024_k6144_n4608",M:1024,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:194.2,t_dram:135.2,t_fabric:110.1,ideal:194.2,limiter:"compute",ag:149.8,mm:276.3,m:{measured:435.4,speedup:2.24,blocking:"M3 K3 N16 sb(1,4)",flop:44.6,dram:31.0,fabric:25.3,tflops:133.2,dram_gbps:158.9,fabric_gbps:6.3},fail:null},
+   {id:"flux_m1024_k2304_n6144",M:1024,K:2304,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:64.5,t_fabric:41.3,ideal:97.1,limiter:"compute",ag:66.8,mm:163.5,m:{measured:253.5,speedup:2.61,blocking:"M3 K3 N14 sb(3,1)",flop:38.3,dram:25.4,fabric:16.3,tflops:114.4,dram_gbps:130.3,fabric_gbps:4.1},fail:null},
+   {id:"flux_m512_k6144_n4608",M:512,K:6144,N:4608,fusion:"\u2014",tag:"flux",ring:8,t_compute:97.1,t_dram:122.9,t_fabric:55.1,ideal:122.9,limiter:"dram",ag:84.1,mm:218.5,m:{measured:374.4,speedup:3.05,blocking:"M4 K4 N16 sb(2,2)",flop:25.9,dram:32.8,fabric:14.7,tflops:77.4,dram_gbps:168.1,fabric_gbps:3.7},fail:null},
+   {id:"flux_m512_k2304_n6144",M:512,K:2304,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:48.5,t_dram:59.9,t_fabric:20.6,ideal:59.9,limiter:"dram",ag:44.1,mm:128.1,m:{measured:207.0,speedup:3.46,blocking:"M2 K3 N14 sb(2,2)",flop:23.5,dram:28.9,fabric:10.0,tflops:70.0,dram_gbps:148.2,fabric_gbps:2.5},fail:null},
+   {id:"flux_m32_k6144_n1536",M:32,K:6144,N:1536,fusion:"\u2014",tag:"flux",ring:8,t_compute:2.0,t_dram:37.6,t_fabric:3.4,ideal:37.6,limiter:"dram",ag:15.3,mm:81.3,m:{measured:140.6,speedup:3.74,blocking:"M4 K8 N6 sb(2,2)",flop:1.4,dram:26.8,fabric:2.4,tflops:4.3,dram_gbps:137.1,fabric_gbps:0.6},fail:null},
+   {id:"flux_m1024_k6144_n128",M:1024,K:6144,N:128,fusion:"\u2014",tag:"flux",ring:8,t_compute:5.4,t_dram:27.6,t_fabric:110.1,ideal:110.1,limiter:"fabric",ag:149.8,mm:61.8,m:{measured:204.8,speedup:1.86,blocking:"M6 K8 N2 sb(2,2)",flop:2.6,dram:13.5,fabric:53.8,tflops:7.9,dram_gbps:69.1,fabric_gbps:13.4},fail:null},
+   {id:"flux_m1024_k3072_n6144",M:1024,K:3072,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:129.5,t_dram:86.0,t_fabric:55.1,ideal:129.5,limiter:"compute",ag:83.7,mm:200.2,m:{measured:302.5,speedup:2.34,blocking:"M6 K6 N11 sb(3,1)",flop:42.8,dram:28.4,fabric:18.2,tflops:127.8,dram_gbps:145.6,fabric_gbps:4.5},fail:null},
+   {id:"flux_m512_k3072_n6144",M:512,K:3072,N:6144,fusion:"\u2014",tag:"flux",ring:8,t_compute:64.7,t_dram:79.9,t_fabric:27.5,ideal:79.9,limiter:"dram",ag:51.1,mm:160.6,m:{measured:260.0,speedup:3.26,blocking:"M4 K4 N14 sb(2,2)",flop:24.9,dram:30.7,fabric:10.6,tflops:74.3,dram_gbps:157.3,fabric_gbps:2.6},fail:null},
   ];
   var CEIL={compute:50,dram:90,fabric:80};
   var LIMNAME={compute:'Compute',dram:'DRAM',fabric:'Fabric'};
@@ -386,29 +397,62 @@
   }
 
   // ---------- drawer ----------
+  // keep a centered tag inside the plot near the edges
+  function clampAnchor(pct){ return pct<9?'translateX(0)':pct>91?'translateX(-100%)':'translateX(-50%)'; }
   function bars(d,axmax,showMeas){
-    var plot='<div class="rf-plot"><div>';
+    var LANE=showMeas?34:20;  // top lane height for marker tags (2 rows when measured)
+    var barsHtml='';
     RES.forEach(function(r){
-      var w=(d['t_'+r]/axmax)*100, isLim=d.limiter===r;
-      plot+='<div class="rf"><div class="rf-top"><span class="rf-name"><span class="sw" style="background:var('+RESVAR[r]+')"></span>'+LIMNAME[r]+
-        (isLim?'<span class="lim">LIMITER</span>':'')+'</span><span style="font-size:11px;color:var(--muted)">'+({compute:'50% FLOP',dram:'90% BW',fabric:'80% link'})[r]+'</span></div>'+
-        '<div class="rf-track"><div class="rf-bar" style="width:'+w+'%;background:var('+RESVAR[r]+');opacity:'+(isLim?1:0.85)+'"></div>'+
-        '<div class="rf-val" style="left:'+w+'%">'+d['t_'+r].toFixed(0)+'</div></div></div>';
+      var w=Math.min(100,(d['t_'+r]/axmax)*100), isLim=d.limiter===r;
+      // wide bars: put the value INSIDE the bar (right-aligned) so it can't run off the plot
+      var vStyle = w>76
+        ? 'left:'+w+'%;transform:translate(-100%,-50%);padding-right:8px;color:var(--surface-1);font-weight:700'
+        : 'left:'+w+'%;padding-left:7px';
+      barsHtml+='<div class="rf"><div class="rf-top"><span class="rf-name"><span class="sw" style="background:var('+RESVAR[r]+')"></span>'+LIMNAME[r]+
+        (isLim?'<span class="lim">LIMITER</span>':'')+'</span><span style="font-size:11px;color:var(--muted)">100% peak</span></div>'+
+        '<div class="rf-track"><div class="rf-bar" style="width:'+w+'%;background:var('+RESVAR[r]+');opacity:'+(isLim?1:0.82)+'"></div>'+
+        '<div class="rf-val" style="'+vStyle+'">'+d['t_'+r].toFixed(0)+'</div></div></div>';
     });
-    plot+='</div>';
-    // markers
-    var idpct=(d.ideal/axmax)*100;
-    plot+='<div class="mk ideal" style="left:'+idpct+'%"><div class="ln"></div><div class="tag">ideal '+d.ideal.toFixed(0)+'</div></div>';
+    var idpct=Math.min(100,(d.ideal/axmax)*100);
+    var markers='';
     if(showMeas){
-      var mpct=(d.m.measured/axmax)*100;
-      plot+='<div class="band" style="left:'+idpct+'%;width:'+(mpct-idpct)+'%"></div>';
-      plot+='<div class="mk meas" style="left:'+mpct+'%"><div class="ln"></div><div class="tag">measured '+d.m.measured.toFixed(0)+'</div></div>';
+      var mpct=Math.min(100,(d.m.measured/axmax)*100);
+      markers+='<div class="band" style="left:'+idpct+'%;width:'+(mpct-idpct)+'%;top:'+LANE+'px"></div>'+
+        '<div class="mk meas" style="left:'+mpct+'%"><div class="ln" style="top:'+LANE+'px"></div>'+
+        '<div class="tag" style="top:2px;transform:'+clampAnchor(mpct)+'">measured '+d.m.measured.toFixed(0)+'</div></div>';
     }
-    // axis
+    // ideal tag sits on the second lane row when measured is shown (they never collide)
+    markers+='<div class="mk ideal" style="left:'+idpct+'%"><div class="ln" style="top:'+LANE+'px"></div>'+
+      '<div class="tag" style="top:'+(showMeas?18:2)+'px;transform:'+clampAnchor(idpct)+'">ideal '+d.ideal.toFixed(0)+'</div></div>';
     var ticks=[]; var step=niceStep(axmax); for(var t=0;t<=axmax;t+=step)ticks.push(t);
     var ax='<div class="rf-axis">'+ticks.map(function(t){return '<span class="tk" style="left:'+(t/axmax*100)+'%">'+t+'</span>';}).join('')+
       '<span class="tk" style="left:100%;transform:translateX(-100%);color:var(--muted)">µs</span></div>';
-    return '<div style="position:relative;padding-top:8px">'+plot+ax+'</div>';
+    return '<div class="rf-plot" style="padding-top:'+LANE+'px">'+barsHtml+markers+'</div>'+ax;
+  }
+  function isoSection(d){
+    if(d.ag==null && d.mm==null) return '';
+    var has=d.ag!=null && d.mm!=null;
+    var serial=has?d.ag+d.mm:null, fused=d.m?d.m.measured:null;
+    var mx=Math.max(serial||0,fused||0)||1;
+    var seg=function(v,cvar,lbl){return '<div class="iso-seg" style="width:'+(v/mx*100)+'%;background:var('+cvar+')" title="'+lbl+'"></div>';};
+    var out='<div class="dw-sec">Isolated AG + MM vs fused</div>';
+    out+='<p class="dw-note">'+(has&&fused
+        ? 'Fused AGMM streams the gather into the matmul; the gap below serial <b>AG + MM</b> is the fusion win.'
+        : 'Isolated AG/MM sweep still in progress for this shape.')+'</p>';
+    if(has) out+='<div class="iso-bar"><span class="iso-lab">AG + MM</span><div class="iso-track">'+
+      seg(d.ag,'--r-fabric','AG '+d.ag.toFixed(0)+' µs')+seg(d.mm,'--r-compute','MM '+d.mm.toFixed(0)+' µs')+
+      '</div><span class="iso-num">'+serial.toFixed(0)+'</span></div>';
+    if(fused) out+='<div class="iso-bar"><span class="iso-lab">Fused AGMM</span><div class="iso-track">'+
+      '<div class="iso-seg" style="width:'+(fused/mx*100)+'%;background:var('+RESVAR[d.limiter]+')"></div>'+
+      '</div><span class="iso-num">'+fused.toFixed(0)+'</span></div>';
+    out+='<dl class="dl" style="margin-top:12px">'+
+      '<dt><span class="sw" style="background:var(--r-fabric)"></span>All-gather (isolated)</dt><dd>'+(d.ag!=null?d.ag.toFixed(1)+' µs':'—')+'</dd>'+
+      '<dt><span class="sw" style="background:var(--r-compute)"></span>Matmul (isolated)</dt><dd>'+(d.mm!=null?d.mm.toFixed(1)+' µs':'—')+'</dd>'+
+      (has?'<dt>Serial AG + MM</dt><dd>'+serial.toFixed(1)+' µs</dd>':'')+
+      (fused?'<dt>Fused AGMM (measured)</dt><dd>'+fused.toFixed(1)+' µs</dd>':'')+
+      (has&&fused?'<dt>Fusion saves</dt><dd>'+(serial-fused).toFixed(1)+' µs · '+(100*(serial-fused)/serial).toFixed(0)+'%</dd>':'')+
+      '</dl>';
+    return out;
   }
   function niceStep(mx){var raw=mx/5;var p=Math.pow(10,Math.floor(Math.log10(raw)));var n=raw/p;var s=n>=5?5:n>=2?2:1;return s*p;}
   function meters(d){
@@ -436,6 +480,7 @@
         '<dt>Fusion</dt><dd>'+d.fusion+'</dd>'+
         (d.m?'<dt>Best blocking</dt><dd>'+d.m.blocking+'</dd>':'')+
       '</dl>'+
+      isoSection(d)+
       '<div class="dw-sec">Roofline — best-case time per resource</div>'+
       '<p class="dw-note">Tallest bar is the limiter; ideal equals it.'+(d.m?' Measured sits right — the band is headroom.':'')+'</p>'+
       bars(d,axmax,!!d.m);
