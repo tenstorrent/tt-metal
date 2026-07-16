@@ -38,6 +38,7 @@ SINGLE_CHIP_MESH_PARAMS = [
 # Token-count sweep for the single-expert profiling test, applied per model with that model's
 # (emb_dim, hidden_dim). The (num_tokens, id) pairs are model-independent.
 _TOKEN_SWEEP = [
+    (640, "640"),
     (1024, "1k"),
     (25600, "25k"),
 ]
@@ -49,6 +50,7 @@ def run_single_routed_expert(
     num_tokens: int,
     emb_dim: int,
     hidden_dim: int,
+    x_row_major: bool = False,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -85,12 +87,14 @@ def run_single_routed_expert(
     logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN input: 2D (num_tokens, emb_dim), replicated across the 1-device mesh.
+    # x_row_major selects the composite branch: ROW_MAJOR bf16 -> in-op tilize;
+    # TILE bf8 -> direct tiled read.
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
     )
     logger.debug(f"TTNN input shape: {tt_input.shape}")
 
@@ -212,8 +216,27 @@ def _xfail_blackhole_token_sweep(request, silicon_arch_name):
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-def test_single_routed_expert_models(mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int):
-    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+def test_single_routed_expert_models(
+    mesh_device, device_params, num_tokens: int, emb_dim: int, hidden_dim: int, x_row_major: bool
+):
+    run_single_routed_expert(mesh_device, device_params, num_tokens, emb_dim, hidden_dim, x_row_major)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_single_routed_expert_kimi_row_major_640(mesh_device, device_params):
+    """ROW_MAJOR bf16 x, Kimi K2.6 dims, 640 tokens, single chip. Dedicated entrypoint so the
+    row-major path is selectable with a single `-k` token (no composed-id bracket)."""
+    run_single_routed_expert(
+        mesh_device,
+        device_params,
+        num_tokens=640,
+        emb_dim=KimiK26Config.EMB_SIZE,
+        hidden_dim=KimiK26Config.MOE_INTERMEDIATE_SIZE,
+        x_row_major=True,
+    )
 
 
 # (allocated_tokens, active_tokens, id) sweep for the count-aware sparsity test, applied per

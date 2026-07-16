@@ -146,6 +146,7 @@ def run_routed_expert(
     dispatch_buffer_capacity_factor,
     run_pcc_check,
     use_predictable_data,
+    x_row_major=False,
 ):
     """Run TtRoutedExpert against the torch reference and (optionally) PCC-check it. Shared body
     for the per-model test entrypoints below — they differ only on the (emb_dim, hidden_dim)
@@ -302,12 +303,14 @@ def run_routed_expert(
         ttnn.synchronize_device(mesh_device)
         profiler.end("input_to_device")
     else:
-        # Fast path: allocate directly on device (uninitialized DRAM)
+        # Fast path: allocate directly on device (uninitialized DRAM). x layout/dtype
+        # selects the composite branch: ROW_MAJOR bf16 -> in-op tilize path; TILE bf8 ->
+        # direct tiled read.
         profiler.start("input_to_device")
         dispatched_buffer_tt = ttnn.empty(
             per_device_shape,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16 if x_row_major else ttnn.bfloat8_b,
+            layout=ttnn.ROW_MAJOR_LAYOUT if x_row_major else ttnn.TILE_LAYOUT,
             device=mesh_device,
         )
         ttnn.synchronize_device(mesh_device)
@@ -565,6 +568,7 @@ def routed_expert_shape_params():
     "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 def test_ttnn_routed_expert_models(
     mesh_device,
     device_params,
@@ -576,6 +580,7 @@ def test_ttnn_routed_expert_models(
     dispatch_buffer_capacity_factor,
     run_pcc_check,
     use_predictable_data,
+    x_row_major,
 ):
     run_routed_expert(
         mesh_device,
@@ -588,6 +593,7 @@ def test_ttnn_routed_expert_models(
         dispatch_buffer_capacity_factor,
         run_pcc_check,
         use_predictable_data,
+        x_row_major,
     )
 
 
@@ -612,9 +618,9 @@ def test_ttnn_routed_expert_ffn_row_major(mesh_device, device_params, offset_til
     0; offset_tiles=2 puts the region behind 64 rows of padding.
     """
     torch.manual_seed(0)
-    emb = 1024  # K_gate_tiles = 32 -> 2 gate/up K-blocks
-    hidden = 512
-    max_tokens = 64  # this expert's region: 2 tile-rows
+    emb = 7168  # Kimi K2.6 EMB_SIZE; K_gate_tiles = 224
+    hidden = 2048  # Kimi K2.6 MOE_INTERMEDIATE_SIZE
+    max_tokens = 640  # one expert's tokens (seq_len_per_chip=640); 20 tile-rows
     start_row = offset_tiles * 32
     buf_rows = start_row + max_tokens  # shared buffer holds offset padding + region
 
@@ -638,9 +644,9 @@ def test_ttnn_routed_expert_ffn_row_major(mesh_device, device_params, offset_til
         return ttnn.from_torch(t, layout=layout, dtype=dtype, device=mesh_device, memory_config=dram)
 
     x_tt = to_tt(x_full, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
-    gate_tt = to_tt(gate, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
-    up_tt = to_tt(up, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
-    down_tt = to_tt(down, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
+    gate_tt = to_tt(gate, ttnn.TILE_LAYOUT, ttnn.bfloat4_b)
+    up_tt = to_tt(up, ttnn.TILE_LAYOUT, ttnn.bfloat4_b)
+    down_tt = to_tt(down, ttnn.TILE_LAYOUT, ttnn.bfloat4_b)
     counts_tt = to_tt(torch.tensor([max_tokens], dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
     idx_tt = to_tt(torch.tensor([0], dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
     offsets_tt = to_tt(torch.tensor([start_row], dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
