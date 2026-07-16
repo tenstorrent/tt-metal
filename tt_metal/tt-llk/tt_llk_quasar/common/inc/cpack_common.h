@@ -34,7 +34,6 @@ union pack_untilize_stride_cfg_u
     pack_untilize_stride_cfg_t f;
 };
 
-constexpr static std::uint32_t TRISC_ID = 2;
 static std::uint32_t clear_dest_bank_id = 0;
 
 inline void _update_clear_dest_bank_id_()

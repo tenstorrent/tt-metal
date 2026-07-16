@@ -45,8 +45,30 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
 // Helper function to check generated ASIC mapping files against golden files
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name = "");
 
-// Galaxy corner folding (dual/quad/triple-pod 16x8/single-galaxy ControlPlane init tests only): mesh endpoint logical
-// chips (row-major first/last) must map to tray_ids 1–4 and asic_location 1 in the physical system descriptor.
+// Per-host rank-group dispatch and split-host 4x4 mesh checks (called from layout tests).
+void expect_galaxy_rank_group_checks(const ControlPlane& control_plane);
+void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane);
+
+// Per-host rank-group checks for supported MGD slice shapes (dim0 x dim1 or dim1 x dim0; implementations in utils.cpp).
+void expect_galaxy_rank_group_1x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_1x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_2x2_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_2x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x16_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x32_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_8x16_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+
+// Split-host 4x4 torus rank checks (mesh device shape 4x4; used by TestGalaxy4x4SplitHostLayoutCheck).
+void expect_galaxy_rank_group_1x1_4x4split_check(
+    const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+void expect_galaxy_rank_group_4x4_4x4split_check(
+    const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank);
+
+// Galaxy corner folding: mesh endpoint logical chips (row-major first/last) must map to tray_ids 1–4
+// and asic_location 1. Used by MultiHost init tests and ControlPlaneFixture.TestGalaxyCornerPins.
 void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 
 // Cross-checks three independent inputs: tt-run rank bindings (TT_MESH_ID / TT_MESH_HOST_RANK),

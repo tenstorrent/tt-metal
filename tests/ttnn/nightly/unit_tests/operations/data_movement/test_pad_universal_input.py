@@ -29,16 +29,17 @@ All padding amounts are tile-aligned (multiples of 32).
 All output widths are multiples of 64 elements (L1-aligned for bfloat16 on Wormhole)
 so sharded output configs are valid for both TILE and ROW_MAJOR layouts.
 
-Seven test categories (matching test_reshape_universal_input.py structure):
+Ten test categories (matching test_reshape_universal_input.py structure):
   1. Interleaved inputs -> DRAM output         (baseline, should always pass)
   2. Sharded inputs -> DRAM output             (isolates reading from sharded input)
   3. DRAM input -> sharded output              (isolates writing to sharded output)
   4. Sharded input -> sharded output           (full sharded path, production use-case)
   5. Non-4D sharded inputs (rank-2, rank-3)
   6. RM W/B sharded width front-padding
-  7. DRAM W/B sharded input (to_memory_config composite fallback)
-  8. Alt shape + float32 W/B sharded input     (accessor_page_size / shard_width coverage)
-  9. Cross-strategy sharded -> sharded         (input/output shard geometry differ)
+  7. RM HEIGHT_SHARDED width front-padding (PadRmShardedWidthOnlyProgramFactory)
+  8. DRAM W/B sharded input (to_memory_config composite fallback)
+  9. Alt shape + float32 W/B sharded input     (accessor_page_size / shard_width coverage)
+  10. Cross-strategy sharded -> sharded         (input/output shard geometry differ)
 """
 
 import pytest
@@ -324,9 +325,7 @@ def test_pad_non_4d_sharded_input(device, padding_spec, input_shape, output_shap
 #
 # Width front-padding (non-zero left pad on W axis) is only supported by the
 # RM pad kernel path.  TILE layout has a pre-existing TT_FATAL that rejects
-# front padding, and HEIGHT_SHARDED has its own factory-level issue with it.
-# These tests validate the native RM W/B sharded front-pad path added by
-# this PR (noc_async_*_sharded + memmove in reader kernel).
+# front padding.
 # ---------------------------------------------------------------------------
 
 FRONT_PAD_CASES = [
@@ -381,7 +380,71 @@ def test_pad_rm_wb_sharded_front_pad_to_sharded(
 
 
 # ---------------------------------------------------------------------------
-# Category 7: DRAM WIDTH/BLOCK sharded input (to_memory_config composite fallback)
+# Category 7: RM HEIGHT_SHARDED — width front-padding
+#
+# front_pad_w duplicates FRONT_PAD_CASES shapes but uses HEIGHT sharding, so it
+# routes through PadRmShardedWidthOnlyProgramFactory instead of the W/B RM path.
+# ---------------------------------------------------------------------------
+
+HEIGHT_FRONT_PAD_CASES = [
+    # (padding_spec, input_shape, output_shape, test_id)
+    ([(0, 0), (0, 0), (0, 0), (64, 0)], [1, 1, 64, 128], [1, 1, 64, 192], "front_pad_w"),
+    ([(0, 0), (0, 0), (0, 0), (32, 32)], [1, 1, 32, 64], [1, 1, 32, 128], "front_pad_w_both"),
+]
+
+
+@pytest.mark.parametrize(
+    "padding_spec,input_shape,output_shape,case_id",
+    HEIGHT_FRONT_PAD_CASES,
+    ids=[c[3] for c in HEIGHT_FRONT_PAD_CASES],
+)
+def test_pad_height_sharded_front_pad_to_sharded(device, padding_spec, input_shape, output_shape, case_id):
+    """HEIGHT_SHARDED RM input with width front-padding → HEIGHT_SHARDED output."""
+    in_cfg = make_sharded_memory_config(device, input_shape, ttnn.ShardStrategy.HEIGHT, ttnn.ROW_MAJOR_LAYOUT)
+    out_cfg = make_sharded_memory_config(device, output_shape, ttnn.ShardStrategy.HEIGHT, ttnn.ROW_MAJOR_LAYOUT)
+    _run_pad(
+        device, input_shape, padding_spec, output_shape, in_cfg, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=out_cfg
+    )
+
+
+@pytest.mark.parametrize(
+    "padding_spec,input_shape,output_shape,case_id",
+    HEIGHT_FRONT_PAD_CASES,
+    ids=[c[3] for c in HEIGHT_FRONT_PAD_CASES],
+)
+def test_pad_height_sharded_front_pad_to_dram(device, padding_spec, input_shape, output_shape, case_id):
+    """HEIGHT_SHARDED RM input with width front-padding → DRAM output (default factory path)."""
+    in_cfg = make_sharded_memory_config(device, input_shape, ttnn.ShardStrategy.HEIGHT, ttnn.ROW_MAJOR_LAYOUT)
+    _run_pad(device, input_shape, padding_spec, output_shape, in_cfg, ttnn.ROW_MAJOR_LAYOUT)
+
+
+@pytest.mark.parametrize(
+    "padding_spec,input_shape,output_shape,case_id",
+    [HEIGHT_FRONT_PAD_CASES[0]],  # front_pad_w only
+    ids=["front_pad_w"],
+)
+def test_pad_float32_height_sharded_front_pad_to_sharded(device, padding_spec, input_shape, output_shape, case_id):
+    """float32 HEIGHT_SHARDED RM front-pad → sharded (element_size=4 W front-pad bytes)."""
+    in_cfg = make_sharded_memory_config(
+        device, input_shape, ttnn.ShardStrategy.HEIGHT, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32
+    )
+    out_cfg = make_sharded_memory_config(
+        device, output_shape, ttnn.ShardStrategy.HEIGHT, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32
+    )
+    _run_pad(
+        device,
+        input_shape,
+        padding_spec,
+        output_shape,
+        in_cfg,
+        ttnn.ROW_MAJOR_LAYOUT,
+        output_memory_config=out_cfg,
+        dtype=ttnn.float32,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Category 8: DRAM WIDTH/BLOCK sharded input (to_memory_config composite fallback)
 #
 # needs_pad_composite_fallback routes DRAM-sharded W/B inputs through
 # to_memory_config -> pad. L1 sharded tests above exercise the native path.
@@ -438,7 +501,7 @@ def test_pad_dram_block_sharded_composite_fallback_unsupported(device, expect_er
 
 
 # ---------------------------------------------------------------------------
-# Category 8: Alt shape + float32 W/B sharded input
+# Category 9: Alt shape + float32 W/B sharded input
 #
 # accessor_page_size = shard_width * element_size in the RM factory. Exercises
 # non-default shard_width (alt aspect ratio) and element_size=4 (float32).
@@ -495,7 +558,7 @@ def test_pad_float32_wb_sharded_input(device, padding_spec, input_shape, output_
 
 
 # ---------------------------------------------------------------------------
-# Category 9: Cross-strategy sharded input -> sharded output
+# Category 10: Cross-strategy sharded input -> sharded output
 #
 # Production configs may pad between different shard strategies; reader and writer
 # must use independent input/output accessor_page_size values.

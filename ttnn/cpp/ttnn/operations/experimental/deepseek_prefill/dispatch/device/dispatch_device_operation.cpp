@@ -15,9 +15,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 void DispatchDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
-        tensor_args.weights_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Weights tensor must be ROW_MAJOR layout");
-    TT_FATAL(
         tensor_args.indices_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "Indices tensor must be ROW_MAJOR layout");
     TT_FATAL(
@@ -32,10 +29,6 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         tensor_args.input_tensor.dtype() == DataType::BFLOAT16,
         "Input tensor must be BFLOAT16, got {}",
         tensor_args.input_tensor.dtype());
-    TT_FATAL(
-        tensor_args.weights_tensor.dtype() == DataType::BFLOAT16,
-        "Weights tensor must be BFLOAT16, got {}",
-        tensor_args.weights_tensor.dtype());
     TT_FATAL(
         tensor_args.indices_tensor.dtype() == DataType::UINT16,
         "Indices tensor must be UINT16 (matching moe_grouped_topk output), got {}",
@@ -157,7 +150,6 @@ namespace ttnn::prim {
 ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation::tensor_return_value_t
 prefill_dispatch(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
@@ -196,7 +188,6 @@ prefill_dispatch(
             .has_padding_config = padding_config.has_value()},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
-            .weights_tensor = weights_tensor,
             .indices_tensor = indices_tensor,
             .expert_offsets_tensor = expert_offsets_tensor,
             .expert_dispatch_table_tensor = expert_dispatch_table_tensor,
