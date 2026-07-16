@@ -188,7 +188,26 @@ Nlp{Create,Concat}Heads −1.29, SDPA −0.38 (56→28 batch-2), RoPE −0.41; U
 **Correctness:** frame-0 audio PCC **0.9997** (old vs new, seed 0; gate 0.90), test_lm_pcc intact
 (prefill 0.995 / decode 0.9997), test_cfg_batched_lm_equiv + _prefill_equiv PASS. `VV_CFG_BATCHED=0`
 falls back to the separate-cache path.
-REMAINING: wire the whole-segment trace (deployed path) to the batched forward.
+
+### STATUS: WIRED into the whole-segment trace (deployed path) + measured
+The `--trace` path (`VV_TRACE_SEGMENT=1`) now fuses the per-frame **neg-LM + pos-LM into ONE
+batch-2 device-driven forward**, pipelining the negative stream one frame ahead — the same win as
+the eager path but on the deployed graph. New LM helpers: `_rope_rows_from_pos2` (device-gather
+2-stream RoPE from a `[2]` int32 device position) + `forward_decode_batched2_dev_rope` (trace-safe
+wrapper). The captured `_frame()` (in `_run_segment_frame_traced`) now: `cond_pos=condition(hidden_buf)`,
+`cond_neg=condition(neg_hidden_buf)` (loop-carried, one frame ahead) → diffusion → post →
+`e2=[fused, speech_diffusion_embed]` → `forward_decode_batched2_dev_rope(e2, cur_pos2, kv_comb)` →
+split `hidden2` rows into the two loop-carry buffers → **single `plus_one(cur_pos2)` advances both
+streams**. Segment-start seed (`_sf_neg_seed`) writes speech_start's K/V into the combined cache neg
+row + seeds `neg_hidden_buf`; it runs only on a frame-0 with **no trace live** (segment boundaries
+release the capture first via the trace-aware speech_start handler), so no allocation-during-trace.
+**Steady-state trace decode 21.1 → 26.3 tok/s (47.2 → 38.1 ms/frame device time, −19.3%, −9.4 ms).**
+**Correctness: whole-clip audio BIT-IDENTICAL** (RMS diff 0.0, PCC 1.000000) vs the separate-cache
+trace at seed 0, 48 frames — the row-stack + neg-offset are numerically exact and both paths already
+gather bf16 device RoPE. Large-prefill (13249 tok / ~26k ctx) trace runs clean at 25.4 tok/s.
+`VV_CFG_BATCHED=0 --trace` falls back to the separate-cache trace (verified bit-identical to the old
+baseline). Single-segment validated on-device; multi-segment path implemented correct-by-construction
+(reuses the existing release/recapture + the eager seed) — validate on a longer multi-speaker render.
 
 ### batched decode CORE (3de97d74f4f)
 `alloc_kv_cache_batched2`, `_rope_rows_from_pos_int2`, `_attention_decode_batched2`,

@@ -1201,6 +1201,20 @@ class TTVibeVoiceLM:
         sin = ttnn.embedding(idx, self._sin_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(cos, [1, 1, 1, hd]), ttnn.reshape(sin, [1, 1, 1, hd])
 
+    def _rope_rows_from_pos2(self, cur_pos: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Gather bf16 RoPE cos/sin rows for a 2-stream DEVICE position (batched, on-device).
+
+        cur_pos: [2] int32 device tensor (row0 = positive/absolute pos, row1 = negative pos).
+        Returns cos/sin [1,1,2,hd] bf16 — the batch-2 analogue of ``_rope_rows_from_pos`` used by
+        the CFG-batched traced decode, so both stream positions can be advanced on-device
+        (``plus_one``) with no per-frame host RoPE write.  Numerically = ``_rope_rows_from_pos_int2``
+        rounded to bf16 (~0.9999 PCC vs the fp32 rows)."""
+        hd = self.cfg.head_dim
+        idx = ttnn.reshape(ttnn.typecast(cur_pos, ttnn.uint32), [1, 2])
+        cos = ttnn.embedding(idx, self._cos_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        sin = ttnn.embedding(idx, self._sin_emb, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.reshape(cos, [1, 1, 2, hd]), ttnn.reshape(sin, [1, 1, 2, hd])
+
     def _rope_rows_from_pos_int(self, start_pos: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Eager-decode RoPE rows: host TILE write into persistent device buffers.
 
@@ -1351,6 +1365,19 @@ class TTVibeVoiceLM:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         return logits, hidden2
+
+    def forward_decode_batched2_dev_rope(
+        self,
+        embeds2: ttnn.Tensor,  # [1, 1, 2, hidden]  (row0 pos, row1 neg)
+        cur_pos: ttnn.Tensor,  # [2] int32 device tensor (self-advancing)
+        kv_cache: KVCache,  # combined [2, n_kv, maxS, hd]
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Like ``forward_decode_batched2`` but RoPE rows are gathered ON DEVICE from ``cur_pos``
+        (llama pattern) instead of supplied as host-written rows — so the whole batched CFG step,
+        including RoPE-row selection, is driven by the device position tensor and is trace-safe
+        (position advances via ``plus_one`` on ``cur_pos`` after the call)."""
+        cos_rows, sin_rows = self._rope_rows_from_pos2(cur_pos)
+        return self.forward_decode_batched2(embeds2, cos_rows, sin_rows, cur_pos, kv_cache)
 
     def prefill(
         self,

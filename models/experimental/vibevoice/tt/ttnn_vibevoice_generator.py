@@ -269,6 +269,13 @@ class TTVibeVoiceGenerator:
         self._sf_neg_diff: Optional[ttnn.Tensor] = None  # const embed(speech_diffusion_id)
         self._sf_pos_pos: Optional[ttnn.Tensor] = None
         self._sf_neg_pos: Optional[ttnn.Tensor] = None
+        # CFG-batched trace (VV_CFG_BATCHED=1, default): the neg stream is fused into ONE batch-2
+        # forward per frame (pipelined one frame ahead), so it keeps a loop-carried neg hidden and a
+        # 2-stream self-advancing device position instead of a separate neg cache/position.
+        self._sf_batched: bool = False
+        self._sf_kv_comb: Optional[KVCache] = None
+        self._sf_neg_hidden_buf: Optional[ttnn.Tensor] = None  # loop-carried cond_neg source (row1)
+        self._sf_cur_pos2: Optional[ttnn.Tensor] = None  # [2] int32: [pos, neg] self-advancing
         self._sf_noise: Optional[ttnn.Tensor] = None
         self._sf_t_tensors: Optional[list] = None
         self._sf_audio_out: Optional[ttnn.Tensor] = None
@@ -562,6 +569,25 @@ class TTVibeVoiceGenerator:
             buf,
         )
 
+    def _sf_write_pos2(self, pos0: int, pos1: int) -> None:
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor([pos0, pos1], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+            ),
+            self._sf_cur_pos2,
+        )
+
+    def _sf_neg_seed(self, start_pos: int) -> None:
+        """CFG-batched segment-start seed: write speech_start's K/V into the combined cache neg row
+        (row1 @ pos 0), copy speech_start's hidden into the loop-carried neg-hidden buffer, and set
+        the 2-stream device position to ``[start_pos, 1]``.  Eager and allocation-heavy, but runs
+        ONLY on a segment's frame-0 (never timed) and only when no trace is live — segment boundaries
+        release the capture first, so the next frame-0 recaptures.  Mirrors the eager AR loop's
+        ``_reset_neg_cache_batched`` seed."""
+        neg_start_hidden = self._reset_neg_cache_batched(self._sf_kv_comb)  # writes neg row1@0
+        ttnn.copy(input_a=neg_start_hidden, input_b=self._sf_neg_hidden_buf)
+        self._sf_write_pos2(start_pos, 1)
+
     def _sf_set_inputs(self, seg_frame_idx: int, start_pos: int, noise_2x) -> None:
         """Per-frame non-allocating writes into the persistent trace buffers.  A segment's first
         frame (seg_frame_idx==0) rewinds the device positions, re-seeds the loop-carried hidden from
@@ -570,7 +596,14 @@ class TTVibeVoiceGenerator:
         positions self-advance (ttnn.plus_one) on device.  All writes here are host->device or
         device->device copies into fixed-address buffers (no allocation), so they are safe to run
         while the fused trace is live."""
-        if seg_frame_idx == 0:
+        if self._sf_batched:
+            # CFG-batched: on a segment's frame-0 re-seed the loop-carried pos hidden, re-seed the
+            # neg stream (cache row1@0 + neg-hidden buffer) and rewind the 2-stream position; later
+            # frames self-advance (plus_one) and the neg embed is the constant speech_diffusion embed.
+            if seg_frame_idx == 0:
+                ttnn.copy(input_a=self._sf_hidden_seed, input_b=self._sf_hidden_buf)  # device->device seed
+                self._sf_neg_seed(start_pos)
+        elif seg_frame_idx == 0:
             self._sf_write_int(self._sf_pos_pos, start_pos)
             self._sf_write_int(self._sf_neg_pos, 0)
             ttnn.copy(input_a=self._sf_hidden_seed, input_b=self._sf_hidden_buf)  # device->device seed
@@ -588,20 +621,33 @@ class TTVibeVoiceGenerator:
         self.acoustic_tok.reset_decode_cache_inplace()
         self.semantic_tok.reset_cache_inplace()
 
-    def _run_segment_frame_traced(self, seg_frame_idx, step_hidden, start_pos, noise_2x, kv_pos, kv_neg):
+    def _run_segment_frame_traced(self, seg_frame_idx, step_hidden, start_pos, noise_2x, kv_pos, kv_neg, kv_comb=None):
         """One speech-diffusion frame as ONE device-driven trace (Option 1, llama shape), replayed
-        for the WHOLE segment.  Returns (audio_chunk, logits).  Frame graph:
+        for the WHOLE segment.  Returns (audio_chunk, logits).
+
+        CFG-batched frame graph (``kv_comb`` given, VV_CFG_BATCHED=1 default):
+            cond_pos = condition(hidden_buf);  cond_neg = condition(neg_hidden_buf)  # neg one frame ahead
+            latent = DPM_loop(cond_pos, cond_neg, noise);  fused, audio = post(latent)
+            e2 = [fused, speech_diffusion_embed];  logits, hidden2 = LM_batched_dev_rope(e2, cur_pos2, kv_comb)
+            copy(hidden2[row0] -> hidden_buf); copy(hidden2[row1] -> neg_hidden_buf); plus_one(cur_pos2)
+        The two CFG streams are fused into ONE batch-2 forward (row-stacked M, neg ~free) with the neg
+        stream pipelined one frame ahead — halving the per-frame LM work vs the separate-cache graph.
+
+        Separate-cache frame graph (``kv_comb`` None, VV_CFG_BATCHED=0 fallback):
             cond_pos = condition(hidden_buf);  neg_hidden = LM_dev_rope(neg_embed @ neg_pos, kv_neg)
             latent = DPM_loop(cond_pos, condition(neg_hidden), noise);  fused, audio = post(latent)
             logits, new_hidden = LM_dev_rope(fused @ pos_pos, kv_pos);  copy(new_hidden -> hidden_buf)
             plus_one(pos_pos); plus_one(neg_pos)
+
         On the first frame-0 after a (re)capture the runner warms up (eager — compiles + allocates
         the conv caches), does a throwaway capture, then RESETS (rewind positions, re-seed hidden +
-        speech_start embed, zero conv caches in place) and replays — all internal, so the caller
-        sees only the real frame's output and there is no capture-poison re-run.  RoPE is gathered
-        on device (bf16) from the device position, so no per-frame host RoPE/position write."""
+        neg stream, zero conv caches in place) and replays — all internal, so the caller sees only
+        the real frame's output and there is no capture-poison re-run.  RoPE is gathered on device
+        (bf16) from the device position, so no per-frame host RoPE/position write."""
         lm = self.lm
         dev = self.device
+        self._sf_batched = kv_comb is not None
+        self._sf_kv_comb = kv_comb
 
         if self._sf_hidden_buf is None:
             H = lm.cfg.hidden_size
@@ -616,6 +662,9 @@ class TTVibeVoiceGenerator:
             self._sf_neg_embed = _z([1, 1, 1, H], self._sf_neg_start.dtype, ttnn.TILE_LAYOUT)
             self._sf_pos_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self._sf_neg_pos = _z([1], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            # CFG-batched extra state: loop-carried neg hidden + 2-stream self-advancing position.
+            self._sf_neg_hidden_buf = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
+            self._sf_cur_pos2 = _z([2], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self._sf_noise = _z([1, 1, 1, 64], ttnn.bfloat16, ttnn.TILE_LAYOUT)
             self.scheduler.set_timesteps(self.num_diffusion_steps)
             self._sf_t_tensors = [
@@ -643,12 +692,19 @@ class TTVibeVoiceGenerator:
 
         self._sf_set_inputs(seg_frame_idx, start_pos, noise_2x)
 
+        H = lm.cfg.hidden_size
+
         def _frame():
             cond_pos = _condition_from_hidden(self._sf_hidden_buf)
-            _, neg_hidden = lm.forward_decode_traced_embeds_dev_rope(
-                self._sf_neg_embed, self._sf_neg_pos, kv_neg, return_last_hidden=True, need_logits=False
-            )
-            cond_neg = _condition_from_hidden(neg_hidden)
+            if self._sf_batched:
+                # CFG-batched: neg condition comes from the PREVIOUS frame's batched forward
+                # (pipelined one frame ahead) via the loop-carried neg-hidden buffer.
+                cond_neg = _condition_from_hidden(self._sf_neg_hidden_buf)
+            else:
+                _, neg_hidden = lm.forward_decode_traced_embeds_dev_rope(
+                    self._sf_neg_embed, self._sf_neg_pos, kv_neg, return_last_hidden=True, need_logits=False
+                )
+                cond_neg = _condition_from_hidden(neg_hidden)
             latent = sample_speech_latents(
                 self.diffusion_head,
                 cond_pos,
@@ -662,6 +718,21 @@ class TTVibeVoiceGenerator:
                 t_embs=self._sf_t_embs,
             )
             fused, audio = self._run_post_pipeline(latent)
+            if self._sf_batched:
+                # ONE batch-2 forward: row0 = positive (fused), row1 = negative (speech_diffusion,
+                # pipelined for the NEXT frame).  RoPE + positions driven by the device cur_pos2.
+                e2 = ttnn.concat([fused, self._sf_neg_diff], dim=2)  # [1,1,2,H]
+                logits, hidden2 = lm.forward_decode_batched2_dev_rope(e2, self._sf_cur_pos2, kv_comb)
+                ttnn.copy(
+                    input_a=ttnn.slice(hidden2, [0, 0, 0, 0], [1, 1, 1, H], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    input_b=self._sf_hidden_buf,
+                )
+                ttnn.copy(
+                    input_a=ttnn.slice(hidden2, [0, 0, 1, 0], [1, 1, 2, H], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                    input_b=self._sf_neg_hidden_buf,
+                )
+                ttnn.plus_one(self._sf_cur_pos2)  # advances both [pos, neg] by 1
+                return audio, logits
             logits, new_hidden = lm.forward_decode_traced_embeds_dev_rope(
                 fused, self._sf_pos_pos, kv_pos, return_last_hidden=True
             )
@@ -918,11 +989,10 @@ class TTVibeVoiceGenerator:
         # (reused buffer), so it only needs to span one segment ≤ max_steps.
         # CFG-batched decode: run the negative + positive LM streams in ONE row-stacked batch-2
         # forward (matmuls/norms/heads pad M=1->32 either way, so the neg stream is ~free).  Uses a
-        # combined [2,n_kv,maxS,hd] cache (row0=pos, row1=neg).  Eager TT path only; the whole-
-        # segment trace and the reference path keep the separate-cache path for now.
-        use_cfg_batched = (
-            (self._ref_lm is None) and (not self._trace_segment) and os.environ.get("VV_CFG_BATCHED", "1") == "1"
-        )
+        # combined [2,n_kv,maxS,hd] cache (row0=pos, row1=neg).  Both the eager AR loop AND the
+        # whole-segment trace use it (the trace fuses the two per-frame LM passes into one); the
+        # reference path keeps the separate-cache path.  VV_CFG_BATCHED=0 falls back to separate caches.
+        use_cfg_batched = (self._ref_lm is None) and os.environ.get("VV_CFG_BATCHED", "1") == "1"
         kv_comb = None
         if self._ref_lm is None:
             if use_cfg_batched:
@@ -1030,7 +1100,7 @@ class TTVibeVoiceGenerator:
                 start_pos = prefill_len + step
                 with prof.section("segment_frame"):
                     audio_chunk, logits = self._run_segment_frame_traced(
-                        seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg
+                        seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg, kv_comb=kv_comb
                     )
                 neg_prev_diffusion_token = current_token
                 _emit_audio(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))  # syncs frame
@@ -1123,11 +1193,19 @@ class TTVibeVoiceGenerator:
                         break
 
                 if current_token == self.speech_start_id:
-                    _vv_debug("  new speech segment: reset neg-CFG cache + tokenizer streaming caches")
-                    neg_pos = 1
-                    neg_hidden_pending = self._reset_neg_cache_batched(kv_comb)
-                    self.acoustic_tok.reset_decode_cache()
-                    self.semantic_tok.reset_cache()
+                    if self._trace_segment:
+                        # Whole-segment trace: release the capture so the boundary's eager decode
+                        # can't corrupt it; the next diffusion frame (frame 0) recaptures and re-seeds
+                        # the neg stream + zeroes the conv caches in place (see _run_segment_frame_traced).
+                        _vv_debug("  new speech segment (trace): release segment trace (recapture next frame)")
+                        self._reset_segment_frame_trace()
+                        neg_prev_diffusion_token = None
+                    else:
+                        _vv_debug("  new speech segment: reset neg-CFG cache + tokenizer streaming caches")
+                        neg_pos = 1
+                        neg_hidden_pending = self._reset_neg_cache_batched(kv_comb)
+                        self.acoustic_tok.reset_decode_cache()
+                        self.semantic_tok.reset_cache()
 
                 with prof.section("token_constraint"):
                     logits = ttnn.add(
