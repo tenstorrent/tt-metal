@@ -109,7 +109,8 @@ TEST_F(RegimeADiagFixture, Run) {
     // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
     if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
-        mask == 2048 || mask == 4096 || mask == 8192 || mask == 16384) {
+        mask == 2048 || mask == 4096 || mask == 8192 || mask == 16384 || mask == 32768 || mask == 65536 ||
+        mask == 131072 || mask == 262144) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -378,15 +379,23 @@ TEST_F(RegimeADiagFixture, RingOrderCorrectness) {
         {"pk1_W4_noc0", 256, 2048, 1024, 1, 1, 1, 2, 2},        // Pk=1 single ring (NOC0-reader), W=4
         {"pk2_ns2_bothnoc", 32, 2048, 2048, 2, 2, 1, 4, 4},     // Pk=2 -> both reader NoCs; Ns>1
         {"pk4_sm2_bothnoc", 256, 2048, 1024, 1, 4, 2, 2, 2},    // Sm=2; Pk=4 -> both NoCs (agg over 2 mm-rings)
+        {"sm3_2048x1024", 256, 2048, 1024, 1, 1, 3, 2, 2},      // Sm=3 (balanced M-split, agg over 3 mm-rings)
         {"sm4_2048x1024", 256, 2048, 1024, 1, 1, 4, 2, 2},      // largest feasible Sm here (agg over 4 mm-rings)
         {"pk12_768_W1", 256, 6144, 768, 1, 12, 1, 2, 1},        // deep chain, W=1, both NoCs, N_bpc=3
         {"wideN_pk12", 256, 6144, 4608, 1, 12, 1, 2, 1},        // wide-N Sm=1
         {"ktail_ntail_pk12", 256, 6080, 4640, 1, 12, 1, 2, 1},  // balanced K-tail (190) + N-tail (145)
     };
     // mask 0 = opt (production default); 1<<12 = DIAG_RING_BANK (old bank order); 1<<13 = DIAG_RING_GREEDY.
-    // mask 0 = agg (default); 1<<12 bank; 1<<13 greedy; 1<<14 opt-mm0. All must be bit-identical (order only).
+    // mask 0 = pareto (default); 1<<12 bank; 1<<13 greedy; 1<<14 mm0; 1<<15 maxring; 1<<16 total; 1<<18
+    // maxedge. All must be bit-identical (only the ring order differs, never the math).
     const std::vector<std::pair<uint32_t, const char*>> masks = {
-        {4096u, "bank"}, {8192u, "greedy"}, {16384u, "mm0"}, {0u, "agg"}};
+        {4096u, "bank"},
+        {8192u, "greedy"},
+        {16384u, "mm0"},
+        {0u, "pareto"},
+        {32768u, "maxring"},
+        {65536u, "total"},
+        {262144u, "maxedge"}};
     auto* device = device_;
 
     for (const auto& c : cases) {
