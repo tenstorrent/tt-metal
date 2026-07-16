@@ -7,9 +7,32 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <tt-metalium/hal.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+
+namespace {
+
+void validate_sharded_tile_buffer_for_gather(const Tensor& tensor, const char* tensor_name) {
+    if (!tensor.memory_config().is_sharded()) {
+        return;
+    }
+    const uint32_t page_size_bytes = tensor.buffer()->page_size();
+    const uint32_t alignment_requirement = hal::get_l1_alignment();
+    TT_FATAL(
+        page_size_bytes == tensor.buffer()->aligned_page_size(),
+        "gather: {} TILE page size {} bytes (dtype {}) must equal aligned page size {} bytes for L1 NoC alignment ({} "
+        "bytes)",
+        tensor_name,
+        page_size_bytes,
+        tensor.dtype(),
+        tensor.buffer()->aligned_page_size(),
+        alignment_requirement);
+}
+
+}  // namespace
 
 constexpr uint32_t GATHER_WT_THRESHOLD = 60;
 
@@ -71,10 +94,14 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
             input_index_tensor_shape[i],
             input_tensor_shape[i]);
     }
-    TT_FATAL(
-        attributes.output_mem_config.is_sharded() == false,
-        "Sharded implementation not supported yet. Shard status: {}",
-        attributes.output_mem_config.is_sharded());
+
+    // Interleaved, legacy sharded, and ND-sharded TILE tensors are supported; TensorAccessor resolves logical tile
+    // page_id to physical addresses. Require L1-aligned tile pages for NoC reads/writes on sharded buffers.
+    validate_sharded_tile_buffer_for_gather(tensor_args.input_tensor, "input_tensor");
+    validate_sharded_tile_buffer_for_gather(tensor_args.input_index_tensor, "input_index_tensor");
+    if (tensor_args.output_tensor.has_value()) {
+        validate_sharded_tile_buffer_for_gather(tensor_args.output_tensor.value(), "output_tensor");
+    }
 
     TT_FATAL(
         tensor_args.input_tensor.layout() == Layout::TILE,
@@ -105,12 +132,18 @@ GatherDeviceOperation::spec_return_value_t GatherDeviceOperation::compute_output
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor.value().tensor_spec();
     }
-    // Create output tensor specs
     const auto input_index_tensor_shape = tensor_args.input_index_tensor.logical_shape();
-    const auto tensor_specs = TensorSpec(
+    auto output_layout =
+        TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(Layout::TILE), attributes.output_mem_config);
+    auto output_padded_shape = output_layout.compute_padded_shape(input_index_tensor_shape);
+    return TensorSpec(
         input_index_tensor_shape,
-        TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(Layout::TILE), attributes.output_mem_config));
-    return tensor_specs;
+        TensorLayout::fromPaddedShape(
+            tensor_args.input_tensor.dtype(),
+            PageConfig(Layout::TILE),
+            attributes.output_mem_config,
+            input_index_tensor_shape,
+            output_padded_shape));
 }
 
 GatherDeviceOperation::tensor_return_value_t GatherDeviceOperation::create_output_tensors(

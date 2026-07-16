@@ -10,6 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <cstdint>
+#include <numeric>
 #include <ranges>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -22,6 +23,7 @@
 #include "ttnn/graph/graph_serialization.hpp"
 
 #include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal {
 
