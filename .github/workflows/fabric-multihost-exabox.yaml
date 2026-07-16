@@ -1,5 +1,4 @@
-# This workflow can be run between 3 and 7 AM UTC
-name: "(SC4) Health check & Fabric Test on"
+name: "(SC4) Health check & Fabric Test"
 
 on:
   schedule:
