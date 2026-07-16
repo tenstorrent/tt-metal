@@ -135,7 +135,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
                 ringcost.append(g)
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576, 2097152)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -701,7 +701,7 @@ PLACE_SHAPES = [
     ("control", "64x6144x4608_sm1", 64, 6144, 4608, None),
     ("control", "128x6144x4608_sm1", 128, 6144, 4608, None),
 ]
-PLACE_VARIANTS = [("current", 0), ("readers_first", 524288), ("in1_near", 1048576)]
+PLACE_VARIANTS = [("current", 2097152), ("readers_first", 524288), ("in1_near", 0)]  # in1_near = default
 
 
 def placement(relaunches=3):
