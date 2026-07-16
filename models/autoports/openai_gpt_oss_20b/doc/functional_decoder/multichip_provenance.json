@@ -1,0 +1,1355 @@
+{
+  "schema_version": 1,
+  "hf_model": "openai/gpt-oss-20b",
+  "source_ir": {
+    "prefill": {
+      "filename": "ttnn_gpt_oss_20b_tp_batch_size_1_qb2_bs1_isl128_runc01f_g0_1784000876774.mlir",
+      "sha256": "95a2eac6f9188ce1d88f93ef23d9bf768b2c1a967990402e282c3bdacaeaf338",
+      "role": "prefill",
+      "trace_function": "trace_0_main",
+      "captured_batch": 1,
+      "captured_sequence": 17,
+      "captured_cache_length": 128
+    },
+    "decode": {
+      "filename": "ttnn_gpt_oss_20b_tp_batch_size_1_qb2_bs1_isl128_runc01f_g1_1784001120946.mlir",
+      "sha256": "62855b105ebba55addcfbb11fd4564e35ed7c3c338d3a663a45e229a0f2b3ae8",
+      "role": "decode",
+      "trace_function": "trace_1_main",
+      "captured_batch": 1,
+      "captured_sequence": 1,
+      "captured_cache_length": 128
+    }
+  },
+  "mesh": {
+    "name": "mesh",
+    "shape": [
+      1,
+      4
+    ],
+    "axes": [
+      {
+        "name": "axis_0",
+        "size": 1,
+        "source_index": 0,
+        "role": "singleton"
+      },
+      {
+        "name": "axis_1",
+        "size": 4,
+        "source_index": 1,
+        "role": "tensor_and_expert_parallel"
+      }
+    ],
+    "tp_degree": 4,
+    "ep_degree": 4,
+    "axis_name_note": "The TTNN IR preserves the mesh name and numeric cluster axes but not upstream Shardy symbolic axis names; axis_0 and axis_1 are lossless names for TTNN cluster-axis indices 0 and 1."
+  },
+  "layer_index": 12,
+  "segmentation": {
+    "prefill": {
+      "first_norm": "rms_norm_24",
+      "second_norm": "rms_norm_25",
+      "next_layer_first_norm": "rms_norm_26",
+      "raw_ir_lines": [
+        8020,
+        8238
+      ]
+    },
+    "decode": {
+      "first_norm": "rms_norm_24",
+      "second_norm": "rms_norm_25",
+      "next_layer_first_norm": "rms_norm_26",
+      "raw_ir_lines": [
+        7571,
+        7751
+      ]
+    },
+    "layer_count_cross_check": "Both graphs contain 49 RMSNorm operations: two per decoder layer for 24 layers plus one final model norm."
+  },
+  "shard_axis_convention": "shard_axes are zero-based axes of the canonical dense Hugging Face tensor; global_shape is canonical dense shape and local_shape is the effective per-rank shape after presharding or mesh_partition.",
+  "tensors": [
+    {
+      "name": "model.layers.12.input_layernorm.weight",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        2880
+      ],
+      "local_shape": [
+        2880
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.post_attention_layernorm.weight",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        2880
+      ],
+      "local_shape": [
+        2880
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.q_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        4096,
+        2880
+      ],
+      "local_shape": [
+        1024,
+        2880
+      ],
+      "materialization": "presharded TTNN function parameter",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.q_proj.bias",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        4096
+      ],
+      "local_shape": [
+        1024
+      ],
+      "materialization": "full IR argument followed by ttnn.mesh_partition(dim=0, cluster_axis=1)",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.k_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        512,
+        2880
+      ],
+      "local_shape": [
+        128,
+        2880
+      ],
+      "materialization": "presharded TTNN function parameter",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.k_proj.bias",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        512
+      ],
+      "local_shape": [
+        128
+      ],
+      "materialization": "full IR argument followed by ttnn.mesh_partition(dim=0, cluster_axis=1)",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.v_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        512,
+        2880
+      ],
+      "local_shape": [
+        128,
+        2880
+      ],
+      "materialization": "presharded TTNN function parameter",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.v_proj.bias",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        512
+      ],
+      "local_shape": [
+        128
+      ],
+      "materialization": "full IR argument followed by ttnn.mesh_partition(dim=0, cluster_axis=1)",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.o_proj.weight",
+      "kind": "tensor_row",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        2880,
+        4096
+      ],
+      "local_shape": [
+        2880,
+        1024
+      ],
+      "materialization": "presharded TTNN function parameter; local matmul output is summed across axis_1",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.o_proj.bias",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        2880
+      ],
+      "local_shape": [
+        2880
+      ],
+      "materialization": "added after the o_proj all_reduce",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.self_attn.sinks",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        64
+      ],
+      "local_shape": [
+        16
+      ],
+      "materialization": "full IR argument followed by ttnn.mesh_partition(dim=0, cluster_axis=1)",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "prefill.layer_12.attention_sink_table",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        64,
+        17,
+        1
+      ],
+      "local_shape": [
+        1,
+        16,
+        17,
+        1
+      ],
+      "derived_from": "model.layers.12.self_attn.sinks",
+      "paths": [
+        "prefill"
+      ]
+    },
+    {
+      "name": "decode.layer_12.attention_sink_table",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        64,
+        32
+      ],
+      "local_shape": [
+        16,
+        32
+      ],
+      "derived_from": "model.layers.12.self_attn.sinks",
+      "paths": [
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.mlp.router.weight",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        32,
+        2880
+      ],
+      "local_shape": [
+        32,
+        2880
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.mlp.router.bias",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        32
+      ],
+      "local_shape": [
+        32
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.mlp.experts.gate_up_proj",
+      "kind": "expert",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        32,
+        2880,
+        5760
+      ],
+      "local_shape": [
+        8,
+        2880,
+        5760
+      ],
+      "materialization": "presharded TTNN function parameter",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.mlp.experts.gate_up_proj_bias",
+      "kind": "expert",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        32,
+        5760
+      ],
+      "local_shape": [
+        8,
+        5760
+      ],
+      "materialization": "presharded TTNN function parameter",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.mlp.experts.down_proj",
+      "kind": "expert",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        32,
+        2880,
+        2880
+      ],
+      "local_shape": [
+        8,
+        2880,
+        2880
+      ],
+      "materialization": "presharded TTNN function parameter",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.12.mlp.experts.down_proj_bias",
+      "kind": "expert",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        32,
+        2880
+      ],
+      "local_shape": [
+        8,
+        2880
+      ],
+      "materialization": "presharded TTNN function parameter",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.rotary_emb.inv_freq",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        32
+      ],
+      "local_shape": [
+        32
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "prefill.rope_cos",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        17,
+        64
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        64
+      ],
+      "derived_from": "model.rotary_emb.inv_freq",
+      "paths": [
+        "prefill"
+      ]
+    },
+    {
+      "name": "prefill.rope_sin",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        17,
+        64
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        64
+      ],
+      "derived_from": "model.rotary_emb.inv_freq",
+      "paths": [
+        "prefill"
+      ]
+    },
+    {
+      "name": "decode.rope_cos",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        1,
+        64
+      ],
+      "local_shape": [
+        1,
+        1,
+        1,
+        64
+      ],
+      "derived_from": "model.rotary_emb.inv_freq and decode position",
+      "paths": [
+        "decode"
+      ]
+    },
+    {
+      "name": "decode.rope_sin",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        1,
+        64
+      ],
+      "local_shape": [
+        1,
+        1,
+        1,
+        64
+      ],
+      "derived_from": "model.rotary_emb.inv_freq and decode position",
+      "paths": [
+        "decode"
+      ]
+    },
+    {
+      "name": "layer_12.key_cache",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        8,
+        128,
+        64
+      ],
+      "local_shape": [
+        1,
+        2,
+        128,
+        64
+      ],
+      "materialization": "presharded KV-cache input on the KV-head axis",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer_12.value_cache",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        8,
+        128,
+        64
+      ],
+      "local_shape": [
+        1,
+        2,
+        128,
+        64
+      ],
+      "materialization": "presharded KV-cache input on the KV-head axis",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "prefill.layer_12.attention_mask",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        17,
+        128
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        128
+      ],
+      "paths": [
+        "prefill"
+      ]
+    },
+    {
+      "name": "decode.layer_12.attention_mask",
+      "kind": "tensor_column",
+      "shard_axes": [
+        2
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        1,
+        64,
+        128
+      ],
+      "local_shape": [
+        1,
+        1,
+        16,
+        128
+      ],
+      "paths": [
+        "decode"
+      ]
+    },
+    {
+      "name": "prefill.router_scatter_base",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        17,
+        32
+      ],
+      "local_shape": [
+        17,
+        32
+      ],
+      "materialization": "shared consteval ttnn.all_gather(dim=1, cluster_axis=1) expands a local [17,8] zero tensor to the full [17,32] router-scatter base",
+      "paths": [
+        "prefill"
+      ]
+    },
+    {
+      "name": "decode.router_scatter_base",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        32
+      ],
+      "local_shape": [
+        1,
+        32
+      ],
+      "materialization": "shared consteval ttnn.all_gather(dim=1, cluster_axis=1) expands a local [1,8] zero tensor to the full [1,32] router-scatter base",
+      "paths": [
+        "decode"
+      ]
+    }
+  ],
+  "absent_layer_tensors": [
+    {
+      "name": "model.layers.12.self_attn.q_norm.weight",
+      "reason": "No Q-norm parameter or Q-norm operation is present in either selected graph or the functional decoder."
+    },
+    {
+      "name": "model.layers.12.self_attn.k_norm.weight",
+      "reason": "No K-norm parameter or K-norm operation is present in either selected graph or the functional decoder."
+    }
+  ],
+  "activations": [
+    {
+      "name": "prefill.layer_input_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        17,
+        2880
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        2880
+      ],
+      "where": "entry to layer 12 / rms_norm_24"
+    },
+    {
+      "name": "prefill.q_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        64,
+        17,
+        64
+      ],
+      "local_shape": [
+        1,
+        16,
+        17,
+        64
+      ]
+    },
+    {
+      "name": "prefill.k_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        8,
+        17,
+        64
+      ],
+      "local_shape": [
+        1,
+        2,
+        17,
+        64
+      ]
+    },
+    {
+      "name": "prefill.v_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        8,
+        17,
+        64
+      ],
+      "local_shape": [
+        1,
+        2,
+        17,
+        64
+      ]
+    },
+    {
+      "name": "prefill.attention_context_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        64,
+        17,
+        64
+      ],
+      "local_shape": [
+        1,
+        16,
+        17,
+        64
+      ]
+    },
+    {
+      "name": "prefill.o_proj_partial",
+      "kind": "tensor_row",
+      "shard_axes": [],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        1,
+        17,
+        2880
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        2880
+      ],
+      "reduction": "sum"
+    },
+    {
+      "name": "prefill.post_attention_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        17,
+        2880
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        2880
+      ],
+      "where": "after attention all_reduce, o_proj bias, and first residual add"
+    },
+    {
+      "name": "prefill.router_probabilities",
+      "kind": "expert",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        17,
+        32
+      ],
+      "local_shape": [
+        17,
+        8
+      ]
+    },
+    {
+      "name": "prefill.local_expert_outputs",
+      "kind": "expert",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        32,
+        17,
+        2880
+      ],
+      "local_shape": [
+        8,
+        17,
+        2880
+      ]
+    },
+    {
+      "name": "prefill.layer_output_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        17,
+        2880
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        2880
+      ],
+      "where": "exit from layer 12 / input to rms_norm_26"
+    },
+    {
+      "name": "decode.cache_position",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1
+      ],
+      "local_shape": [
+        1
+      ],
+      "where": "shared by both layer-12 paged_update_cache operations"
+    },
+    {
+      "name": "decode.layer_input_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        1,
+        2880
+      ],
+      "local_shape": [
+        1,
+        1,
+        1,
+        2880
+      ],
+      "where": "entry to layer 12 / rms_norm_24"
+    },
+    {
+      "name": "decode.q_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        2
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        1,
+        64,
+        64
+      ],
+      "local_shape": [
+        1,
+        1,
+        16,
+        64
+      ]
+    },
+    {
+      "name": "decode.k_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        2
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        1,
+        8,
+        64
+      ],
+      "local_shape": [
+        1,
+        1,
+        2,
+        64
+      ]
+    },
+    {
+      "name": "decode.v_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        2
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        1,
+        8,
+        64
+      ],
+      "local_shape": [
+        1,
+        1,
+        2,
+        64
+      ]
+    },
+    {
+      "name": "decode.attention_context_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        2
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        1,
+        64,
+        64
+      ],
+      "local_shape": [
+        1,
+        1,
+        16,
+        64
+      ]
+    },
+    {
+      "name": "decode.o_proj_partial",
+      "kind": "tensor_row",
+      "shard_axes": [],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        1,
+        1,
+        2880
+      ],
+      "local_shape": [
+        1,
+        1,
+        1,
+        2880
+      ],
+      "reduction": "sum"
+    },
+    {
+      "name": "decode.post_attention_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        1,
+        2880
+      ],
+      "local_shape": [
+        1,
+        1,
+        1,
+        2880
+      ],
+      "where": "after attention all_reduce, o_proj bias, and first residual add"
+    },
+    {
+      "name": "decode.router_probabilities",
+      "kind": "expert",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1,
+        32
+      ],
+      "local_shape": [
+        1,
+        8
+      ]
+    },
+    {
+      "name": "decode.local_expert_outputs",
+      "kind": "expert",
+      "shard_axes": [
+        0
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        32,
+        1,
+        2880
+      ],
+      "local_shape": [
+        8,
+        1,
+        2880
+      ]
+    },
+    {
+      "name": "decode.layer_output_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        1,
+        2880
+      ],
+      "local_shape": [
+        1,
+        1,
+        1,
+        2880
+      ],
+      "where": "exit from layer 12 / input to rms_norm_26"
+    }
+  ],
+  "collectives": [
+    {
+      "path": "prefill",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 0,
+      "where": "consteval: layer-12 q_proj.bias, 4096 -> 1024 elements per rank"
+    },
+    {
+      "path": "prefill",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 0,
+      "where": "consteval: layer-12 k_proj.bias, 512 -> 128 elements per rank"
+    },
+    {
+      "path": "prefill",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 0,
+      "where": "consteval: layer-12 v_proj.bias, 512 -> 128 elements per rank"
+    },
+    {
+      "path": "prefill",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 0,
+      "where": "consteval: layer-12 attention sinks, 64 -> 16 query heads per rank"
+    },
+    {
+      "path": "prefill",
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "trace layer 12: combine row-parallel o_proj partial outputs"
+    },
+    {
+      "path": "prefill",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 1,
+      "where": "trace layer 12: routing probabilities [17,32] -> [17,8] for local experts"
+    },
+    {
+      "path": "prefill",
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "trace layer 12: combine weighted outputs from eight local experts per rank"
+    },
+    {
+      "path": "prefill",
+      "op": "ttnn.all_gather",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 1,
+      "topology": "ring",
+      "scope": "shared_consteval",
+      "where": "shared by all layers, including layer 12: build the full router-scatter zero base [17,8] -> [17,32]"
+    },
+    {
+      "path": "decode",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 0,
+      "where": "consteval: layer-12 q_proj.bias, 4096 -> 1024 elements per rank"
+    },
+    {
+      "path": "decode",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 0,
+      "where": "consteval: layer-12 k_proj.bias, 512 -> 128 elements per rank"
+    },
+    {
+      "path": "decode",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 0,
+      "where": "consteval: layer-12 v_proj.bias, 512 -> 128 elements per rank"
+    },
+    {
+      "path": "decode",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 0,
+      "where": "consteval: layer-12 attention sinks, 64 -> 16 query heads per rank"
+    },
+    {
+      "path": "decode",
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "trace layer 12: combine row-parallel o_proj partial outputs"
+    },
+    {
+      "path": "decode",
+      "op": "ttnn.mesh_partition",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 1,
+      "where": "trace layer 12: routing probabilities [1,32] -> [1,8] for local experts"
+    },
+    {
+      "path": "decode",
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "trace layer 12: combine weighted outputs from eight local experts per rank"
+    },
+    {
+      "path": "decode",
+      "op": "ttnn.all_gather",
+      "cluster_axis": 1,
+      "mesh_axis": "axis_1",
+      "tensor_axis": 1,
+      "topology": "ring",
+      "scope": "shared_consteval",
+      "where": "shared by all layers, including layer 12: build the full router-scatter zero base [1,8] -> [1,32]"
+    }
+  ],
+  "tp_collapse_cross_check": {
+    "functional_decoder": "models/autoports/openai_gpt_oss_20b/tt/functional_decoder.py",
+    "consistent": true,
+    "qkv_fusion_order": [
+      "q",
+      "k",
+      "v"
+    ],
+    "hidden_size": 2880,
+    "head_dim": 64,
+    "query_heads": {
+      "full": 64,
+      "local": 16,
+      "rank_ownership": "rank r owns query heads [16*r, 16*r+15]"
+    },
+    "kv_heads": {
+      "full": 8,
+      "local": 2,
+      "rank_ownership": "rank r owns KV heads [2*r, 2*r+1]"
+    },
+    "qkv_projection_width": {
+      "full": 5120,
+      "local": 1280
+    },
+    "o_proj_input_width": {
+      "full": 4096,
+      "local": 1024,
+      "collapse": "full dense o_proj replaces local row-parallel matmul plus sum all_reduce"
+    },
+    "experts": {
+      "full": 32,
+      "local": 8,
+      "rank_ownership": "rank r owns experts [8*r, 8*r+7]",
+      "collapse": "all 32 dense experts replace eight local experts plus sum all_reduce"
+    },
+    "kv_cache": {
+      "full_heads": 8,
+      "local_heads": 2,
+      "collapse": "single-device cache stores all eight KV heads instead of the rank-local two"
+    }
+  },
+  "evidence": {
+    "full_graph_collective_counts": {
+      "prefill": {
+        "ttnn.mesh_partition": 120,
+        "ttnn.all_reduce": 48,
+        "ttnn.all_gather": 1
+      },
+      "decode": {
+        "ttnn.mesh_partition": 120,
+        "ttnn.all_reduce": 48,
+        "ttnn.all_gather": 1
+      }
+    },
+    "representative_layer_collective_counts_per_path": {
+      "ttnn.mesh_partition": 5,
+      "ttnn.all_reduce": 2,
+      "ttnn.all_gather": 1
+    },
+    "absent_collective_ops": [
+      "ttnn.mesh_shard",
+      "ttnn.reduce_scatter",
+      "ttnn.all_to_all",
+      "ttnn.collective_permute"
+    ],
+    "presharded_note": "Q/K/V and O weights, expert tensors, and KV caches reach the TTNN graph as presharded local-shape arguments; their sharding is evidenced by full-versus-local dimensions even though no explicit mesh_shard op remains.",
+    "shared_collective_note": "The one all_gather in each full graph is a shared const-eval dependency used as the zero base for every layer's router scatter, so it is recorded once for the representative layer even though it is not repeated inside each trace-layer segment."
+  }
+}

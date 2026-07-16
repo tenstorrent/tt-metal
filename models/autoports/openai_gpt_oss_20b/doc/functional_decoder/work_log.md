@@ -105,3 +105,9 @@ One host-wide reset was enough to show that reset did not alter the first-pair f
 
 - Reviewed functional-decoder artifact: `88aa9f0d75fecc65be3b034d1f9ea3fa9348df26` (`Add IR-derived GPT-OSS functional decoder`).
 - This work-log-only SHA record is committed separately so the reviewed artifact commit can be named exactly.
+
+## 2026-07-16 — Multichip provenance
+
+- Retro-generated [`multichip_provenance.json`](multichip_provenance.json) from the selected compiler `g0` prefill and `g1` decode IRs for representative layer 12.
+- The capture uses a `1x4` mesh with TP degree 4: 64/8 query/KV heads become 16/2 per rank and 32 experts become 8 per rank.
+- The layer collective set is `ttnn.mesh_partition`, ring-sum `ttnn.all_reduce`, and a shared const-eval `ttnn.all_gather` for the MoE router-scatter base, all on cluster axis 1. This was static IR analysis only; no TT device was opened.
