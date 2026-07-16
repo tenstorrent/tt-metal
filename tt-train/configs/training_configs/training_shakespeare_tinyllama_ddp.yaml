@@ -12,7 +12,7 @@ training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama_bpe.yaml"
   optimizer:
     type: AdamW
-    lr: 0.0003
+    lr: 0.00010
     beta1: 0.9
     beta2: 0.999
     epsilon: 1.0e-8
