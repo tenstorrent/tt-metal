@@ -21,3 +21,15 @@ set(TTNN_OP_CONV_API_HEADERS
     conv2d/device/conv2d_op_sharded_program_factory.hpp
     conv2d/device/conv2d_op_width_sharded_program_factory.hpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/conv/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_CONV_NANOBIND_SRCS
+    conv1d/conv1d_nanobind.cpp
+    conv2d/conv2d_nanobind.cpp
+    conv_nanobind.cpp
+    conv_transpose2d/conv_transpose2d_nanobind.cpp
+)

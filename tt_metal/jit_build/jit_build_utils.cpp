@@ -26,11 +26,13 @@
 
 #include <tt-logger/tt-logger.hpp>
 
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+
 namespace tt::jit_build::utils {
 
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose) {
-    // ZoneScoped;
-    // ZoneText( cmd.c_str(), cmd.length());
+    TTZoneScopedD(JIT);
+    TTZoneTextD(JIT, cmd.c_str(), cmd.length());
     int ret;
     static std::mutex io_mutex;
 

@@ -6,6 +6,7 @@
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
 #include "api/compute/add_int_sfpu.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -37,18 +38,33 @@ ALWI void sfpu_reduce_max_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     binary_max_int32_tile(a, b, out);
 }
 
-// SFPU SUM fold (Int32 cross-tile add). add_int_tile is exact 2's-complement and wraps on
-// overflow, matching torch's Int32 sum semantics.
+// SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
+// accurate fp32 accumulation. add_binary_tile is unavailable on Quasar, so guard
+// it with ARCH_QUASAR to avoid template lookup failures.
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_init() {
-    static_assert(format == DataFormat::Int32, "SFPU reduce SUM fold: Int32 only");
-    add_int_tile_init();
+    if constexpr (format == DataFormat::Int32) {
+        add_int_tile_init();
+    } else {
+#ifndef ARCH_QUASAR
+        add_binary_tile_init();
+#else
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU mean is not supported on Quasar");
+#endif
+    }
 }
 
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
-    static_assert(format == DataFormat::Int32, "SFPU reduce SUM fold: Int32 only");
-    add_int_tile<format>(a, b, out);
+    if constexpr (format == DataFormat::Int32) {
+        add_int_tile<format>(a, b, out);
+    } else {
+#ifndef ARCH_QUASAR
+        add_binary_tile(a, b, out);
+#else
+        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU mean is not supported on Quasar");
+#endif
+    }
 }
 
 // Pool-type dispatched cross-tile fold init (MAX -> binary_max, SUM -> add_int).
@@ -248,6 +264,7 @@ template <
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
+    ReduceFp32Mode fp32_mode,
     typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce(
@@ -315,7 +332,7 @@ ALWI void reduce(
     const uint32_t Wt = input_block_shape.cols;
     const uint32_t num_batches = input_block_shape.batches;
 
-    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format>();
+    constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);

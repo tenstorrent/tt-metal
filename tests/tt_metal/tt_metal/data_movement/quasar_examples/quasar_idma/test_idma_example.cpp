@@ -40,9 +40,7 @@ static void run_kernel(
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = std::move(compile_time_args),
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{

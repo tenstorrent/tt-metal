@@ -14,7 +14,7 @@
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
-#include "tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include "tt_backend_api_types.hpp"
 
 namespace {
@@ -343,7 +343,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
 
     TT_ASSERT(
         BfpFormat == tt::DataFormat::Bfp2 || BfpFormat == tt::DataFormat::Bfp4 || BfpFormat == tt::DataFormat::Bfp8 ||

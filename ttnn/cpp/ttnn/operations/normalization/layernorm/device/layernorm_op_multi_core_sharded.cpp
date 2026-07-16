@@ -430,6 +430,8 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         kernel_config.writer_defines.emplace_back("DO_COL_MASK", "1");
         kernel_config.logical_K = logical_K;
     }
+    kernel_config.gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
+    kernel_config.beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
 
     add_kernel_descriptors(program_descriptor, core_ranges, workers, grid, std::move(kernel_config));
 

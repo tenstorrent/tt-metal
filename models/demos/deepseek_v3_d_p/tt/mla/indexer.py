@@ -195,6 +195,7 @@ class TtIndexer:
         ccl_topology,
         seq_len: int = 1024,
         slot_num: int = 1,
+        layer_num: int = 1,
         is_chunked: bool = False,
     ):
         """Architecture constants are read from the HF config (DS defaults below; GLM sets
@@ -217,6 +218,13 @@ class TtIndexer:
         self.hifi4_fp32_compute_kernel_config = hifi4_fp32_compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.layer_idx = layer_idx
+        # Total local layers in the shared key cache. The block-cyclic index_kv_cache is user-major
+        # [num_users*layer_num, 1, T, D_idx] — the SAME layout as the MLA KVPE cache — so the flat slot
+        # for (user, layer) is cache_user_id*layer_num + cache_layer_idx, where cache_layer_idx is the
+        # LOCAL per-rank cache slot passed to forward (mirrors the KVPE cache; NOT self.layer_idx, which is
+        # GLOBAL and diverges from the local slot under pipeline parallelism). Computed in forward, used by
+        # write_k and _gather_index_kbuf.
+        self.layer_num = layer_num
         self.tt_ccl = tt_ccl
         self.ccl_num_links = ccl_num_links
         self.ccl_topology = ccl_topology
@@ -242,6 +250,13 @@ class TtIndexer:
         # match BF16 within bf16 noise, ~5e-4 PCC — so it can be allocated BF8 to halve the memory).
         # self._index_kbuf below is the NATURAL (single-shot) path's internal concat-grown cache only.
         self._index_kbuf = None
+        # GLM-5.2 cross-layer indexer reuse: the index key cache is allocated for full layers only, so this
+        # layer writes/reads its compacted rank among full layers, and the folded (user-major) slot stride
+        # is num_full, not all layers. _index_cache_layers is that stride.
+        self._num_index_layers = num_full_indexer_layers(config)
+        self._is_index_compact = self._num_index_layers is not None
+        self._index_layer_idx = full_indexer_rank(config, layer_idx) if self._is_index_compact else layer_idx
+        self._index_cache_layers = self._num_index_layers if self._is_index_compact else self.layer_num
         self._upload_weights(idx_host)
         self._build_rope_tables()
         # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
@@ -390,11 +405,17 @@ class TtIndexer:
         ttnn.deallocate(nope)
         return out
 
-    def _gather_index_kbuf(self, index_kbuf: ttnn.Tensor) -> ttnn.Tensor:
-        """Read the block-cyclic ND-sharded key cache back to a replicated full-T [num_users,1,T,D_idx]
+    def _gather_index_kbuf(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
+        """Read the block-cyclic ND-sharded key cache back to a replicated full-T [1,1,T,D_idx]
         (block-cyclic order preserved, bf16 TILE) for indexer_score_dsa's block-cyclic reader — the
-        analogue of ttMLA._gather_kvpe_prefix, but the score op consumes TILE so no RM/typecast step.
-        The op selects this user's slot via cache_batch_idx; the unwritten suffix is never scored
+        analogue of ttMLA._gather_kvpe_prefix, and it uses the same fix.
+
+        SLOT SELECT BEFORE THE GATHER: index_kbuf is user-major [num_users*layer_num, 1, T, D_idx]
+        (same layout as the MLA KVPE cache). Slice the active (user, layer) slot out of dim 0 FIRST, then
+        SP all-gather only that single [1,1,T,D_idx] slot — NOT the whole B-slot cache. Gathering all
+        slots materializes a full-T copy of every user/layer (OOMs at high num_layers, exactly like the
+        MLA kvpe gather did). The gathered kv is then batch-1, so indexer_score needs NO cache_batch_idx
+        (the op requires kB==1 when cache_batch_idx is unset). The unwritten suffix is never scored
         (future positions are causally masked).
 
         PERF TODO: this SP all-gather is currently a blocking barrier — it materializes the whole full-T
@@ -404,12 +425,22 @@ class TtIndexer:
         overlapping the CCL with the op's own compute instead of paying a full gather up front. Op-level
         change (ring indexer_score), not a host-side reorder."""
         cache_i = ttnn.to_memory_config(index_kbuf, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
-        full = self._sp_all_gather(cache_i, dim=2)  # [B,1,T,D_idx] replicated, block-cyclic
+        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
+            sel = ttnn.slice(
+                cache_i,
+                [cache_batch_idx, 0, 0, 0],
+                [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
+            )
+            ttnn.deallocate(cache_i)
+            cache_i = sel
+        full = self._sp_all_gather(cache_i, dim=2)  # [1,1,T,D_idx] replicated, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         return full
 
-    def write_k(self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, index_kbuf=None):
+    def write_k(
+        self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, cache_layer_idx=0, index_kbuf=None
+    ):
         """Device K stem (wk + TP all-reduce + k_norm + device rope) written into the device index-key
         cache. forward() calls this on every chunk so the key-cache stays complete — else later chunks
         score against missing keys for the early prefix. (Dense v3.1 binds a NullIndexer, so write_k never
@@ -445,8 +476,8 @@ class TtIndexer:
                 index_kbuf,
                 k,
                 slot_idx=cache_user_id,
-                layer_idx=0,
-                num_layers=1,
+                layer_idx=cache_layer_idx,
+                num_layers=self._index_cache_layers,
                 kv_actual_global=start_pos,
                 cluster_axis=self.sp_axis,
             )
@@ -489,6 +520,7 @@ class TtIndexer:
         start_pos: int = 0,
         rope_tensors: dict = None,
         cache_user_id: int = 0,
+        cache_layer_idx: int = 0,
         index_kv_cache: ttnn.Tensor = None,
     ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
@@ -510,6 +542,8 @@ class TtIndexer:
         scoring. Scoring currently spans the full preallocated cache width (see the kv_len TODO below).
         Natural path ignores rope_tensors/cache_user_id."""
         a = self.index_args
+        if self._is_index_compact:
+            cache_layer_idx = self._index_layer_idx
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
         # Block-cyclic key cache is caller-owned (like the KVPE cache) — required, never self-allocated.
@@ -518,12 +552,14 @@ class TtIndexer:
                 "block-cyclic indexer requires an externally-allocated index_kv_cache passed to forward() "
                 "(same ownership as the MLA KVPE cache); none was provided"
             )
+        cache_batch_idx = cache_user_id * self._index_cache_layers + cache_layer_idx
         self.write_k(
             hidden_states,
             seq_len,
             start_pos,
             rope_tensors=rope_tensors,
             cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
             index_kbuf=index_kv_cache,
         )
 
@@ -574,22 +610,19 @@ class TtIndexer:
         # indexer_score wants per-head weights [1, H_idx/tp, S/sp, 1]; wts is [1, 1, S/sp, H_idx/tp].
         weights = ttnn.permute(wts, (0, 3, 2, 1))
         if self._blockcyclic:
-            # Gather the per-user block-cyclic key cache to replicated full-T; the op reads it back in
-            # logical order via invP, selects this user's slot via cache_batch_idx, and applies the
+            # _gather_index_kbuf slices this (user, layer) slot then gathers it to replicated full-T; the op
+            # reads it back in logical order via invP (batch-1, so cache_batch_idx=None) and applies the
             # straddle for a non-slab-aligned start_pos (padded chunk). Scores the FULL preallocated width T:
             # positions past each query are causally -inf, and top-k below drops those (-inf -> sentinel).
             #
-            # TODO(perf, indexer kv_len): on an over-allocated cache (T >> written extent, e.g. a 55k slot
-            # with a 5k chunk written) this scores the whole T. The op supports bounding the scored logical
-            # prefix via kv_len (the tightest legal value is end_pos = start_pos + chunk_global; it cannot go
-            # lower because the pad query rows push the fullest-device causal window to end_pos, and the op
-            # TT_FATALs on kv_len < that). Wiring kv_len=end_pos here is NOT correct on its own: kv_len only
-            # writes logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf), so the
-            # downstream top-k over full-T then picks garbage columns (observed: rotated-prefill PCC -> 0.0).
-            # It also needs the logits sliced to [0, end_pos) before top-k (that path validated correct at the
-            # OP level, but is deferred). Investigate: slice-vs-stale-tail interaction + whether the extra
-            # slice/copy is cheaper than the saved score/top-k work before turning this on.
-            k_full = self._gather_index_kbuf(index_kv_cache)  # [num_users, 1, T, D_idx] bf16 TILE, block-cyclic
+            # Bound the score to the real written prefix (kv_len=end_pos) rather than the full preallocated
+            # width T: end_pos = start_pos + chunk_global is the tightest legal value (the pad query rows
+            # push the fullest-device causal window to end_pos; the op TT_FATALs on kv_len < that). kv_len
+            # only WRITES logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf); the
+            # top-k below is told the valid length (valid_length=end_pos) so it never reads or ranks that
+            # stale tail — which is the future top-k would drop anyway (causally -inf), so the selection is
+            # unchanged.
+            k_full = self._gather_index_kbuf(index_kv_cache, cache_batch_idx)  # [1,1,T,D_idx] bf16 TILE, block-cyclic
             logits = ttnn.experimental.indexer_score_dsa(
                 q_dev,
                 k_full,
@@ -597,9 +630,10 @@ class TtIndexer:
                 chunk_start_idx=start_pos,
                 program_config=cfg,
                 cluster_axis=self.sp_axis,
-                cache_batch_idx=cache_user_id,
+                cache_batch_idx=None,  # k_full is already sliced to this slot (batch-1) → no in-kernel select
                 block_cyclic_sp_axis=self.sp_axis,
                 block_cyclic_chunk_local=seq_len,  # per-chip chunk == chunk_size_global / sp
+                kv_len=end_pos,
             )
             ttnn.deallocate(k_full)
         else:
@@ -625,7 +659,13 @@ class TtIndexer:
         # index_topk is a multiple of 16, so k is too iff end_pos is — assert it at the caller contract
         # (current chunk sizing guarantees tile alignment) rather than failing deep inside the op.
         assert end_pos % 16 == 0, f"indexer top-k requires a tile-aligned key count; got end_pos={end_pos}"
-        return ttnn.experimental.topk_large_indices(logits, k=min(self.index_args.index_topk, end_pos))
+        # Block-cyclic logits are the full preallocated width T with a stale [end_pos, T) tail (kv_len only
+        # wrote the real prefix); valid_length bounds top-k to that prefix so the tail is never read or ranked.
+        # The natural path's cache is exact-sized (no tail), so it needs no bound.
+        topk_valid_length = end_pos if self._blockcyclic else None
+        return ttnn.experimental.topk_large_indices(
+            logits, k=min(self.index_args.index_topk, end_pos), valid_length=topk_valid_length
+        )
 
 
 class NullIndexer:
@@ -635,6 +675,20 @@ class NullIndexer:
 
     def forward(self, *args, **kwargs):
         return None
+
+
+class ReuseIndexer:
+    """GLM-5.2 ``shared`` DSA layer stand-in: owns no indexer weights and never computes. The layer is
+    still sparse (top-k SDPA) but reuses a prior ``full`` layer's top-k indices, injected at
+    ttMLA.forward(indexer_indices=...). forward() is unreachable there (the injected indices short-
+    circuit it); it raises if ever called, so a shared layer missing its reused indices fails loudly
+    instead of silently going dense."""
+
+    def forward(self, *args, **kwargs):
+        raise RuntimeError(
+            "ReuseIndexer.forward called: a GLM-5.2 shared DSA layer must receive reused top-k indices "
+            "via MLA.forward(indexer_indices=...)."
+        )
 
 
 # Back-compat alias; TtIndexer.WEIGHT_NAMES is the single source of truth.
@@ -664,3 +718,31 @@ def resolve_has_indexer(config, state_dict=None, explicit=None, weight_cache_pat
     if weight_cache_path is not None and cache_name_prefix is not None:
         return TtIndexer.check_cache_complete(weight_cache_path, cache_name_prefix)
     return False
+
+
+def indexer_layer_is_reused(config, layer_idx: int) -> bool:
+    """GLM-5.2 ``shared`` layer: sparse attention but owns NO indexer (it reuses a prior ``full`` layer's
+    top-k). True iff ``config.indexer_types[layer_idx] == "shared"``. Absent the map (v3.1 / v3.2 /
+    GLM-5.1) every layer is a full indexer owner -> current behavior. Single source of truth for the
+    device construction (ReuseIndexer binding) and the cache build (skip the indexer tensorbins)."""
+    types = getattr(config, "indexer_types", None)
+    return bool(types) and layer_idx < len(types) and types[layer_idx] == "shared"
+
+
+def num_full_indexer_layers(config):
+    """Count how many entries equal ``"full"`` in ``config.indexer_types``. Returns ``None`` when the list
+    is absent or empty."""
+    types = getattr(config, "indexer_types", None)
+    if not types:
+        return None
+    return sum(1 for t in types if t == "full")
+
+
+def full_indexer_rank(config, layer_idx: int) -> int:
+    """Prefix rank over ``config.indexer_types``: count how many entries equal ``"full"`` before position
+    ``layer_idx`` (exclusive), renumbering the matching positions into dense 0-based ranks. Returns
+    ``layer_idx`` unchanged when the list is absent or empty."""
+    types = getattr(config, "indexer_types", None)
+    if not types:
+        return layer_idx
+    return sum(1 for t in types[:layer_idx] if t == "full")

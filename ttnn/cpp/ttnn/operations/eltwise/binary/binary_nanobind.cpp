@@ -2209,10 +2209,10 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_composite<"outer">(
         mod,
-        R"doc(Computes outer for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Computes the outer product of :attr:`input_tensor_a` and :attr:`input_tensor_b`. The last dim of each input is treated as the vector; any leading dims are batch dims that are right-aligned and broadcast against each other (missing leading dims are treated as 1, and a dim of size 1 expands to match the other input). For inputs of shape :math:`[\ldots, N]` and :math:`[\ldots, M]` the output has shape :math:`[\ldots, N, M]`, equivalent to ``a.unsqueeze(-1) * b.unsqueeze(-2)``.)doc",
         R"doc(\mathrm{output\_tensor} = \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b})doc",
         &ttnn::outer,
-        R"doc(BFLOAT16, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32)doc");
 
     detail::bind_polyval<"polyval">(
         mod,

@@ -96,14 +96,52 @@ def hash_gate_golden_act(
     )
 
 
-def calculate_average_recall(predicted_experts: torch.Tensor, reference_experts: torch.Tensor) -> float:
-    """Calculate average recall of predicted expert selections vs reference."""
-    recall = 0
-    for i in range(predicted_experts.shape[0]):
-        pred_set = set(e.item() for e in predicted_experts[i])
-        ref_set = set(e.item() for e in reference_experts[i])
-        recall += len(pred_set & ref_set) / len(ref_set) if ref_set else 0
-    return recall / predicted_experts.shape[0]
+def calculate_average_recall(
+    predicted_experts: torch.Tensor,
+    reference_experts: torch.Tensor,
+    predicted_weights: Optional[torch.Tensor] = None,
+    reference_weights: Optional[torch.Tensor] = None,
+    weight_rtol: float = 0.0,
+) -> float:
+    """Calculate average recall of predicted expert selections vs reference.
+
+    Plain mode (no weights): fraction of reference experts also selected by the device.
+
+    Tie-aware mode (per-expert gate weights supplied, aligned position-for-position with the
+    index tensors, and weight_rtol > 0): a reference expert the device did NOT select is still
+    counted as recovered if the device selected some other expert whose gate weight is within
+    weight_rtol (relative) of the missed expert's weight. DeepSeek uses grouped top-k gating, so
+    at a crowded selection boundary the device fp32 gate and the torch reference can pick different
+    experts that carry near-equal weight — a numerically-ambiguous swap that leaves the routed
+    output essentially unchanged (the block-level PCC stays ~0.999, and pcc_scores remains the
+    correctness backstop for the selected-weight distribution).
+    """
+    recall = 0.0
+    n = predicted_experts.shape[0]
+    tie_aware = predicted_weights is not None and reference_weights is not None and weight_rtol > 0.0
+    for i in range(n):
+        pred_idx = [e.item() for e in predicted_experts[i]]
+        ref_idx = [e.item() for e in reference_experts[i]]
+        pred_set = set(pred_idx)
+        ref_set = set(ref_idx)
+        if not ref_set:
+            continue
+        hits = len(pred_set & ref_set)
+        if tie_aware:
+            # Gate weight of each selected expert, aligned by position with its index tensor.
+            ref_w = {ref_idx[j]: reference_weights[i][j].item() for j in range(len(ref_idx))}
+            pred_w = {pred_idx[j]: predicted_weights[i][j].item() for j in range(len(pred_idx))}
+            extra_w = [pred_w[e] for e in (pred_set - ref_set)]  # device-only experts' weights
+            for missed in ref_set - pred_set:
+                wm = ref_w[missed]
+                for k in range(len(extra_w)):  # credit one unconsumed device-only expert of tied weight
+                    we = extra_w[k]
+                    if we is not None and abs(we - wm) <= weight_rtol * max(abs(wm), abs(we), 1e-6):
+                        hits += 1
+                        extra_w[k] = None
+                        break
+        recall += hits / len(ref_set)
+    return recall / n
 
 
 def distinct_logits(shape, lo: float = -6.0, hi: float = 6.0, dtype=torch.float32) -> torch.Tensor:
@@ -615,13 +653,26 @@ def compare_pcc(threshold: float = 0.99) -> ComposedComparator:
     return _compare
 
 
-def compare_recall(threshold: float = 0.999) -> ComposedComparator:
-    """Return a recall comparator with the given threshold."""
+def compare_recall(
+    threshold: float = 0.999,
+    predicted_weights: Optional[torch.Tensor] = None,
+    reference_weights: Optional[torch.Tensor] = None,
+    weight_rtol: float = 0.0,
+) -> ComposedComparator:
+    """Return a recall comparator with the given threshold.
+
+    When gate-weight tensors are supplied (same [num_groups, group_size, ...] layout as the index
+    tensors, and NOT reordered relative to them) and weight_rtol > 0, recall is tie-aware: a
+    boundary swap between experts of near-equal gate weight is credited (see
+    calculate_average_recall). The per-cell weight slices are looked up by the (_g, _c) indices.
+    """
 
     def _compare(
         actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int, verbose_histogram: bool = False
     ) -> Tuple[bool, Optional[str]]:
-        r = calculate_average_recall(actual, expected)
+        pred_w = predicted_weights[_g, _c] if predicted_weights is not None else None
+        ref_w = reference_weights[_g, _c] if reference_weights is not None else None
+        r = calculate_average_recall(actual, expected, pred_w, ref_w, weight_rtol)
         if r >= threshold:
             return (True, f"recall={r:.4f} >= {threshold}")
         else:
@@ -1027,10 +1078,9 @@ def validate_dispatch_metadata(
     """
     Validate dispatch metadata against torch reference.
 
-    Handles:
+    Metadata is 3 fields per token; all are validated:
     - Linearized mesh coord conversion (field 0)
-    - Direct comparison of fields 1-3
-    - Weight bfloat16 bit reinterpretation (field 4)
+    - Direct comparison of fields 1-2 (global token idx, top-k slot)
 
     Args:
         torch_metadata: Reference metadata
@@ -1079,43 +1129,31 @@ def validate_dispatch_metadata(
                 # expert_region_offsets directly gives the expert region start position
                 start = int(expert_region_offsets[r, dst_chip_id, global_expert_idx].item())
 
-                # Compare fields 1-3 directly
-                out = ttnn_metadata[r, dst_chip_id, start : start + count, 1:4]
-                ref = torch_metadata[r, dst_chip_id, start : start + count, 1:4]
+                # Compare fields 1-2 (global token idx, top-k slot) directly
+                out = ttnn_metadata[r, dst_chip_id, start : start + count, 1:3]
+                ref = torch_metadata[r, dst_chip_id, start : start + count, 1:3]
 
-                # Both Torch and TTNN now embed linearized mesh coord in field 0
+                # Both Torch and TTNN embed linearized mesh coord in field 0
                 out_linearized_mesh_coord = ttnn_metadata[r, dst_chip_id, start : start + count, 0]
                 ref_linearized_mesh_coord = torch_metadata[r, dst_chip_id, start : start + count, 0]
-
-                # Compare weights (metadata[4]):
-                # TTNN stores raw bfloat16 bits as uint16 in int32 - convert to bfloat16
-                out_weight_bf16 = (
-                    ttnn_metadata[r, dst_chip_id, start : start + count, 4].to(torch.int16).view(torch.bfloat16)
-                )
-                # Torch stores bfloat16 value directly
-                ref_weight_bf16 = (
-                    torch_metadata[r, dst_chip_id, start : start + count, 4].to(torch.int16).view(torch.bfloat16)
-                )
 
                 metadata_match = torch.allclose(out, ref, atol=1e-6)
                 coord_match = torch.allclose(
                     out_linearized_mesh_coord.float(), ref_linearized_mesh_coord.float(), atol=1e-6
                 )
 
-                gate_weight_match, gate_pcc = comp_pcc(ref_weight_bf16.float(), out_weight_bf16.float(), pcc=0.99)
-
-                if metadata_match and coord_match and gate_weight_match:
+                if metadata_match and coord_match:
                     matches += 1
                     logger.debug(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
                 else:
-                    error_detail = f"metadata={metadata_match}, coord={coord_match}, weight={gate_weight_match}"
+                    error_detail = f"metadata={metadata_match}, coord={coord_match}"
                     logger.error(f"❌ {r} Metadata {dst_chip_id=} {expert_id=} {count=} ({error_detail})")
                     mismatches.append((r, dst_chip_id, expert_id, error_detail))
 
                     if verbose:
                         for slot in range(count):
-                            torch_data = torch_metadata[r, dst_chip_id, start + slot, :4]
-                            kernel_data = ttnn_metadata[r, dst_chip_id, start + slot, :4]
+                            torch_data = torch_metadata[r, dst_chip_id, start + slot, :3]
+                            kernel_data = ttnn_metadata[r, dst_chip_id, start + slot, :3]
                             slot_data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
                             if not slot_data_match:
                                 logger.error(
@@ -1123,11 +1161,6 @@ def validate_dispatch_metadata(
                                     f"ref_coord={ref_linearized_mesh_coord[slot].item()}, "
                                     f"out_coord={out_linearized_mesh_coord[slot].item()}, "
                                     f"torch={torch_data.tolist()}, kernel={kernel_data.tolist()}"
-                                )
-                            if not gate_weight_match:
-                                logger.error(
-                                    f"    Slot {slot}: Weight mismatch gate pcc={gate_pcc:.3f}: "
-                                    f"ref={ref_weight_bf16[slot].item()}, out={out_weight_bf16[slot].item()}"
                                 )
 
     passed = len(mismatches) == 0

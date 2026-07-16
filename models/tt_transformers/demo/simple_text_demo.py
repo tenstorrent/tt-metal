@@ -931,6 +931,7 @@ def test_demo_text(
         enable_trace = arg_enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
+    skip_perf_report = request.config.getoption("--skip_perf_report")
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
     if use_prefetcher and not is_blackhole():
         logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
@@ -1556,8 +1557,12 @@ def test_demo_text(
             "decode_t/s/u": resolved_perf_targets.get("decode_t/s/u"),
         }
 
-    # Save benchmark data for CI dashboard
-    if is_ci_env:
+    # Save benchmark data for CI dashboard.
+    # `--skip_perf_report` suppresses perf reporting + the CI perf-target check for this run, so
+    # that when the same test runs in more than one configuration only the intended one reports
+    # perf (e.g. Llama-8B runs ci-eval-32 without the prefetcher for repeat-batch coverage AND
+    # with the prefetcher on a single batch for perf — only the latter should report). #47820
+    if is_ci_env and not skip_perf_report:
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
