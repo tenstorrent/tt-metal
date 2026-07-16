@@ -429,5 +429,5 @@ review returned `clean-pass` with no required work. It independently confirmed
 the advisor gate, fallback-free selected path, traced-decode wins at batch 32
 and batch 1, clean watcher/device detach, zero-host-op profile, arbitrary
 logical lengths through the advertised 128-token context, documentation, and
-the final optimize checklist. The stage is committed locally; no push is
-performed.
+the final optimize checklist. The stage implementation and evidence were
+committed locally as `36f41b593c4`; no push is performed.
