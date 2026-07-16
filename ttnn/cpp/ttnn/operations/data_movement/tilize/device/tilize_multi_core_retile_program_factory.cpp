@@ -9,6 +9,8 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
