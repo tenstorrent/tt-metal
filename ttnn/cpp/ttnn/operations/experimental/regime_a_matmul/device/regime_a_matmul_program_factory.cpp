@@ -5,14 +5,19 @@
 #include "regime_a_matmul_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
+#include <fmt/base.h>  // RINGCOST diagnostic line (physical ring-order experiment)
+
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/device.hpp>  // get_worker_noc_hop_distance (physical ring-order diag)
 
 #include "regime_a_matmul_config.hpp"
 
@@ -75,7 +80,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // ---- Run the pure host planner ----
     auto planres = make_and_build_plan(device, in0, in1, cfg);
     TT_FATAL(planres.ok(), "regime_a_matmul planner rejected config: {}", planres.error);
-    const plan::ExecutionPlan& P = *planres.plan;
+    plan::ExecutionPlan& P = *planres.plan;  // mutable: the ring-order diag overrides ring_pos/next/prev below
     const plan::Geometry& geo = P.geo;
     const plan::CbSizes& cb = P.cb;
 
@@ -105,6 +110,128 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     }
     if (diag & RegimeADiag::DIAG_BARRIER_DRAIN) {
         wdefs["DIAG_BARRIER_DRAIN"] = "1";  // A/B baseline: OLD per-block phase-2 completion barrier
+    }
+
+    // ---- Physical-topology-aware in0 ring ordering (test-only; DEFAULT = bank order [0..7]) ----
+    // Overrides ring_pos/ring_next_idx/ring_prev_idx per ring group using the group's WRITER NoC authoritative
+    // hop distance (get_worker_noc_hop_distance, logical->physical + directed torus routing w/ wraparound).
+    // Placement/work/reduction are unchanged; only the ring visiting order (which core seeds which in0 shard,
+    // the forward route, and the in1 rotated read) changes — correct for ANY permutation. Emits a RINGCOST
+    // line per group (bank/greedy/opt max+total edge cost) for the report. No effect on the public path.
+    const bool ring_bank = (diag & RegimeADiag::DIAG_RING_BANK) != 0u;      // diagnostic: keep bank order [0..7]
+    const bool ring_greedy = (diag & RegimeADiag::DIAG_RING_GREEDY) != 0u;  // diagnostic: greedy
+    if (!ring_bank) {  // DEFAULT = opt (exhaustive); greedy if selected
+        namespace expdev = tt::tt_metal::experimental::Device;
+        const uint32_t preaders = geo.num_cores / 8u;
+        auto cost = [](const std::array<uint32_t, 8>& ord, const uint32_t d[8][8]) -> std::pair<uint32_t, uint32_t> {
+            uint32_t mx = 0, tot = 0;
+            for (uint32_t p = 0; p < 8u; ++p) {
+                const uint32_t e = d[ord[p]][ord[(p + 1u) % 8u]];
+                tot += e;
+                mx = std::max(mx, e);
+            }
+            return {mx, tot};
+        };
+        // M-split (Sm>1): slices differing only in mm share a (kk,nn) group of Sm CONTIGUOUS slice indices
+        // [base, base+Sm). Their in1 slaves receive in1 in the mm==0 READER's shard order, while their in0
+        // rings are separate — so the whole group MUST use the SAME ring permutation (reader/slave ring_pos
+        // must agree per bank) or the in0/in1 pairing corrupts. Compute the order once from the mm==0 slice
+        // (base) and apply it to all Sm slices. For Sm==1 this is one order per slice, as before.
+        for (uint32_t base = 0; base < preaders; base += Sm) {
+            const uint32_t j = base;  // mm==0 reader slice defines the group's order
+            // Ring members = cores {b*preaders + j : b in 0..7}; shared slice j => shared noc. Writer NoC is
+            // opposite the reader's: noc==0 -> reader NOC0 / writer NOC1; noc==1 -> writer NOC0.
+            const NOC wnoc = (P.cores[j].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+            auto lc = [&](uint32_t b) {
+                const auto& c = P.cores[b * preaders + j].coord;
+                return CoreCoord{c.x, c.y};
+            };
+            uint32_t d[8][8];
+            for (uint32_t a = 0; a < 8u; ++a) {
+                for (uint32_t b = 0; b < 8u; ++b) {
+                    d[a][b] = (a == b) ? 0u : expdev::get_worker_noc_hop_distance(device, lc(a), lc(b), wnoc);
+                }
+            }
+            // bank order [0..7]
+            std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
+            // greedy nearest-neighbour (directed, writer NoC), start at bank 0
+            std::array<uint32_t, 8> greedy{};
+            {
+                std::array<bool, 8> vis{};
+                greedy[0] = 0;
+                vis[0] = true;
+                for (uint32_t pos = 1; pos < 8u; ++pos) {
+                    uint32_t best = 0, bestd = 0xffffffffu;
+                    for (uint32_t c = 0; c < 8u; ++c) {
+                        if (!vis[c] && d[greedy[pos - 1]][c] < bestd) {
+                            bestd = d[greedy[pos - 1]][c];
+                            best = c;
+                        }
+                    }
+                    greedy[pos] = best;
+                    vis[best] = true;
+                }
+            }
+            // exhaustive: fix bank 0 at pos 0, permute the other 7 (5040); min (max_edge, total). Directed edge
+            // costs on the writer NoC => a permutation and its reverse are both in the set (both orientations).
+            std::array<uint32_t, 8> opt = bank;
+            {
+                std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
+                uint32_t best_mx = 0xffffffffu, best_tot = 0xffffffffu;
+                do {
+                    std::array<uint32_t, 8> cand{};
+                    cand[0] = 0;
+                    for (uint32_t t = 0; t < 7u; ++t) {
+                        cand[t + 1u] = tail[t];
+                    }
+                    auto [mx, tot] = cost(cand, d);
+                    if (mx < best_mx || (mx == best_mx && tot < best_tot)) {
+                        best_mx = mx;
+                        best_tot = tot;
+                        opt = cand;
+                    }
+                } while (std::next_permutation(tail.begin(), tail.end()));
+            }
+            const auto cb = cost(bank, d), cg = cost(greedy, d), co = cost(opt, d);
+            const std::array<uint32_t, 8>& sel = ring_greedy ? greedy : opt;  // default = opt
+            // apply the selected order to ALL Sm slices of this (kk,nn) group (same permutation => reader/slave
+            // ring_pos agree per bank, preserving in0/in1 pairing under M-split).
+            for (uint32_t mm = 0; mm < Sm; ++mm) {
+                const uint32_t jj = base + mm;
+                for (uint32_t pos = 0; pos < 8u; ++pos) {
+                    const uint32_t ci = sel[pos] * preaders + jj;
+                    P.cores[ci].ring_pos = pos;
+                    P.cores[ci].ring_next_idx = sel[(pos + 1u) % 8u] * preaders + jj;
+                    P.cores[ci].ring_prev_idx = sel[(pos + 7u) % 8u] * preaders + jj;
+                }
+            }
+            // RINGCOST diagnostic line (route costs for bank/greedy/opt). Emitted only when TT_MM_RINGCOST is
+            // set (the perf harness sets it) so the production default path stays silent on compile.
+            if (std::getenv("TT_MM_RINGCOST") != nullptr) {
+                auto join = [](const std::array<uint32_t, 8>& o) {
+                    std::string s;
+                    for (uint32_t p = 0; p < 8u; ++p) {
+                        s += std::to_string(o[p]) + (p + 1u < 8u ? "," : "");
+                    }
+                    return s;
+                };
+                fmt::print(
+                    "RINGCOST group={} wnoc={} sel={} bank[{}]max={}tot={} greedy[{}]max={}tot={} "
+                    "opt[{}]max={}tot={}\n",
+                    j,
+                    (wnoc == NOC::NOC_0 ? 0 : 1),
+                    (ring_greedy ? "greedy" : "opt"),
+                    join(bank),
+                    cb.first,
+                    cb.second,
+                    join(greedy),
+                    cg.first,
+                    cg.second,
+                    join(opt),
+                    co.first,
+                    co.second);
+            }
+        }
     }
     if (diag & RegimeADiag::DIAG_LOCAL_FEED) {
         rdefs["DIAG_LOCAL_FEED"] = "1";

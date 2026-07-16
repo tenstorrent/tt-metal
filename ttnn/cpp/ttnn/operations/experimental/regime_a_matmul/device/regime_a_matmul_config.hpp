@@ -69,6 +69,15 @@ enum RegimeADiag : uint32_t {
     // (bits 1<<12 .. 1<<14 are free — were grouped-K, removed; recover from 56b37f5d5e6/7b3f93ddaa5 +
     // a5b7986b18f/3593ecd4083. See tools/mm_sweep/GROUPED_K_REPORT.md.)
     DIAG_BARRIER_DRAIN = 1u << 11,
+    // Physical-topology-aware in0 ring ordering (host-side; overrides ring_pos/next/prev in the factory, no
+    // kernel change). DEFAULT (neither bit) = OPT: exhaustive 7! cycle search per ring group minimizing max
+    // edge cost then total hops over the group's WRITER-NoC authoritative hop distance
+    // (get_worker_noc_hop_distance; both orientations covered). These bits select A/B diagnostics: BANK = the
+    // old bank order [0..7] (previous production baseline); GREEDY = greedy nearest-neighbour. Ring ordering
+    // only differs; placement/work/reduction unchanged; output bit-identical for any permutation.
+    // (bit 1<<14 is free — was grouped-K; see GROUPED_K_REPORT.md.)
+    DIAG_RING_BANK = 1u << 12,
+    DIAG_RING_GREEDY = 1u << 13,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
