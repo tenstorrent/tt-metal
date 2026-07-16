@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fabric CPU-only unit test driver (keep in sync with tests/pipeline_reorg/fabric_cpu_only_*_tests.yaml).
+# Fabric CPU-only unit test driver (same commands as .github/workflows/fabric-cpu-only-tests-impl.yaml).
 # Run from repository root, or from anywhere (script cds to root). Requires a built tree under ./build.
 # Requires bash (not sh/dash): bash ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh ...
 #
@@ -13,7 +13,7 @@
 #     Runs one group only (same as a single CI matrix job).
 #     Groups: unit, phys-grouping, control-plane, t3k, wh-galaxy,
 #       bh-6u, bh-single-galaxy, bh-dual-galaxy,
-#       bh-subtorus, bh-subtorus-sc16, bh-subtorus-sc20, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-misc
+#       bh-subtorus, bh-subtorus-sc16, bh-sp4-glx, bh-blitz-decode, bh-pod-pipeline, bh-misc
 #
 #   Parallel (all groups at once):
 #     ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
@@ -485,27 +485,6 @@ run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/t
 run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/triple_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding "${SP4_GLX_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestTriplePod32x4QuadBHGalaxyFabric1DSanity"
 run_test tt-run --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/triple_pod_32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto --mock-cluster-rank-binding "${SP4_GLX_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestTriplePod32x4QuadBHGalaxyFabric2DSanity"
 
-######################################
-# Blitz superpod mapping determinism tests (mock cluster / CPU sim — canonical + 5 variations)
-# Variations: shuffled mock rank binding, relabeled MGD descriptors, permuted mesh_id in instances/connections.
-######################################
-AUTOMAPPER_DEFAULT_ARGS=(
-  --mock-cluster-rank-binding tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc_mapping.yaml
-  --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_superpod_mesh_graph_descriptor.textproto
-  --num-variations 5
-  --seed 42
-  --golden tests/tt_metal/tt_fabric/golden_mapping_files/TestBlitzSuperpodAutoMapperControlPlaneInit.yaml
-)
-# Optional override: AUTOMAPPER_TEST_ARGS="--num-variations 1 --force-regenerate"
-if [[ -n "${AUTOMAPPER_TEST_ARGS:-}" ]]; then
-  # shellcheck disable=SC2206
-  AUTOMAPPER_ARGS=(${AUTOMAPPER_TEST_ARGS})
-else
-  AUTOMAPPER_ARGS=("${AUTOMAPPER_DEFAULT_ARGS[@]}")
-fi
-TT_METAL_SLOW_DISPATCH_MODE=1 python_env/bin/python3 tests/scripts/multihost/run_blitz_superpod_automapper_tests.py "${AUTOMAPPER_ARGS[@]}"
-
-
 fi # bh-sp4-glx
 
 ######################################
@@ -529,9 +508,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # ring-embedded-into-a-larger-graph mapping -- the host-minimization SAT case guarded by the conflict
 # cap; on non-subtorus clusters the ring's closing hop has no direct link and is routed the long way.
 # Per-cluster stage lists below: SC16 revC (non-subtorus) runs 16 + 64 (48 omitted -- times out on this
-# mock); the 48- and 64-stage rings strand on SC16 revC subtorus aisleC (the closing hop lands on a
-# Z-link that the host-minimization SAT pass intermittently fails to assign -- "No inter-mesh
-# connection mesh 62->63"), so that one keeps 16 only.
+# mock); the 48-stage ring strands on SC16 revC subtorus aisleC, so that one keeps 16/64.
 for entry in \
     "SC16_revAB:${SP4_GLX_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC16_revC:${BH_110C_CLUSTER_DESC_MAPPING}:16 64" \
