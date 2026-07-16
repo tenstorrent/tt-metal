@@ -27,10 +27,10 @@
 #include "llk_sfpu/ckernel_sfpu_binary.h"
 #include "llk_sfpu/ckernel_sfpu_binary_bitwise.h"
 #include "llk_sfpu/ckernel_sfpu_binary_comp.h"
-#include "llk_sfpu/ckernel_sfpu_bitwise_not.h"
 #include "llk_sfpu/ckernel_sfpu_binary_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_binary_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_bitwise_not.h"
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
@@ -534,10 +534,6 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, false /* legacy_compat */>);
     }
-    else if constexpr (OPERATION == SfpuType::signbit)
-    {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_init);
-    }
     else if constexpr (OPERATION == SfpuType::sine)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sine_init<APPROX_MODE>);
@@ -929,9 +925,19 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::logical_not_unary)
     {
-        // Int32 conditional path (test harness drives Int32); matches the production INT32 mode.
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS), dst_index, vector_mode);
+        // logical_not(x) = (x == 0) ? 1 : 0. Select the layout from the runtime
+        // input format: Int32 inputs use the INT32 path (matches production INT32
+        // mode), everything else uses the native float (DEFAULT) path.
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::DEFAULT, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::heaviside)
     {
@@ -1025,13 +1031,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         // test holds, else 0.0f. The concrete predicate is selected by OPERATION.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_sfpu_isinf_isnan_, (OPERATION, APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
-    else if constexpr (OPERATION == SfpuType::logical_not_unary)
-    {
-        // logical_not(x) = (x == 0) ? 1 : 0. DEFAULT selects the native float
-        // layout (the LO16 / INT32 layouts are the int paths, tested elsewhere).
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::DEFAULT, ITERATIONS), dst_index, vector_mode);
-    }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX_MODE), dst_index, VectorMode::RC);
@@ -1059,10 +1058,6 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::sign)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0u /* exponent_size_8 */);
-    }
-    else if constexpr (OPERATION == SfpuType::signbit)
-    {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative)
     {

@@ -2180,7 +2180,6 @@ class UnarySFPUGolden:
             MathOperation.Cbrt: self._cbrt,
             MathOperation.I1: self._i1_bessel,
             MathOperation.Sign: self._sign,
-            MathOperation.Signbit: self._signbit,
             MathOperation.TanhDerivative: self._tanh_derivative,
             MathOperation.TanhDerivativeLut: self._tanh_derivative_lut,
             MathOperation.RsqrtCompat: self._rsqrt,
@@ -2745,10 +2744,6 @@ class UnarySFPUGolden:
     def _sign(self, x):
         # Matches calculate_sign: -1 for x<0, 0 for x==0, +1 otherwise.
         return float(torch.sign(torch.tensor(x, dtype=torch.float32)).item())
-
-    def _signbit(self, x):
-        # 1.0 when the IEEE sign bit is set (includes -0.0), else 0.0.
-        return 1.0 if math.copysign(1.0, x) < 0.0 else 0.0
 
     def _tanh_derivative(self, x):
         # tanh'(x) = 1 - tanh(x)^2 = sech^2(x).
