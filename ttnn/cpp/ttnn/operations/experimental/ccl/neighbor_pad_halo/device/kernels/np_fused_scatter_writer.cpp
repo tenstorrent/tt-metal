@@ -27,15 +27,15 @@ void kernel_main() {
     const uint32_t device_w_offset = get_arg_val<uint32_t>(10);    // global W index of this shard's col 0
 
     constexpr uint32_t page_size = get_compile_time_arg_val(0);
-    constexpr uint32_t outer = get_compile_time_arg_val(1);
-    constexpr uint32_t Hp = get_compile_time_arg_val(2);
-    constexpr uint32_t Wp = get_compile_time_arg_val(3);
-    constexpr uint32_t Hd = get_compile_time_arg_val(4);
-    constexpr uint32_t Wd = get_compile_time_arg_val(5);
-    constexpr uint32_t pH = get_compile_time_arg_val(6);
-    constexpr uint32_t pW = get_compile_time_arg_val(7);
+    constexpr uint32_t outer = get_compile_time_arg_val(1);  // B*T frames
+    constexpr uint32_t Hp = get_compile_time_arg_val(2);     // padded H (Hd + 2*pH)
+    constexpr uint32_t Wp = get_compile_time_arg_val(3);     // padded W (Wd + 2*pW)
+    constexpr uint32_t Hd = get_compile_time_arg_val(4);     // interior H (H_dev)
+    constexpr uint32_t Wd = get_compile_time_arg_val(5);     // interior W (W_dev)
+    constexpr uint32_t pH = get_compile_time_arg_val(6);     // H halo per side
+    constexpr uint32_t pW = get_compile_time_arg_val(7);     // W halo per side
     constexpr uint32_t cb_id = get_compile_time_arg_val(8);
-    constexpr uint32_t batch = get_compile_time_arg_val(9);
+    constexpr uint32_t batch = get_compile_time_arg_val(9);  // sticks per read/write NOC-barrier group
     constexpr uint32_t border_only = get_compile_time_arg_val(10);
 
     constexpr auto x_args = TensorAccessorArgs<11>();
@@ -45,13 +45,15 @@ void kernel_main() {
     const auto compact = TensorAccessor(compact_args, compact_addr, page_size);
     const auto dst = TensorAccessor(dst_args, dst_addr, page_size);
 
-    constexpr uint32_t frame_stride = Hp * Wp;
-    constexpr uint32_t n_int = outer * Hd * Wd;
-    constexpr uint32_t h_sec = outer * pH * Wd;
-    constexpr uint32_t w_sec = outer * Hp * pW;
-    constexpr uint32_t bb1 = n_int + h_sec;
-    constexpr uint32_t bb2 = bb1 + h_sec;
-    constexpr uint32_t bb3 = bb2 + w_sec;
+    // Flat stick index gi runs [interior | H-top | H-bot | W-left | W-right]. These are the per-section
+    // stick counts and their cumulative boundaries, so src_noc/dst_page can dispatch by `gi < boundary`.
+    constexpr uint32_t frame_stride = Hp * Wp;   // padded sticks per frame
+    constexpr uint32_t n_int = outer * Hd * Wd;  // interior stick count (end of interior section)
+    constexpr uint32_t h_sec = outer * pH * Wd;  // sticks in one H-halo section (top or bottom)
+    constexpr uint32_t w_sec = outer * Hp * pW;  // sticks in one W-halo section (left or right)
+    constexpr uint32_t bb1 = n_int + h_sec;      // end of H-top   -> H-bot starts here
+    constexpr uint32_t bb2 = bb1 + h_sec;        // end of H-bot   -> W-left starts here
+    constexpr uint32_t bb3 = bb2 + w_sec;        // end of W-left  -> W-right starts here
 
     const uint32_t l1_base = get_write_ptr(cb_id);
     const uint32_t end = stick_start + stick_count;

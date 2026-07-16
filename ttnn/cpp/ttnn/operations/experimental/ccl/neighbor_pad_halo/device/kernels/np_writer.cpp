@@ -87,14 +87,16 @@ void kernel_main() {
 
     // Per-core runtime args
     uint32_t arg_idx = 0;
-    const uint32_t outer_dim_offset_start_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t outer_dim_offset_start_id = get_arg_val<uint32_t>(arg_idx++);  // this core's first dst stick
+    const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);             // W offset where interior begins
+    const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);        // interior H per device (H_dev)
+    const uint32_t output_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);       // halo rows per frame (top+bot)
+    const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);             // frames/rows this core owns
+    const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);                    // halo rows per side this od
     const uint32_t padding_left = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);  // interior W width to read per row
+    // Dst row stride in sticks. Overloaded by path: full output row width (W+pad2_left+pad2_right) on the
+    // corners-only H path, but interior W_dev on the compact-buffer paths (see the corners derivation below).
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t neighbor_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t neighbor_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);

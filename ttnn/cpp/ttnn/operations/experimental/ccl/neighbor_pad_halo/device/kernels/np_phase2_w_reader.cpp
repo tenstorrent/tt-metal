@@ -65,19 +65,22 @@ void kernel_main() {
 
     // Per-core runtime args
     uint32_t arg_idx = 0;
+    // outer_dim_size: rows this core processes = slice_frames * h_total (T-frames x padded-H rows) — NOT
+    // B*T. outer_dim_start: this core's first such row (link-local slice offset).
     const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dim_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t barrier_count = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);        // W-halo cols per side this core emits (pad2)
+    const uint32_t barrier_count = get_arg_val<uint32_t>(arg_idx++);  // H->W barrier signals to await (H producers)
     const uint32_t output_row_width = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t pad2_left = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_interior_sticks = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_interior_sticks = get_arg_val<uint32_t>(arg_idx++);  // interior W width (aka W_dev / Wd)
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t input_H_dev = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t input_H_dev = get_arg_val<uint32_t>(arg_idx++);  // interior H per device (aka H_dev / Hd)
     const uint32_t padding_h = get_arg_val<uint32_t>(arg_idx++);
+    // Compact-buffer page offset to the H-bottom section; H-top section base is 0.
     const uint32_t h_halo_hbot_base = get_arg_val<uint32_t>(arg_idx++);
     // Padded-input mode (0 = contiguous). When >0 the input is [.,H+2*input_pad_h,W+2*input_pad_w,C] and
     // the W-edge input reads target its INTERIOR (row stride = padded W, frame stride = padded H*W).
@@ -91,7 +94,7 @@ void kernel_main() {
     // Per-batch region progress sem for this (W-direction, link). A per-batch consumer waits on
     // just this link's count, race-free across links (one producer per (region,link) -> monotonic).
     const uint32_t w_region_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t h_total = input_H_dev + 2 * padding_h;
+    const uint32_t h_total = input_H_dev + 2 * padding_h;  // padded H rows per frame (aka Hp)
 
     // Per-batch corner H-gate: each corner W-stick read waits only the H-batch it needs (no upfront
     // H->W barrier). H-region sems for all H-links live in CRTA after the reader coords: HT[0..3],
@@ -267,10 +270,14 @@ void kernel_main() {
                         const uint32_t t_idx = global_idx / h_total;
                         const uint32_t hp = global_idx % h_total;
                         const uint32_t l1_addr = base_l1 + m * stick_size;
+                        // hp is the padded-H row: interior content lives in the input tensor, the top/bottom
+                        // pad rows in the compact H-sections. Same page math recurs in the main loop below.
                         if (hp >= padding_h && hp < padding_h + input_H_dev) {
                             const uint32_t page = in_page(t_idx, hp - padding_h, w_col);
                             noc_async_read(get_noc_addr(page, input_accessor), l1_addr, stick_size);
                         } else {
+                            // Compact H-section is [t][pad_row][w], row-major with stride padding_h*W_dev per
+                            // frame. Top pad (hp<padding_h) starts at section base 0; bottom pad at hbot_base.
                             uint32_t halo_page;
                             if (hp < padding_h) {
                                 halo_page = t_idx * padding_h * num_interior_sticks + hp * num_interior_sticks + w_col;

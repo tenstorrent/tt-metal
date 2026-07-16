@@ -45,13 +45,13 @@ void kernel_main() {
 
     // Per-core runtime args
     uint32_t arg_idx = 0;
-    const uint32_t outer_dim_offset_start_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t outer_dim_offset_start_id = get_arg_val<uint32_t>(arg_idx++);  // this core's first src stick
+    const uint32_t stick_start_id = get_arg_val<uint32_t>(arg_idx++);             // W offset the halo row starts at
+    const uint32_t input_halo_dim_size = get_arg_val<uint32_t>(arg_idx++);        // interior H per device (H_dev)
+    const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);             // frames this core owns
+    const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);                    // halo rows per side (pH)
+    const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);         // interior W read per row (W_dev)
+    const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);    // W_dev (halo row stride)
     // Number of corner sticks per pad row in L1 recv buffer (= pad2_left + pad2_right for 2D corners-only)
     const uint32_t num_l1_recv_sticks_per_row = get_arg_val<uint32_t>(arg_idx++);
     // Rows per input frame for the per-frame stride (num_sticks_per_halo_dim * input_frame_rows). Equals
