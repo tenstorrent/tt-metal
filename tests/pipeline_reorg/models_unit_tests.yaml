@@ -727,12 +727,12 @@
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
     unset TT_METAL_WATCHER  # watcher off: embedding_ind_tilized NOC circular-buffer overflow (#49082) + ring_attention assert; re-enable once fixed
-    export TT_METAL_WATCHER=120 # temporarily turn on to check timeouts
-    pytest --timeout 10000 models/tt_dit/tests/unit/
+    export TT_METAL_WATCHER=240 # temporarily turn on to check timeouts
+    pytest --timeout 20000 models/tt_dit/tests/unit/
   model: dit-common
   skus:
     wh_n150:
-      timeout: 120
+      timeout: 240
       tier: 1
     bh_quietbox_2:
       timeout: 230

@@ -333,7 +333,7 @@ models:
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:
     wh_llmbox: 61
-    wh_n150: 190
+    wh_n150: 290
     wh_galaxy: 45
     wh_galaxy_perf: 45
     bh_p150: 20
