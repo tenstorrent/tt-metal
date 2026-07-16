@@ -10,10 +10,10 @@
   cmd: "./tests/scripts/run_ttnn_examples.sh"
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 15
     sim_wormhole_b0:
-      timeout: 40
+      timeout: 15
     sim_blackhole:
-      timeout: 40
+      timeout: 15
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

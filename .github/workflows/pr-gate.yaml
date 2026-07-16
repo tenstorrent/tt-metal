@@ -248,6 +248,7 @@ jobs:
       product: tt-metalium
       build-type: 'ASan'
       enable-kernel-ccache: true
+      per-test-timeout: 15
     secrets: inherit
 
   ttnn-examples:
@@ -265,6 +266,7 @@ jobs:
       product: tt-nn
       build-type: 'ASan'
       enable-kernel-ccache: true
+      per-test-timeout: 15
     secrets: inherit
 
   # A quick check that parses the models charts in README.md and models/README.md
@@ -409,6 +411,7 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+      per-test-timeout: 15
       # Priority runners only accept merge-queue traffic. Regular PRs and
       # other triggers must continue using the original non-priority runner.
       enabled-skus: ${{

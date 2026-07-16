@@ -300,6 +300,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
+      per-test-timeout: 15
 
   # ===========================================================================
   # Team: ttnn
@@ -354,6 +355,7 @@ jobs:
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      per-test-timeout: 15
 
   # ===========================================================================
   # Team: models
@@ -376,6 +378,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      per-test-timeout: 15
 
   # ===========================================================================
   # Team: train
@@ -398,6 +401,7 @@ jobs:
       enabled-skus: "wh_n150_civ2"
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      per-test-timeout: 15
 
   # ===========================================================================
   # Team: scaleout (fabric)
@@ -420,6 +424,7 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      per-test-timeout: 15
 
   # Fabric CPU-only tests removed from merge gate — https://github.com/tenstorrent/tt-metal/pull/47987
   # Scaffolding kept for a future smoke subset (fabric_cpu_only_smoke_merge_gate_tests.yaml).
@@ -437,6 +442,7 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      per-test-timeout: 15
 
   # ===========================================================================
   # Team: llk
@@ -465,6 +471,7 @@ jobs:
       test-category: merge_gate
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      per-test-timeout: 15
       # Prio runner pool is reserved for merge-queue traffic; any other trigger
       # (pull_request, push, etc.) routes blackhole jobs to the non-prio viommu
       # variant so PR runs don't starve the merge-group queue.

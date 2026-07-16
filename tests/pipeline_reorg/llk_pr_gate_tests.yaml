@@ -16,7 +16,7 @@
       --junitxml=pytest-report-wormhole.xml .
   skus:
     wh_n150_civ2:
-      timeout: 40
+      timeout: 15
   owner_id: U07J3K6KS1K # LLK team
 
 - name: llk_smoke_blackhole
@@ -31,7 +31,7 @@
       --junitxml=pytest-report-blackhole.xml .
   skus:
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 15
     bh_p150b_civ2_viommu_prio:
-      timeout: 40
+      timeout: 15
   owner_id: U07J3K6KS1K # LLK team
