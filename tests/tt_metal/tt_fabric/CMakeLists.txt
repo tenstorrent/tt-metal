@@ -4,7 +4,7 @@ include(sources.cmake)
 add_executable(
     fabric_unit_tests
     ${UNIT_TESTS_FABRIC_SRC}
-    ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
+    ${PROJECT_SOURCE_DIR}/tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp
 )
 
 target_link_libraries(
