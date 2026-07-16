@@ -64,7 +64,7 @@ jobs:
 
   prepare-validation-inputs:
     name: Prepare validation inputs
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
     outputs:
