@@ -26,7 +26,6 @@ import gc
 import json
 import os
 import statistics
-import sys
 import time
 from pathlib import Path
 
@@ -48,9 +47,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import comp_pcc
-
-logger.remove()
-logger.add(sys.stderr, level="INFO")
 
 CHUNK = 5 * 1024  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
