@@ -6,8 +6,6 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
-#include <algorithm>
-
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -39,9 +37,10 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         TILE_WIDTH,
         in_tile_width,
         out_tile_width);
+    const bool shrink = in_tile_height >= out_tile_height;
     TT_FATAL(
-        in_tile_height >= out_tile_height && (in_tile_height % out_tile_height) == 0,
-        "Retile currently supports in_tile_height >= out_tile_height with exact divisibility; got {} -> {}",
+        shrink ? (in_tile_height % out_tile_height) == 0 : (out_tile_height % in_tile_height) == 0,
+        "Retile requires one tile height to divide the other exactly; got {} -> {}",
         in_tile_height,
         out_tile_height);
     TT_FATAL(
@@ -52,7 +51,13 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_cb_data_format);
-    const uint32_t mid_page_size = std::max(input_single_tile_size, output_single_tile_size);
+    // Intermediate page = input tile size: untilize (the producer) writes one input tile of RM
+    // per page. The consumer (tilize) addresses output tile-rows by byte offset within the CB,
+    // independent of the page size.
+    const uint32_t mid_page_size = input_single_tile_size;
+    // The intermediate bytes are in the input data format throughout (conversion happens on the
+    // final pack to the output CB), so the consumer view sizes an output tile in the input format.
+    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -72,23 +77,33 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
 
     const uint32_t tiles_per_block = tensor_width / in_tile_width;  // == width / out_tile_width
     const uint32_t num_input_tile_rows = tensor_height / in_tile_height;
-    const uint32_t height_ratio = in_tile_height / out_tile_height;
+    const uint32_t num_output_tile_rows = tensor_height / out_tile_height;
+
+    // SHRINK: 1 input tile-row -> `ratio` output tile-rows. GROW: `ratio` input tile-rows -> 1 output tile-row.
+    const uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
+
+    // Split by whole tile-rows of the taller tile so each core's work maps to whole tile-rows on
+    // both sides: shrink splits input tile-rows, grow splits output tile-rows.
+    const uint32_t num_split_units = shrink ? num_input_tile_rows : num_output_tile_rows;
 
     auto* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, num_input_tile_rows);
+        ttnn::split_blocks_for_tilize(grid_size, num_split_units);
 
     // Double-buffer when a core processes more than one block so reader/compute/writer overlap.
     const uint32_t cb_num_pages_per_block = tiles_per_block;
     const uint32_t cb_factor = (nblocks_per_core > 1 || nblocks_per_core_cliff > 1) ? 2 : 1;
     const uint32_t src_cb_tiles = cb_num_pages_per_block * cb_factor;
-    const uint32_t mid_cb_pages = cb_num_pages_per_block * cb_factor;
     const uint32_t out_cb_tiles = cb_num_pages_per_block * cb_factor;
 
+    // One output block occupies `ratio` input tile-rows of RM in the grow case, one otherwise.
+    const uint32_t mid_pages_per_out_block = (shrink ? 1u : ratio) * tiles_per_block;
+
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t mid_cb_index = tt::CBIndex::c_1;
-    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
+    constexpr uint32_t mid_cb_index = tt::CBIndex::c_1;       // input tile geometry (untilize producer)
+    constexpr uint32_t mid_view_cb_index = tt::CBIndex::c_2;  // output tile geometry (tilize consumer), aliases c_1
+    constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
 
     ProgramDescriptor desc;
 
@@ -104,19 +119,35 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         }}},
     });
 
-    // Single intermediate RM CB, shared by untilize (producer) and tilize (consumer) — no L1
-    // copy between them. Double-buffered so the reader/writer overlap with compute.
-    // Page size = max(in, out) tile size. Tile/face geometry matches the input tile (required by
-    // pack_untilize). Kernels must not call get_tile_size() on this CB.
+    // Single intermediate RM allocation, shared by untilize (producer) and tilize (consumer) — no
+    // L1 copy between them. Double-buffered so the reader/writer overlap with compute.
+    //
+    // Two aliased views over the same L1 region (the producer and consumer need different tile/face
+    // geometry, which is fixed per-CB at program-creation time):
+    //   c_1 (input geometry):  what pack_untilize writes into — one input tile of RM per page.
+    //   c_2 (output geometry): what tilize reads from — so llk_unpack_tilize uses the output tile's
+    //                          face_r_dim/num_faces and reads the correct number of RM rows. The
+    //                          bytes are still in the input data format (conversion happens on the
+    //                          final pack), hence the input-format tile size for the view page.
+    // The consumer view has no independent producer; the compute kernel points its fifo_rd_ptr at
+    // the producer's block base each iteration. Kernels must not call get_tile_size() on either.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * mid_cb_pages * mid_page_size,
+        .total_size = 2 * mid_pages_per_out_block * mid_page_size,
         .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(mid_cb_index),
-            .data_format = input_cb_data_format,
-            .page_size = mid_page_size,
-            .tile = input_tile,
-        }}},
+        .format_descriptors = {{
+            CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(mid_cb_index),
+                .data_format = input_cb_data_format,
+                .page_size = mid_page_size,
+                .tile = input_tile,
+            },
+            CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(mid_view_cb_index),
+                .data_format = input_cb_data_format,
+                .page_size = out_tile_size_input_fmt,
+                .tile = output_tile,
+            },
+        }},
     });
 
     // Output CB (tiled, output tile shape) — double-buffered for compute/writer overlap.
@@ -167,6 +198,7 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     if (fp32_llk_acc) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[mid_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[mid_view_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     auto make_compute_desc = [&](const CoreRangeSet& ranges) {
@@ -178,10 +210,11 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
             tiles_per_block,
             src0_cb_index,
             mid_cb_index,
+            mid_view_cb_index,
             output_cb_index,
             in_tile_height,
             out_tile_height,
-            output_single_tile_size,
+            out_tile_size_input_fmt,
         };
         cd.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,
@@ -215,9 +248,12 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
 
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
-        const uint32_t num_input_blocks = nblocks_per_core;
-        const uint32_t num_input_tiles = num_input_blocks * tiles_per_block;
-        const uint32_t num_output_tiles = num_input_blocks * height_ratio * tiles_per_block;
+        // nblocks_per_core is in split units (input tile-rows if shrink, output tile-rows if grow).
+        const uint32_t input_rows = shrink ? nblocks_per_core : nblocks_per_core * ratio;
+        const uint32_t output_rows = shrink ? nblocks_per_core * ratio : nblocks_per_core;
+        const uint32_t num_input_blocks = input_rows;  // compute kernel derives its outer loop from this
+        const uint32_t num_input_tiles = input_rows * tiles_per_block;
+        const uint32_t num_output_tiles = output_rows * tiles_per_block;
 
         reader_ref.emplace_runtime_args(core, {src0_buffer, num_input_tiles, input_tile_start_id});
         writer_ref.emplace_runtime_args(core, {dst_buffer, num_output_tiles, output_tile_start_id});
@@ -231,9 +267,11 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
 
     if (has_cliff) {
         const CoreCoord& core = cores[ncores_full];
-        const uint32_t num_input_blocks = nblocks_per_core_cliff;
-        const uint32_t num_input_tiles = num_input_blocks * tiles_per_block;
-        const uint32_t num_output_tiles = num_input_blocks * height_ratio * tiles_per_block;
+        const uint32_t input_rows = shrink ? nblocks_per_core_cliff : nblocks_per_core_cliff * ratio;
+        const uint32_t output_rows = shrink ? nblocks_per_core_cliff * ratio : nblocks_per_core_cliff;
+        const uint32_t num_input_blocks = input_rows;
+        const uint32_t num_input_tiles = input_rows * tiles_per_block;
+        const uint32_t num_output_tiles = output_rows * tiles_per_block;
 
         reader_ref.emplace_runtime_args(core, {src0_buffer, num_input_tiles, input_tile_start_id});
         writer_ref.emplace_runtime_args(core, {dst_buffer, num_output_tiles, output_tile_start_id});

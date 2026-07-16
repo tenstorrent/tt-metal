@@ -988,20 +988,24 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
 
 
 @pytest.mark.parametrize(
-    "tensor_shape, input_tile_shape, output_tile_shape",
+    "tensor_shape",
     [
-        ([1, 1, 128, 256], (32, 32), (16, 32)),
-        ([1, 1, 64, 256], (32, 32), (8, 32)),
-        ([1, 1, 64, 128], (32, 32), (4, 32)),
-        ([1, 1, 16, 128], (32, 32), (2, 32)),
+        ([1, 1, 128, 256]),
+        ([1, 1, 64, 256]),
+        ([1, 1, 64, 128]),
+        ([1, 1, 16, 128]),
     ],
 )
+@pytest.mark.parametrize("input_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32)])
+@pytest.mark.parametrize("output_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_tilize_retile(device, tensor_shape, input_tile_shape, output_tile_shape, dtype):
     """Retile an already-tiled input into a different tile shape (invokes the retile factory)."""
     torch.manual_seed(42)
     torch_input = torch.rand(tensor_shape, dtype=torch.bfloat16)
 
+    if input_tile_shape[0] == output_tile_shape[0]:
+        pytest.skip("Input and output tile shapes are the same")
     # Build an already-tiled input using the source tile shape.
     tt_input = ttnn.from_torch(
         torch_input,

@@ -178,7 +178,7 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.padded_shape()[-1],
         tile_width);
     TT_FATAL(
-        input_tensor_a.padded_shape()[-2] % tile_height == 0,
+        retile || input_tensor_a.padded_shape()[-2] % tile_height == 0,
         "Input tensor height ({}) must be divisible by tile height ({})",
         input_tensor_a.padded_shape()[-2],
         tile_height);
