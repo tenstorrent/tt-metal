@@ -334,28 +334,6 @@ DitFusedDistributedRmsnormDeviceOperation::create_output_tensors(
     return tensors;
 }
 
-ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "DitFusedDistributedRmsnormDeviceOperation::compute_program_hash");
-    auto* mesh_device = tensor_args.input.device();
-    auto sd_id = args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<DitFusedDistributedRmsnormDeviceOperation>(
-        args.epsilon,
-        args.num_heads_per_device,
-        args.per_head_norm,
-        args.dtype,
-        args.output_mem_config,
-        args.cluster_axis,
-        args.num_links,
-        args.ring_size,
-        args.topology,
-        args.compute_kernel_config,
-        static_cast<uint8_t>(args.norm_type),
-        subdevice_core_range_set,
-        tensor_args);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

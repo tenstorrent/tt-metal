@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt_stl/reflection.hpp>
@@ -79,21 +80,33 @@ struct DitFusedDistributedRmsnormParams {
         sub_device_id(sub_device_id),
         compute_kernel_config(compute_kernel_config) {}
 
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("epsilon", epsilon);
-        attrs.emplace_back("num_heads_per_device", num_heads_per_device);
-        attrs.emplace_back("per_head_norm", per_head_norm);
-        attrs.emplace_back("norm_type", static_cast<uint8_t>(norm_type));
-        attrs.emplace_back("dtype", dtype);
-        attrs.emplace_back("output_mem_config", output_mem_config);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
-        return attrs;
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "epsilon",
+        "num_heads_per_device",
+        "per_head_norm",
+        "dtype",
+        "output_mem_config",
+        "cluster_axis",
+        "num_links",
+        "ring_size",
+        "topology",
+        "compute_kernel_config",
+        "norm_type",
+        "sub_device_id");
+    auto attribute_values() const {
+        return std::make_tuple(
+            epsilon,
+            num_heads_per_device,
+            per_head_norm,
+            dtype,
+            output_mem_config,
+            cluster_axis,
+            num_links,
+            ring_size,
+            topology,
+            compute_kernel_config,
+            static_cast<uint8_t>(norm_type),
+            sub_device_id);
     }
 };
 
