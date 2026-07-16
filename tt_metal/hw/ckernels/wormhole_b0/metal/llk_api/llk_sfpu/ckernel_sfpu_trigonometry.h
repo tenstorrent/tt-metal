@@ -885,8 +885,8 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstIntPrgm0 = RECIPROCAL_GT0_MAGIC_SEED;
-        sfpi::vConstFloatPrgm1 = 0x1.99938ap-3f;
-        sfpi::vConstFloatPrgm2 = -0x1.555558p-2f;
+        sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
+        sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
     } else {
         // Initialisation for use of sfpu_reciprocal<false> by sfpu_atan_bf16.
         sfpu_reciprocal_init<false>();
