@@ -337,14 +337,6 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_1,
         "worker_indices_scratch");
-    // c_2: weights scratch
-    detail::create_tensor_cb(
-        desc,
-        worker_core_grid,
-        weights_tensor,
-        /*buffering_factor=*/read_batch_size,
-        /*cb_id=*/tt::CBIndex::c_2,
-        "worker_weights_scratch");
     // c_3: offsets (full tensor, mutated in place per batch as the shared running counter).
     // The owner worker core (local_core_id==0) loads expert_offsets[] here once at startup;
     // non-owners leave it uninitialized and pull/push the owner's copy under the baton each
@@ -699,7 +691,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     }
 
     // ==================== Worker core kernels ====================
-    // Reader (RISCV_1): routing decisions, DRAM reads for input/indices/weights/offsets/dispatch_table,
+    // Reader (RISCV_1): routing decisions, DRAM reads for input/indices/offsets/dispatch_table,
     //                   publishes per-batch route plan to writer via c_14.
     // Writer (RISCV_0): drains c_14 plan, executes local DRAM writes for the local path and direct
     //                   NOC writes into the owning sender's writer-CB set for local_core_id (set s)
@@ -751,7 +743,6 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
 
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(worker_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(worker_reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(worker_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(worker_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(worker_reader_compile_args);
 
@@ -1029,7 +1020,6 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         tt::tt_metal::KernelDescriptor::RTArgList worker_reader_rt_args;
         worker_reader_rt_args.push_back(input_tensor.buffer());
         worker_reader_rt_args.push_back(indices_tensor.buffer());
-        worker_reader_rt_args.push_back(weights_tensor.buffer());
         worker_reader_rt_args.push_back(offsets_tensor.buffer());
         worker_reader_rt_args.push_back(dispatch_table_tensor.buffer());
         worker_reader_rt_args.push_back(0u);                           // token_start_idx
