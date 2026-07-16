@@ -413,6 +413,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     sfpi::vFloat s;
     sfpi::vFloat a;
     sfpi::vFloat x_abs;
+    sfpi::vFloat half_pi;
 
     x_abs = sfpi::setsgn(x, 0);
     a = x_abs;
@@ -444,12 +445,12 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c3.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c2 = -0x1.24p-3f;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat a3 = s * a;
         q = q * s + sfpi::vConstFloatPrgm1;
         q = q * s + sfpi::vConstFloatPrgm2;
+        half_pi = 0x1.921fb6p+0f;
+        r = q * a3 + a;
     }
-    sfpi::vFloat half_pi = 0x1.921fb6p+0f;
-    sfpi::vFloat t = q * s;
-    r = t * a + a;
 
     // Special cases:
     v_if(a_exp >= 0) { r = half_pi - r; }
