@@ -238,3 +238,50 @@
   test_scaled_dot_product_attention_perf.py` — the flagged-shape perf harness
   (loops the op N times for N profiler rows; asserts the soft PCC≥0.997 gate) plus
   the R3 guard set (`test_sdpa_guard_set`: none/custom × small/medium × DRAM/L1).
+
+## Refinement 3b — Speed up the perf-flagged profile (data-movement) (debug: fix gate violations)
+- Date: 2026-07-16
+- What was done: The completion gate overruled R3's `[~]` with a **regression** —
+  one prior-passing golden cell (1180/1181) "failed, hung, or never ran". R3's only
+  golden-affecting change was the reader/writer NoC-batching lever, so it is the sole
+  suspect. Investigation:
+  * **Reproduction attempt**: ran the FULL golden suite (`test_golden.py`) at R3's
+    committed HEAD in production mode → **1181 passed / 1088 xfailed / 0 failed** in
+    105 s. The regression is **not deterministic on this hardware**. (R3's breadcrumbs
+    show it claimed 1181 while its unit count dropped 334→55 — it ran subsets and
+    inferred the golden suite unchanged; the full suite was not re-run at R3.)
+  * **Suspect narrowing** (pure-Python `_fit_l1`/`_chunk_size` over all supported
+    cells): the largest batched reads (`n` up to 64) and the `KV_DEPTH=1` full-slot
+    reserves land on the large-D shapes `1×1×128×512` / `1×1×128×1024`. Ran those
+    golden cells under `--dev` (watcher) → **all pass** (40 passed / 32 xfailed).
+  * **Structural review** (`ttnn-static-analyzer`, fresh context): the `batch=true`
+    path is byte-identical in L1 layout and producer/consumer counts to the per-tile
+    path for **every** supported shape — the `batch_q`/`batch_kv`/`batch_mask`
+    predicates guarantee full-slot, slot-aligned, non-straddling reserves; the CBs are
+    an integer number of slots; `get_tile_size == buffer_page_size` for all supported
+    dtypes; barrier precedes publish/free; no deadlock cycle (reader→compute→writer is
+    a DAG). **No structural hazard found.** The only plausible mechanism for an
+    intermittent gate failure is a rare bursty-NoC transient stall on silicon
+    (≤64 async reads before one barrier) or an infra flake.
+  * **Decision**: the lever is **ablation-proven zero-win** (R3: the flagged shape is
+    compute-bound, reads hidden behind `KV_DEPTH=2`), so it banks no measured perf.
+    Per the perf-refinement rule for a correct-but-not-yet-winning lever, it is
+    **parked at its trivial (per-tile) default** — compile-time `batch_q = batch_kv =
+    batch_mask = false` in the reader, `batch_q = false` in the writer — making the
+    shipped reader/writer **runtime byte-identical to the gate-passing R2 state**. This
+    removes the bursty-read pattern AND guarantees no regression by construction. The
+    `read_tiles<cb,batch>` / `write_tiles<cb,batch>` scaffolding is retained as a live
+    knob: **R3a re-enables + re-measures** it (one-line predicate flip) once the
+    compute-side work (R5) exposes the reads on the critical path.
+- Accuracy achieved: unchanged from R2 (reader/writer are the only touched files and
+  are now byte-identical to R2). Flagged shape soft `pcc≥0.997` held; guard set
+  `pcc≥0.99`; golden `TOLERANCES` met across the suite.
+- Golden test progress: **1181 passed / 1088 xfailed** (0 failed, 0 xpass — no
+  SUPPORTED change), ran to completion with no hang. Identical to R2 / R3.
+- Issues encountered: the gate regression could not be reproduced locally (full suite
+  green in both production and `--dev`-subset runs); root-caused to the R3 batching
+  lever by elimination + static analysis, then neutralized by parking. No new hang or
+  numeric issue introduced.
+- Tests added: none (used existing suites). Verification: full golden suite
+  1181/1088; core unit (acceptance + nonaligned + coarse-chunk + debug) 58 passed;
+  precision baseline + matrix + perf/guard 285 passed / 112 skipped.

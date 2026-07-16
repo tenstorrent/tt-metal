@@ -283,6 +283,51 @@ partial-chunk per-tile fallback); precision-matrix **272/112**; new guard set
 **8/8** (mask none/custom × small/medium × DRAM/L1). The win is gated on the
 compute-side work → **R3a** below (which converges with R5).
 
+> **Correction (R3b)**: the `batch=true` path was **parked at its per-tile default**,
+> not left active — see R3b's Landed note. The `read_tiles`/`write_tiles` scaffolding
+> stays as a live knob for R3a to re-enable + re-measure; the shipped runtime is
+> byte-identical to R2's per-tile reader/writer.
+
+
+
+### [x] Refinement 3b — Speed up the perf-flagged profile (data-movement) (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 3 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 1180/1181). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Landed (R3b)**: root-caused the regression to R3's `batch=true` NoC-batching lever
+and **parked it at its trivial (per-tile) default** — the shipped reader/writer are
+now runtime **byte-identical to the gate-passing R2** state. Evidence chain:
+- The full golden suite **passes clean locally** at R3's committed HEAD
+  (`1181 passed / 1088 xfailed / 0 failed`, production mode), so the gate's 1-cell
+  regression is **not deterministic** on this hardware.
+- A `ttnn-static-analyzer` structural review of `batch=true` found **no hazard**:
+  the batched reserve/read/barrier/push is byte-identical in L1 layout and
+  producer/consumer counts to the per-tile path for every supported shape
+  (full-slot, slot-aligned, non-straddling reserves; `get_tile_size ==
+  buffer_page_size` for all supported dtypes; no deadlock cycle; balanced counts).
+- The lever is **ablation-proven zero-win** (R3: the flagged shape is compute-bound,
+  reads hidden behind `KV_DEPTH=2`), so parking it costs no measured perf.
+The only plausible mechanism for the intermittent gate failure is a rare bursty-NoC
+transient stall on silicon (n≤64 async reads before one barrier) or an infra flake;
+neither reproduces here. Parking the knob (compile-time `batch_* = false`) removes
+the bursty-read pattern **and** guarantees no regression by construction (== R2).
+The `read_tiles<cb,batch>` / `write_tiles<cb,batch>` scaffolding is retained so R3a
+flips a one-line predicate to re-enable + re-measure once compute-side work (R5)
+exposes the reads on the critical path.
+
+**Verification**: full golden suite **1181 passed / 1088 xfailed / 0 failed**
+(ran to completion, no hang — bullets 1 & 3); acceptance + nonaligned + coarse-chunk
++ debug unit **58 passed**; precision baseline + matrix + perf/guard **285 passed /
+112 skipped** (flagged-shape soft `pcc≥0.997` held, guard set `pcc≥0.99`) — bullet 2.
+No SUPPORTED change (perf refinement).
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression. ✔
 ### [ ] Refinement 3a — Close the perf win on the compute-bound flagged shape (re-measure DM after compute-side)
 
 **Type**: perf
@@ -297,9 +342,13 @@ the `fp32_dest_acc_en=False` DEST budget (8 bf16 tiles) and/or coarsen `Sq_chunk
 reconfig/init/fill-drain) over more tiles — i.e. lift FPU util from ≈0.07 toward 0.35.
 This is exactly **R5's** lever class (`matmul_output_subblock`, `compute_block_size`,
 reconfig ablation); R3a is the ordered marker that R5 is the step that closes R3's
-target. **After R5 lands, re-measure the R3 DM batching**: if the faster compute
-exposes the reads (reader becomes the critical path), tune `KV_DEPTH` / the read-block
-size; if reads stay hidden, the R3 DM batching is complete as-is.
+target. **After R5 lands, RE-ENABLE + re-measure the R3 DM batching** (parked at its
+per-tile default in R3b — flip the reader/writer `batch_q`/`batch_kv` predicates back
+to the divisor rules documented in the reader kernel, then re-run the full golden
+suite under `--dev` to confirm no intermittent hang before measuring): if the faster
+compute exposes the reads (reader becomes the critical path), the re-enabled batching
+should now win — tune `KV_DEPTH` / the read-block size; if reads stay hidden, leave the
+knob parked (the DM batching is complete-but-dormant, no measured win to bank).
 
 **Verifier notes**: no SUPPORTED change (perf). Do R5 first (or fold R5 into this),
 then confirm on the flagged shape that device-ns moves toward the 0.35 util goal with

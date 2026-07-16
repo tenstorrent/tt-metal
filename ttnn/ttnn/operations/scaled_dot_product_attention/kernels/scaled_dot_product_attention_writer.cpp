@@ -50,10 +50,12 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<6>();
 
-    // R3: batch the q-chunk output writes (one barrier) only when every q-chunk is
-    // a full CB slot (Sq_t divides Sq_chunk_t) — same slot-alignment / no-straddle
-    // condition as the reader. The perf-flagged shape (Sq_t=296, chunk 4) qualifies.
-    constexpr bool batch_q = (Sq_t % Sq_chunk_t) == 0;
+    // R3 DM-batching knob (writer twin) — PARKED at the per-tile default in R3b to
+    // match the reader (see the reader kernel for the full rationale: correct but
+    // zero-win/compute-bound, and disabled to guarantee no golden-suite regression;
+    // runtime byte-identical to the gate-passing R2 per-tile writer). R3a re-enables
+    // with: batch_q = (Sq_t % Sq_chunk_t) == 0;
+    constexpr bool batch_q = false;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_wu = get_arg_val<uint32_t>(1);

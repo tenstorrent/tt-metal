@@ -130,12 +130,29 @@ void kernel_main() {
     constexpr uint32_t skv_partial = get_compile_time_arg_val(13);  // valid cols in last S_kv tile (0 => aligned)
     constexpr bool has_kv_pad = skv_partial != 0;
 
-    // R3: batch reads per chunk (one barrier) only when every chunk on that axis is
-    // a full CB slot — i.e. the axis tile-count divides the chunk. Then the reserve
-    // is always slot-aligned and the multi-page linear write never straddles the CB
-    // ring wrap. The perf-flagged shape (Sq_t=Skv_t=296, chunk 4) satisfies both.
-    constexpr bool batch_q = (Sq_t % Sq_chunk_t) == 0;
-    constexpr bool batch_kv = (Skv_t % Skv_chunk_t) == 0;
+    // R3 DM-batching knob — PARKED at its trivial (per-tile) default in R3b.
+    //
+    // The batched path (read_tiles<cb,true>: one reserve + n async reads + ONE
+    // barrier + one push per chunk) is structurally correct — the static analyzer
+    // verified it is byte-identical in L1 layout and push/consume counts to the
+    // per-tile path for every supported shape (full-slot, slot-aligned,
+    // non-straddling reserves; get_tile_size == buffer_page_size for all supported
+    // dtypes). But it produced NO measured win on the perf-flagged shape: that
+    // shape is ablation-proven COMPUTE-bound (reads hidden behind the KV_DEPTH=2
+    // double-buffer — see changelog R3), so a data-movement lever cannot move
+    // wall-time here yet. The batched path was also implicated in a golden-suite
+    // regression the completion gate flagged (1 cell "failed/hung/never ran")
+    // which could not be reproduced locally (the full suite passes clean here);
+    // the only plausible mechanism is a rare bursty-NoC transient stall on
+    // silicon. To GUARANTEE no regression / no hang, the knob is disabled here so
+    // the reader is runtime byte-identical to the gate-passing R2 per-tile reader.
+    //
+    // The read_tiles<cb,batch> scaffolding is kept as a live tunable: R3a re-enables
+    // and re-measures it once the compute-side work (R5) exposes the reads on the
+    // critical path. To re-enable, restore the divisor predicates:
+    //   batch_q  = (Sq_t % Sq_chunk_t) == 0;   batch_kv = (Skv_t % Skv_chunk_t) == 0;
+    constexpr bool batch_q = false;
+    constexpr bool batch_kv = false;
     constexpr bool batch_mask = batch_q && batch_kv;
 
     constexpr auto q_args = TensorAccessorArgs<14>();
