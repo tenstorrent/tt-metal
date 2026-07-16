@@ -10,6 +10,7 @@
 #   team: The team that owns the test.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 # Non-nightly smoke tests
 - name: tt-train cpp smoke tests

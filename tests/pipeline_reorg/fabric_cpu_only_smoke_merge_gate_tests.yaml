@@ -6,6 +6,7 @@
 #
 # Empty until merge gate re-enables fabric CPU tests (see #47987). Uncomment the example
 # below before removing `if: false` on the merge-gate job.
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 []
 
@@ -14,8 +15,6 @@
 #   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group unit
 #   skus:
 #     cpu_medium:
-#       timeout: 10
-#     cpu_medium_prio:
 #       timeout: 10
 #   team: scaleout
 #   arch: wormhole_b0
