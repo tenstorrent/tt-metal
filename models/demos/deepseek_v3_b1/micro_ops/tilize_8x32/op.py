@@ -87,16 +87,12 @@ def tilize_8x32_kernel(input_tensor, output_tensor):
     in_cb = 0
     out_cb = 16  # Output operands start at 16
 
-    # tile
-    input_tile = ttnn.Tile((8, 32))
-
     # ========================================================================
     # Circular Buffer Descriptors
     # ========================================================================
 
-    # CB 0: Input (sharded tensor, row-major format).
+    # CB 0: Input (sharded tensor, row-major format)
     input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in_cb, input_tensor)
-    input_cb_descriptor.format_descriptors[in_cb].tile = ttnn.TileDescriptor(input_tile)
 
     # CB 16: Output (sharded tensor, tiled format)
     output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
