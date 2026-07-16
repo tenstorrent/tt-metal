@@ -5,6 +5,8 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/debug/dprint.h"
 
@@ -56,7 +58,9 @@ void kernel_main() {
     constexpr uint32_t multicast_chunk_size_in_tiles = multicast_chunk_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t multicast_chunk_size_bytes = multicast_chunk_size_in_tiles * in0_single_tile_size_bytes;
 
-    cb_reserve_back(cb_id_in0, multicast_chunk_size_in_tiles * num_multicast_steps);
+    CircularBuffer cb_in0(cb_id_in0);
+
+    cb_in0.reserve_back(multicast_chunk_size_in_tiles * num_multicast_steps);
     for (uint32_t istep = 0; istep < num_multicast_steps; istep++) {
         volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -64,6 +68,6 @@ void kernel_main() {
 
         noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
         noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
-        cb_push_back(cb_id_in0, multicast_chunk_size_in_tiles);
+        cb_in0.push_back(multicast_chunk_size_in_tiles);
     }
 }

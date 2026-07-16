@@ -62,26 +62,24 @@ void emit_runtime_args_hc_tiled(
         uint32_t h = num_tiles_read / CtWt % H;
         uint32_t ct = num_tiles_read / Wt % Ct;
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                input_buffer->address(),
-                Wt,
-                H,
-                Ct,
-                HW_bytes,
-                CHW_bytes,
-                num_tiles_read,
-                num_tiles_per_core,
-                num_tiles_read / CtHWt * CHW_bytes,
-                h,
-                h / TILE_HEIGHT * Wt,
-                ct,
-                ct * TILE_HEIGHT * HW_bytes,
-                num_tiles_read % Wt});
+            {input_buffer,
+             Wt,
+             H,
+             Ct,
+             HW_bytes,
+             CHW_bytes,
+             num_tiles_read,
+             num_tiles_per_core,
+             num_tiles_read / CtHWt * CHW_bytes,
+             h,
+             h / TILE_HEIGHT * Wt,
+             ct,
+             ct * TILE_HEIGHT * HW_bytes,
+             num_tiles_read % Wt});
 
-        writer_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{output_buffer->address(), num_tiles_per_core, num_tiles_read});
+        writer_desc.emplace_runtime_args(core, {output_buffer, num_tiles_per_core, num_tiles_read});
 
         num_tiles_read += num_tiles_per_core;
     }

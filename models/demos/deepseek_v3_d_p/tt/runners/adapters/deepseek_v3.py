@@ -32,6 +32,11 @@ class DeepSeekV3Adapter(MLAPrefillAdapter):
     mla_pcc_threshold = 0.996
     moe_pcc_threshold = 0.982
     prefill_trace_layout = "single_file"
+    # Stock fast tokenizer — no custom tokenizer code to import, so skip trust_remote_code (Kimi keeps it).
+    tokenizer_trust_remote_code = False
+    # No trust_remote_code, so config/tokenizer load fine from the HF snapshot dir — skip the flat copy
+    # (which is wasteful and fails on a read-only HF cache mount). Kimi keeps it (inherits True).
+    needs_flat_config_dir = False
 
     @property
     def reference_model_cls(self):

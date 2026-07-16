@@ -283,12 +283,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             block_wt * tile_width);
     }
 
-    auto in0_dram_addr = a.buffer()->address();
-    auto out_dram_addr = output.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto input_mask_dram_addr = input_mask.has_value() ? input_mask.value().buffer()->address() : 0;
-
     uint32_t in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
     uint32_t in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
     uint32_t in_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
@@ -1085,9 +1079,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                 if (reader_noc == NOC::NOC_1) {
                     std::swap(mcast_start, mcast_end);
                 }
-                std::vector<uint32_t> mcast_sender_args;
-                mcast_sender_args.push_back(in0_dram_addr);
-                mcast_sender_args.push_back(out_dram_addr);
+                tt::tt_metal::KernelDescriptor::RTArgList mcast_sender_args;
+                mcast_sender_args.push_back(a.buffer());
+                mcast_sender_args.push_back(output.buffer());
                 mcast_sender_args.push_back(in0_start_id);
                 mcast_sender_args.push_back(out_tile_start_id);
                 mcast_sender_args.push_back(Wt);
@@ -1139,23 +1133,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                     CoreCoord coord = device->worker_core_from_logical_core(gcore);
                     mcast_noc_xy.push_back(coord.y);
                 }
-                mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
-                reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(mcast_sender_args));
+                mcast_sender_args.append(mcast_noc_xy);
+                reader_mcast_sender_desc.emplace_runtime_args(core, mcast_sender_args);
             } else {  // mcast receiver
-                // NOTE: do not pass Buffer* here. in0_start_id/out_tile_start_id/Wt/mcast
-                // coords are per-core and shape-derived; using BufferBinding would skip
-                // create_descriptor() on cache hits and leave those scalars stale when a
-                // later call collides on the same cache entry with different shape/grid.
-                reader_mcast_receiver_desc.runtime_args.emplace_back(
+                reader_mcast_receiver_desc.emplace_runtime_args(
                     core,
-                    tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                        a.buffer()->address(),
-                        output.buffer()->address(),
-                        in0_start_id,
-                        out_tile_start_id,
-                        Wt,
-                        static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).x),
-                        static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).y)});
+                    {a.buffer(),
+                     output.buffer(),
+                     in0_start_id,
+                     out_tile_start_id,
+                     Wt,
+                     static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).x),
+                     static_cast<uint32_t>(device->worker_core_from_logical_core(group.front()).y)});
             }
         }
     }
@@ -1187,18 +1176,30 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             }
         }
 
-        std::vector<uint32_t> writer_mcast_sender_args;
+        tt::tt_metal::KernelDescriptor::RTArgList writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(eps_u);
-        writer_mcast_sender_args.push_back(out_dram_addr);
-        writer_mcast_sender_args.push_back(gamma_dram_addr);
-        writer_mcast_sender_args.push_back(beta_dram_addr);
-        writer_mcast_sender_args.push_back(input_mask_dram_addr);
+        writer_mcast_sender_args.push_back(output.buffer());
+        if (gamma.has_value()) {
+            writer_mcast_sender_args.push_back(gamma.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (beta.has_value()) {
+            writer_mcast_sender_args.push_back(beta.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
+        if (input_mask.has_value()) {
+            writer_mcast_sender_args.push_back(input_mask.value().buffer());
+        } else {
+            writer_mcast_sender_args.push_back(0u);
+        }
         writer_mcast_sender_args.push_back(out_tile_start_id);
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_mcast_sender_args));
+        writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
     }
 
     desc.kernels.push_back(std::move(reader_mcast_sender_desc));

@@ -146,7 +146,7 @@ TEST_F(TensorTopology2x4Test, Shard1DRowMajor) {
     const auto& tensor_topology = sharded_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.distribution_shape(), MeshShape(num_devices));
     EXPECT_EQ(
-        tensor_topology.placements(), (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{1}}));
+        tensor_topology.placements(), (ttsl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{1}}));
 
     const auto& mesh_coords = tensor_topology.mesh_coords();
     EXPECT_EQ(mesh_coords.size(), num_devices);

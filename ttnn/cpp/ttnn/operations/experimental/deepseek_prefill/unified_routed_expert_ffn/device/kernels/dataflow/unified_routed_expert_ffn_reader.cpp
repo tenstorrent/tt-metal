@@ -7,8 +7,10 @@
 // Per-core responsibilities, sequenced over `effective_chunks` chunks
 // (effective_chunks = ceil(this expert's token count / chunk_M_tiles)):
 //   - Read counts/idx_table scratch once at kernel start to discover this
-//     expert's active token count. x is the already-extracted per-expert
-//     token tensor — tile reads always start at row 0.
+//     expert's active token count. x tile reads start at row 0 unless
+//     read_x_at_offset is set, in which case x is a shared buffer and this
+//     expert's rows begin at start[global_id] (fusing what ttnn::extract did);
+//     the reader adds (start / TILE) * K_gate_tiles to every x page index.
 //   - Phase 1 (gate matmul, fused with phase 2): per K-block, sender at
 //     gx=0 NoC-mcasts the x K-block to its M-row receivers (in0 mcast);
 //     sender at gy=0 NoC-mcasts the gate+up K-block to its N-col
@@ -79,10 +81,8 @@ void kernel_main() {
     // up_done = up block landed in L1. Monotonic; gy=0 in1-sender cores only.
     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(31);
     const uint32_t up_done_sem_id = get_arg_val<uint32_t>(32);
-    volatile tt_l1_ptr uint32_t* up_go_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_go_sem_id));
-    volatile tt_l1_ptr uint32_t* up_done_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_done_sem_id));
+    Semaphore<> up_go_sem(up_go_sem_id);
+    Semaphore<> up_done_sem(up_done_sem_id);
 
     // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 33.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
@@ -118,6 +118,11 @@ void kernel_main() {
     // NoC 1 into cb_in1_up); both 0 = UP_WRITER_MCAST, reader skips up.
     constexpr uint32_t reader_reads_up = get_compile_time_arg_val(23);
     constexpr uint32_t reader_mcasts_up = get_compile_time_arg_val(24);
+    // read_x_at_offset: x is a shared buffer; offset x reads by this expert's
+    // region start (start[global_id]/TILE tile-rows). 0 => x is per-expert,
+    // reads start at row 0. cb_start_scratch holds the fetched `start` page.
+    constexpr uint32_t read_x_at_offset = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(26);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -128,7 +133,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 25;
+    constexpr uint32_t x_accessor_offset = 27;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
@@ -152,6 +157,14 @@ void kernel_main() {
     constexpr auto idx_args = TensorAccessorArgs<idx_accessor_offset>();
     const auto idx_acc = TensorAccessor(idx_args, idx_table_addr);
 
+    // `start` (= expert_region_offsets) accessor. Appended last in the reader's
+    // accessor stream; read only when read_x_at_offset. start_addr is the final
+    // runtime arg, after the GRID_X-pair M-row NoC table at M_ROW_NOC_RT_OFFSET.
+    const uint32_t start_addr = get_arg_val<uint32_t>(M_ROW_NOC_RT_OFFSET + 2 * GRID_X_NOC);
+    constexpr uint32_t start_accessor_offset = idx_args.next_compile_time_args_offset();
+    constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
+    const auto start_acc = TensorAccessor(start_args, start_addr);
+
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
     // `noc_read` forces NoC 0 for DRAM weight/page reads — the kernel issues
     // those concurrently with mcast traffic on the kernel's default NoC for
@@ -168,6 +181,7 @@ void kernel_main() {
     CircularBuffer cb_in0_down_full_obj(cb_in0_down_full);
     CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
     CircularBuffer cb_idx_scratch_obj(cb_idx_scratch);
+    CircularBuffer cb_start_scratch_obj(cb_start_scratch);
     CircularBuffer cb_activated_obj(cb_activated);
 
     // D2.0 Semaphore wrappers.
@@ -212,6 +226,23 @@ void kernel_main() {
     const uint32_t effective_chunks_runtime = (count_tiles + chunk_M_tiles - 1) / chunk_M_tiles;
     // Clamp to compile-time num_chunks just in case (defensive against bad input).
     const uint32_t effective_chunks = effective_chunks_runtime < num_chunks ? effective_chunks_runtime : num_chunks;
+
+    // x-read row offset. Zero unless read_x_at_offset: then x is a shared buffer
+    // and this expert's rows begin at start[global_id]. Fetch the start page and
+    // convert the token row to a tile-page offset (row_tile * K_gate_tiles), the
+    // exact source rebase ttnn::extract used to perform. Must agree with the
+    // writer's row_offset_tiles so x is read and y is written to the same region.
+    uint32_t x_start_tile_idx = 0;
+    if constexpr (read_x_at_offset != 0) {
+        cb_start_scratch_obj.reserve_back(1);
+        const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
+        noc_read.async_read(
+            start_acc, CoreLocalMem<uint32_t>(start_l1), start_acc.get_aligned_page_size(), {.page_id = 0}, {});
+        noc_read.async_read_barrier();
+        cb_start_scratch_obj.push_back(1);
+        const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
+        x_start_tile_idx = (start_ptr[global_expert_id] / 32) * K_gate_tiles;
+    }
 
     // Per-chunk pre-zero bookkeeping. For each chunk we decide whether
     // THIS core (as in0 sender) needs to zero its cb_in0_x slots before
@@ -302,7 +333,7 @@ void kernel_main() {
             if constexpr (up_split) {
                 if (is_in1_sender) {
                     ++up_seq;
-                    *up_go_local = up_seq;
+                    up_go_sem.set(up_seq);
                 }
             }
 
@@ -344,7 +375,9 @@ void kernel_main() {
                     if (row_valid) {
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                             const uint32_t col = kb * in0_block_w_gu + k;
-                            const uint32_t tile_idx = row * K_gate_tiles + col;
+                            // x_start_tile_idx offsets into this expert's region
+                            // of a shared buffer (0 when x is per-expert).
+                            const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
                             noc_read.async_read(
                                 x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
                             l1_x += x_tile_bytes;
@@ -430,7 +463,8 @@ void kernel_main() {
                             const uint32_t col = my_nt_gu * per_core_N_gu + n;
                             if (col < N_gate_tiles_full) {
                                 const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                noc_async_read_page(tile_idx, up_acc, l1_w_up, /*offset=*/0, /*noc=*/0);
+                                noc_read.async_read(
+                                    up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
                             } else {
                                 volatile tt_l1_ptr uint64_t* p =
                                     reinterpret_cast<volatile tt_l1_ptr uint64_t*>(l1_w_up);
@@ -446,7 +480,7 @@ void kernel_main() {
 
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
-                    noc_semaphore_wait_min(up_done_local, up_seq);
+                    up_done_sem.wait_min(up_seq);
                 }
 
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the

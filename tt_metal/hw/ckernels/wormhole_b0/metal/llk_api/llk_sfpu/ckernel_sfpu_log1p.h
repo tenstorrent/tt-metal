@@ -49,7 +49,7 @@ namespace sfpu {
 // it still evaluates to -inf via the same bit-level reduction path.
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
-    sfpi::vFloat u = a + sfpi::vConst1;
+    sfpi::vFloat u = a + 1.0f;
     sfpi::vFloat r = std::numeric_limits<float>::quiet_NaN();
 
     v_if(u >= 0.0f) {
@@ -73,7 +73,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
 
         // Use -0.25 (instead of 0.25) so we can reuse it in the bf16 Horner step later.
         sfpi::vFloat neg_quarter = -0.25f;
-        sfpi::vFloat neg1 = sfpi::vConstNeg1;
+        sfpi::vFloat neg1 = -1.0f;
         // t = -s' / 4 - 1 = 2^(-k) - 1
         sfpi::vFloat t = __builtin_rvtt_sfpmad(neg_quarter.get(), s.get(), neg1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 

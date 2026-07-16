@@ -27,6 +27,7 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
@@ -62,6 +63,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
 }
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // ---- Metal 2.0 resource names (ProgramSpec scope) ----
 // DFB accessor names surface kernel-side as dfb::<name> tokens; the ported width-sharded kernels
@@ -89,10 +91,12 @@ const m2::KernelSpecName KERNEL_ACT{"act_reader"};
 const m2::KernelSpecName KERNEL_WEIGHTS{"weights_reader"};
 const m2::KernelSpecName KERNEL_COMPUTE{"compute"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::create_program_artifacts(
     const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args, Tensor& output_tensor) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     const auto& a = tensor_args.a;
     const auto& b = tensor_args.b;
     const auto& bias = tensor_args.bias;
@@ -129,8 +133,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    auto packer_l1_acc = compute_kernel_config.packer_l1_acc;
 
     TT_FATAL(
         out_block_h_ntiles >= act_block_h_ntiles,
@@ -610,18 +613,18 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"tilized_cb_second_reader_offset", 0u},
                 {"split_reader_cb_shared", 0u},
             },
-        .hw_config =
-            m2::ComputeHardwareConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en,
-                .math_approx_mode = math_approx_mode,
-            },
+        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
     };
 
     // ---- Activation reader kernel ----
     // DFB bindings: produces ACT_ROW_MAJOR + ACT (mcast), consumes ACT_TILIZED (mcast source);
     // self-loops the borrowed ACT_SHARDED (input address source) and READER_INDICES.
+    m2::DataMovementHardwareConfig act_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        act_hw = m2::DataMovementGen2Config{};
+    } else {
+        act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
+    }
     m2::KernelSpec act_kernel{
         .unique_id = KERNEL_ACT,
         .source = std::filesystem::path("ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
@@ -687,12 +690,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             {
                 .runtime_arg_names = {"this_core_x", "this_core_y", "num_cores_x"},
             },
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc},
-            },
+        .hw_config = std::move(act_hw),
     };
     if (skip_activation_mcast) {
         act_kernel.compiler_options.defines.insert({"SKIP_MCAST", "1"});
@@ -723,6 +721,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         weights_tensor_bindings.push_back(m2::TensorBinding{.tensor_parameter_name = TP_BIAS, .accessor_name = "bias"});
     }
 
+    m2::DataMovementHardwareConfig weights_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        weights_hw = m2::DataMovementGen2Config{};
+    } else {
+        weights_hw =
+            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
+    }
     m2::KernelSpec weights_kernel{
         .unique_id = KERNEL_WEIGHTS,
         .source = std::filesystem::path("ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
@@ -748,12 +753,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             {
                 .runtime_arg_names = {"init_weight_start_tile_id", "is_active"},
             },
-        .hw_config =
-            m2::DataMovementHardwareConfig{
-                .gen1_config =
-                    m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc},
-            },
+        .hw_config = std::move(weights_hw),
     };
 
     // FUSE_BIAS preprocessor define gates the conditionally-bound dfb::bias / tensor::bias references
@@ -805,15 +805,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         uint32_t core_y = core_index / full_core_grid.x;
         CoreCoord core(core_x, core_y);
 
-        act_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"this_core_x", core_x},
-                    {"this_core_y", core_y},
-                    {"num_cores_x", full_core_grid.x},
-                },
-        });
+        m2::KernelRunArgs::RuntimeArgValues& act_rtas = act_run_args.runtime_arg_values;
+        m2::AddRuntimeArgsForNode(
+            act_rtas,
+            core,
+            {
+                {"this_core_x", core_x},
+                {"this_core_y", core_y},
+                {"num_cores_x", full_core_grid.x},
+            });
         // X/Y mcast lookup tables as per-node varargs.
         m2::AdvancedKernelRunArgs::Varargs varargs;
         varargs.reserve(act_mcast_noc_x.size() + act_mcast_noc_y.size());
@@ -822,14 +822,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         act_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
 
         if (core_index < total_num_active_cores) {
-            weights_run_args.runtime_arg_values.push_back(m2::KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args =
-                    {
-                        {"init_weight_start_tile_id", core_index * weight_block_w_ntiles},
-                        {"is_active", (uint32_t)(core_index < output_num_cores)},
-                    },
-            });
+            m2::KernelRunArgs::RuntimeArgValues& weights_rtas = weights_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                weights_rtas,
+                core,
+                {
+                    {"init_weight_start_tile_id", core_index * weight_block_w_ntiles},
+                    {"is_active", (uint32_t)(core_index < output_num_cores)},
+                });
         }
     }
 

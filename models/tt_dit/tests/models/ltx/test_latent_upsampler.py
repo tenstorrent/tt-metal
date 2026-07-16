@@ -116,20 +116,20 @@ def test_ltx_upsampler_resblock(mesh_device: ttnn.MeshDevice, H: int, W: int):
 def test_ltx_latent_upsampler(mesh_device: ttnn.MeshDevice, H: int, W: int):
     """Full ``LTXLatentUpsampler`` PCC vs reference, random weights at production shape
     (in=128, mid=1024, T=19, 2x4). No HF checkpoint required."""
-    from ltx_core.model.upsampler.model import LatentUpsampler as TorchLatentUpsampler
+    from diffusers.pipelines.ltx2.latent_upsampler import LTX2LatentUpsamplerModel
 
     in_c, mid_c, T, B = 128, 1024, 19, 1
     torch.manual_seed(0xC0FFEE)
 
-    torch_model = TorchLatentUpsampler(
+    torch_model = LTX2LatentUpsamplerModel(
         in_channels=in_c,
         mid_channels=mid_c,
         num_blocks_per_stage=4,
         dims=3,
         spatial_upsample=True,
         temporal_upsample=False,
-        spatial_scale=2.0,
-        rational_resampler=False,
+        rational_spatial_scale=2.0,
+        use_rational_resampler=False,
     )
     torch_model.eval()
 

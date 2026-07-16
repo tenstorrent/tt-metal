@@ -83,10 +83,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
 
     // Clamp to [0, 255]. Boundary inputs land on the +inf / +0 encodings after
     // setexp + bf16 round.
-    sfpi::vFloat threshold_low = 0.f;
-    sfpi::vFloat threshold_high = sfpi::vFloat(255.f);
-    sfpi::vec_min_max(threshold_low, xlog2);
-    sfpi::vec_min_max(xlog2, threshold_high);
+    xlog2 = sfpi::clamp(xlog2, 0.0f, 255.0f);
 
     // Decompose xlog2 in [0, 255] into:
     //   exponential_part = floor(xlog2)             (integer in [0, 255])

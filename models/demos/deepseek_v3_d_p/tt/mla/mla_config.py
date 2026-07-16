@@ -23,6 +23,7 @@ MLA_MATMUL_CONFIG = {
     "q_a_proj": {
         640: {
             "num_heads": 64,
+            "q_lora_rank": 1536,
             "chunked_only": True,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=COMPUTE_GRID,
@@ -76,6 +77,7 @@ MLA_MATMUL_CONFIG = {
     "q_b_proj": {
         640: {
             "num_heads": 64,
+            "q_lora_rank": 1536,
             "chunked_only": True,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=COMPUTE_GRID,
@@ -129,6 +131,7 @@ MLA_MATMUL_CONFIG = {
     "wkv_b1": {
         640: {
             "num_heads": 64,
+            "q_lora_rank": 1536,
             "chunked_only": True,
             "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=COMPUTE_GRID,
@@ -177,6 +180,7 @@ MLA_MATMUL_CONFIG = {
     "kv_a_proj_with_mqa": {
         640: {
             "num_heads": 64,
+            "q_lora_rank": 1536,
             "chunked_only": True,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=COMPUTE_GRID,
@@ -230,6 +234,7 @@ MLA_MATMUL_CONFIG = {
     "wkv_b2": {
         640: {
             "num_heads": 64,
+            "q_lora_rank": 1536,
             "chunked_only": True,
             "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=COMPUTE_GRID,
@@ -280,6 +285,7 @@ MLA_MATMUL_CONFIG = {
     "o_proj": {
         640: {
             "num_heads": 64,
+            "q_lora_rank": 1536,
             "chunked_only": True,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=COMPUTE_GRID,
@@ -358,7 +364,7 @@ MLA_SDPA_CONFIG = {
     640: {
         "q_chunk_size": 32,
         "k_chunk_size": 640,
-        "num_heads": 64,
+        "num_heads": None,
         "chunked_only": True,
     },
 }

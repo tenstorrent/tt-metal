@@ -275,10 +275,15 @@ prep_ubuntu_system() {
     apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg jq
 
     # Add LLVM repository for Clang 17
-    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
-    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
+    local llvm_keyring="/usr/share/keyrings/llvm-snapshot.gpg"
+    local llvm_keyring_tmp
+    llvm_keyring_tmp="$(mktemp "${llvm_keyring}.XXXXXX")"
+    ( set -o pipefail; wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor --batch --yes --no-tty -o "$llvm_keyring_tmp" )
+    chmod 0644 "$llvm_keyring_tmp"
+    mv -f "$llvm_keyring_tmp" "$llvm_keyring"
+    echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
     # Also v20
-    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
+    echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
     # Install CMake from GitHub releases (skip in Docker, cmake provided via tool image)
     if [ "$docker" -ne 1 ]; then
@@ -316,6 +321,10 @@ enabled=1
 gpgcheck=1
 repo_gpgcheck=1
 gpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
+# Keep the Intel repository scoped to the oneAPI TBB packages tt-metal needs.
+# Without this, DNF may satisfy unrelated dependencies (for example OpenMPI)
+# from oneAPI, pulling older Intel packages signed by keys not listed above.
+includepkgs=intel-oneapi-tbb* intel-oneapi-common-* intel-oneapi-tcm-*
 REPO_EOF
 }
 

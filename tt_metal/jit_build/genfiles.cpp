@@ -38,6 +38,7 @@
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel_source.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : uint8_t;
@@ -122,6 +123,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             ta_entries.push_back({name, cta_offset, addr_crta_offset});
         });
 
+    // Get the scratchpad bindings from the settings callback.
+    // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
+    // (Kernel::compute_hash hashes them in the same order — the two must agree).
+    struct ScratchEntry {
+        string name;
+        uint32_t size_bytes;
+        uint32_t addr_crta_word;
+    };
+    vector<ScratchEntry> scratch_entries;
+    settings.process_scratchpad_binding_handles(
+        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
+            scratch_entries.push_back({name, size_bytes, addr_crta_word});
+        });
+
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
@@ -141,7 +156,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -154,6 +169,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // This header defines TensorBindingToken, a type which can be used
             // to construct a TensorAccessor or LocalTensorAccessor.
             content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+        }
+        if (!scratch_entries.empty()) {
+            // The full Scratchpad accessor (NOC-free, so it compiles on both data-movement and
+            // compute/TRISC builds), which also pulls in the ScratchpadAccessor binding type.
+            content << "#include \"api/scratchpad.h\"\n";
         }
         content << "\n";
 
@@ -188,6 +208,21 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
             content << "}  // namespace tensor\n";
+        }
+
+        if (!scratch_entries.empty()) {
+            // ScratchpadAccessor scratchpad_accessor_name{ADDR_CRTA_WORD, SIZE_BYTES}
+            // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
+            // and the scratchpad's compile-time per-node size.
+            // The kernel-side Scratchpad(accessor) constructor unpacks both.
+            // The accessor's members are opaque, so the framework can extend it later without touching
+            // kernel source.
+            content << "namespace scratch {\n";
+            for (const auto& entry : scratch_entries) {
+                content << "constexpr ScratchpadAccessor " << entry.name << "{" << entry.addr_crta_word << "u, "
+                        << entry.size_bytes << "u};\n";
+            }
+            content << "}  // namespace scratch\n";
         }
     }
     write_file(path, content.str());
@@ -801,9 +836,8 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
 
 // clang-format off
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options) {
-    //ZoneScoped;
-    //const std::string tracyPrefix = "generate_descriptors_";
-    //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
+    TTZoneScopedDN(JIT, "generate_descriptors");
+    TTZoneTextD(JIT, options.name.c_str(), options.name.length());
     fs::create_directories(options.path);
     generate_all_descriptors(env, options);
 }

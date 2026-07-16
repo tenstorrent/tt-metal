@@ -106,29 +106,24 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
-    uint32_t out_block_hw_last = out_block_hw_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = block_h % num_out_blocks;
-        out_block_hw_last = out_block_h_last * block_w;
     }
 
     uint32_t index_b_offset = 0;
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t mt_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual, out_block_hw_actual;
+            uint32_t out_block_h_actual;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
-                out_block_hw_actual = out_block_hw_last;
             } else {
                 out_block_h_actual = out_block_h_normal;
-                out_block_hw_actual = out_block_hw_normal;
             }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
@@ -200,13 +195,11 @@ void kernel_main() {
 
         mt_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-            uint32_t out_block_h_actual, out_block_hw_actual;
+            uint32_t out_block_h_actual;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
-                out_block_hw_actual = out_block_hw_last;
             } else {
                 out_block_h_actual = out_block_h_normal;
-                out_block_hw_actual = out_block_hw_normal;
             }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
