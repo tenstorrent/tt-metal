@@ -7,12 +7,17 @@
 #include <cstdint>
 #include <optional>
 
+#include <string>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "combine.hpp"
+#include "device/combine_connectivity.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine::detail {
@@ -95,6 +100,23 @@ void bind_combine(nb::module_& mod) {
         nb::arg("init_zeros") = true,
         nb::arg("use_l1_small_for_semaphores") = false,
         nb::arg("use_fp8_combine") = false);
+
+    // [debug] Dump the per-device combine connectivity (eth-to-eth links + sender/untilizer placement) that the
+    // program factory captured when it last built the op. Call AFTER the combine op has run. Writes one
+    // device_{id}_connectivity.txt per device into out_dir (default "generated/combine_flow_log"), alongside the
+    // [rxlog]/[txlog] flow-control traces so the topology and the traces sit together.
+    ttnn::bind_function<"dump_combine_connectivity", "ttnn.experimental.deepseek_prefill.">(
+        mod,
+        R"doc(
+            Dump the combine op's per-eth-to-eth connectivity and sender/untilizer core placement (physical NOC0
+            + NOC1 coords, routing plane, and destination device per eth link) to one text file per device.
+            Call after the combine op has run. out_dir defaults to "generated/combine_flow_log".
+        )doc",
+        +[](tt::tt_metal::distributed::MeshDevice* mesh_device, const std::string& out_dir) {
+            ttnn::operations::experimental::deepseek_prefill::combine::dump_combine_connectivity(*mesh_device, out_dir);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("out_dir") = std::string(""));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

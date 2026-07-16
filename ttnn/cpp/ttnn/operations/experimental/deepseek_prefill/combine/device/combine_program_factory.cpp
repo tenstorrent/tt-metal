@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_device_operation.hpp"
+#include "combine_connectivity.hpp"  // [debug] host-side topology capture
 #include <algorithm>
 #include <array>
 #include <bitset>
@@ -1231,6 +1232,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             writer_runtime_args_raw.push_back(noc_y);
         }
 
+        // [debug] per-sender index, used by the writer kernel to build the eRISC combine marker value
+        // (100 + chip*10 + index) written into the connected eth router's telemetry scratch[0]. Read
+        // unconditionally by the kernel (before the fabric-connection args), so append it here for all cores.
+        writer_runtime_args_raw.push_back(core_idx);
+
         if (num_links > 0) {
             // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.
             std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
@@ -1349,6 +1355,100 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 desc.kernels[untilize_compute_kernel_id].emplace_runtime_args(untilizer_row_cores[j], compute_rt_args);
             }
         }
+    }
+
+    // [debug] Build this device's NoC-connectivity descriptors for the host-side dump (ttnn ...
+    // dump_combine_connectivity). The dump is role-agnostic: we just hand it one CoreDesc per core we placed,
+    // describing the on-device NoC write each makes to the next core (and, for eth cores, the fabric-cable far
+    // end). Ids are unique within this device; every downstream_id refers to a core in this same list.
+    {
+        std::vector<CoreDesc> cores;
+        int32_t next_id = 0;
+        // NoC each tensix writer uses (writer_untilize / writer_combine): preferred_noc_for_dram_write. If a
+        // relay stage is added, its cores would be appended here with their own .noc (NOC_0).
+        const int32_t worker_noc =
+            static_cast<int32_t>(tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()));
+
+        // Combine-axis neighbors (fabric nodes), excluding self, in the same order as the fabric-connection loop.
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+        for (const auto& neighbor_coordinate : neighbors) {
+            if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
+                continue;
+            }
+            dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+        }
+
+        // --- Eth ('E') cores: one per (combine neighbor, routing plane). get_link_eth_info(src, dst, link)
+        // selects the eth channel candidate_eth_chans[link] whose routing plane IS that index -- so the combine's
+        // "link" and the fabric routing plane are the SAME number, and we key everything by plane. Coord, plane
+        // and the eth->eth forwarding NoC come from the fabric; the fabric-cable far end is that neighbor. ---
+        std::map<uint32_t, std::vector<size_t>> eth_idx_by_plane;  // plane (== link) -> indices into `cores`
+        for (size_t ni = 0; ni < dst_nodes.size(); ++ni) {
+            for (uint32_t plane = 0; plane < num_links; ++plane) {
+                try {
+                    const auto info = tt::tt_fabric::get_link_eth_info(src_fabric_node_id, dst_nodes[ni], plane);
+                    CoreDesc e;
+                    e.type = 'E';
+                    e.core_type = tt::CoreType::ETH;
+                    e.id = next_id++;
+                    e.coord = info.eth_core_logical;  // LOGICAL: matches the [rxlog]/[txlog] file naming
+                    e.noc0_physical = info.eth_core_noc0;  // fabric-supplied PHYSICAL NOC0 (eth can't be translated)
+                    e.downstream_noc = static_cast<int32_t>(info.forwarding_noc);  // fabric-supplied eth->eth NoC
+                    e.fabric_dst_mesh = static_cast<int32_t>(*dst_nodes[ni].mesh_id);
+                    e.fabric_dst_dev = static_cast<int32_t>(dst_nodes[ni].chip_id);
+                    e.routing_plane = static_cast<int32_t>(info.routing_plane);  // == plane
+                    eth_idx_by_plane[info.routing_plane].push_back(cores.size());
+                    cores.push_back(e);
+                } catch (...) {
+                    // No forwarding direction / fewer eth channels than links -> that plane is unavailable; skip.
+                }
+            }
+        }
+        // eth->eth on-device NoC forwarding: within a plane the two direction-eths forward to each other (the
+        // device receives from one combine neighbor and forwards over NoC to the eth facing the other). For
+        // exactly two eths on a plane, point each at the other; a line end (one eth) has no on-device forward.
+        for (auto& [plane, idxs] : eth_idx_by_plane) {
+            if (idxs.size() == 2) {
+                cores[idxs[0]].downstream_ids = {cores[idxs[1]].id};
+                cores[idxs[1]].downstream_ids = {cores[idxs[0]].id};
+            }
+        }
+
+        // --- Sender ('S') cores: sender core_idx connects on plane (core_idx % num_links) and fans out to the
+        // eth toward EACH combine neighbor on that plane (one downstream per neighbor). ---
+        std::vector<int32_t> sender_id(sender_cores.size(), -1);
+        for (uint32_t s = 0; s < sender_cores.size(); ++s) {
+            CoreDesc sd;
+            sd.type = 'S';
+            sd.id = next_id++;
+            sd.coord = sender_cores[s];
+            const uint32_t plane = num_links > 0 ? s % num_links : 0;
+            auto it = eth_idx_by_plane.find(plane);
+            if (it != eth_idx_by_plane.end()) {
+                for (size_t idx : it->second) {
+                    sd.downstream_ids.push_back(cores[idx].id);
+                }
+            }
+            sd.downstream_noc = worker_noc;
+            sender_id[s] = sd.id;
+            cores.push_back(sd);
+        }
+
+        // --- Untilizer ('U') cores: each writes to the single sender it feeds (untilizer_sender_map). ---
+        for (uint32_t u = 0; u < all_untilizer_cores.size(); ++u) {
+            CoreDesc ud;
+            ud.type = 'U';
+            ud.id = next_id++;
+            ud.coord = all_untilizer_cores[u];
+            const uint32_t s = u < untilizer_sender_map.size() ? untilizer_sender_map[u] : 0;
+            if (s < sender_id.size() && sender_id[s] >= 0) {
+                ud.downstream_ids = {sender_id[s]};
+            }
+            ud.downstream_noc = worker_noc;
+            cores.push_back(ud);
+        }
+
+        record_combine_connectivity(mesh_device, src_fabric_node_id, std::move(cores));
     }
 
     return desc;

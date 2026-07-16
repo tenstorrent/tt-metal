@@ -14,6 +14,9 @@
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
+// [debug] Fabric-supplied API to open/close a router's detailed flow-control logging window ([rxlog]/[txlog]).
+#include "tt_metal/fabric/hw/inc/edm_fabric/detailed_fabric_log_command.hpp"
+
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
 // under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
@@ -132,6 +135,10 @@ void kernel_main() {
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
         all_core_barrier_noc_addrs[c] = get_noc_addr(noc_x, noc_y, output_init_barrier_l1_offset);
     }
+
+    // [debug] per-sender index (RT arg appended by the program factory); used for the eRISC combine marker
+    // value written to each connected eth router's telemetry scratch[0] to open/close the flow-log window.
+    [[maybe_unused]] const uint32_t combine_sender_index = get_arg_val<uint32_t>(rt_args_idx++);
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -263,6 +270,19 @@ void kernel_main() {
     noc_semaphore_set(init_sem_ptr, 0);
 
     DPRINT_COMBINE("Fabric setup complete\n");
+
+#ifndef FABRIC_2D
+    // [debug] Open the detailed flow-control logging window on each connected eth router. window_id =
+    // 100 + chip*10 + sender_index so a dumped trace file ties back to this sender without host-side mapping.
+    // FABRIC_1D only: uses the direction-array connections (the FABRIC_2D path is not instrumented).
+    const uint32_t combine_window_id = 100 + src_chip_id * 10 + combine_sender_index;
+    for (uint32_t d = 0; d < 4; d++) {
+        if (directions[d]) {
+            tt::tt_fabric::start_detailed_logging(
+                fabric_connections[d].edm_noc_x, fabric_connections[d].edm_noc_y, combine_window_id);
+        }
+    }
+#endif
 #endif
 
 #if INIT_ZEROS
@@ -350,6 +370,16 @@ void kernel_main() {
     // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
     // so the exit-sem signal cannot reach peers ahead of the last data writes.
     noc_async_write_barrier();
+
+#ifndef FABRIC_2D
+    // [debug] Close the detailed logging window on each connected eth router (after the barrier above, so the
+    // last data packet has departed L1). The router finalizes its trace to DRAM on seeing this.
+    for (uint32_t d = 0; d < 4; d++) {
+        if (directions[d]) {
+            tt::tt_fabric::stop_detailed_logging(fabric_connections[d].edm_noc_x, fabric_connections[d].edm_noc_y);
+        }
+    }
+#endif
 
     // Exit semaphore exchange on a dedicated semaphore (exit_semaphore_address). The exit-inc must not
     // be observed before our prior fabric writes to that chip have landed, or a peer could see

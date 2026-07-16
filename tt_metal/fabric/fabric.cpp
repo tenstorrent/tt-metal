@@ -15,6 +15,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <umd/device/types/core_coordinates.hpp>          // CoordSystem
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include <optional>
 #include <vector>
@@ -454,6 +455,76 @@ std::vector<uint32_t> get_forwarding_link_indices(
 
     return get_forwarding_link_indices_in_direction(
         control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
+}
+
+FabricLinkEthInfo get_link_eth_info(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
+
+    // Resolve the forwarding direction EXACTLY as append_fabric_connection_rt_args does, so the eth channel we
+    // report is the one the sender's connection will actually use. The 1D path uses the neighbor-scan
+    // workaround (#22524) rather than get_forwarding_direction.
+    std::optional<RoutingDirection> forwarding_direction;
+    if (is_2d_fabric) {
+        forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    } else {
+        for (const auto& direction : FabricContext::routing_directions) {
+            auto neighbors = control_plane.get_chip_neighbors(src_fabric_node_id, direction);
+            auto neighbor_mesh_chips = neighbors.find(dst_fabric_node_id.mesh_id);
+            if (neighbor_mesh_chips == neighbors.end() ||
+                std::find(
+                    neighbor_mesh_chips->second.begin(),
+                    neighbor_mesh_chips->second.end(),
+                    dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end()) {
+                continue;
+            }
+            forwarding_direction = direction;
+            break;
+        }
+    }
+    TT_FATAL(
+        forwarding_direction.has_value(),
+        "get_link_eth_info: no forwarding direction from src {} to dst {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto candidate_eth_chans =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
+    TT_FATAL(
+        link_idx < candidate_eth_chans.size(),
+        "get_link_eth_info: link index {} out of bounds ({} eth channels available src {} -> dst {})",
+        link_idx,
+        candidate_eth_chans.size(),
+        src_fabric_node_id,
+        dst_fabric_node_id);
+    const auto fabric_router_channel = candidate_eth_chans[link_idx];
+
+    const auto routing_plane = control_plane.get_routing_plane_id(src_fabric_node_id, fabric_router_channel);
+
+    const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    // Default coord system is NOC0 (physical) -- the space NoC routing actually happens in. Also resolve the
+    // LOGICAL coord (same channel, CoordSystem::LOGICAL): it is how the DRAM flow-log reader names eth cores
+    // (soc_desc.get_eth_core_for_channel(chan, LOGICAL)), so debug tools can correlate the two by logical coord.
+    const auto eth_noc0 = soc_desc.get_eth_core_for_channel(fabric_router_channel);
+    const auto eth_logical = soc_desc.get_eth_core_for_channel(fabric_router_channel, tt::CoordSystem::LOGICAL);
+
+    // NoC an eth core uses to forward a received packet over NoC to its downstream eth core (the receiver-
+    // forwarding NoC -- what an on-device eth->eth write rides). Read from the built router config when present;
+    // otherwise fall back to the fabric default (identical for every eth core of a given config).
+    uint32_t forwarding_noc = static_cast<uint32_t>(FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC);
+    if (fabric_context.has_builder_context()) {
+        forwarding_noc = static_cast<uint32_t>(
+            fabric_context.get_builder_context().get_fabric_router_config().receiver_channel_forwarding_noc_ids[0]);
+    }
+
+    return FabricLinkEthInfo{
+        tt::tt_metal::CoreCoord{static_cast<std::size_t>(eth_noc0.x), static_cast<std::size_t>(eth_noc0.y)},
+        tt::tt_metal::CoreCoord{static_cast<std::size_t>(eth_logical.x), static_cast<std::size_t>(eth_logical.y)},
+        static_cast<uint32_t>(routing_plane),
+        forwarding_noc};
 }
 
 tt::tt_fabric::Topology get_fabric_topology() {

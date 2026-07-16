@@ -113,6 +113,22 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
+// Physical NOC0 coordinate of the ethernet (EDM) core a given sender link uses to forward to dst, plus that
+// channel's routing plane id. Resolves exactly the channel that append_fabric_connection_rt_args(src, dst,
+// link_idx) would connect to (candidate eth channels in the forwarding direction, indexed by link_idx).
+// Intended for host-side placement/topology decisions that need to co-locate or identify the eth core a worker
+// drives. Throws (TT_FATAL) if there is no forwarding direction from src to dst or link_idx is out of range.
+struct FabricLinkEthInfo {
+    tt::tt_metal::CoreCoord eth_core_noc0;     // eth core in PHYSICAL NOC0 space (routing happens here)
+    tt::tt_metal::CoreCoord eth_core_logical;  // same eth core in LOGICAL space (how debug tools / DRAM traces name it)
+    uint32_t routing_plane;                    // routing plane id of the selected channel
+    uint32_t forwarding_noc;  // NoC index (0/1) the fabric router uses to forward a received packet over NoC to
+                              // the downstream eth core (the receiver-forwarding NoC); i.e. the NoC an eth->eth
+                              // on-device write rides. Same for every eth core of a given fabric config.
+};
+FabricLinkEthInfo get_link_eth_info(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx);
+
 FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
