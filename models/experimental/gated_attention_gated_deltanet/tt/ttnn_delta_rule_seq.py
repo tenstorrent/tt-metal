@@ -73,7 +73,9 @@ def chunk_gated_delta_rule_seq_adapter(
     output and this returns it without a head to token permute; the caller then runs the per-head
     RMS on that layout.
 
-    Same interface ([B,T,H,*] inputs, returns (o [B,T,H,V], new_state [B,H,K,V])).
+    Inputs are [B,T,H,*]; returns (o, new_state [B,H,K,V]). The output layout is
+    conditional: o is [B,T,H,V] by default, but [B,T,H*V] (token-major, already
+    head-flattened) when ``token_major=True``.
     Internally L2-norms q/k (matching the bf16 chunk path), converts to the seq
     kernel's [BH,T,*] float32 layout, runs the kernel, and converts the output
     and final state back. final_state is returned as bfloat16 to match the
@@ -328,7 +330,9 @@ def chunk_gated_delta_rule_seq(
 ):
     """Chunked gated delta rule using the C++ sequential scan kernel (Path A).
 
-    Returns (output [BH, T, V], final_state [BH, K, V]), both float32.
+    Returns (output, final_state [BH, K, V]), both float32. Output is [BH, T, V] by
+    default, but token-major [B, T, H*V] when ``token_major=True`` (requires
+    num_v_heads); in that mode the writer folds the head->token permute into the scan.
 
     valid_len: when set (< T), positions [valid_len, T) are treated as right-padding
     and zeroed in q/k/v/beta/g BEFORE the scan — exactly mirroring the function's own
@@ -615,6 +619,10 @@ def chunk_gated_delta_rule_seq(
     # ---- C++ sequential scan kernel (Path A) ----
     # Token-major output: when enabled and H known, the writer scatters heads straight into a
     # token-major [B, T, H*V] tensor, which folds the core.out permute.
+    # token_major is an explicit caller opt-in, so fail fast rather than silently emitting the
+    # legacy [BH, T, V] layout when num_v_heads is missing.
+    if token_major and not num_v_heads:
+        raise ValueError("token_major=True requires num_v_heads (v-heads per batch) to be set")
     _tm = bool(token_major and num_v_heads)
     out_4d, final_state = ttnn.transformer.gated_delta_attn_seq(
         L_unit_4d,

@@ -235,7 +235,15 @@ class TPGatedDeltaNet:
             )
             self._gn_G = mk(Gt)
             self._gn_E = mk(Et)
-            self._gn_wrep = ttnn.concat([ttnn.reshape(self.tw["norm_w"], [1, 1, V])] * H, dim=-1)
+            # Pin to TILE_LAYOUT + DRAM (matching _gn_G/_gn_E and the o/scale operands it
+            # multiplies in _gated_rmsnorm_tm) so this cached constant can't land in L1 or
+            # force an implicit relayout at use.
+            self._gn_wrep = ttnn.concat(
+                [ttnn.reshape(self.tw["norm_w"], [1, 1, V])] * H,
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._gn_wrep = ttnn.to_layout(self._gn_wrep, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             self._gn_cfg = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,

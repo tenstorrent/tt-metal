@@ -76,7 +76,7 @@ void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(attrs.num_v_heads > 0, "token_major_output requires num_v_heads > 0");
         TT_FATAL(
             BH % attrs.num_v_heads == 0,
-            "token_major_output: num_heads {} must be divisible by num_v_heads {}",
+            "token_major_output: BH (batch*heads) {} must be divisible by num_v_heads {}",
             BH,
             attrs.num_v_heads);
         TT_FATAL(
