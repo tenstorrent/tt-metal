@@ -42,7 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_face_compressed_mm_init_<false>(params.in0_face_r_dim);
 
     ckernel::pmp_run(
-        [&] { _llk_unpack_AB_face_compressed_mm_<true>(L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM, CT_DIM); },
+        [&] { _llk_unpack_AB_face_compressed_mm_<CT_DIM, true, true>(L1_ADDRESS(params.buffer_A[0]), params.buffer_C[0], KT_DIM); },
         [&] { DEVICE_PRINT("Case: M={} K={} N={} IMPL=9\n", params.in0_face_r_dim, (std::uint32_t)KT_DIM, (std::uint32_t)CT_DIM); });
 
     _llk_unpack_AB_face_compressed_mm_uninit_(params.num_faces_A);
@@ -64,11 +64,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    _llk_math_face_compressed_mm_init_();
+    _llk_math_face_compressed_mm_init_<CT_DIM>();
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    ckernel::pmp_run([&] { _llk_math_face_compressed_mm_<CT_DIM>(params.buffer_C[0], 0, KT_DIM); }, [&] {});
+    ckernel::pmp_run([&] { _llk_math_face_compressed_mm_<CT_DIM, true>(params.buffer_C[0], 0, KT_DIM); }, [&] {});
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

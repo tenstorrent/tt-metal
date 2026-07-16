@@ -18,7 +18,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-static constexpr char _llk_unpack_AB_face_compressed_mm_code_sequence_[] = "SBS0S1S0S111S00S1S000S11S0S11";
+static constexpr char _llk_unpack_AB_face_compressed_mm_code_sequence_[] = "SB0B1S0S1S0S111S00S1S000S11S0S11";
 static_assert(
     sizeof(_llk_unpack_AB_face_compressed_mm_code_sequence_) - 1 <= 32,
     "Code sequence length must not be greater than 32");
@@ -57,12 +57,12 @@ inline constexpr std::array<std::uint32_t, 64> _llk_unpack_AB_face_compressed_mm
     const std::array<std::uint32_t, 8> lut = {{
         find("0"),                            // 000  bfp2->bfp2 no B
         find("S0"),                           // 001  bfp4->bfp2 no B
-        TT_OP_MOP(p_mop::MASK_LOOP, 0, 0x0),  // 010  bfp2->bfp2 with B (SvbvB0)
-        TT_OP_MOP(p_mop::MASK_LOOP, 0, 0x0),  // 011  bfp4->bfp2 with B (SvbvB0)
+        find("B0"),                           // 010  bfp2->bfp2 with B
+        TT_OP_MOP(p_mop::MASK_LOOP, 0, 0x0),  // 011  bfp4->bfp2 with B (SB0)
         find("S1"),                           // 100  bfp2->bfp4 no B
         find("1"),                            // 101  bfp4->bfp4 no B
-        TT_OP_MOP(p_mop::MASK_LOOP, 0, 0x1),  // 110  bfp2->bfp4 with B (SvbvB1)
-        TT_OP_MOP(p_mop::MASK_LOOP, 0, 0x1),  // 111  bfp4->bfp4 with B (SvbvB1)
+        TT_OP_MOP(p_mop::MASK_LOOP, 0, 0x1),  // 110  bfp2->bfp4 with B (SB1)
+        find("B1"),                           // 111  bfp4->bfp4 with B
     }};
     std::array<std::uint32_t, 64> table{};
     for (std::uint32_t m = 0; m < 64; ++m) {
@@ -116,9 +116,7 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_() {
             case '0': TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 0, 1, 1); break;  // Ch0Y += 1
             case '1': TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 1, 2, 1); break;  // Ch0Y += 1
             case 'S': TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC); break;
-            case 'v': TTI_UNPACR_COMMON(SrcB, 0b00'00'00'01, 0); break;  // Ch0Z += 1 Ch1Z += 1
-            case 'b': TTI_UNPACR_COMMON(SrcB, 0b00'00'01'00, 0); break;  // Ch0Y += 1 Ch1Z += 1
-            case 'B': TTI_UNPACR_COMMON(SrcB, 0b00'00'10'10, 1); break;  // Ch0Y += 1 Ch1Z += 1
+            case 'B': TTI_UNPACR_COMMON(SrcB, 0b00'00'10'10, 1); break;  // Ch0Y += 2 Ch0Z += 2
             default: LLK_ASSERT(false, "Invalid code for unpack instruction"); break;
         }
     };
@@ -195,12 +193,9 @@ inline void _llk_unpack_AB_face_compressed_mm_uninit_(const std::uint32_t unpA_n
     TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1111);
 }
 
-template <bool clear_src = true>
+template <std::uint32_t ct_dim = 1, bool clear_src = true, bool finalize = true>
 inline void _llk_unpack_AB_face_compressed_mm_(
-    const std::uint32_t base_address_b,
-    const std::uint32_t base_address_meta,
-    const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t base_address_b, const std::uint32_t base_address_meta, const std::uint32_t kt_dim) {
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
     const std::uint32_t math_meta_size =
@@ -507,6 +502,12 @@ inline void _llk_unpack_AB_face_compressed_mm_(
         ckernel::instrn_buffer[0] = data0;
         ckernel::instrn_buffer[0] = data1;
         meta >>= 5;
+    }
+
+    if constexpr (ct_dim == 1 && finalize) {
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
+        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
