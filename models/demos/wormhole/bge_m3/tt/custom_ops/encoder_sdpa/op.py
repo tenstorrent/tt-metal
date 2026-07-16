@@ -359,6 +359,18 @@ def build_encoder_sdpa_descriptor(
     integration.
     """
     plan = validate_encoder_sdpa_inputs(q, k, v, config)
+    import os as _os
+
+    if _os.environ.get("BGE_SDPA_LOG_CFG", "0") == "1":
+        from loguru import logger as _lg
+
+        _lg.info(
+            f"ENCODER_SDPA cfg: q_chunk={config.q_chunk_size} k_chunk={config.k_chunk_size} "
+            f"score_cb={'bf8' if config.score_cb_bf8 else 'bf16'} fp32_dest={config.fp32_dest_acc_en} "
+            f"full_sync={config.dst_full_sync_en} DST_SIZE={plan.DST_SIZE} "
+            f"q_num_chunks={plan.q_num_chunks} k_num_chunks={plan.k_num_chunks} "
+            f"qk_in1_nsb={plan.qk_in1_num_subblocks} streaming={config.use_streaming}"
+        )
     device = q.device()
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(config.output_shape),
@@ -386,7 +398,12 @@ def build_encoder_sdpa_descriptor(
         _cb_descriptor(CB_V, 2 * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
         _cb_descriptor(CB_IDENTITY, 1, ttnn.bfloat16, core_grid),
         _cb_descriptor(CB_COL_IDENTITY, 1, ttnn.bfloat16, core_grid),
-        _cb_descriptor(CB_QK, plan.q_chunk_tiles * plan.k_chunk_tiles, ttnn.bfloat16, core_grid),
+        _cb_descriptor(
+            CB_QK,
+            plan.q_chunk_tiles * plan.k_chunk_tiles,
+            ttnn.bfloat8_b if plan.config.score_cb_bf8 else ttnn.bfloat16,
+            core_grid,
+        ),
         # out_im/out = Sq_chunk_t*vDHt; max/sum/exp_max_diff = statistics_tiles
         # (=Sq_chunk_t). All plan-derived; q128 defaults = 8/8/4/4/4/4/4/8.
         _cb_descriptor(CB_OUT_A, plan.out_im_tiles, ttnn.bfloat16, core_grid),

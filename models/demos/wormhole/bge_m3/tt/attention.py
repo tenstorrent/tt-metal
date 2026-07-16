@@ -341,9 +341,13 @@ class BgeM3Attention(LightweightModule):
                 bge_encoder_sdpa_experimental,
             )
 
-            # Non-FP32-dest / half-sync (DEST=8): measured -2.3ms/SDPA call,
-            # -57ms full-model wall, PCC 0.9423 -> 0.9548. This is the whole
-            # point of the experimental path.
+            # Non-FP32-dest / half-sync (DEST=8), q128/k2048, BF16 score.
+            # Validated: -57ms wall, PCC 0.9548 (gate), comparable-to-stock across
+            # seeds. BF8 score CB was ablated and CONCLUSIVELY breaks full-model
+            # PCC (0.31 at q128 AND q256) despite standalone PCC 1.0 on peaked
+            # random softmax — real activations have flatter softmax that BF8
+            # score quantization destroys. q256/k2048 hits 21.48ms/call but only
+            # via BF8 score (bf16-score q256 OOMs), so it is not shippable.
             _ecfg = EncoderSDPAConfig(fp32_dest_acc_en=False)
             context = bge_encoder_sdpa_experimental(q, k, v, output_mem_config=self.config.score_memcfg, config=_ecfg)
         else:

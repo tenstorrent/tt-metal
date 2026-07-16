@@ -43,6 +43,10 @@ class EncoderSDPAConfig:
     #  - dst_full_sync_en=True + fp32 => DEST=8 (Branch B).
     fp32_dest_acc_en: bool = True
     dst_full_sync_en: bool = False
+    # Score CB (QK^T intermediate) dtype. Default bf16 (matches production im_df).
+    # BF8 halves the score-CB L1 footprint (~492KB at q256), which is what lets
+    # q256/k2048 fit. Experiment: validate PCC/perf before enabling.
+    score_cb_bf8: bool = False
 
     @property
     def q_shape(self) -> tuple[int, int, int, int]:
