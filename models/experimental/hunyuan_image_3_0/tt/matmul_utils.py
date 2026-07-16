@@ -244,7 +244,13 @@ def _ensure_width_sharded_act(
 
     m_dim = int(list(x.shape)[-2])
     if m_dim < TILE_SIZE:
-        padded = ttnn.pad(x, [(0, 0), (0, 0), (0, TILE_SIZE - m_dim), (0, 0)], 0.0)
+        # Pad M (the -2 dim) up to a full tile. Build the pad spec to match the
+        # tensor's actual rank — the decode lm_head path feeds a 3D [B, 1, H] slice,
+        # while the backbone linears feed 4D; ttnn.pad requires len(spec) == rank.
+        rank = len(x.shape)
+        pad_spec = [(0, 0)] * rank
+        pad_spec[-2] = (0, TILE_SIZE - m_dim)
+        padded = ttnn.pad(x, pad_spec, 0.0)
         if padded is not x:
             ttnn.deallocate(x)
         x = padded
@@ -377,7 +383,13 @@ def act_width_sharded_linear(
 
     out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if batch_rows < int(list(out.shape)[-2]):
-        out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, batch_rows, n])
+        # Build the slice spec to match the tensor's rank (lm_head feeds 3D).
+        out_rank = len(out.shape)
+        begins = [0] * out_rank
+        ends = list(out.shape)
+        ends[-2] = batch_rows
+        ends[-1] = n
+        out = ttnn.slice(out, begins, ends)
     return out
 
 
@@ -404,7 +416,10 @@ def decode_width_sharded_linear(
     x_shape = list(x.shape)
     m_dim = int(x_shape[-2])
     if m_dim < TILE_SIZE:
-        x = ttnn.pad(x, [(0, 0), (0, 0), (0, TILE_SIZE - m_dim), (0, 0)], 0.0)
+        # Build the pad spec to match the tensor's rank (decode lm_head feeds 3D).
+        pad_spec = [(0, 0)] * len(x_shape)
+        pad_spec[-2] = (0, TILE_SIZE - m_dim)
+        x = ttnn.pad(x, pad_spec, 0.0)
 
     act_mc, _, num_cores = width_sharded_act_mem_config(k)
     x_sh = ttnn.interleaved_to_sharded(x, act_mc)
@@ -423,7 +438,13 @@ def decode_width_sharded_linear(
 
     out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if batch_rows < TILE_SIZE:
-        out = ttnn.slice(out, [0, 0, 0, 0], [1, 1, batch_rows, n])
+        # Build the slice spec to match the tensor's rank (decode lm_head feeds 3D).
+        out_rank = len(out.shape)
+        begins = [0] * out_rank
+        ends = list(out.shape)
+        ends[-2] = batch_rows
+        ends[-1] = n
+        out = ttnn.slice(out, begins, ends)
     return out
 
 
