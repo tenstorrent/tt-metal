@@ -7,6 +7,15 @@ compile-gated modes `DIAG_KGROUP2/4/8` (masks `1<<11/12/13`, program-cache-hashe
 API). **Verdict: no grouped mode improves any shape; `Kg=1` (the current per-block progressive schedule)
 stays the default. Grouped-K is left diagnostic-only.**
 
+> **UPDATE — streamed grouped-K (§9).** The schedule below was first implemented as a whole-group
+> **prewait** (wait all `Kg` blocks, then compute), which reintroduced per-group startup latency. It was
+> corrected to **streamed** waits — now the default for `KGROUP`: acquire DST once per output subblock, then
+> per-block progressive cumulative waits INSIDE the first subblock so math begins after block 0
+> (`DIAG_KGROUP_PREWAIT`=`1<<14` retains the old prewait for A/B). Streamed beats prewait on every shape (it
+> recovers the startup overlap) but **still does not beat `Kg=1`**: best −1% (within relaunch noise), `Kg=2`
+> ≈ `Kg=1`, larger `Kg` slightly worse on narrow-N. Decision unchanged — `Kg=1` stays default. Details in §9;
+> §1–§7 describe the original prewait experiment.
+
 ## 1. Old repeated-pack behavior
 `matmul_blocks` packs the FP32 partial into CB3 once per delivered K block, accumulating in L1
 (`llk_pack_reconfig_l1_acc(1)` after block 0). With `K_num_blocks=8` that is 8 FP32 pack/L1-accumulate
@@ -99,3 +108,57 @@ cached-program, for `Kg=1/2/4/8` across both Mt=8 primaries, `Pk=1`/`Pk>1`, `Sm=
 `W=1`/`W>1`, and balanced K/N tails — all **PCC 0.99999** (infeasible `Kg` combos cleanly L1-skip). Public
 20/20 suite unchanged (mask 0 = `Kg=1`). Grouped and baseline are not bit-identical (FP32 pack points move)
 but K accumulation stays monotonic, as expected.
+
+## 9. Streamed grouped-K correction (the current default for KGROUP)
+§1–§8 measured a **whole-group prewait**: wait all `Kg` in0/in1 blocks, then acquire DST and compute — which
+reintroduced the per-group startup latency the progressive in0 schedule had removed (at `Kg=K_num_blocks` it
+degenerates to the full-slice startup wait). The corrected **streamed** discipline (now the default for a
+`KGROUP` mode; `DIAG_KGROUP_PREWAIT`=`1<<14` selects the old prewait for A/B) instead acquires DST once per
+output subblock and consumes the group's blocks with **per-block progressive cumulative waits inside the
+first output subblock** (in0 `(group_start+g+1)` over the resident slice, first traversal only; in1 `(g+1)`
+over the CB1 group front), so the first matmul begins after block 0. Later output subblocks find all inputs
+resident and run with no waits; in1 is popped once after all subblocks; still one pack per output subblock
+per group. `matmul_group_streamed` in compute.cpp.
+
+### Results — Kg=1 vs streamed vs prewait (median µs, 3 interleaved relaunches, Δ vs Kg=1)
+Raw: `regime_a_kgroup_bench.json` (all relaunches, per-RISC, util%512, PCC, CB1 alloc). All PCC ≥ 0.999.
+| shape | grp | Kg1 | strm2 | strm4 | strm8 | pre2 | pre4 | pre8 |
+|---|---|---|---|---|---|---|---|---|
+| 256×2048×1024 (nsb2) | tgt | **28.6** | +0% | +1% | +4% | −1% | +3% | +9% |
+| 256×2048×1024 (nsb4) | tgt | **28.0** | +1% | +5% | +12% | +1% | +5% | +15% |
+| 256×6144×768 | tgt | **53.8** | +0% | −1% | +1% | +2% | +0% | +4% |
+| 256×6144×2304 | ctl | **91.5** | +0% | +0% | +0% | +1% | +2% | +1% |
+| 256×6144×4608 | ctl | 152.8 | +0% | −1% | −1% | +0% | +0% | +0% |
+| 32×6144×4608 (Mt1) | ctl | **118.7** | +0% | +1% | +1% | +0% | +1% | +1% |
+| 64×6144×4608 (Mt2) | ctl | **119.3** | +0% | +0% | +0% | +0% | +1% | +3% |
+| 128×6144×4608 (Mt4) | ctl | **129.6** | +0% | +0% | +0% | +0% | +0% | +1% |
+
+**Streamed ≤ prewait on every shape** (e.g. 768 Kg8: 54.3 vs 56.2; nsb2 Kg8: 29.7 vs 31.1) — the correction
+works, the startup overlap is recovered. But **no streamed `Kg` beats `Kg=1`**: `strm2` ties `Kg=1`
+everywhere; the only sub-zero cells (768/4608 `strm4/8` at −1%) are within the ~1% relaunch spread; larger
+`Kg` on narrow-N is a small regression.
+
+### Per-RISC (median µs) — streamed recovers the compute-start prewait lost, but doesn't beat Kg=1
+| shape | variant | wall | BRISC | NCRISC | TRISC (compute) |
+|---|---|---|---|---|---|
+| 256×6144×768 | kg1 | 53.8 | 44.8 | 44.4 | 45.0 |
+| 256×6144×768 | strm8 | 54.3 | 40.2 | 39.2 | **46.5** |
+| 256×6144×768 | pre8 | 56.2 | 40.1 | 39.9 | **47.4** |
+| 256×2048×1024 | kg1 | 28.6 | 22.4 | 22.6 | 23.1 |
+| 256×2048×1024 | strm8 | 29.7 | 21.9 | 21.8 | **24.1** |
+| 256×2048×1024 | pre8 | 31.1 | 22.4 | 22.1 | **25.2** |
+
+Streaming drops the compute (TRISC) span vs prewait (768: 47.4→46.5; 2048×1024: 25.2→24.1) — the first
+matmul starts earlier. But streamed's TRISC is still **above** `Kg=1` (45.0 / 23.1): grouping shifts fewer
+FP32 packs off the data-movement RISCs (BRISC/NCRISC 44→40 on 768) yet the compute RISC — not the packer —
+bounds the shape, and holding DST across a group with interleaved waits adds a little math-side stall.
+`Kg=2` streamed is indistinguishable from `Kg=1`. Wide-N stays DRAM-read-bound (neutral).
+
+### Decision (unchanged)
+Streamed grouped-K is the correct, faster-than-prewait design, but it does not produce a stable end-to-end
+win over `Kg=1` at fixed configuration, so per the selection gate the **production default stays `Kg=1`** and
+**no exhaustive `Pk×Ns×Sm×kb×nsb×Kg` re-sweep** was run (gated on a fixed-config win; none). Streamed is the
+default *within* the diagnostic `KGROUP` modes; prewait is retained as `DIAG_KGROUP_PREWAIT` for A/B. Root
+cause is unchanged from §6: the FP32 pack/L1-accumulation is not on the critical path (the packer runs
+concurrently with the math), so reducing pack count cannot lower wall time; correcting the startup latency
+(streamed) removes the prewait regression but leaves grouped-K at parity, not ahead.
