@@ -52,33 +52,55 @@ _TILE = 32
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
+def _create_heads():
+    """Default-ON switch for the fused ``nlp_create_qkv_heads_gdn`` op: one kernel reads the fused
+    token-major conv output and emits head-major q/k/v, replacing the caller's host-side conv
+    head-split AND this adapter's ``_to_bhtd`` token->head permute with page-id address arithmetic.
+    Bit-identical (pure tile relocation). Set ``QWEN_GDN_CREATE_HEADS=0`` to fall back to the legacy
+    head-split + ``_to_bhtd`` permute path."""
+    return _os.environ.get("QWEN_GDN_CREATE_HEADS", "1") != "0"
+
+
 def chunk_gated_delta_rule_seq_adapter(
-    q,  # [B, T, H, K]
-    k,  # [B, T, H, K]
-    v,  # [B, T, H, V]
-    beta,  # [B, T, H]
-    g,  # [B, T, H]
+    q=None,  # [B, T, H, K]  (None when fused_qkv is given)
+    k=None,  # [B, T, H, K]
+    v=None,  # [B, T, H, V]
+    beta=None,  # [B, T, H]
+    g=None,  # [B, T, H]
     chunk_size=128,
     scale=None,
     initial_state=None,  # [B, H, K, V] (any dtype) or None
     device=None,
     cached_masks=None,
     valid_len=None,
+    fused_qkv=None,  # [B, T, (Nq+Nk+Nv)*D] token-major conv output; when set, one
+    fused_hc=None,  # (num_q, num_k, num_v, head_dim) — nlp_create_qkv_heads_gdn does the head-split
 ):
     """Drop-in replacement for chunk_gated_delta_rule_ttnn that runs the C++
     chunk-parallel `gated_delta_attn_seq` kernel.
 
-    Same interface ([B,T,H,*] inputs, returns (o [B,T,H,V], new_state [B,H,K,V])).
-    Internally L2-norms q/k (matching the bf16 chunk path), converts to the seq
-    kernel's [BH,T,*] float32 layout, runs the kernel, and converts the output
-    and final state back. final_state is returned as bfloat16 to match the
-    decode recurrent_state dtype.
+    Inputs are [B,T,H,*] (q/k/v/beta/g), or — when ``fused_qkv``/``fused_hc`` are given — the fused
+    token-major conv output plus its (num_q, num_k, num_v, head_dim); in that mode the head-split +
+    token->head permute are done by the ``nlp_create_qkv_heads_gdn`` op instead of the ``_to_bhtd``
+    permute (bit-identical). Returns (o [B,T,H,V], new_state [B,H,K,V]). Internally L2-norms q/k
+    (matching the bf16 chunk path), converts to the seq kernel's [BH,T,*] float32 layout, runs the
+    kernel, and converts the output and final state back. final_state is returned as bfloat16 to
+    match the decode recurrent_state dtype.
     """
-    B = q.shape[0]
-    T = q.shape[1]
-    H = q.shape[2]
-    K = q.shape[3]
-    V = v.shape[3]
+    _use_fork = fused_qkv is not None
+    if _use_fork:
+        _nq, _nk, _nv, _dh = fused_hc
+        B = fused_qkv.shape[0]
+        T = fused_qkv.shape[1]
+        H = _nv  # value-head count (beta/g/v/output/state all use this)
+        K = _dh
+        V = _dh
+    else:
+        B = q.shape[0]
+        T = q.shape[1]
+        H = q.shape[2]
+        K = q.shape[3]
+        V = v.shape[3]
     BH = B * H
 
     def _tilize_f32(t):
@@ -99,9 +121,28 @@ def chunk_gated_delta_rule_seq_adapter(
         t = ttnn.reshape(t, [BH, T])
         return _tilize_f32(t)
 
-    q_bh = _to_bhtd(q, K)
-    k_bh = _to_bhtd(k, K)
-    v_bh = _to_bhtd(v, V)
+    if _use_fork:
+        # One fused op: token-major conv [B,T,(Nq+Nk+Nv)*D] -> head-major q/k/v, folding the
+        # host-side head-split + the _to_bhtd token->head permute into address arithmetic. The op
+        # emits q/k at Nk heads; block-repeat them to Nv (the GQA expand, unchanged from the legacy
+        # path) so all three enter the kernel at Nv. Reshape [B,Hh,T,D] -> [B*Hh,T,D] is free; the
+        # fp32 tilize matches _to_bhtd's output.
+        fused4 = ttnn.reshape(fused_qkv, [B, 1, T, (_nq + _nk + _nv) * _dh], memory_config=_DRAM)
+        q_h, k_h, v_h = ttnn.experimental.nlp_create_qkv_heads_gdn(
+            fused4, num_q_heads=_nq, num_k_heads=_nk, num_v_heads=_nv
+        )
+        ttnn.deallocate(fused_qkv)
+        rf = _nv // _nk
+        if rf > 1:
+            q_h = ttnn.repeat_interleave(q_h, rf, dim=1)  # [B,Nk,T,D] -> [B,Nv,T,D]
+            k_h = ttnn.repeat_interleave(k_h, rf, dim=1)
+        q_bh = _tilize_f32(ttnn.reshape(q_h, [BH, T, _dh]))
+        k_bh = _tilize_f32(ttnn.reshape(k_h, [BH, T, _dh]))
+        v_bh = _tilize_f32(ttnn.reshape(v_h, [BH, T, _dh]))
+    else:
+        q_bh = _to_bhtd(q, K)
+        k_bh = _to_bhtd(k, K)
+        v_bh = _to_bhtd(v, V)
 
     q_bh = l2_norm_ttnn(q_bh, dim=-1)
     k_bh = l2_norm_ttnn(k_bh, dim=-1)
