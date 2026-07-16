@@ -101,8 +101,14 @@ ProgramDescriptor NlpCreateHeadsGdnDeviceOperation::Interleaved::create_descript
     writer_desc.config = WriterConfigDescriptor{};
 
     // Single circular buffer (cb1) — Q, K, V all flow through it in read order (no transpose).
+    // Sized to hold a whole block (qkv_tiles = in0_w_tiles) double-buffered: the reader fills the
+    // block behind one barrier and the writer drains it behind one barrier, so the two kernels
+    // pipeline one block apart. The total MUST stay an integer multiple of the block size so each
+    // reserve_back(qkv_tiles)/wait_front(qkv_tiles) region is contiguous in L1 (no ring wrap
+    // mid-block) — the ×2 factor keeps that invariant.
     uint32_t cb_index = 1;
-    uint32_t cb_num_tiles = 4;  // quadruple-buffer a single micro-tile
+    constexpr uint32_t kBufferFactor = 2;                 // double-buffer the block for reader/writer overlap
+    uint32_t cb_num_tiles = kBufferFactor * in0_w_tiles;  // in0_w_tiles == qkv_tiles (per block)
     desc.cbs.push_back(CBDescriptor{
         .total_size = cb_num_tiles * single_tile_size,
         .core_ranges = all_cores,
