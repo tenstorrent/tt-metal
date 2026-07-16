@@ -766,6 +766,43 @@ the "loses its key / container churn" symptom) but is not the reboot root. See m
 
 ---
 
+### 23. Pipeline bottleneck under load — the readers are the wall, not downstream (bh-11, 2026-07-16)
+
+`test_with_ops` captures a 100-matmul trace on the 8×8 grid and replays it 5×. Each matmul fires
+zone markers across 64 cores × 5 RISCs, so markers are generated in a burst far faster than an op
+takes. The buffer chain (L1 rings → LIM mirrors → single SPSC → D2H FIFO) absorbs ~95 ops of slack,
+then saturates and back-pressures the Tensix producers — the "X280 stall". This is a **sustained
+throughput** problem: the drainer's real drain rate R is below the burst marker rate. Isolated
+per-stage BW numbers (§11–16) all showed headroom; they don't set R. This is which stage does.
+
+Per-stage cycle telemetry from one run (1354 ms wall):
+
+| Stage | Busy (real work) | Waiting | Verdict |
+|---|---|---|---|
+| **Relay** (single SPSC → D2H → host) | copy **17 ms (1.3%)** | empty-spin **1279 ms (94.5%)**; D2H reserve 57 ms; **0 reserve-stall spins** | starved — huge headroom |
+| **Collect** (mirrors → reshape → single) | copy **90 ms (6.6%)** | empty-spin **1264 ms (93%)** (mirrors idle) | starved — huge headroom |
+| **Readers** (Tensix L1 → LIM mirror, NoC0) | **~100% of wall in the poll sweep** | ~0 | **the wall** |
+
+**The bottleneck is the reader stage (L1→mirror drain).** Everything downstream — collect, relay,
+the PCIe D2H export, the host consumer — is 90%+ idle and the host D2H FIFO stalled **0** times, so
+they all have large headroom (consistent with the isolated measurements). The readers spend their
+whole wall sweeping cores, and **~96% of polls find no data** (reader 0: 4857 productive of 126,610
+polls; reader 1: 3595 of 130,405). Reader throughput was **371 k/s (r0) vs 222 k/s (r1)** — the
+core→reader split is also unbalanced.
+
+**Why isolated tests misled:** the NoC-read benches (§11–12) hit 1.5–1.8 GB/s using **ILP (many reads
+in flight)**. The real reader poll issues **one ctrl read per core and waits** (non-posted round-trip
++ full `fence`), so it is **latency-bound, not bandwidth-bound** — BW headroom is irrelevant when you
+pay per-core round-trip latency × 55 cores/sweep.
+
+**OPEN (needs burst-window data):** cumulative telemetry folds in idle gaps + the 500 µs
+`POLL_BACKOFF` after empty passes, so the headline "~10.5 µs/poll" can't separate NoC poll latency
+from backoff-domination (readers sleeping through part of a burst). Different fixes (ILP the polls vs
+retune/kill the backoff vs more reader harts). Next: split the reader wall into ctrl-poll / bulk-read
+/ backoff cycle counters to localize the reader sub-cause definitively.
+
+---
+
 ## Hardware facts established
 
 - **X280 → host D2H write ceiling ≈ 3.0 GB/s** (1 hart, posted 64 B `vse64`,
