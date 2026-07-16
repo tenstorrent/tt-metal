@@ -9,11 +9,13 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::test {
@@ -37,10 +39,34 @@ struct DramPrefetcherValidatorDeviceOperation {
         // queued to the prefetcher). Empty == identity (lead_block = ring_pos), the natural
         // topology order. Non-empty exercises a host-chosen lead block per receiver.
         std::vector<uint32_t> rotation = {};
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("num_layers", "print_stride", "streaming", "rotation", "global_cb_config_address");
+        auto attribute_values() const {
+            return std::make_tuple(
+                num_layers,
+                print_stride,
+                streaming,
+                rotation,
+                global_cb.has_value() ? static_cast<uint64_t>(global_cb->config_address()) : uint64_t{0});
+        }
     };
 
     struct tensor_args_t {
         const ttnn::Tensor& source_tensor;
+
+        explicit tensor_args_t(const ttnn::Tensor& source_tensor) : source_tensor(source_tensor) {}
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("source_tensor_buffer_address", "source_tensor_dataformat", "source_tensor");
+        auto attribute_values() const {
+            const auto* tensor_buffer = source_tensor.buffer();
+            const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(source_tensor.dtype());
+            return std::make_tuple(
+                static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
+                static_cast<uint32_t>(dataformat),
+                std::cref(source_tensor));
+        }
     };
 
     // Side-effect op (no output tensors).
@@ -70,7 +96,6 @@ struct DramPrefetcherValidatorDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 // Public free function (kept for the nanobind binding `ttnn.experimental.test_dram_prefetcher_validator`).
