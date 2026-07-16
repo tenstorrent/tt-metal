@@ -13,9 +13,6 @@ namespace tt::tt_metal {
 // Guards push a context string (e.g. op name + compile args) before dispatching;
 // the allocator records whatever context is on top of the stack at allocation time.
 //
-// Suppression markers can be checked against the entire active stack so
-// outer scopes (for example corruptible_allocation_scope) can suppress
-// allocations from nested operation contexts as well.
 // Process-start configuration, cached when tt-metal is loaded.
 bool trace_allocation_tracking_enabled();
 bool trace_allocation_diagnostics_enabled();

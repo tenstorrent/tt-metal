@@ -113,6 +113,15 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("trace_id"));
     mod.def("drain_pending_traceback_ids", []() { return ttnn::operations::trace::drain_pending_traceback_ids(); });
+    mod.def("drain_retired_traceback_ids", []() { return ttnn::operations::trace::drain_retired_traceback_ids(); });
+    mod.def(
+        "push_corruptible_allocation_scope",
+        [](MeshDevice* device) { ttnn::operations::trace::push_corruptible_allocation_scope(device); },
+        nb::arg("mesh_device"));
+    mod.def(
+        "pop_corruptible_allocation_scope",
+        [](MeshDevice* device) { ttnn::operations::trace::pop_corruptible_allocation_scope(device); },
+        nb::arg("mesh_device"));
 
     // Allocation context stack
     mod.def(
