@@ -391,6 +391,7 @@ jobs:
               "structured-output": true,
               "multimodal": true,
               "additional-server-args": "--max_model_len 131072 --async-scheduling",
+              "mm-processor-kwargs": "{\"use_fast\": false}",
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions",
               "co-owner-1-id": "U08H31YMN4Q"
             },
@@ -557,6 +558,15 @@ jobs:
             DEFAULT_CHAT_TEMPLATE_KWARGS=()
           fi
 
+          # JSON value carries spaces/quotes; capture single-quoted and pass as one
+          # arg so it survives to vLLM intact (same pattern as the kwargs above).
+          MM_PROCESSOR_KWARGS_RAW='${{ matrix.test-group.mm-processor-kwargs }}'
+          if [ -n "$MM_PROCESSOR_KWARGS_RAW" ]; then
+            MM_PROCESSOR_KWARGS=(--mm-processor-kwargs "$MM_PROCESSOR_KWARGS_RAW")
+          else
+            MM_PROCESSOR_KWARGS=()
+          fi
+
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
             export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
@@ -607,6 +617,7 @@ jobs:
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
+          VLLM_SERVER_ARGS+=("${MM_PROCESSOR_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
