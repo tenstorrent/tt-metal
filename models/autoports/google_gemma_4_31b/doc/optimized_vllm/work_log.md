@@ -190,6 +190,8 @@ are recorded below; no push was performed.
 
 ## Local commits
 
-- Nested vLLM plugin: `44b7853d448f3f8c5db7ed068a4f82ebfcd1065d`
-- Main tt-metal implementation and Stage 10 evidence: recorded by the local
-  checkpoint commit containing this file.
+- Nested `vllm/` repository, branch `dev`:
+  `44b7853d448f3f8c5db7ed068a4f82ebfcd1065d`
+- Main tt-metal repository, branch
+  `odjuricic/agentic-research/graph-rewrite-skill`:
+  `1db88f6af66105647814fc4bf3bd9bd95432a4ac`
