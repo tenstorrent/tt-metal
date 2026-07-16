@@ -86,6 +86,7 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         UNIT_TESTS_API_SOURCES
+        emule/death_test_env.cpp
         emule/test_alignment_writes.cpp
         emule/test_cb_leak.cpp
         emule/test_cb_pages.cpp

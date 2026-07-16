@@ -99,8 +99,26 @@ set_target_properties(
 
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_api PRIVATE -rdynamic)
-    # emule ASAN sanitizer test wiring (unit_tests_fiber_asan + the threadsafe
-    # death-test env for unit_tests_api). Kept in the emule/ subdir alongside the
-    # emule test sources.
-    add_subdirectory(emule)
+
+    # Per-fiber ASAN sanitizer-state isolation test. Its own binary because it
+    # includes the emule kernel-side context header (jit_hw/internal/
+    # emule_thread_ctx.h) directly, which isn't on the shared api test lib's
+    # include path and shouldn't be dragged into its unity build / PCH.
+    add_executable(unit_tests_fiber_asan emule/test_fiber_sanitizer_isolation.cpp)
+    target_include_directories(
+        unit_tests_fiber_asan
+        BEFORE
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+            ${TT_EMULE_PATH}/include
+    )
+    target_link_libraries(unit_tests_fiber_asan PRIVATE test_metal_common_libs)
+    target_link_options(unit_tests_fiber_asan PRIVATE -rdynamic)
+    set_target_properties(
+        unit_tests_fiber_asan
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal
+    )
 endif()
