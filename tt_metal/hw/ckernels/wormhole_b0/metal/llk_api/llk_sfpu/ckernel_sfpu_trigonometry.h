@@ -549,16 +549,16 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     // Minimax approximation for asin(reduced) on [0, SWITCHOVER].
     sfpi::vFloat square = reduced * reduced;
     sfpi::vFloat polynomial = 0x1.9e0000p-5f;
-    sfpi::vFloat coefficient = 0x1.365f44p-6f;
+    sfpi::vFloat coefficient = 0x1.364p-6f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    coefficient = 0x1.7dbc50p-5f;
+    coefficient = 0x1.7dcp-5f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    coefficient = 0x1.329f7cp-4f;
+    coefficient = 0x1.329a74p-4f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    coefficient = 0x1.5556dcp-3f;
+    coefficient = 0x1.55578cp-3f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     sfpi::vFloat neg_two = -2.0f;
