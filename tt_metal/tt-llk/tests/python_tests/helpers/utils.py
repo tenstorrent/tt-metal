@@ -11,7 +11,13 @@ import numpy as np
 import torch
 from filelock import FileLock
 
-from .format_config import MX_FP_SPECS, MX_INT_SPECS, DataFormat, FormatConfig
+from .format_config import (
+    MX_FORMAT_BLOCK_SIZE,
+    MX_FP_SPECS,
+    MX_INT_SPECS,
+    DataFormat,
+    FormatConfig,
+)
 from .llk_params import format_dict
 from .logger import logger
 from .tile_constants import (
@@ -365,7 +371,6 @@ def _mxint_block_aware_compare(
     in lower precision, so a near-zero result can land one block-lattice step
     away. The compare bounds that residual; it does not model HW exactly.
     """
-    BLOCK = 32
 
     g_flat = golden.float().flatten()
     r_flat = result.float().flatten()
@@ -376,13 +381,13 @@ def _mxint_block_aware_compare(
 
     # Batch over 32-element blocks (zero-pad a partial tail block; padded zeros
     # never raise a block's amax, so the real elements compare identically).
-    num_blocks = (n + BLOCK - 1) // BLOCK
-    pad = num_blocks * BLOCK - n
+    num_blocks = (n + MX_FORMAT_BLOCK_SIZE - 1) // MX_FORMAT_BLOCK_SIZE
+    pad = num_blocks * MX_FORMAT_BLOCK_SIZE - n
     if pad:
         g_flat = torch.cat([g_flat, g_flat.new_zeros(pad)])
         r_flat = torch.cat([r_flat, r_flat.new_zeros(pad)])
-    g_blk = g_flat.reshape(num_blocks, BLOCK)
-    r_blk = r_flat.reshape(num_blocks, BLOCK)
+    g_blk = g_flat.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    r_blk = r_flat.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
 
     both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
     diff = (g_blk - r_blk).abs()
@@ -452,20 +457,19 @@ def _mxfp_block_aware_compare(
     values disagree by up to ~1 representable step. The compare is not modeling
     HW exactly; it is bounding that residual.
     """
-    BLOCK = 32
     g = golden.float().flatten()
     r = result.float().flatten()
     n = g.numel()
     if n == 0:
         return torch.ones(0, dtype=torch.bool)
 
-    num_blocks = (n + BLOCK - 1) // BLOCK
-    pad = num_blocks * BLOCK - n
+    num_blocks = (n + MX_FORMAT_BLOCK_SIZE - 1) // MX_FORMAT_BLOCK_SIZE
+    pad = num_blocks * MX_FORMAT_BLOCK_SIZE - n
     if pad:
         g = torch.cat([g, g.new_zeros(pad)])
         r = torch.cat([r, r.new_zeros(pad)])
-    g_blk = g.reshape(num_blocks, BLOCK)
-    r_blk = r.reshape(num_blocks, BLOCK)
+    g_blk = g.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    r_blk = r.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
 
     both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
 

@@ -9,8 +9,8 @@ import torch
 from helpers.format_config import (
     MX_FORMAT_BLOCK_SIZE,
     MX_FP_SPECS,
-    MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
-    MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
+    MXFP_SRCS_SLICE_32B_PACKED_BYTE_LEN,
+    MXFP_SRCS_SLICE_PACKED_BYTE_LEN,
     DataFormat,
 )
 
@@ -327,10 +327,10 @@ def _unpack_mxfp8_srcs(packed_bytes, fp8_dtype, dest_acc: bool = False):
       - 32-bit (dest_acc=True):  4×16 =  64 elements/slice,  80 bytes
     """
     if dest_acc:
-        slice_len = MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
+        slice_len = MXFP_SRCS_SLICE_32B_PACKED_BYTE_LEN
         slice_row_dim = SRCS_SLICE_32B_ROW_DIM
     else:
-        slice_len = MXFP8_SRCS_SLICE_PACKED_BYTE_LEN
+        slice_len = MXFP_SRCS_SLICE_PACKED_BYTE_LEN
         slice_row_dim = SRCS_SLICE_ROW_DIM
 
     num_bytes = len(packed_bytes)
@@ -539,10 +539,10 @@ def _unpack_mxfp6(packed_bytes, *, data_format, num_faces=4, face_r_dim=MAX_FACE
 def _unpack_mxfp6_srcs(packed_bytes, *, data_format, dest_acc: bool = False):
     """Unpack sequential SrcS slices for MXFP6 (mirrors _unpack_mxfp8_srcs)."""
     if dest_acc:
-        slice_len = MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN
+        slice_len = MXFP_SRCS_SLICE_32B_PACKED_BYTE_LEN
         slice_row_dim = SRCS_SLICE_32B_ROW_DIM
     else:
-        slice_len = MXFP8_SRCS_SLICE_PACKED_BYTE_LEN
+        slice_len = MXFP_SRCS_SLICE_PACKED_BYTE_LEN
         slice_row_dim = SRCS_SLICE_ROW_DIM
 
     num_bytes = len(packed_bytes)
