@@ -3,46 +3,21 @@
 
 """KV chunk address table builder for the MiniMax-M3 GQA prefill cache.
 
-This is the MODEL-specific half of migration bring-up: describe the on-device KV layout as a
-``KvChunkAddressTable`` (protobuf) so the migration worker can copy the right chunks. ``TtPrefillRuntime``
-calls this via ``runtime.build_kv_chunk_table(kv_cache, path)``; the runner then publishes the serialized
-table to the migration worker over the generic handshake in
-``models.demos.common.prefill.runners.migration`` (the runner owns the comms).
+Describes the on-device KV layout as a ``KvChunkAddressTable`` so the migration worker can copy the right
+chunks. ``TtPrefillRuntime.build_kv_chunk_table`` calls this; the runner publishes the serialized table.
 
-Why M3 does NOT use the single-config ``serialize_kv_chunk_table`` helper
-------------------------------------------------------------------------
-DeepSeek-MLA has ONE cache tensor (the merged ``kvpe``) that is REPLICATED across the TP (column)
-axis, so a single-config table with one device-group-per-row (columns = replicas) is enough.
+The worker treats a chunk's device group as REPLICAS (reads one member, writes the same bytes to all
+destinations). M3's ``k`` / ``v`` are TP-head-sharded — column ``c`` holds a different head, not a replica —
+so each (tensor, head) needs its OWN config with a single-member device group; ``index_k`` is TP-replicated
+(like DeepSeek's kvpe) and uses a full-row replica group. Hence a multi-config table:
 
-M3 is different in one decisive way: the migration worker (``dcn_sender_backend.cpp``) is
-*replica-broadcast* — it reads a chunk from ``device_group.fabric_node_ids[0]`` and fans the identical
-bytes to every destination-group member. That is correct only when a group's members hold identical
-data. M3 has THREE tensors with two sharding modes:
+    config 0..N-1   -> k head 0..N-1   (single-member group: the head's column, per SP row)
+    config N..2N-1  -> v head 0..N-1   (single-member group)
+    config 2N       -> index_k         (replica group: all TP columns of the SP row)
 
-  * ``k`` / ``v`` — GQA K/V, TP-HEAD-sharded: column ``c`` holds a DIFFERENT head, so columns are NOT
-    replicas. Putting them in one multi-member group would make the worker broadcast head 0 to every
-    column and silently drop heads 1..N-1.
-  * ``index_k`` — the MSA indexer key, REPLICATED across the TP columns (like DeepSeek's kvpe).
-
-The worker's only free addressing axis (besides layer/position/slot) is ``config_id``, and it already
-iterates every config per layer (src config i -> dst config i, positionally). So the correct encoding
-is ONE CONFIG PER (tensor, head-shard):
-
-    config 0..N-1   -> k head 0..N-1   (single-member device group = the head's column, per SP row)
-    config N..2N-1  -> v head 0..N-1   (single-member device group)
-    config 2N       -> index_k         (replica device group = all TP columns of the SP row)
-
-With single-member K/V groups the broadcast is a no-op (n==1), so the worker needs NO change; index_k
-stays a genuine replica group, which the worker handles correctly. This is why we build the multi-config
-table directly here rather than through the single-config helper.
-
-Everything else — the per-chip DRAM addressing (32-token blocks round-robin across the 8 DRAM banks),
-the block-cyclic position mapping, and the user-major ``slot*num_layers+layer`` batch fold — is IDENTICAL
-to DeepSeek's ``create_kv_chunk_address_table_kimi`` (same ND-shard substrate), just repeated per config
-with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and the correct column set.
-
-Serialization uses ``ttnn.experimental.disaggregation.export_to_protobuf_file`` (no separate _migration
-extension needed). Per-layer LayerAck + scheduler-driven migration are NOT here (runner / scheduler side).
+The per-chip DRAM addressing (32-token blocks round-robin across the DRAM banks, block-cyclic positions,
+user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_address_table_kimi``, just
+repeated per config with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and column set.
 """
 
 import socket
@@ -50,7 +25,7 @@ import socket
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import BH_NUM_DRAM_BANKS, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+from models.demos.minimax_m3.tt.attention.kv_cache import BH_NUM_DRAM_BANKS, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
 # bf8_b / bf16 TILE byte sizes (32x32 tile). bf8_b = 1024 mantissa + 64 exponent bytes; bf16 = 2048.
 _TILE_BYTES = {ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}

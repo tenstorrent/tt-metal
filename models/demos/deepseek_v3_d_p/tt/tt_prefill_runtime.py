@@ -333,10 +333,10 @@ class TtPrefillRuntime:
     def read_slot_kv(self, kv_cache: ttnn.Tensor, slot: int):
         """Pairwise-migration primitive (bring-up only): the slot's raw stored kvpe cache block for a
         dst==src compare — a single host tensor ``[num_layers, 1, seq_cache, kvpe]`` (one TP replica). No
-        un-rotation: both migration endpoints carry the same block-cyclic layout, so a raw compare is
-        rotation-invariant. The common validator (common/prefill/runners/validation.py) compares src vs
-        dst element-wise. DRAM_MEMORY_CONFIG on the slice is REQUIRED — kvpe_cache is ND-sharded
-        ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host read-back."""
+        un-rotation: both migration endpoints carry the same block-cyclic layout, so a raw src-vs-dst
+        compare is rotation-invariant. DRAM_MEMORY_CONFIG on the slice is REQUIRED — kvpe_cache is
+        ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
+        read-back."""
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
         s = list(kv_cache.shape)

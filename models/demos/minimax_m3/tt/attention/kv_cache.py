@@ -7,7 +7,12 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, get_num_dram_banks
+
+# DRAM ND-shard geometry for the packed prefill KV cache — M3-local (decoupled from the DeepSeek substrate
+# so they can diverge). The sequence is tiled into NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token blocks that
+# round-robin across BH_NUM_DRAM_BANKS DRAM banks. The address-table builder must match both values.
+NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
+BH_NUM_DRAM_BANKS = 8
 
 
 @dataclass
@@ -70,8 +75,7 @@ def allocate_kv_caches(
     seq_local = max_seq_len // sp
 
     core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0))
-        for bank_id in range(get_num_dram_banks(mesh_device))
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
     ]
     nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
