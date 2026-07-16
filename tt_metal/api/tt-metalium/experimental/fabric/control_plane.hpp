@@ -222,7 +222,7 @@ public:
 
     // Reserve `num_reserved` routing planes in `routing_direction` from `fabric_node_id` so they are excluded
     // from the usable count. Not intended as a query API. Set semantics: the latest call wins, so repeated
-    // invocation during fabric re-init is idempotent.
+    // invocation during fabric re-init is idempotent (reserving 0 is a no-op).
     void reserve_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved);
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(

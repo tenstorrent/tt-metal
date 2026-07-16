@@ -413,6 +413,8 @@ class TtPrefillBlock(LightweightModule):
         return_kv_intermediates: bool = False,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
     ):
         """
@@ -452,11 +454,18 @@ class TtPrefillBlock(LightweightModule):
             actual_start=actual_start,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
+            indexer_indices=indexer_indices,
+            return_indexer_indices=return_indexer_indices,
             index_kv_cache=index_kv_cache,
         )
         kv_intermediates = None
-        if return_kv_intermediates:
+        mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
+        if return_kv_intermediates and return_indexer_indices:
+            mla_out, kv_intermediates, mla_indices = mla_out
+        elif return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
+        elif return_indexer_indices:
+            mla_out, mla_indices = mla_out
         ttnn.deallocate(attn_norm_out)
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
@@ -468,15 +477,19 @@ class TtPrefillBlock(LightweightModule):
         # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
         if on_layer_complete is not None:
             assert actual_end is not None, "actual_end required when on_layer_complete is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.mla.layer_num,
-                actual_end,
-                seq_len_local * self.mla.sp_factor,
-                self.mla.sp_axis,
-            )
+            # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
+            # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
+            # sparse.
+            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    kvpe_cache,
+                    cache_user_id,
+                    cache_layer_idx,
+                    self.mla.layer_num,
+                    actual_end,
+                    seq_len_local * self.mla.sp_factor,
+                    self.mla.sp_axis,
+                )
             ttnn.synchronize_device(self.mesh_device)
             on_layer_complete(self.mla.layer_idx)
 
@@ -484,6 +497,8 @@ class TtPrefillBlock(LightweightModule):
             # KV cache filled (by MLA), migration callback fired. The block
             # output is unused (no FFN, no further layers). Return (None, None)
             # so the transformer can short-circuit.
+            if return_indexer_indices:
+                return None, None, None
             return None, None
 
         x = ttnn.add(x, mla_out)
@@ -513,9 +528,13 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(ffn_out)
 
         if return_kv_intermediates:
+            if return_indexer_indices:
+                return x, kv_intermediates, mla_indices
             return x, kv_intermediates
 
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+        if return_indexer_indices:
+            return x, kv_cache, mla_indices
         return x, kv_cache
 
     def _moe_path(

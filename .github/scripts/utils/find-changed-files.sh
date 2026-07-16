@@ -32,11 +32,12 @@ LLK_TESTS_CHANGED=false
 LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
+WORKFLOWS_CHANGED=false
 
 
 while IFS= read -r FILE; do
     case "$FILE" in
-        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|CMakePresets.json)
+        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
             CMAKE_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -96,7 +97,7 @@ while IFS= read -r FILE; do
         # LLK engine submodule's pytest suite. Must come before the generic
         # tests/tt_metal/**/*.{h,hpp,c,cpp,py} catch-all so the narrower flag is set; we
         # also raise the broader TTMETALIUM_TESTS_CHANGED here so existing test gates
-        # (e.g. metalium-smoke-tests) keep firing for these changes.
+        # (e.g. runtime-smoke-tests) keep firing for these changes.
         tests/tt_metal/tt_metal/llk/**)
             LLK_UNIT_TESTS_CHANGED=true
             TTMETALIUM_TESTS_CHANGED=true
@@ -145,6 +146,13 @@ while IFS= read -r FILE; do
             BUILD_WORKFLOWS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
+        # Any other workflow change runs the standard PR gate. More specific workflow
+        # patterns above (e.g. llk-*.yaml, build-artifact.yaml) match first and keep
+        # their targeted behavior; this catch-all ensures a workflow-only PR never
+        # silently skips CI. Fanned out to the full gate below (same as submodule).
+        .github/workflows/*.yaml|.github/workflows/*.yml)
+            WORKFLOWS_CHANGED=true
+            ;;
     esac
 done <<< "$CHANGED_FILES"
 
@@ -156,8 +164,10 @@ for submodule_path in $SUBMODULE_PATHS; do
         break
     fi
 done
-if [[ "$SUBMODULE_CHANGED" = true ]]; then
-    # Treat any submodule change as a change to everything; not going to manage dependency trees for this
+if [[ "$SUBMODULE_CHANGED" = true || "$WORKFLOWS_CHANGED" = true ]]; then
+    # Treat any submodule or workflow change as a change to everything; not going to manage dependency trees for this.
+    # For workflows this guarantees a workflow-only PR runs the full standard gate (build + smoke + examples + code-analysis)
+    # rather than silently skipping, matching every other PR.
     TTMETALIUM_CHANGED=true
     TTNN_CHANGED=true
     TTMETALIUM_TESTS_CHANGED=true

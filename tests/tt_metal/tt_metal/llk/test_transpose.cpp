@@ -199,6 +199,13 @@ void run_single_core_transpose(
         .data_format_metadata = test_config.data_format,
     };
 
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    }
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
@@ -208,15 +215,16 @@ void run_single_core_transpose(
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"N", "Ht", "Wt", "HtWt"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = reader_hw_config,
     };
 
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -226,13 +234,7 @@ void run_single_core_transpose(
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen1_config =
-                    experimental::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = writer_hw_config,
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
@@ -248,6 +250,25 @@ void run_single_core_transpose(
     // DST_ACCUM_MODE as the transpose-dest EN_32BIT_DEST template arg, so the two must agree.
     const bool fp32_dest_acc_en =
         (test_config.data_format == tt::DataFormat::Float32 || test_config.data_format == tt::DataFormat::Int32);
+    experimental::ComputeHardwareConfig compute_hw_config;
+    experimental::ComputeUnpackToDestModes unpack_modes{};
+    if (fp32_dest_acc_en) {
+        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+    }
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .unpack_to_dest_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_modes,
+        };
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = test_config.dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_modes,
+        };
+    }
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel_path,
@@ -267,17 +288,7 @@ void run_single_core_transpose(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_en = fp32_dest_acc_en,
-                .unpack_to_dest_mode =
-                    fp32_dest_acc_en
-                        ? experimental::ComputeHardwareConfig::
-                              UnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
@@ -310,11 +321,12 @@ void run_single_core_transpose(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", num_tensor_tiles}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tensor_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

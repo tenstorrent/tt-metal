@@ -79,6 +79,26 @@ class PrefillRunParams:
         return self.mesh_shape[self.tp_axis]
 
 
+class KvCaches(tuple):
+    """The device KV cache(s) a prefill model owns, returned by ``allocate_kv_cache`` as an ORDERED
+    tuple of tensors. Callers index positionally:
+
+      * ``kv_caches[0]`` — ALWAYS the primary KV cache (the MLA KVPE cache for the DeepSeek-V3 family).
+      * ``kv_caches[1:]`` — any SECONDARY caches the model also owns. A sparse-attention (DSA) model
+        like GLM-5.1 puts its lightning-indexer block-cyclic key cache at index 1, so the engine can
+        build a single MERGED migration table over both (config 0 = KVPE, config 1 = index). A dense
+        model returns just ``KvCaches([kvpe])`` (length 1).
+
+    A tuple rather than a bare tensor plus optional allocate hooks: every model implements the same
+    single ``allocate_kv_cache`` and just returns as many caches as it owns — a model that grows a
+    third cache appends it at index 2, no new adapter method or engine argument. The engine allocates
+    these once, OWNS their lifetime — it passes them into every runtime call that touches them
+    (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check) and frees them with the mesh
+    at shutdown."""
+
+    __slots__ = ()
+
+
 class PrefillModelAdapter(ABC):
     """Per-model plumbing the prefill engine needs. One instance per model.
 
@@ -122,21 +142,28 @@ class PrefillModelAdapter(ABC):
         the cache-populate run wrote. None only if the cache is explicitly empty."""
 
     @abstractmethod
-    def allocate_kv_cache(
-        self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams
-    ) -> "ttnn.Tensor":
-        """Allocate (and zero) this model's KV cache on device and return it. This is
-        the single place a model's KV layout is defined. The engine OWNS the returned
-        cache's lifetime: it allocates it once, passes it into every runtime call that
-        touches it (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check),
-        and frees it with the mesh at shutdown. ``params`` carries the per-rank knobs
-        (max_seq_len, mesh_shape, this rank's num_layers, num_users, …)."""
+    def allocate_kv_cache(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> KvCaches:
+        """Allocate (and zero) this model's KV cache(s) on device and return them as a ``KvCaches``
+        (ordered tuple): index 0 the primary KV cache, then any secondary caches the model owns. A
+        dense model returns ``KvCaches([kvpe])``; a sparse-attention (DSA) model appends its index
+        cache (``KvCaches([kvpe, index])``). This is the single place a model's KV layout is defined.
+        The engine OWNS the returned caches' lifetime — see ``KvCaches``. ``params`` carries the
+        per-rank knobs (max_seq_len, mesh_shape, this rank's num_layers, num_users, …)."""
+
+    def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
+        """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
+        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
+        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
+        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
+        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
+        onto these and rejects any split whose rank starts fall off them."""
+        return None
 
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return a runtime handle. The runtime
-        is stateless w.r.t. the KV cache — it receives the engine-owned cache as an
-        argument on each call. The engine then calls ``.compile(kv_cache)`` and drives
+        is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
+        argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
         it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
         kv_cache_pcc_check / set_layer_ack_channel). ``params`` carries the per-rank knobs."""
 
@@ -215,11 +242,12 @@ DEFAULT_MODEL = "deepseek_v3_d_p"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
-    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
-    # Sparse-attention (DSA) variants — test-only today (config + sparse-MLA reference parity;
-    # no prefill serving runtime wired). See adapters/sparse_mla.py.
+    # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
-    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:GLM51Adapter",
+    # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
+    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
+    "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
+    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

@@ -1235,12 +1235,10 @@ inline void init_reduce_max_min_int32() {
  * operations)
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, bool clear_high_bits>
-inline void init_reduce_max_min(std::uint32_t num_cols) {
+inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
 #ifdef DISABLE_SFPLOADMACRO
-    if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP && !clear_high_bits) {
-        init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
-        return;
-    }
+    init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
+    return;
 #endif
 
     // Initialize SFPU config and set swap direction before defining LOADMACRO sequences
@@ -1801,7 +1799,7 @@ template <
     DataFormat format,
     bool is_fp32_dest_acc_en,
     DataFormat output_format = format>
-inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block_rt_dim = 1) {
+inline void calculate_reduce([[maybe_unused]] std::uint32_t block_ct_dim = 1, [[maybe_unused]] std::uint32_t block_rt_dim = 1) {
     // Row reduction supports SUM/MAX/MIN for every supported format; AVG is row-supported only for
     // float formats, because the row divisor is the runtime column count and only the float
     // reciprocal-multiply divides exactly (integer AVG stays column-only with its fixed /32 divisor).
@@ -1854,6 +1852,17 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
                 "Row MAX/MIN reduction supports FP32, FP16B, and INT32 (sign-magnitude) instruction modes");
             perform_reduce_row_max_min<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>(
                 block_ct_dim, block_rt_dim);
+#ifdef DISABLE_SFPLOADMACRO
+        } else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
+            // Int32 column reduce already has a manual load/cast/swap path. Use it when LOADMACRO is
+            // disabled, since the generic column MAX/MIN path records SFPLOADMACRO instructions.
+            calculate_reduce_max_min_int32<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>();
+        } else {
+            // LOADMACRO-disabled builds use the manual load/swap column reducer. With
+            // clear_high_bits=false it is just the unfused equivalent of the LOADMACRO
+            // compare-and-swap pipeline.
+            calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
+#else
         } else if constexpr (clear_high_bits) {
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
             calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
@@ -1864,6 +1873,7 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             calculate_reduce_max_min_int32<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>();
         } else {
             calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>(block_rt_dim);
+#endif
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
         calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>(

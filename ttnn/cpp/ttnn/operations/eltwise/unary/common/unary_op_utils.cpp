@@ -177,10 +177,35 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RELU_MAX:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::UINT16) {
+                const auto as_int = static_cast<std::int32_t>(param0_raw);
+                TT_FATAL(
+                    as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                    "RELU_MAX upper_limit {} out of range for UInt16",
+                    as_int);
+                return {
+                    "relu_max_tile_init();",
+                    fmt::format("relu_max_tile_uint16({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                if (input_dtype == DataType::UINT8) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint8_t>::max(),
+                        "RELU_MAX upper_limit {} out of range for UInt8",
+                        as_int);
+                }
+                return {
+                    "relu_max_tile_init();",
+                    fmt::format("relu_max_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             if (input_dtype == DataType::INT32) {
                 return {
                     "relu_max_tile_init();",
-                    fmt::format("relu_max_tile_int32({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                    fmt::format(
+                        "relu_max_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             return {
                 "relu_max_tile_init();",
@@ -189,6 +214,30 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RELU_MIN:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::UINT16) {
+                const auto as_int = static_cast<std::int32_t>(param0_raw);
+                TT_FATAL(
+                    as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                    "RELU_MIN lower_limit {} out of range for UInt16",
+                    as_int);
+                return {
+                    "relu_min_tile_init();",
+                    fmt::format("relu_min_tile_uint16({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                if (input_dtype == DataType::UINT8) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint8_t>::max(),
+                        "RELU_MIN lower_limit {} out of range for UInt8",
+                        as_int);
+                }
+                return {
+                    "relu_min_tile_init();",
+                    fmt::format("relu_min_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             if (input_dtype == DataType::INT32) {
                 return {"relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
@@ -207,6 +256,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 param0);
             return {"power_iterative_tile_init();", fmt::format("power_iterative_tile({}, {});", idst, param0_raw)};
         case UnaryOpType::LEAKY_RELU:
+            // For unsigned inputs, leaky_relu is the identity. Emit an empty op so the tile is just copied.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
+                return {};
+            }
             return {
                 "leaky_relu_tile_init();",
                 fmt::format("leaky_relu_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
@@ -831,7 +884,19 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             return {"rounding_op_tile_init();", fmt::format("frac_tile({});", idst)};
-        case UnaryOpType::RELU6: return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
+        case UnaryOpType::RELU6:
+            if (input_dtype == DataType::UINT16) {
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint16({}, 6u);", idst)};
+            }
+            // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
+            // U32-layout kernel clamps it correctly with the same unsigned compare logic.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint32({}, 6u);", idst)};
+            }
+            if (input_dtype == DataType::INT32) {
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_int32({}, 6u);", idst)};
+            }
+            return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
         case UnaryOpType::NEG:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");

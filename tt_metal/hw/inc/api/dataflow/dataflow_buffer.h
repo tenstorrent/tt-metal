@@ -81,6 +81,62 @@ public:
     uint32_t get_stride_size() const;
     // Returns the total number of entries that can be stored in the DFB
     uint32_t get_total_num_entries() const;
+    // Total L1 backing for the global ring (num_entries * entry_size), in bytes.
+    uint32_t get_total_size_bytes() const;
+
+    // --- Quasar (tt-2xx) depth / L1 extent queries ---------------------------------
+    //
+    // A logical DFB on Quasar may use multiple hardware tile counters (TCs) on one RISC
+    // (round-robin via tc_idx over tc_slots[0..num_tcs_to_rr-1]). Each TC has its own
+    // base_addr and ring extent (limit on DM; ring_size on TRISC). These getters expose
+    // three measurement scopes; see also DFB L1 layout diagrams (STRIDED vs ALL).
+    //
+    //  (1) get_total_*     — entire DFB: num_entries credits, num_entries * entry_size L1.
+    //
+    //  (2) get_local_*     — active TC only (tc_slots[tc_idx]):
+    //        get_local_num_entries()  HW credit depth (buf_capacity) for this TC.
+    //        get_local_size_bytes()   linear address interval [base, limit) / ring_size
+    //                                 for this TC alone.
+    //
+    //      local_size_bytes is ONE contiguous L1 interval, but the entries *owned* by this
+    //      TC are often NOT adjacent inside it — tile counters can have discontiguous L1:
+    //
+    //      STRIDED (e.g. 4Sx1S: stride_in_entries = num_producers):
+    //        Global ring is interleaved: physical slot (e, p) = e*P + p.
+    //        Each TC walks its column with stride_size (= entry_size * P):
+    //
+    //          L1:  [P0@e0][P1@e0][P2@e0][P3@e0][P0@e1][P1@e1]...
+    //          TC0:  ^              ^              ^         (every P-th entry)
+    //
+    //        TC0's [base0, limit0) spans the full linear ring byte length, but its owned
+    //        tiles sit P-1 foreign slots apart — discontiguous within that interval.
+    //
+    //      ALL (e.g. 4Sx1A: stride_in_entries = 1):
+    //        Each TC owns a contiguous block of capacity entries; bases step by
+    //        capacity * entry_size:
+    //
+    //          L1:  [ TC0: cap entries ][ TC1: cap entries ][ TC2: ... ][ TC3: ... ]
+    //
+    //        Here each TC's owned tiles ARE contiguous within its local interval.
+    //
+    //  (3) get_ring_span_* — bounding box across ALL TC slots on this RISC:
+    //        Contiguous L1 from tc_slots[0].base through the end of the last TC ring
+    //        (limit[last] - base[0] on DM; base[last] + ring_size[last] - base[0] on TRISC).
+    //        get_ring_span_num_entries() = ring_span_bytes / entry_size (address slots in
+    //        that bounding interval, not per-TC owned entry count).
+    //
+    //        ring_span is the minimal contiguous L1 interval covering every TC window.
+    //        In STRIDED layouts TC bases are staggered by entry_size with overlapping
+    //        windows; in ALL layouts TC blocks are disjoint and packed. Neither layout
+    //        guarantees that every byte in ring_span belongs to one TC's owned entries
+    //        (STRIDED: foreign interleaved slots; ALL: only the active TC's block is
+    //        "yours" at a given time during round-robin).
+    //
+    // On tt-1xx (WH/BH) there is no per-TC view; all four getters alias get_total_*.
+    uint32_t get_local_num_entries() const;
+    uint32_t get_local_size_bytes() const;
+    uint32_t get_ring_span_bytes() const;
+    uint32_t get_ring_span_num_entries() const;
 
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }
@@ -212,9 +268,16 @@ public:
 #endif // DFB_DESCRIPTORS_DEFINED
 
 #ifdef COMPILE_FOR_TRISC
+// This can be enabled on Quasar once GH issue #49608 is resolved.
 #ifndef ARCH_QUASAR
     uint32_t get_tile_address(uint32_t tile_index);
-    uint32_t read_tile_value(uint32_t tile_index, uint32_t element_offset);
+
+    // Reads one scalar element from a tile at specified tile_index. element_offset is an index into the tile as a T[]
+    // array from its L1 base address (not a byte offset); each step is sizeof(T) bytes
+    // (default T=uint32_t → 4-byte words).
+    // Values are mailbox-broadcast to all TRISC threads as a zero-extended uint32_t; MATH/PACK cast back to T.
+    template <typename T = uint32_t>
+    T read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
 #endif
 
@@ -265,8 +328,18 @@ private:
         // TODO: Unregister with the debugger
     }
 
-    DFBInterface& local_dfb_interface_;
+    constexpr uint32_t address_units_to_bytes(uint32_t units) const {
+        return units << cb_addr_shift;
+    }
+
     uint16_t logical_dfb_id_;
+
+    // MATH TRISC does not own fifo state (see trisc firmware: cb_interface / g_dfb_interface
+    // exist only on UNPACK/PACK). Compute kernels still construct DataflowBuffer on all TRISC
+    // threads; MATH carries logical_dfb_id_ only and no-ops sync / runtime-interface accessors.
+#if !(defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH))
+    DFBInterface& local_dfb_interface_;
+#endif
 
 #ifdef ARCH_QUASAR
     // Metadata for implicit sync

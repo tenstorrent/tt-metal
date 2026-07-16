@@ -581,12 +581,23 @@ public:
                     apply_dynamic_runtime_args_if_declared(
                         program, attrs, tensor_args, tensor_return_value, coordinate_range);
                 } else {
-                    // ProgramDescriptor variant — simple per-coord factory.  Fast-path when the factory
-                    // declared rt-arg buffer bindings via emplace_runtime_args(), OR the op declares
-                    // get_dynamic_runtime_args() to re-apply its per-dispatch args — in which case the
-                    // framework also patches the op's `.buffer = ...` CB bindings (covers CB-bound sharded
-                    // ops).  With neither, a `.buffer` CB mixed with raw uint32 rt-args could go stale, so
-                    // fall through to the slow-path rebuild instead. (#48928)
+                    // ProgramDescriptor variant — simple per-coord factory.  Fast-path when the
+                    // factory declared rt-arg buffer bindings via emplace_runtime_args(), OR the op
+                    // declares get_dynamic_runtime_args() to re-apply its per-dispatch args — in which
+                    // case the framework also patches the op's `.buffer = ...` CB bindings (covers
+                    // CB-bound sharded ops).  With neither, a `.buffer` CB mixed with raw uint32
+                    // rt-args could go stale, so fall through to the slow-path rebuild instead.
+                    //
+                    // The get_dynamic_runtime_args() opt-in additionally requires that
+                    // resolve_bindings actually produced bindings (!resolved_bindings.empty()):
+                    // get_dynamic_runtime_args() only re-applies hash-excluded SCALAR runtime args
+                    // (seed/step/lr), so buffer addresses still ride on the resolved bindings.
+                    // resolve_bindings returns an EMPTY ResolvedBindings when it bails on ambiguous
+                    // buffer aliasing — notably moreh_adamw, called in-place so its optional
+                    // param_out == param_in etc. appear twice within the input region.  Fast-pathing
+                    // such a bailed op would apply_resolved_bindings() nothing and leave the cached
+                    // program pointing at stale first-miss addresses; route it to the slow-path
+                    // rebuild instead, which re-derives all addresses AND scalars. (#48928)
                     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
                     if constexpr (requires {
                                       DeviceOperation::get_dynamic_runtime_args(
@@ -601,7 +612,8 @@ public:
                             tensor_return_value,
                             std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
                     }
-                    if (!sv.resolved_bindings.rt_args.empty() || !dynamic_args.empty()) {
+                    if (!sv.resolved_bindings.rt_args.empty() ||
+                        (!dynamic_args.empty() && !sv.resolved_bindings.empty())) {
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);

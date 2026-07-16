@@ -47,20 +47,35 @@ struct UnifiedRoutedExpertFfnParams {
     // keeps DeepSeek V3 routed-expert dims inside Blackhole L1.
     uint32_t chunk_M_tiles = 64;
 
+    // This expert's M dimension in tiles — the row count the matmul grid,
+    // chunk loop, and CB sizes are built for. Decoupled from x's shape so x
+    // may be a shared buffer larger than one expert's region: the reader/writer
+    // index into it at the region offset while the op still sizes its work to a
+    // single expert. When x IS the per-expert tensor this equals x_padded[-2]/TILE.
+    uint32_t m_tiles = 0;
+
     // Local expert id used to index `global_expert_idx_table` at runtime
     // (kernel reads global_id = idx_table[local_expert_id], then count =
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
-    // Activation variant (see RoutedExpertActivation). Default Silu = DeepSeek
-    // path, kernel unchanged. SwiGluOai drives the SWIGLU_OAI compile-time define
-    // in the compute kernel.
+    // When true, x is a shared buffer and the reader offsets its x reads by this
+    // expert's region start (expert_region_offsets[global_id]) — fusing what
+    // ttnn::extract did. Requires expert_region_offsets. False => x is per-expert.
+    bool read_x_at_offset = false;
+
+    // Per-expert FFN activation variant. Baked into the compute kernel as a
+    // compile-time define, so each variant caches as a distinct program — hence
+    // it is part of the program-cache key below.
     RoutedExpertActivation activation = RoutedExpertActivation::Silu;
 
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "activation");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, activation); }
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("chunk_M_tiles", "m_tiles", "local_expert_id", "read_x_at_offset", "activation");
+    auto attribute_values() const {
+        return std::forward_as_tuple(chunk_M_tiles, m_tiles, local_expert_id, read_x_at_offset, activation);
+    }
 };
 
 // Tensors fed into the op.

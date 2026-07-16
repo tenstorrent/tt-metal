@@ -278,14 +278,6 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 }
 
 /**
- * @brief Enable Int8 math on the FPU.
- */
-inline void _llk_enable_int8_fpu_math_()
-{
-    enable_int8_fpu_math();
-}
-
-/**
  * @brief Mark SrcA and SrcB as data-valid without unpacking real data.
  *
  * Issues zero-source UNPACR NOPs that set the data-valid flag on both source registers, e.g. to

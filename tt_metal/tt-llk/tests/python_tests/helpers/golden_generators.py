@@ -289,18 +289,35 @@ def get_golden_generator(cls):
     return golden_registry[cls]
 
 
+def _dummy_zeros(**kwargs):
+    # Size the dummy tensor from the caller's tile-shape kwargs when they are
+    # all present (num_faces * face_r_dim * FACE_DIM per tile, times tile_cnt),
+    # so callers that strictly size-check the result (e.g. untilize_block on a
+    # 16x32 tiny tile) get a correctly-sized tensor. When any sizing kwarg is
+    # absent, fall back to the historical ELEMENTS_PER_TILE (1024) so existing
+    # callers are unaffected.
+    num_faces = kwargs.get("num_faces")
+    face_r_dim = kwargs.get("face_r_dim")
+    tile_cnt = kwargs.get("tile_cnt")
+    if num_faces is None or face_r_dim is None or tile_cnt is None:
+        size = ELEMENTS_PER_TILE
+    else:
+        size = tile_cnt * num_faces * face_r_dim * FACE_DIM
+    return torch.zeros(size, dtype=torch.bfloat16)
+
+
 class DummyGoldenGenerator:
     def __call__(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
+        return _dummy_zeros(**kwargs)
 
     def transpose_faces_multi_tile(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
+        return _dummy_zeros(**kwargs)
 
     def transpose_within_faces_multi_tile(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
+        return _dummy_zeros(**kwargs)
 
     def accumulate_l1(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
+        return _dummy_zeros(**kwargs)
 
 
 def dummy_golden_generator(cls):
@@ -2139,6 +2156,7 @@ class UnarySFPUGolden:
             MathOperation.Relu: self._relu,
             MathOperation.Rsqrt: self._rsqrt,
             MathOperation.Sin: self._sin,
+            MathOperation.Signbit: self._signbit,
             MathOperation.Sqrt: self._sqrt,
             MathOperation.Square: self._square,
             MathOperation.Tanh: self._tanh,
@@ -2154,6 +2172,11 @@ class UnarySFPUGolden:
             MathOperation.Rdiv: self._rdiv,
             MathOperation.Clamp: self._clamp,
             MathOperation.Hardtanh: self._hardtanh,
+            MathOperation.Tanhshrink: self._tanhshrink,
+            MathOperation.Floor: self._floor,
+            MathOperation.Ceil: self._ceil,
+            MathOperation.Trunc: self._trunc,
+            MathOperation.Frac: self._frac,
             MathOperation.Gelu: self._gelu,
             MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.Neg: self._neg,
@@ -2379,6 +2402,11 @@ class UnarySFPUGolden:
     def _not_equal_zero(self, x):
         return 1.0 if x != 0.0 else 0.0
 
+    def _signbit(self, x):
+        # Mirrors the kernel: logical-shift the fp32 bit pattern right by 31,
+        # i.e. return 1.0 iff the sign bit is set (negative, incl. -0.0).
+        return 1.0 if math.copysign(1.0, x) < 0.0 else 0.0
+
     def _less_than_zero(self, x):
         return 1.0 if x < 0.0 else 0.0
 
@@ -2427,6 +2455,23 @@ class UnarySFPUGolden:
 
     def _tanh(self, x):
         return math.tanh(x)
+
+    def _tanhshrink(self, x):
+        # tanhshrink(x) = x - tanh(x)
+        return x - math.tanh(x)
+
+    def _floor(self, x):
+        return math.floor(x) if math.isfinite(x) else x
+
+    def _ceil(self, x):
+        return math.ceil(x) if math.isfinite(x) else x
+
+    def _trunc(self, x):
+        return math.trunc(x) if math.isfinite(x) else x
+
+    def _frac(self, x):
+        # Fractional part with sign of x: frac(x) = x - trunc(x)
+        return (x - math.trunc(x)) if math.isfinite(x) else x
 
     def _square(self, x):
         if not math.isfinite(x * x):
@@ -3105,12 +3150,24 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         pass
 
     def _right_shift(self, t1, t2):
+        # The kernel defines shift amounts outside [0, 31] as producing 0 (see
+        # ckernel_sfpu_shift.h). torch.bitwise_right_shift is an *arithmetic* shift,
+        # so for a negative value an out-of-range shift would sign-extend to -1 rather
+        # than 0; guard here so the golden matches the hardware contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         return torch.bitwise_right_shift(t1, t2).item()
 
     def _left_shift(self, t1, t2):
+        # Shift amounts outside [0, 31] produce 0 to match the kernel contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         return torch.bitwise_left_shift(t1, t2).item()
 
     def _logical_right_shift(self, t1, t2):
+        # Shift amounts outside [0, 31] produce 0 to match the kernel contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         # Perform logical right shift by treating t1 as unsigned 32-bit
         t1_uint = t1.to(torch.int64) & 0xFFFFFFFF
         result = (t1_uint >> t2).to(torch.int32)
@@ -3418,11 +3475,16 @@ class ReduceGolden:
 
 @register_golden
 class ReduceBlockMaxRowGolden:
+    # Row-wise block max reduce. Works for both 32x32 (num_faces=4) and 16x32 (num_faces=2,
+    # one face-row) tiles: the reduce is per-row across the full block width and the caller
+    # passes block dims sized by the actual tile row/col dims. Column width per tile is 32 in
+    # both cases (only the row count shrinks for tiny tiles), so the reduce span is ct_dim * 32.
     def __call__(self, operand, ct_dim, data_format, dimensions):
         operand = operand.reshape(dimensions)
         output = torch.zeros(dimensions)
+        reduce_width = min(ct_dim * 32, dimensions[1])
         for i in range(dimensions[0]):
-            output[i, 0] = torch.max(operand[i, : ct_dim * 32])
+            output[i, 0] = torch.max(operand[i, :reduce_width])
 
         return output
 
@@ -3454,9 +3516,13 @@ class ReduceGapoolGolden(FidelityMasking):
         reduce_dim,
         math_fidelity=MathFidelity.LoFi,
         tile_cnt=1,
+        tile_shape=None,
         input_format=None,
         dest_acc: Optional[DestAccumulation] = None,
     ):
+        if tile_shape is None:
+            tile_shape = construct_tile_shape()
+
         # Quantize MX format inputs to match hardware behavior
         if input_format is not None and input_format.is_mx_format():
             operand1 = quantize_mx_tensor_chunked(operand1, input_format)
@@ -3488,6 +3554,7 @@ class ReduceGapoolGolden(FidelityMasking):
                     reduce_dim,
                     fidelity_iter_count,
                     tile,
+                    tile_shape,
                     fp32_acc=fp32_acc,
                 )
                 for tile in range(tile_cnt)
@@ -3511,33 +3578,55 @@ class ReduceGapoolGolden(FidelityMasking):
         reduce_dim,
         fidelity_iter_count,
         tile_idx,
+        tile_shape,
         fp32_acc=False,
     ):
         # Extract srcA tile and srcB face0 (only f0 unpacked for srcB)
-        tile_start = tile_idx * ELEMENTS_PER_TILE
-        src_a = to_tensor(
-            operand1[tile_start : tile_start + ELEMENTS_PER_TILE], data_format
-        )
-        src_b = to_tensor(operand2[:ELEMENTS_PER_FACE], data_format)
+        tile_size = tile_shape.total_tile_size()
+        face_r_dim = tile_shape.face_r_dim
+        face_c_dim = tile_shape.face_c_dim
+        num_faces = tile_shape.total_num_faces()
+        face_size = face_r_dim * face_c_dim
 
-        # Row reduce: transpose within each face of SrcA (models unpacker behavior)
+        tile_start = tile_idx * tile_size
+        src_a = to_tensor(operand1[tile_start : tile_start + tile_size], data_format)
+        src_b = to_tensor(operand2[:face_size], data_format)
+
+        # HW performs 16x16 matmul in FPU; pad rows beyond face_r_dim with zeros
+        # so the golden models the padded register state.
+        row_pad = face_c_dim - face_r_dim
+        a_padded = src_a.view(num_faces, face_r_dim, face_c_dim)
+        b_padded = src_b.view(1, face_r_dim, face_c_dim)
+        if row_pad > 0:
+            a_padded = torch.nn.functional.pad(a_padded, (0, 0, 0, row_pad))
+            b_padded = torch.nn.functional.pad(b_padded, (0, 0, 0, row_pad))
+
+        # Row reduce: transpose within each (padded) face of SrcA (models unpacker behavior)
         if reduce_dim == ReduceDimension.Row:
-            src_a = (
-                src_a.view(FACES_PER_TILE, FACE_DIM, FACE_DIM).transpose(1, 2).flatten()
-            )
+            a_padded = a_padded.transpose(1, 2).contiguous()
+
+        src_a_flat = a_padded.flatten()
+        src_b_flat = b_padded.flatten()
 
         # Compute gapool for each face across all fidelity iterations
         face_results = self._compute_gapool(
-            src_a, src_b, data_format, fidelity_iter_count, fp32_acc=fp32_acc
+            src_a_flat,
+            src_b_flat,
+            data_format,
+            fidelity_iter_count,
+            num_faces,
+            face_c_dim,
+            fp32_acc=fp32_acc,
         )
 
         # Combine results based on reduce dimension
         return self._accumulate_gapool_results(
             face_results,
-            src_b,
+            src_b_flat,
             data_format,
             reduce_dim,
             fidelity_iter_count,
+            tile_shape,
             fp32_acc=fp32_acc,
         )
 
@@ -3547,13 +3636,14 @@ class ReduceGapoolGolden(FidelityMasking):
         src_b,
         data_format,
         fidelity_iter_count,
-        num_faces=FACES_PER_TILE,
+        num_faces,
+        dim,
         fp32_acc=False,
     ):
-        """Compute D = srcB @ srcA for each face, accumulating across fidelity iterations."""
+        """Compute D = srcB @ srcA per face (dim x dim), accumulating across fidelity iterations."""
         acc_dtype = torch.float32 if fp32_acc else src_a.dtype
         face_results = torch.zeros(
-            num_faces, FACE_DIM * FACE_DIM, dtype=acc_dtype, device=src_a.device
+            num_faces, dim * dim, dtype=acc_dtype, device=src_a.device
         )
 
         for fidelity_iter in range(fidelity_iter_count + 1):
@@ -3561,8 +3651,8 @@ class ReduceGapoolGolden(FidelityMasking):
                 data_format, src_a, src_b, fidelity_iter
             )
 
-            a_faces = a_masked.view(num_faces, FACE_DIM, FACE_DIM)
-            b_face = b_masked.view(1, FACE_DIM, FACE_DIM)
+            a_faces = a_masked.view(num_faces, dim, dim)
+            b_face = b_masked.view(1, dim, dim)
             # When dest_acc=Yes HW dest is fp32; promote operands to fp32 so
             # the per-iter dot product is not rounded to bf16/fp16 before
             # accumulating. Operand precision was already set by fidelity
@@ -3583,39 +3673,54 @@ class ReduceGapoolGolden(FidelityMasking):
         data_format,
         reduce_dim,
         fidelity_iter_count,
+        tile_shape,
         fp32_acc=False,
     ):
         """Place pooled results in output tile based on reduce dimension."""
-        face_shape = (FACE_DIM, FACE_DIM)
-        f0, f1, f2, f3 = face_results
-        result = torch.zeros(ELEMENTS_PER_TILE, dtype=f0.dtype)
+        face_r_dim = tile_shape.face_r_dim
+        face_c_dim = tile_shape.face_c_dim
+        face_size = face_r_dim * face_c_dim
+        result = torch.zeros(tile_shape.total_tile_size(), dtype=face_results.dtype)
 
         if reduce_dim == ReduceDimension.Column:
-            # Sum left faces (f0+f2) → face0 row 0, right faces (f1+f3) → face1 row 0
-            result[:FACE_DIM] = (f0 + f2)[:FACE_DIM]
-            result[ELEMENTS_PER_FACE : ELEMENTS_PER_FACE + FACE_DIM] = (f1 + f3)[
-                :FACE_DIM
-            ]
+            # For each face column, sum faces vertically → row 0 of first face in that column
+            for col_idx in range(tile_shape.num_faces_c_dim):
+                face_indices = [
+                    col_idx + row_idx * tile_shape.num_faces_c_dim
+                    for row_idx in range(tile_shape.num_faces_r_dim)
+                ]
+                summed = sum(face_results[i] for i in face_indices)
+                result_start = col_idx * face_size
+                result[result_start : result_start + face_c_dim] = summed[:face_c_dim]
 
         elif reduce_dim == ReduceDimension.Row:
-            # Sum top faces (f0+f1) → face0 col 0, bottom faces (f2+f3) → face2 col 0
-            result[0:ELEMENTS_PER_FACE:FACE_DIM] = (f0 + f1)[:FACE_DIM]
-            result[2 * ELEMENTS_PER_FACE : 3 * ELEMENTS_PER_FACE : FACE_DIM] = (
-                f2 + f3
-            )[:FACE_DIM]
+            # For each face row, sum faces horizontally → col 0 of first face in that row
+            for row_idx in range(tile_shape.num_faces_r_dim):
+                face_indices = [
+                    row_idx * tile_shape.num_faces_c_dim + col_idx
+                    for col_idx in range(tile_shape.num_faces_c_dim)
+                ]
+                summed = sum(face_results[i] for i in face_indices)
+                face_row_start = row_idx * tile_shape.num_faces_c_dim * face_size
+                for i in range(face_r_dim):
+                    result[face_row_start + i * face_c_dim] = summed[i]
 
         elif reduce_dim == ReduceDimension.Scalar:
-            # Sum all faces, transpose, pool again to get single scalar
-            all_faces = (f0 + f1 + f2 + f3).view(face_shape).T.flatten()
+            # Sum all (padded 16x16) faces, transpose, pool again to get single scalar
+            all_faces_sum = sum(
+                face_results[i] for i in range(tile_shape.total_num_faces())
+            )
+            all_faces = all_faces_sum.view(face_c_dim, face_c_dim).T.flatten()
             pool_result = self._compute_gapool(
                 all_faces,
                 src_b,
                 data_format,
                 fidelity_iter_count,
-                num_faces=1,
+                1,
+                face_c_dim,
                 fp32_acc=fp32_acc,
             )
-            result[0] = pool_result[0][0]  # First element of a single face result
+            result[0] = pool_result[0][0]
 
         return result
 

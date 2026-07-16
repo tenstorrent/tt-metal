@@ -58,7 +58,10 @@ inline void calculate_tanhshrink() {
                 sfpi::vFloat axc = ax;
                 axc = sfpi::min(axc, 9.0f);
                 sfpi::vFloat e = _sfpu_exp_fp32_accurate_unsafe_(-2.f * axc);
-                sfpi::vFloat sig = sfpu_reciprocal_iter<2>(1.0f + e);  // sigmoid(2|x|)
+                // Denominator 1+e is provably well-conditioned here: |x|>1 so
+                // e = exp(-2|x|) in (0, e^-2], giving 1+e in [1, 1+e^-2] >= 1.
+                // A single Newton refinement therefore suffices (2->1 iterations).
+                sfpi::vFloat sig = sfpu_reciprocal_iter<1>(1.0f + e);  // sigmoid(2|x|)
                 sfpi::vFloat tanh_ax = 2.f * sig - 1.0f;               // tanh(|x|)
                 result = sfpi::copysgn(ax - tanh_ax, x);
             } else {
