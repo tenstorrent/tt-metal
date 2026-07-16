@@ -24,7 +24,13 @@ namespace tt::tt_metal::experimental {
 // Create a Program object from a ProgramSpec
 // (This will become a constructor for the Program class)
 //
-// INVARIANT: A successfully constructed Program is always valid.
+// INVARIANT: A successfully constructed Program is semantically valid
+// and compiled, but has not yet been finalized for dispatch.
+// Kernel config layout and capacity are validated when the Program is
+// finalized as part of a MeshWorkload.
+//
+// PRE-CONDITION: If skip_validation is true, the caller guarantees that
+// the ProgramSpec satisfies all semantic validation requirements.
 //
 Program MakeProgramFromSpec(
     distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
@@ -33,6 +39,9 @@ Program MakeProgramFromSpec(
 // (This will become a constructor for the MeshWorkload class)
 //
 // INVARIANT: A successfully constructed MeshWorkload is always valid.
+//
+// PRE-CONDITION: If skip_validation is true, the caller guarantees that
+// the ProgramSpecs satisfy all semantic validation requirements.
 //
 distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
     distributed::MeshDevice& mesh_device,
@@ -44,6 +53,9 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
 // (This will become a constructor for the MeshWorkload class)
 //
 // INVARIANT: A successfully constructed MeshWorkload is always valid.
+//
+// PRE-CONDITION: If skip_validation is true, the caller guarantees that
+// the ProgramSpec satisfies all semantic validation requirements.
 //
 distributed::MeshWorkload MakeMeshWorkloadFromSpec(
     distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation = false);
