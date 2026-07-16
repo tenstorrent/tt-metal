@@ -107,7 +107,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
             maxrel = float(line.split("max_rel_err=")[1])
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -388,6 +388,89 @@ def variants():
     print("VARIANTS DONE", flush=True)
 
 
+def _cfg_for(M, K, N, explicit):
+    """Explicit winning cfg if given; else the sweep winner; else the picker auto config."""
+    if explicit is not None:
+        return tuple(explicit)
+    cfgs = pick_configs(M, K, N)
+    winner = next((c for c, labels in cfgs.items() if "winner" in labels), None)
+    return winner if winner is not None else tuple(rb.auto_config(M, K, N))
+
+
+# (group, label, M, K, N, explicit_cfg or None). Primary targets pin the spec's winning configs; controls
+# use the sweep winner / picker auto config. cfg tuple order = (Ns, Pk, Sm, kb, nsb).
+PROG_SHAPES = [
+    ("target", "256x2048x1024", 256, 2048, 1024, (1, 4, 2, 2, 2)),
+    ("target", "256x6144x768", 256, 6144, 768, (1, 12, 1, 2, 1)),
+    ("control", "256x6144x2304", 256, 6144, 2304, None),
+    ("control", "256x6144x4608", 256, 6144, 4608, None),
+    ("control", "mt1_32x6144x4608", 32, 6144, 4608, None),
+    ("control", "mt2_64x6144x4608", 64, 6144, 4608, None),
+    ("control", "mt4_128x6144x4608", 128, 6144, 4608, None),
+]
+
+
+def progressive():
+    # A/B: progressive cumulative in0 waits (default, mask 0) vs the OLD full-slice startup barrier
+    # (DIAG_FULL_IN0_WAIT, mask 1024) in the SAME binary at the SAME config. Both are correctness-checked
+    # (constant-input max_rel_err) by the gtest; the real PCC + bit-identical A/B is the ProgressiveVsFullWait
+    # gtest. Report: full/prog median kernel us, %change, every relaunch, logical %512, per-RISC spans, cfg.
+    out = []
+    for grp, label, M, K, N, explicit in PROG_SHAPES:
+        cfg = _cfg_for(M, K, N, explicit)
+        ideal = ideal_us(M, K, N)
+        res = {}
+        for name, mask in (("full", 1024), ("prog", 0)):  # freeze full-wait baseline first
+            runs = [run_one(M, K, N, cfg, mask) for _ in range(3)]
+            oks = [x for x in runs if x.get("ok") and x["wall_us"]]
+            walls = sorted(x["wall_us"] for x in oks)
+            med = statistics.median(walls) if walls else None
+            res[name] = {
+                "walls": walls,
+                "med_us": med,
+                "min_us": (walls[0] if walls else None),
+                "n_ok": len(oks),
+                "util512_pct": (ideal / med * 100 if med else None),
+                "max_rel_err": [x.get("max_rel_err") for x in runs],
+                "risc": (oks[0]["risc"] if oks else None),
+            }
+        fm, pm = res["full"]["med_us"], res["prog"]["med_us"]
+        delta = (pm / fm - 1) * 100 if (fm and pm) else None  # negative = progressive faster
+        rec = {
+            "group": grp,
+            "label": label,
+            "M": M,
+            "K": K,
+            "N": N,
+            "cfg": list(cfg),
+            "ideal_us": ideal,
+            "full_wait": res["full"],
+            "progressive": res["prog"],
+            "prog_vs_full_pct": delta,
+        }
+        out.append(rec)
+        print(
+            f"[prog/{grp}] {label:18} cfg={cfg} ideal={ideal:.1f}us  "
+            f"full={fm if fm is None else round(fm,1)}us{res['full']['walls']!s:>0} "
+            f"prog={pm if pm is None else round(pm,1)}us "
+            f"delta={delta if delta is None else round(delta,1)}%  "
+            f"full_all={[round(w,1) for w in res['full']['walls']]} "
+            f"prog_all={[round(w,1) for w in res['prog']['walls']]} "
+            f"util512 full={res['full']['util512_pct'] and round(res['full']['util512_pct'],1)}%"
+            f"->prog={res['prog']['util512_pct'] and round(res['prog']['util512_pct'],1)}%",
+            flush=True,
+        )
+        json.dump(out, open(f"{HERE}/regime_a_progressive_bench.json", "w"), indent=2)
+    print("PROGRESSIVE DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
-    {"smoke": smoke, "matrix": matrix, "mscale": mscale, "scatter": scatter, "variants": variants}[mode]()
+    {
+        "smoke": smoke,
+        "matrix": matrix,
+        "mscale": mscale,
+        "scatter": scatter,
+        "variants": variants,
+        "progressive": progressive,
+    }[mode]()
