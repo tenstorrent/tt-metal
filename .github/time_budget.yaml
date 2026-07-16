@@ -77,9 +77,7 @@ ttnn:
     wh_n150_civ2: 45
     wh_n300_civ2: 55
     wh_llmbox_civ2_viommu: 15
-    wh_llmbox_civ2_prio: 15
     bh_p150b_civ2_viommu: 45
-    bh_p150b_civ2_viommu_prio: 45
     sim_wormhole_b0: 40
     sim_blackhole: 40
   sanity:
@@ -216,9 +214,7 @@ runtime:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
     wh_llmbox_civ2_viommu: 15
-    wh_llmbox_civ2_prio: 15
     bh_p150b_civ2_viommu: 45
-    bh_p150b_civ2_viommu_prio: 45
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
