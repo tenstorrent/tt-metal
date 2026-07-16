@@ -116,6 +116,20 @@ def prefill_matmul_program_config(
     )
 
 
+# Final-layer ResBlock AdaGN emb linear (M=32, K=4096, N=2048=2×1024).
+# Filled by tests/perf/test_final_layer_emb_matmul_sweep.py → apply winner here.
+_FINAL_LAYER_EMB_MATMUL_GRID: tuple[int, int] | None = (8, 2)  # from summary best_grid
+
+
+def final_layer_emb_matmul_grid() -> tuple[int, int] | None:
+    """Optional grid override for HunyuanTtUNetUp ResBlock emb linear."""
+    raw = os.environ.get("HY_FINAL_LAYER_EMB_GRID")
+    if raw:
+        a, b = raw.lower().split("x")
+        return (int(a), int(b))
+    return _FINAL_LAYER_EMB_MATMUL_GRID
+
+
 def _fit_1d_matmul_grid(device, k: int, n: int) -> tuple[tuple[int, int], int, int, int]:
     """Pick a rectangular grid for 1D-mcast matmul (resnet50 fc pattern).
 
@@ -214,6 +228,7 @@ def _ensure_width_sharded_act(
 
     When ``x`` is already WIDTH_SHARDED with M≥32 and a matching shard spec, returns
     it as-is (``owns_tensor=False``) so callers can leave resident embeddings alive.
+    Otherwise consumes ``x`` (frees pad / I2S sources) and returns a fresh shard.
     """
     m_dim = int(list(x.shape)[-2])
     already_ws = ttnn.is_sharded(x) and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -352,11 +367,10 @@ def act_width_sharded_linear(
     if bias is not None:
         kwargs["bias"] = bias
     out = ttnn.linear(x_sh, weight, **kwargs)
-    # Drop in0 after matmul unless we are returning a resident sharded emb produced
-    # from this same buffer (keep_sharded_output and already-sharded in0 match).
-    if owns_x_sh or not keep_sharded_output:
-        if x_sh is not out:
-            ttnn.deallocate(x_sh)
+    # Drop owned in0 after matmul. Never deallocate a caller-owned resident emb
+    # (owns_x_sh=False), even when keep_sharded_output is False.
+    if owns_x_sh and x_sh is not out:
+        ttnn.deallocate(x_sh)
 
     if keep_sharded_output:
         return out
@@ -454,6 +468,8 @@ def l1_sharded_linear(
         kwargs["bias"] = bias
     if dtype is not None:
         kwargs["dtype"] = dtype
+    if program_config is not None:
+        kwargs["program_config"] = program_config
     return ttnn.linear(x, weight, **kwargs)
 
 

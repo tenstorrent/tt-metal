@@ -26,7 +26,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-from ..matmul_utils import act_width_sharded_linear
+from ..matmul_utils import act_width_sharded_linear, final_layer_emb_matmul_grid
 from .patch_embed_conv_configs import make_layer_conv2d_config
 
 # Prefer sharded conv configs when HY_PATCH_EMBED_SHARDED=1 (set 0 for auto-only).
@@ -264,6 +264,7 @@ class HunyuanTtResBlock(LightweightModule):
 
         g = lambda k: state_dict[f"{prefix}.{k}"]
         np = conv_name_prefix  # "" for patch_embed, "final_" for UNetUp resblock
+        self._final_layer_emb = np == "final_"
 
         self.in_norm = _TtGroupNorm(
             device, in_channels, g("in_layers.0.weight"), g("in_layers.0.bias"), eps=eps, dtype=dtype
@@ -320,6 +321,8 @@ class HunyuanTtResBlock(LightweightModule):
             e = ttnn.silu(t_emb, memory_config=t_emb.memory_config())
         else:
             e = ttnn.silu(t_emb)
+        # UNetUp (final_layer) AdaGN emb: sweep-tuned 1D-mcast grid.
+        emb_grid = final_layer_emb_matmul_grid() if self._final_layer_emb else None
         e = act_width_sharded_linear(
             e,
             self.emb_w,
@@ -327,6 +330,7 @@ class HunyuanTtResBlock(LightweightModule):
             batch_rows=B,
             compute_kernel_config=_COMPUTE_KERNEL_CONFIG,
             device=self.device,
+            grid_size=emb_grid,
         )
         scale = ttnn.slice(e, [0, 0, 0, 0], [1, 1, B, self.out_channels])
         shift = ttnn.slice(e, [0, 0, 0, self.out_channels], [1, 1, B, 2 * self.out_channels])
