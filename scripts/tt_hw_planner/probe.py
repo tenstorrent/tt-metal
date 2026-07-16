@@ -238,6 +238,38 @@ def _dominant_dtype(parameters, weight_bytes) -> Tuple[str, str, Optional[int], 
     return canonical, pretty, total_params, bytes_per_param
 
 
+_TORCH_DTYPE_BYTES = {
+    "float32": 4,
+    "float": 4,
+    "float64": 8,
+    "double": 8,
+    "bfloat16": 2,
+    "float16": 2,
+    "half": 2,
+    "float8_e4m3fn": 1,
+    "float8_e5m2": 1,
+    "float8": 1,
+    "int8": 1,
+    "uint8": 1,
+}
+
+
+def _bytes_per_param_from_config(model_id: str) -> Tuple[int, bool]:
+    """Fallback bytes-per-param derived from ``config.json torch_dtype`` when the
+    exact safetensors parameter count is unavailable.
+
+    Returns ``(bytes, confident)``. ``confident`` is False when the dtype could
+    not be determined and 2 (bf16) was assumed — callers should flag the derived
+    parameter count as a low-confidence estimate. Keys on the universal weight
+    dtype, never the architecture, so it holds for any repo (LLM / DiT / VAE / CNN).
+    """
+    cfg = _maybe_fetch_config(model_id) or {}
+    td = str(cfg.get("torch_dtype") or "").lower().replace("torch.", "").strip()
+    if td in _TORCH_DTYPE_BYTES:
+        return _TORCH_DTYPE_BYTES[td], True
+    return 2, False
+
+
 def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     safe_id = _validate_hf_id(model_id)
     try:
@@ -346,7 +378,14 @@ def probe_model(model_id: str) -> ModelProbe:
     parameters = info.safetensors.parameters if info.safetensors else None
     canonical_dtype, pretty_dtype, total_params, bytes_per_param = _dominant_dtype(parameters, weight_bytes)
     if total_params is None and weight_bytes > 0:
-        total_params = weight_bytes // 2
+        _bpp, _confident = _bytes_per_param_from_config(model_id)
+        total_params = weight_bytes // _bpp
+        bytes_per_param = float(_bpp)
+        pretty_dtype = (
+            f"{pretty_dtype} (param count est. from config torch_dtype, {_bpp} B/param)"
+            if _confident
+            else f"{pretty_dtype} (param count est., dtype unknown — assumed bf16, low confidence)"
+        )
 
     category = _classify_category(info.pipeline_tag, info.tags or [], info.library_name)
 
