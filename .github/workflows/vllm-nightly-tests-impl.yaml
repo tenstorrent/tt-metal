@@ -615,6 +615,10 @@ jobs:
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
+          # Greedy variant: the structured benchmark sends no temperature, so
+          # force the server generation-config default to 0 -> deterministic
+          # argmax decode (isolates whether greedy itself loops).
+          VLLM_SERVER_ARGS+=(--override-generation-config '{"temperature": 0}')
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 
