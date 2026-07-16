@@ -798,7 +798,7 @@
       timeout: 40
       tier: 2
     bh_p150:
-      timeout: 20
+      timeout: 30
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
@@ -831,7 +831,7 @@
       timeout: 30
       tier: 2
     bh_p150:
-      timeout: 20
+      timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
@@ -844,7 +844,7 @@
   model: sdxl-demo
   skus:
     wh_n300:
-      timeout: 20
+      timeout: 30
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
