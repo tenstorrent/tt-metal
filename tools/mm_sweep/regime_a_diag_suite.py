@@ -107,7 +107,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
             maxrel = float(line.split("max_rel_err=")[1])
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 18432, 20480, 24576)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -464,115 +464,6 @@ def progressive():
     print("PROGRESSIVE DONE", flush=True)
 
 
-def _rup(x, y):
-    return cdiv(x, y) * y
-
-
-def kg_geom(M, K, N, cfg):
-    """K_num_blocks, N_sub, N_bpc — mirrors the planner (build_plan)."""
-    Ns, Pk, Sm, kb, nsb = cfg
-    Kt, Nt = cdiv(K, 32), cdiv(N, 32)
-    K_slice_cap = _rup(cdiv(Kt, Pk), kb * 8)  # rup(ceil(Kt/Pk), kb*8)
-    Knb = K_slice_cap // kb  # K_num_blocks_eff (== G*W)
-    N_own = cdiv(Nt, 8 * Ns)  # per-core N tiles (before nsb rounding); N_sub = nsb or N_own
-    N_sub = nsb if nsb else N_own
-    N_bpc = cdiv(N_own, N_sub)
-    return Knb, N_sub, N_bpc
-
-
-def cb1_blocks_for(Knb, N_bpc, Kg):
-    # matches build_plan: max(4, min(2*Kg, total in1 blocks streamed = N_bpc*Knb))
-    return max(4, min(2 * Kg, N_bpc * Knb))
-
-
-# (group, label, M, K, N, explicit_cfg or None). Primary targets pin the winning configs incl. the nsb=4
-# candidate; controls use the sweep winner / picker auto config. cfg tuple order = (Ns, Pk, Sm, kb, nsb).
-KG_SHAPES = [
-    ("target", "256x2048x1024_nsb2", 256, 2048, 1024, (1, 4, 2, 2, 2)),
-    ("target", "256x2048x1024_nsb4", 256, 2048, 1024, (1, 4, 2, 2, 4)),
-    ("target", "256x6144x768", 256, 6144, 768, (1, 12, 1, 2, 1)),
-    ("control", "256x6144x2304", 256, 6144, 2304, None),
-    ("control", "256x6144x4608", 256, 6144, 4608, None),
-    ("control", "mt1_32x6144x4608", 32, 6144, 4608, None),
-    ("control", "mt2_64x6144x4608", 64, 6144, 4608, None),
-    ("control", "mt4_128x6144x4608", 128, 6144, 4608, None),
-]
-# (variant label, Kg, RegimeADiag mask). Streamed (default KGROUP) vs prewait (|1<<14=16384) vs Kg=1.
-KG_VARIANTS = [
-    ("kg1", 1, 0),
-    ("strm2", 2, 2048),
-    ("strm4", 4, 4096),
-    ("strm8", 8, 8192),
-    ("pre2", 2, 2048 | 16384),
-    ("pre4", 4, 4096 | 16384),
-    ("pre8", 8, 8192 | 16384),
-]
-
-
-def kgroup(relaunches=3):
-    # Fixed-config comparison of Kg=1 vs STREAMED grouped-K (Kg=2/4/8) vs PREWAIT grouped-K (Kg=2/4/8) at
-    # identical configs. Kg=1 = the current progressive baseline. Relaunches are INTERLEAVED across variants
-    # (round-robin) so none is always measured back-to-back. Reports median, %change vs Kg=1, util%512,
-    # per-RISC spans, PCC(max_rel_err), K_num_blocks, #groups, CB1 alloc. Raw: regime_a_kgroup_bench.json.
-    out = []
-    for grp, label, M, K, N, explicit in KG_SHAPES:
-        cfg = _cfg_for(M, K, N, explicit)
-        Knb, N_sub, N_bpc = kg_geom(M, K, N, cfg)
-        ideal = ideal_us(M, K, N)
-        runs = {v: [] for v, _, _ in KG_VARIANTS}
-        for _r in range(relaunches):  # interleaved: round r -> each variant once
-            for v, kg, mask in KG_VARIANTS:
-                runs[v].append(run_one(M, K, N, cfg, mask))
-        per = {}
-        for v, kg, mask in KG_VARIANTS:
-            oks = [x for x in runs[v] if x.get("ok") and x["wall_us"]]
-            walls = sorted(x["wall_us"] for x in oks)
-            med = statistics.median(walls) if walls else None
-            cb1b = cb1_blocks_for(Knb, N_bpc, kg)
-            per[v] = {
-                "kg": kg,
-                "mask": mask,
-                "walls": walls,
-                "med_us": med,
-                "min_us": (walls[0] if walls else None),
-                "n_ok": len(oks),
-                "util512_pct": (ideal / med * 100 if med else None),
-                "pcc_maxrelerr": [x.get("max_rel_err") for x in runs[v]],
-                "risc": (oks[0]["risc"] if oks else None),
-                "k_num_blocks": Knb,
-                "n_groups": cdiv(Knb, kg),
-                "cb1_blocks": cb1b,
-                "cb1_tiles": cb1b * cfg[3] * N_sub,
-            }
-        base = per["kg1"]["med_us"]
-        for v, _, _ in KG_VARIANTS:
-            m = per[v]["med_us"]
-            per[v]["vs_kg1_pct"] = ((m / base - 1) * 100) if (base and m) else None
-        out.append(
-            {
-                "group": grp,
-                "label": label,
-                "M": M,
-                "K": K,
-                "N": N,
-                "cfg": list(cfg),
-                "ideal_us": ideal,
-                "k_num_blocks": Knb,
-                "N_sub": N_sub,
-                "N_bpc": N_bpc,
-                "variants": per,
-            }
-        )
-        summ = " ".join(
-            f"{v}={per[v]['med_us'] if per[v]['med_us'] is None else round(per[v]['med_us'],1)}"
-            f"({'' if per[v]['vs_kg1_pct'] is None else ('%+d' % round(per[v]['vs_kg1_pct']))}%)"
-            for v, _, _ in KG_VARIANTS
-        )
-        print(f"[kgroup/{grp}] {label:20} cfg={cfg} Knb={Knb} ideal={ideal:.1f}  {summ}", flush=True)
-        json.dump(out, open(f"{HERE}/regime_a_kgroup_bench.json", "w"), indent=2)
-    print("KGROUP DONE", flush=True)
-
-
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
     {
@@ -582,5 +473,4 @@ if __name__ == "__main__":
         "scatter": scatter,
         "variants": variants,
         "progressive": progressive,
-        "kgroup": kgroup,
     }[mode]()
