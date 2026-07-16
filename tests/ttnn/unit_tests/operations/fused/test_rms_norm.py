@@ -47,18 +47,29 @@ def test_rms_norm(device, batch_size, h, w):
     )
 
 
+# The weight_dtype axis exercises the ROW_MAJOR weight reader for both a 2-byte (bf16) and a 4-byte
+# (fp32) element, so its element-size handling is covered rather than only the bf16 case.
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [24, 128])
 @pytest.mark.parametrize("w", [32, 4096])
+@pytest.mark.parametrize("weight_dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
 @pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
 @pytest.mark.parametrize("packer_l1_acc", [True, False])
-def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc):
+def test_rms_norm_row_major(
+    device, batch_size, h, w, weight_dtype, math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc
+):
+    if weight_dtype == torch.float32 and w == 4096:
+        # This path buffers the full width of the weight in SRAM; at w=4096 the fp32 weight CB
+        # alone is 4096 tiles-worth of Float32 and, together with the other per-width CBs, exceeds
+        # the SRAM budget on a single core. The fp32 ROW_MAJOR weight is still exercised at w=32.
+        pytest.skip("fp32 weight at w=4096 exceeds the single-core SRAM budget for this CB layout")
+
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
-    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=weight_dtype)
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
@@ -70,6 +81,7 @@ def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx
     tile_width = 32
     assert w % tile_width == 0
     torch_weight_reshaped = torch_weight.reshape(w // tile_width, tile_width)
+    # from_torch infers the ttnn dtype from the torch tensor, so the weight's ttnn dtype follows weight_dtype.
     weight = ttnn.from_torch(torch_weight_reshaped, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     compute_config = ttnn.init_device_compute_kernel_config(

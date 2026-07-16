@@ -55,12 +55,25 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
+    // Byte offsets within a gamma/beta tile scale with the datum size (2B for bf16, 4B for fp32).
+    // The datum size is recovered from the tile size, since a tile holds TILE_HW datums:
+    //   row_bytes      = one tile-width row      = TILE_WIDTH datums (read from the start of the stick)
+    //   half_row_bytes = first FACE_WIDTH datums = the face boundary inside a row-major stick
+    //   face_bytes     = one 16x16 tile face     = FACE_HW datums (face 1 starts here within the tile)
 #ifdef FUSE_GAMMA
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
+    const uint32_t gamma_datum_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
+    const uint32_t gamma_row_bytes = tt::constants::TILE_WIDTH * gamma_datum_bytes;
+    const uint32_t gamma_half_row_bytes = tt::constants::FACE_WIDTH * gamma_datum_bytes;
+    const uint32_t gamma_face_bytes = tt::constants::FACE_HW * gamma_datum_bytes;
     const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
+    const uint32_t beta_datum_bytes = beta_tile_bytes / tt::constants::TILE_HW;
+    const uint32_t beta_row_bytes = tt::constants::TILE_WIDTH * beta_datum_bytes;
+    const uint32_t beta_half_row_bytes = tt::constants::FACE_WIDTH * beta_datum_bytes;
+    const uint32_t beta_face_bytes = tt::constants::FACE_HW * beta_datum_bytes;
     const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
@@ -137,18 +150,18 @@ void kernel_main() {
                         noc.async_read(
                             addrg,
                             cb_gamma,
-                            64,
+                            gamma_row_bytes,
                             {.page_id = block.start() + r},
                             {.offset_bytes = idx * gamma_tile_bytes});
                         noc.async_read_barrier();
                         noc.async_read(
                             local_ep,
                             cb_gamma,
-                            32,
+                            gamma_half_row_bytes,
                             {.noc_x = my_x[noc.get_noc_id()],
                              .noc_y = my_y[noc.get_noc_id()],
-                             .addr = cb_gamma.get_write_ptr() + idx * gamma_tile_bytes + 32},
-                            {.offset_bytes = idx * gamma_tile_bytes + 512});
+                             .addr = cb_gamma.get_write_ptr() + idx * gamma_tile_bytes + gamma_half_row_bytes},
+                            {.offset_bytes = idx * gamma_tile_bytes + gamma_face_bytes});
                         idx++;
                     }
                     noc.async_read_barrier();
@@ -165,18 +178,18 @@ void kernel_main() {
                         noc.async_read(
                             addrb,
                             cb_beta,
-                            64,
+                            beta_row_bytes,
                             {.page_id = block.start() + r},
                             {.offset_bytes = idx * beta_tile_bytes});
                         noc.async_read_barrier();
                         noc.async_read(
                             local_ep,
                             cb_beta,
-                            32,
+                            beta_half_row_bytes,
                             {.noc_x = my_x[noc.get_noc_id()],
                              .noc_y = my_y[noc.get_noc_id()],
-                             .addr = cb_beta.get_write_ptr() + idx * beta_tile_bytes + 32},
-                            {.offset_bytes = idx * beta_tile_bytes + 512});
+                             .addr = cb_beta.get_write_ptr() + idx * beta_tile_bytes + beta_half_row_bytes},
+                            {.offset_bytes = idx * beta_tile_bytes + beta_face_bytes});
                         idx++;
                     }
                     noc.async_read_barrier();
