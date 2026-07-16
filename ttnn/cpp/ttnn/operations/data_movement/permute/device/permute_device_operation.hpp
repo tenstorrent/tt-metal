@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <variant>
 #include <optional>
+#include <tuple>
+#include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -22,6 +23,9 @@ struct PermuteDeviceOperation {
         const ttsl::SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
         const float pad_value = 0.0f;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("dims", "output_mem_config", "pad_value");
+        auto attribute_values() const { return std::forward_as_tuple(dims, std::cref(output_mem_config), pad_value); }
     };
     struct tensor_args_t {
         const Tensor& input_tensor;
@@ -90,7 +94,6 @@ struct PermuteDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 };
