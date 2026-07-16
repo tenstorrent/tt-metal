@@ -1019,38 +1019,31 @@ def test_repeat_composite_edge_cases(shape, repeat_shape, in_mc_fn, out_mc_fn, p
     )
 
 
-def test_repeat_block_sharded_output_grid_is_trimmed(device):
-    """Regression: repeat must report the honest, trimmed block-sharded output grid rather than an
-    over-provisioned device grid whose metadata mismatches the physical buffer.
+def test_repeat_block_sharded_derived_grid_is_minimal(device):
+    """Regression: when repeat synthesizes a block-sharded output grid (output memory config with no
+    explicit shard spec -- the TT-Forge compiler's op-constraints query path), it must report the minimal grid
+    its shards occupy, not the full device grid. tt-metal would otherwise trim the grid to the used
+    cores at allocation, leaving the reported layout inconsistent with the physical buffer potentially causing bad PCC.
 
-    This is the Falcon3 repeat->SDPA PCC bug: a compiler emitted an 8x8 (64-core) block-sharded
-    output for a tensor that only fills 1x4 tiles. tt-metal would silently trim the buffer to the 4
-    real cores while the tensor's shard_spec still advertised 64 cores, so the op-constraints query
-    (and downstream consumers) saw a grid that didn't match the physical layout. The repeat op must
-    return the trimmed grid so the reported layout is consistent with what is actually allocated.
-
-    Input 1x1x1x128 in a 1x4 block-sharded grid; requesting an 8x8 block-sharded output for the
-    1x1x8x128 result (= 32x128 padded = 1 tile tall x 4 tiles wide = 4 shards) must trim to 4 cores.
+    Input 1x1x1x128 in a 1x4 block-sharded grid; the 1x1x8x128 result (= 32x128 padded = 1 tile tall
+    x 4 tiles wide = 4 shards) must be reported on 4 cores, not the full device grid.
     """
-    compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x < 8 or compute_grid.y < 8:
-        pytest.skip("requires at least an 8x8 compute grid")
-
     torch.manual_seed(0)
     x = torch.rand((1, 1, 1, 128), dtype=torch.bfloat16)
 
     input_mem_config = _explicit_block_shard_config(device, grid_y=1, grid_x=4, sh=32, sw=32)
-    over_provisioned_output = _explicit_block_shard_config(device, grid_y=8, grid_x=8, sh=32, sw=32)
+    # No explicit output shard spec -> repeat derives the grid via generate_repeat_shard_spec.
+    derived_block_output = _sharded_no_spec(ttnn.TensorMemoryLayout.BLOCK_SHARDED)(device)
 
     ttnn_in = ttnn.from_torch(
         x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=input_mem_config
     )
-    result = ttnn.repeat(ttnn_in, [1, 1, 8, 1], memory_config=over_provisioned_output)
+    result = ttnn.repeat(ttnn_in, [1, 1, 8, 1], memory_config=derived_block_output)
 
     shard_spec = result.memory_config().shard_spec
     assert shard_spec is not None, "expected a sharded output"
-    # 4 shards (1x4 tiles) must occupy 4 cores, not the requested 64 -- the pre-fix bug reported 64.
-    assert shard_spec.num_cores() == 4, f"grid not trimmed: {shard_spec.num_cores()} cores ({shard_spec.grid})"
+    # 4 shards (1x4 tiles) must occupy 4 cores; the bug synthesised the full device grid instead.
+    assert shard_spec.num_cores() == 4, f"grid not minimal: {shard_spec.num_cores()} cores ({shard_spec.grid})"
 
     ref = x.repeat(1, 1, 8, 1)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))

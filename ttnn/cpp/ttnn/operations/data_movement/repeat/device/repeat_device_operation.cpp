@@ -84,21 +84,6 @@ RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output
             }
         }
     }
-
-    // Report the honest block-sharded grid: trim an over-provisioned grid (whether provided by the
-    // caller or synthesised above) down to the sub-grid its shards actually occupy. Otherwise
-    // tt-metal trims the grid silently at allocation, so the layout surfaced through the
-    // op-constraints query and created at runtime would not match the physical buffer -- which hides
-    // the real grid from the compiler and corrupts consumers that trust the reported grid.
-    if (mem_config.is_sharded() && mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED &&
-        mem_config.shard_spec().has_value()) {
-        const tt::tt_metal::TensorLayout probe_layout(
-            input_tensor_a.dtype(), tt::tt_metal::PageConfig(input_tensor_a.layout()), mem_config);
-        const auto physical_shape = probe_layout.compute_physical_shape(output_shape);
-        mem_config = operations::data_movement::repeat::trim_block_shard_grid(
-            mem_config, static_cast<uint32_t>(physical_shape.height()), static_cast<uint32_t>(physical_shape.width()));
-    }
-
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(

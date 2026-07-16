@@ -248,51 +248,27 @@ std::optional<ShardSpec> generate_repeat_shard_spec(
     } else if (input_tensor.shard_spec().has_value()) {
         orientation = input_tensor.shard_spec()->orientation;
     }
-    return ShardSpec(all_cores, shard_shape, orientation);
-}
 
-MemoryConfig trim_block_shard_grid(const MemoryConfig& mem_config, uint32_t physical_height, uint32_t physical_width) {
-    if (mem_config.memory_layout() != TensorMemoryLayout::BLOCK_SHARDED || !mem_config.shard_spec().has_value()) {
-        return mem_config;
+    // For BLOCK sharding, place the shards on exactly the sub-grid they occupy instead of the whole
+    // compute grid. Reporting the full grid would leave the tensor's shard_spec inconsistent with its
+    // physical buffer (tt-metal trims the grid to the used cores at allocation), which hides the real
+    // layout from the op-constraints query and can corrupt consumers that trust the reported grid.
+    CoreRangeSet shard_grid = all_cores;
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        const uint32_t num_shards_along_height =
+            static_cast<uint32_t>(tt::div_up(tensor_height, static_cast<uint64_t>(shard_shape[0])));
+        const uint32_t num_shards_along_width =
+            static_cast<uint32_t>(tt::div_up(tensor_width, static_cast<uint64_t>(shard_shape[1])));
+        // Row-major maps width-shards to grid columns (x) and height-shards to rows (y); column-major swaps.
+        const bool row_major = orientation == ShardOrientation::ROW_MAJOR;
+        const uint32_t grid_x = row_major ? num_shards_along_width : num_shards_along_height;
+        const uint32_t grid_y = row_major ? num_shards_along_height : num_shards_along_width;
+        if (grid_x == 0 || grid_y == 0 || grid_x > compute_grid_size.x || grid_y > compute_grid_size.y) {
+            return std::nullopt;
+        }
+        shard_grid = CoreRangeSet(CoreRange({0, 0}, {grid_x - 1, grid_y - 1}));
     }
-    const auto& shard_spec = *mem_config.shard_spec();
-    // Only a single full rectangular grid has a well-defined bounding box to trim.
-    if (shard_spec.grid.ranges().size() != 1) {
-        return mem_config;
-    }
-    const uint32_t shard_height = shard_spec.shape[0];
-    const uint32_t shard_width = shard_spec.shape[1];
-    if (shard_height == 0 || shard_width == 0) {
-        return mem_config;
-    }
-    const uint32_t num_shards_along_height = tt::div_up(physical_height, shard_height);
-    const uint32_t num_shards_along_width = tt::div_up(physical_width, shard_width);
-    // Row-major maps width-shards to grid columns (x) and height-shards to rows (y); column-major swaps.
-    const bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    const uint32_t needed_x = row_major ? num_shards_along_width : num_shards_along_height;
-    const uint32_t needed_y = row_major ? num_shards_along_height : num_shards_along_width;
-    if (needed_x == 0 || needed_y == 0) {
-        return mem_config;
-    }
-    const auto bounding_box = shard_spec.grid.bounding_box();
-    const auto grid_size = bounding_box.grid_size();
-    // Only shrink: a grid smaller than the shard count is a separate error handled by TensorSpec.
-    if (needed_x >= grid_size.x && needed_y >= grid_size.y) {
-        return mem_config;
-    }
-    const auto start = bounding_box.start_coord;
-    CoreRangeSet trimmed_grid(CoreRange(start, CoreCoord{start.x + needed_x - 1, start.y + needed_y - 1}));
-    log_debug(
-        tt::LogOp,
-        "Repeat: trimmed over-provisioned block-sharded grid {}x{} -> {}x{} to match shard layout",
-        grid_size.y,
-        grid_size.x,
-        needed_y,
-        needed_x);
-    return MemoryConfig(
-        mem_config.memory_layout(),
-        mem_config.buffer_type(),
-        ShardSpec(trimmed_grid, shard_spec.shape, shard_spec.orientation));
+    return ShardSpec(shard_grid, shard_shape, orientation);
 }
 
 }  // namespace ttnn::operations::data_movement::repeat

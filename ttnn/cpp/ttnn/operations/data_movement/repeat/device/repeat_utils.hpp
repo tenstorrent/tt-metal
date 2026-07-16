@@ -40,13 +40,4 @@ std::optional<tt::tt_metal::ShardSpec> generate_repeat_shard_spec(
     tt::tt_metal::TensorMemoryLayout memory_layout,
     std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt);
 
-// Trim an over-provisioned BLOCK_SHARDED grid down to the sub-grid its shards actually occupy for
-// the given physical (padded) output extents. tt-metal otherwise trims the grid silently at
-// allocation, so the layout reported by the op-constraints query (and created at runtime) would not
-// match the physical buffer -- hiding the real grid from the compiler and corrupting consumers that
-// trust the reported grid. No-op for non-block layouts, a non-rectangular grid, or a grid that
-// already matches (or is smaller than) the shard count.
-tt::tt_metal::MemoryConfig trim_block_shard_grid(
-    const tt::tt_metal::MemoryConfig& mem_config, uint32_t physical_height, uint32_t physical_width);
-
 }  // namespace ttnn::operations::data_movement::repeat

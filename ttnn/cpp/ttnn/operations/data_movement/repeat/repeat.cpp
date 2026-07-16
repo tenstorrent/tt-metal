@@ -283,20 +283,6 @@ ttnn::Tensor repeat(
                 return working_tensor;  // No valid spec; keep interleaved.
             }
         }
-        // Trim an over-provisioned block-sharded output grid to the sub-grid its shards occupy, so
-        // the created tensor's layout matches its physical buffer (and the op-constraints query
-        // reports the honest grid) instead of tt-metal trimming it silently at allocation.
-        if (final_mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            const auto& padded = working_tensor.padded_shape();
-            const int32_t rank = static_cast<int32_t>(padded.rank());
-            uint32_t physical_width = rank > 0 ? padded[-1] : 1;
-            uint32_t physical_height = 1;
-            for (int32_t i = 0; i + 1 < rank; ++i) {
-                physical_height *= padded[i];
-            }
-            final_mc =
-                operations::data_movement::repeat::trim_block_shard_grid(final_mc, physical_height, physical_width);
-        }
         working_tensor = ttnn::interleaved_to_sharded(working_tensor, final_mc, std::nullopt);
     }
 
