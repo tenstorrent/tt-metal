@@ -77,5 +77,5 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-        fp32_mode>(num_blocks, /*total_input_pages=*/std::nullopt, /*self_drain_output=*/true);
+        fp32_mode>(num_blocks);
 }  // void kernel_main()
