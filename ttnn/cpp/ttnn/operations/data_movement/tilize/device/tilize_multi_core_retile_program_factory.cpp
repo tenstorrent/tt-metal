@@ -87,9 +87,8 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     const uint32_t out_cb_tiles = cb_num_pages_per_block * cb_factor;
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t mid_untilize_cb_index = tt::CBIndex::c_1;
-    constexpr uint32_t mid_tilize_cb_index = tt::CBIndex::c_2;
-    constexpr uint32_t output_cb_index = tt::CBIndex::c_16;
+    constexpr uint32_t mid_cb_index = tt::CBIndex::c_1;
+    constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
 
     ProgramDescriptor desc;
 
@@ -105,29 +104,18 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         }}},
     });
 
-    // Intermediate RM CB for untilize output. Page size = max(in, out) tile size.
-    // Tile/face geometry matches the input tile (required by pack_untilize).
-    // Kernels must not call get_tile_size() on this CB — they use mid_page_size CT arg.
+    // Single intermediate RM CB, shared by untilize (producer) and tilize (consumer) — no L1
+    // copy between them. Double-buffered so the reader/writer overlap with compute.
+    // Page size = max(in, out) tile size. Tile/face geometry matches the input tile (required by
+    // pack_untilize). Kernels must not call get_tile_size() on this CB.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = mid_cb_pages * mid_page_size,
+        .total_size = 2 * mid_cb_pages * mid_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(mid_untilize_cb_index),
+            .buffer_index = static_cast<uint8_t>(mid_cb_index),
             .data_format = input_cb_data_format,
             .page_size = mid_page_size,
             .tile = input_tile,
-        }}},
-    });
-
-    // Intermediate RM CB for tilize input. Same page size; output tile face geometry.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = mid_cb_pages * mid_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(mid_tilize_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = mid_page_size,
-            .tile = output_tile,
         }}},
     });
 
@@ -178,7 +166,7 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_llk_acc) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[mid_tilize_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[mid_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     auto make_compute_desc = [&](const CoreRangeSet& ranges) {
@@ -189,12 +177,10 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         cd.compile_time_args = {
             tiles_per_block,
             src0_cb_index,
-            mid_untilize_cb_index,
-            mid_tilize_cb_index,
+            mid_cb_index,
             output_cb_index,
             in_tile_height,
             out_tile_height,
-            mid_page_size,
             output_single_tile_size,
         };
         cd.config = ComputeConfigDescriptor{

@@ -991,6 +991,9 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
     "tensor_shape, input_tile_shape, output_tile_shape",
     [
         ([1, 1, 128, 256], (32, 32), (16, 32)),
+        ([1, 1, 64, 256], (32, 32), (8, 32)),
+        ([1, 1, 64, 128], (32, 32), (4, 32)),
+        ([1, 1, 16, 128], (32, 32), (2, 32)),
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
