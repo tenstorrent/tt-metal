@@ -29,8 +29,10 @@ Usage:
 import argparse
 import math
 import os
+import re
 import time
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -66,23 +68,134 @@ def _load_audio_22k(ref_audio, max_seconds):
     return load_reference_audio(sample=ref_audio, max_seconds=max_seconds)
 
 
+def _postprocess(wav_np):
+    """Fix the abrupt ("crimped") onset: short raised-cosine fade in/out + leading/trailing
+    silence (the vocoder starts at the first content code with no natural lead-in)."""
+    fade_n = min(int(0.015 * OUTPUT_SAMPLE_RATE), wav_np.shape[0] // 2)  # ~15 ms
+    if fade_n > 0:
+        ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, fade_n, dtype=wav_np.dtype)))
+        wav_np[:fade_n] *= ramp
+        wav_np[-fade_n:] *= ramp[::-1]
+    pad = np.zeros(int(0.06 * OUTPUT_SAMPLE_RATE), dtype=wav_np.dtype)  # ~60 ms lead-in/out
+    return np.concatenate([pad, wav_np, pad])
+
+
+_ASR = {}
+
+
+def _score_take(wav_np, text, codes):
+    """Rank a candidate take: lower is better. Primary = CER (Whisper-base.en transcription
+    vs the input text — directly measures "does the audio say the text"). Falls back to a
+    code-diversity heuristic (1 - unique/total, which penalises collapsed/droning takes) if
+    the Whisper/jiwer backends are unavailable. Returns (score, detail_str)."""
+    try:
+        import jiwer
+        from scipy.signal import resample_poly
+        from transformers import pipeline
+
+        if "asr" not in _ASR:
+            _ASR["asr"] = pipeline("automatic-speech-recognition", model="openai/whisper-base.en", device="cpu")
+        g = math.gcd(16000, OUTPUT_SAMPLE_RATE)
+        wav16 = resample_poly(wav_np.astype("float32"), 16000 // g, OUTPUT_SAMPLE_RATE // g)
+        hyp = _ASR["asr"]({"array": wav16.astype("float32"), "sampling_rate": 16000})["text"].strip()
+        norm = lambda s: re.sub(r"[^a-z ]", "", s.lower()).strip()  # noqa: E731
+        cer = jiwer.cer(norm(text), norm(hyp))
+        return cer, f"CER {cer:.3f} :: {hyp!r}"
+    except Exception as e:  # backend missing / offline — degrade gracefully
+        flat = codes.reshape(-1).tolist()
+        diversity = len(set(flat)) / max(1, len(flat))
+        logger.warning(f"CER scoring unavailable ({type(e).__name__}: {e}); using code-diversity fallback")
+        return 1.0 - diversity, f"diversity {diversity:.3f} (fallback; no CER)"
+
+
+def _generate_one(tt, wrapped, cond_mel, spk_wav_tt, args):
+    """One full device generation + vocode + onset post-processing. Returns (wav_np, codes, dt)."""
+    t0 = time.time()
+    wav_dev, codes = tt.inference(
+        wrapped,
+        cond_mel,
+        spk_wav_tt,
+        max_new_tokens=args.max_tokens,
+        temperature=args.temperature,
+        top_k=args.top_k,
+        repetition_penalty=args.repetition_penalty,
+        top_p=args.top_p,
+    )
+    wav_np = ttnn.to_torch(wav_dev).float().reshape(-1).numpy()  # [T_out]
+    return _postprocess(wav_np), codes, time.time() - t0
+
+
+def _take_on_device(sd, ref_decoder_full, wrapped, cond_mel, spk_wav, args, seed_offset):
+    """Open a FRESH device, build the model, run one generation, close the device. The fp32
+    HiFi-GAN vocoder exhausts L1_SMALL when several full generations share one device, so
+    best-of-N isolates each take on its own device (same reason the tests use a per-test
+    device fixture). Returns ``(wav_np, codes, dt)``."""
+    device = ttnn.open_device(device_id=0, l1_small_size=65536)
+    try:
+        tt = TtXtts(device, sd, ref_decoder_full)
+        spk_wav_tt = ttnn.from_torch(
+            spk_wav.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+        )
+        if args.seed is not None:
+            # distinct-but-reproducible-ish seed per take (ttnn sampling isn't bit-exact across
+            # runs regardless, so takes differ even without this).
+            ttnn.manual_seed(args.seed + seed_offset, device=device)
+        return _generate_one(tt, wrapped, cond_mel, spk_wav_tt, args)
+    finally:
+        ttnn.close_device(device)
+
+
 def main():
     ap = argparse.ArgumentParser(description="XTTS-v2 on-device text-to-speech demo")
     ap.add_argument(
         "--text",
-        default="Voice synthesis has come a long way, and modern systems can now generate natural sounding speech with remarkable accuracy.",
+        # "can already" (not "can now"): "can now" is a /n/#/n/ nasal collision the vocoder
+        # merges into "cannow/cannot" — "already" starts with a vowel and transcribes cleanly (CER 0.008).
+        default="Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy.",
     )
     ap.add_argument("--lang", default="en")
-    ap.add_argument("--ref-audio", default="en_sample.wav", help="local WAV path or HF sample name")
-    ap.add_argument("--ref-seconds", type=int, default=6, help="reference audio length used for conditioning")
+    ap.add_argument(
+        "--ref-audio",
+        default="reference.wav",
+        help="local WAV path or HF sample name. reference.wav scored best of the repo clips "
+        "(UTMOS 4.28 / CER 0.025 / SECS 0.70); en_sample.wav is the portable HF fallback.",
+    )
+    ap.add_argument(
+        "--ref-seconds",
+        type=int,
+        default=30,
+        help="reference audio used for conditioning (coqui gpt_cond_len=30). Split into 4s chunks "
+        "and averaged; a longer clean clip improves voice cloning. Short clips use a single window.",
+    )
     ap.add_argument("--max-tokens", type=int, default=400, help="cap on audio codes (sampling usually stops earlier)")
-    ap.add_argument("--temperature", type=float, default=0.75, help="sampling temperature; 0 = greedy")
+    ap.add_argument(
+        "--num-outputs",
+        type=int,
+        default=1,
+        help="coqui gpt_num_outputs: generate N takes and auto-keep the best (lowest CER vs the "
+        "text, or code-diversity if Whisper is unavailable). Tames run-to-run variance; costs Nx time.",
+    )
+    ap.add_argument(
+        "--temperature",
+        type=float,
+        default=0.75,
+        help="sampling temperature; 0 = greedy. 0.75 (coqui's value) gives natural prosody and "
+        "stays clean with the reference.wav default; drop to ~0.65 if a weaker reference slurs words.",
+    )
     ap.add_argument("--top-k", type=int, default=50, help="top-k sampling cutoff")
     ap.add_argument(
         "--top-p",
         type=float,
         default=0.85,
         help="nucleus (top-p) cutoff; XTTS uses 0.85. 1.0 disables it. Improves text alignment/intelligibility.",
+    )
+    ap.add_argument(
+        "--spk-seconds",
+        type=int,
+        default=8,
+        help="reference audio for the speaker-embedding path (separate from --ref-seconds): the "
+        "on-device speaker mel frontend reshapes samples in one shot and can't take very long "
+        "audio; the d-vector doesn't need >~8s. Kept small while conditioning uses the full clip.",
     )
     ap.add_argument("--repetition-penalty", type=float, default=5.0, help="repetition penalty (XTTS uses 5.0)")
     ap.add_argument(
@@ -106,9 +219,11 @@ def main():
 
     # Inputs: reference audio (22.05 kHz for conditioning, 16 kHz for the speaker encoder) + text.
     wav = _load_audio_22k(args.ref_audio, args.ref_seconds)
-    cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())  # host 80-mel [1, 80, s]
+    cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())  # host 80-mel [1, 80, s] (chunk-averaged on device)
     g = math.gcd(SPK_SR, MEL_SR)
-    spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
+    # Speaker path is capped independently — the device mel frontend can't reshape very long audio.
+    spk_src = wav[0].numpy()[: MEL_SR * args.spk_seconds]
+    spk_wav = torch.from_numpy(resample_poly(spk_src, SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
 
     wrapped = wrap_text_ids(preprocess_text(args.text, lang=args.lang))
     pad = (-wrapped.shape[1]) % TILE
@@ -118,60 +233,45 @@ def main():
 
     reference = XttsReference(sd)  # supplies decoder/speaker/mel weights (and optional A/B wav)
 
-    # 64 KB L1_SMALL: the HiFi-GAN conv1d scratch grows with sequence length, and long
-    # utterances (hundreds of codes) overflow the 32 KB used by the short-sequence tests.
-    device = ttnn.open_device(device_id=0, l1_small_size=65536)
-    try:
-        tt = TtXtts(device, sd, reference.decoder_full)
-        spk_wav_tt = ttnn.from_torch(
-            spk_wav.reshape(1, -1, 1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
-        )
+    mode = (
+        "greedy"
+        if args.temperature <= 0
+        else f"sampled (temp={args.temperature}, top_k={args.top_k}, top_p={args.top_p}, rep={args.repetition_penalty})"
+    )
+    n = max(1, args.num_outputs)
+    logger.info(f"generating on device [{mode}], up to {args.max_tokens} codes, {n} take(s) ...")
 
-        mode = (
-            "greedy"
-            if args.temperature <= 0
-            else f"sampled (temp={args.temperature}, top_k={args.top_k}, top_p={args.top_p}, rep={args.repetition_penalty})"
-        )
-        if args.seed is not None:
-            ttnn.manual_seed(args.seed, device=device)
-            logger.info(f"seeded on-device sampling with {args.seed}")
-        logger.info(f"generating on device [{mode}], up to {args.max_tokens} codes ...")
-        t0 = time.time()
-        wav_tt_dev, codes = tt.inference(
-            wrapped,
-            cond_mel,
-            spk_wav_tt,
-            max_new_tokens=args.max_tokens,
-            temperature=args.temperature,
-            top_k=args.top_k,
-            repetition_penalty=args.repetition_penalty,
-            top_p=args.top_p,
-        )
-        wav_tt = ttnn.to_torch(wav_tt_dev).float().reshape(-1).numpy()  # [T_out]
-        dt = time.time() - t0
-
-        n_codes = codes.shape[1]
+    # Each take runs on its own freshly-opened device (see _take_on_device); best-of-N keeps
+    # the lowest-CER take. A single take (default) is just one open/generate/close.
+    wav_tt, codes, best_score, best_detail = None, None, None, None
+    for i in range(n):
+        wav_i, codes_i, dt = _take_on_device(sd, reference.decoder_full, wrapped, cond_mel, spk_wav, args, i)
+        n_codes = codes_i.shape[1]
         stopped = n_codes < args.max_tokens
+        score, detail = _score_take(wav_i, args.text, codes_i) if n > 1 else (0.0, "")
         logger.info(
-            f"generated {n_codes} codes ({'hit stop token' if stopped else 'reached max'}) "
-            f"-> {wav_tt.shape[0]} samples ({wav_tt.shape[0] / OUTPUT_SAMPLE_RATE:.2f}s audio) in {dt:.1f}s"
+            f"take {i + 1}/{n}: {n_codes} codes ({'stop' if stopped else 'max'}), "
+            f"{wav_i.shape[0] / OUTPUT_SAMPLE_RATE:.2f}s, {dt:.1f}s" + (f" | {detail}" if detail else "")
         )
+        if best_score is None or score < best_score:
+            wav_tt, codes, best_score, best_detail = wav_i, codes_i, score, detail
+    if n > 1:
+        logger.info(f"selected best of {n} -> {best_detail}")
 
-        import soundfile as sf
+    import soundfile as sf
 
-        os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-        sf.write(args.output, wav_tt, OUTPUT_SAMPLE_RATE)
-        logger.info(f"wrote device audio -> {os.path.abspath(args.output)}")
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+    sf.write(args.output, wav_tt, OUTPUT_SAMPLE_RATE)
+    logger.info(f"wrote device audio -> {os.path.abspath(args.output)}")
 
-        if args.write_torch_ref:
-            # A/B on the SAME codes the device produced (teacher-forced), so the two WAVs
-            # are the same utterance — not an independent greedy run (which would collapse).
-            wav_ref = reference.wav_from_codes(wrapped, cond_mel, spk_wav, codes[0].tolist())
-            ref_path = args.output.replace(".wav", "_reference.wav")
-            sf.write(ref_path, wav_ref.reshape(-1).numpy(), OUTPUT_SAMPLE_RATE)
-            logger.info(f"wrote torch reference audio (same codes) -> {os.path.abspath(ref_path)}")
-    finally:
-        ttnn.close_device(device)
+    if args.write_torch_ref:
+        # A/B on the SAME codes the best device take produced (teacher-forced), so the two WAVs
+        # are the same utterance — not an independent greedy run (which would collapse). Runs on
+        # host (CPU torch), so no device is needed here.
+        wav_ref = reference.wav_from_codes(wrapped, cond_mel, spk_wav, codes[0].tolist())
+        ref_path = args.output.replace(".wav", "_reference.wav")
+        sf.write(ref_path, wav_ref.reshape(-1).numpy(), OUTPUT_SAMPLE_RATE)
+        logger.info(f"wrote torch reference audio (same codes) -> {os.path.abspath(ref_path)}")
 
 
 if __name__ == "__main__":
