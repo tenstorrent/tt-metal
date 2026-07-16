@@ -1,0 +1,3686 @@
+[
+  {
+    "group": "target",
+    "label": "256x2048x1024_sm2",
+    "M": 256,
+    "K": 2048,
+    "N": 1024,
+    "cfg": [
+      1,
+      4,
+      2,
+      2,
+      2
+    ],
+    "ideal_us": 11.264,
+    "route_cost": {
+      "bank": {
+        "max_edge": 23,
+        "total_hops": 734,
+        "max_ring_total": 116
+      },
+      "greedy": {
+        "max_edge": 26,
+        "total_hops": 635,
+        "max_ring_total": 104
+      },
+      "mm0": {
+        "max_edge": 26,
+        "total_hops": 601,
+        "max_ring_total": 111
+      },
+      "maxedge": {
+        "max_edge": 16,
+        "total_hops": 553,
+        "max_ring_total": 87
+      },
+      "maxring": {
+        "max_edge": 18,
+        "total_hops": 478,
+        "max_ring_total": 70
+      },
+      "total": {
+        "max_edge": 26,
+        "total_hops": 473,
+        "max_ring_total": 70
+      },
+      "pareto": {
+        "max_edge": 16,
+        "total_hops": 553,
+        "max_ring_total": 87
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "Sm": "2",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 23,
+        "bank_aggtot": 181,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 22,
+        "greedy_aggtot": 152,
+        "greedy_maxringtot": 99,
+        "mm0_aggmax": 23,
+        "mm0_aggtot": 164,
+        "mm0_maxringtot": 111,
+        "maxedge_aggmax": 15,
+        "maxedge_aggtot": 133,
+        "maxedge_maxringtot": 75,
+        "maxring_aggmax": 18,
+        "maxring_aggtot": 116,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 18,
+        "total_aggtot": 116,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 15,
+        "pareto_aggtot": 133,
+        "pareto_maxringtot": 75,
+        "sel_perring": "(8:53)(23:111)"
+      },
+      {
+        "group": "2",
+        "Sm": "2",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 20,
+        "bank_aggtot": 152,
+        "bank_maxringtot": 87,
+        "greedy_aggmax": 20,
+        "greedy_aggtot": 157,
+        "greedy_maxringtot": 104,
+        "mm0_aggmax": 22,
+        "mm0_aggtot": 162,
+        "mm0_maxringtot": 104,
+        "maxedge_aggmax": 15,
+        "maxedge_aggtot": 145,
+        "maxedge_maxringtot": 75,
+        "maxring_aggmax": 16,
+        "maxring_aggtot": 128,
+        "maxring_maxringtot": 70,
+        "total_aggmax": 26,
+        "total_aggtot": 123,
+        "total_maxringtot": 70,
+        "pareto_aggmax": 15,
+        "pareto_aggtot": 145,
+        "pareto_maxringtot": 75,
+        "sel_perring": "(11:58)(22:104)"
+      },
+      {
+        "group": "4",
+        "Sm": "2",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 22,
+        "bank_aggtot": 232,
+        "bank_maxringtot": 116,
+        "greedy_aggmax": 26,
+        "greedy_aggtot": 169,
+        "greedy_maxringtot": 99,
+        "mm0_aggmax": 26,
+        "mm0_aggtot": 157,
+        "mm0_maxringtot": 99,
+        "maxedge_aggmax": 16,
+        "maxedge_aggtot": 157,
+        "maxedge_maxringtot": 87,
+        "maxring_aggmax": 18,
+        "maxring_aggtot": 116,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 18,
+        "total_aggtot": 116,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 16,
+        "pareto_aggtot": 157,
+        "pareto_maxringtot": 87,
+        "sel_perring": "(15:58)(26:99)"
+      },
+      {
+        "group": "6",
+        "Sm": "2",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 22,
+        "bank_aggtot": 169,
+        "bank_maxringtot": 87,
+        "greedy_aggmax": 20,
+        "greedy_aggtot": 157,
+        "greedy_maxringtot": 99,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 118,
+        "mm0_maxringtot": 65,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 118,
+        "maxedge_maxringtot": 65,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 118,
+        "maxring_maxringtot": 65,
+        "total_aggmax": 12,
+        "total_aggtot": 118,
+        "total_maxringtot": 65,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 118,
+        "pareto_maxringtot": 65,
+        "sel_perring": "(11:53)(12:65)"
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        27.931851851851853,
+        28.22703703703704,
+        28.62666666666667
+      ],
+      "med_us": 28.22703703703704,
+      "n_ok": 3,
+      "util512_pct": 39.90500308346345,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 27.88703703703704,
+          "med_us": 22.585925925925928,
+          "min_us": 18.544444444444444
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 26.843333333333334,
+          "med_us": 22.714074074074073,
+          "min_us": 20.162222222222223
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 27.19333333333333,
+          "med_us": 23.152962962962963,
+          "min_us": 19.405925925925928
+        }
+      },
+      "vs_bank_pct": 0.0,
+      "vs_mm0_pct": 2.946023341257842
+    },
+    "mm0": {
+      "mask": 16384,
+      "walls": [
+        26.974814814814817,
+        27.41925925925926,
+        27.57851851851852
+      ],
+      "med_us": 27.41925925925926,
+      "n_ok": 3,
+      "util512_pct": 41.08061378863194,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 26.651851851851852,
+          "med_us": 21.423333333333332,
+          "min_us": 17.07296296296296
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 25.52259259259259,
+          "med_us": 21.837222222222223,
+          "min_us": 18.604444444444443
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 25.915555555555553,
+          "med_us": 22.627037037037038,
+          "min_us": 17.93
+        }
+      },
+      "vs_bank_pct": -2.8617165050581983,
+      "vs_mm0_pct": 0.0
+    },
+    "maxedge": {
+      "mask": 0,
+      "walls": [
+        26.267777777777777,
+        26.27111111111111,
+        26.5837037037037
+      ],
+      "med_us": 26.27111111111111,
+      "n_ok": 3,
+      "util512_pct": 42.875993909659954,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 25.80296296296296,
+          "med_us": 21.526111111111113,
+          "min_us": 14.09074074074074
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 24.666666666666664,
+          "med_us": 20.87037037037037,
+          "min_us": 15.657037037037037
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 25.055925925925926,
+          "med_us": 22.40074074074074,
+          "min_us": 14.954074074074073
+        }
+      },
+      "vs_bank_pct": -6.929264036319271,
+      "vs_mm0_pct": -4.187378430948785
+    },
+    "maxring": {
+      "mask": 32768,
+      "walls": [
+        26.067777777777778,
+        26.284814814814812,
+        26.54074074074074
+      ],
+      "med_us": 26.284814814814812,
+      "n_ok": 3,
+      "util512_pct": 42.85364032183066,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 26.284814814814812,
+          "med_us": 20.700370370370372,
+          "min_us": 15.536666666666667
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 25.150000000000002,
+          "med_us": 21.012407407407405,
+          "min_us": 17.18925925925926
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 25.545555555555556,
+          "med_us": 21.86185185185185,
+          "min_us": 16.414074074074072
+        }
+      },
+      "vs_bank_pct": -6.880715888365518,
+      "vs_mm0_pct": -4.1374000432245595
+    },
+    "total": {
+      "mask": 65536,
+      "walls": [
+        25.924814814814813,
+        26.274444444444445,
+        26.73777777777778
+      ],
+      "med_us": 26.274444444444445,
+      "n_ok": 3,
+      "util512_pct": 42.870554404364185,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 26.264814814814812,
+          "med_us": 20.552592592592593,
+          "min_us": 15.62
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 25.152592592592594,
+          "med_us": 21.071296296296296,
+          "min_us": 17.38148148148148
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 25.57037037037037,
+          "med_us": 21.79222222222222,
+          "min_us": 16.48222222222222
+        }
+      },
+      "vs_bank_pct": -6.917455027357544,
+      "vs_mm0_pct": -4.175221525826666
+    },
+    "pareto": {
+      "mask": 131072,
+      "walls": [
+        25.91037037037037,
+        25.992592592592594,
+        26.22888888888889
+      ],
+      "med_us": 25.992592592592594,
+      "n_ok": 3,
+      "util512_pct": 43.335423197492155,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 25.735555555555557,
+          "med_us": 21.24148148148148,
+          "min_us": 13.931111111111111
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 24.409259259259258,
+          "med_us": 20.932222222222222,
+          "min_us": 15.636296296296296
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 24.805555555555557,
+          "med_us": 22.24388888888889,
+          "min_us": 14.792962962962964
+        }
+      },
+      "vs_bank_pct": -7.915972340676792,
+      "vs_mm0_pct": -5.203155392262804
+    }
+  },
+  {
+    "group": "sm2",
+    "label": "128x6144x4608_sm2",
+    "M": 128,
+    "K": 6144,
+    "N": 4608,
+    "cfg": [
+      1,
+      6,
+      2,
+      2,
+      1
+    ],
+    "ideal_us": 115.968,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1149,
+        "max_ring_total": 133
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 990,
+        "max_ring_total": 111
+      },
+      "mm0": {
+        "max_edge": 22,
+        "total_hops": 881,
+        "max_ring_total": 111
+      },
+      "maxedge": {
+        "max_edge": 16,
+        "total_hops": 797,
+        "max_ring_total": 82
+      },
+      "maxring": {
+        "max_edge": 20,
+        "total_hops": 789,
+        "max_ring_total": 77
+      },
+      "total": {
+        "max_edge": 19,
+        "total_hops": 751,
+        "max_ring_total": 82
+      },
+      "pareto": {
+        "max_edge": 16,
+        "total_hops": 797,
+        "max_ring_total": 82
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "Sm": "2",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 24,
+        "bank_aggtot": 232,
+        "bank_maxringtot": 133,
+        "greedy_aggmax": 23,
+        "greedy_aggtot": 186,
+        "greedy_maxringtot": 99,
+        "mm0_aggmax": 16,
+        "mm0_aggtot": 123,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 15,
+        "maxedge_aggtot": 116,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 15,
+        "maxring_aggtot": 116,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 15,
+        "total_aggtot": 116,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 15,
+        "pareto_aggtot": 116,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(12:53)(16:70)"
+      },
+      {
+        "group": "2",
+        "Sm": "2",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 19,
+        "bank_aggtot": 164,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 19,
+        "greedy_aggtot": 162,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 19,
+        "mm0_aggtot": 150,
+        "mm0_maxringtot": 92,
+        "maxedge_aggmax": 15,
+        "maxedge_aggtot": 150,
+        "maxedge_maxringtot": 75,
+        "maxring_aggmax": 16,
+        "maxring_aggtot": 140,
+        "maxring_maxringtot": 70,
+        "total_aggmax": 19,
+        "total_aggtot": 133,
+        "total_maxringtot": 75,
+        "pareto_aggmax": 15,
+        "pareto_aggtot": 150,
+        "pareto_maxringtot": 75,
+        "sel_perring": "(10:58)(19:92)"
+      },
+      {
+        "group": "4",
+        "Sm": "2",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 25,
+        "bank_aggtot": 244,
+        "bank_maxringtot": 128,
+        "greedy_aggmax": 24,
+        "greedy_aggtot": 152,
+        "greedy_maxringtot": 82,
+        "mm0_aggmax": 22,
+        "mm0_aggtot": 123,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 16,
+        "maxedge_aggtot": 111,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 20,
+        "maxring_aggtot": 116,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 16,
+        "total_aggtot": 111,
+        "total_maxringtot": 70,
+        "pareto_aggmax": 16,
+        "pareto_aggtot": 111,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(14:53)(22:70)"
+      },
+      {
+        "group": "6",
+        "Sm": "2",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 23,
+        "bank_aggtot": 164,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 23,
+        "greedy_aggtot": 198,
+        "greedy_maxringtot": 111,
+        "mm0_aggmax": 18,
+        "mm0_aggtot": 159,
+        "mm0_maxringtot": 94,
+        "maxedge_aggmax": 14,
+        "maxedge_aggtot": 152,
+        "maxedge_maxringtot": 82,
+        "maxring_aggmax": 17,
+        "maxring_aggtot": 154,
+        "maxring_maxringtot": 77,
+        "total_aggmax": 14,
+        "total_aggtot": 152,
+        "total_maxringtot": 82,
+        "pareto_aggmax": 14,
+        "pareto_aggtot": 152,
+        "pareto_maxringtot": 82,
+        "sel_perring": "(12:65)(18:94)"
+      },
+      {
+        "group": "8",
+        "Sm": "2",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 21,
+        "bank_aggtot": 210,
+        "bank_maxringtot": 111,
+        "greedy_aggmax": 20,
+        "greedy_aggtot": 181,
+        "greedy_maxringtot": 111,
+        "mm0_aggmax": 20,
+        "mm0_aggtot": 181,
+        "mm0_maxringtot": 111,
+        "maxedge_aggmax": 15,
+        "maxedge_aggtot": 145,
+        "maxedge_maxringtot": 75,
+        "maxring_aggmax": 16,
+        "maxring_aggtot": 140,
+        "maxring_maxringtot": 70,
+        "total_aggmax": 18,
+        "total_aggtot": 128,
+        "total_maxringtot": 70,
+        "pareto_aggmax": 15,
+        "pareto_aggtot": 145,
+        "pareto_maxringtot": 75,
+        "sel_perring": "(11:70)(20:111)"
+      },
+      {
+        "group": "10",
+        "Sm": "2",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 15,
+        "bank_aggtot": 135,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 16,
+        "greedy_aggtot": 111,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 18,
+        "mm0_aggtot": 145,
+        "mm0_maxringtot": 99,
+        "maxedge_aggmax": 15,
+        "maxedge_aggtot": 123,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 15,
+        "maxring_aggtot": 123,
+        "maxring_maxringtot": 70,
+        "total_aggmax": 16,
+        "total_aggtot": 111,
+        "total_maxringtot": 70,
+        "pareto_aggmax": 15,
+        "pareto_aggtot": 123,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(10:46)(18:99)"
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        217.43851851851852,
+        217.73074074074074,
+        217.85925925925926
+      ],
+      "med_us": 217.73074074074074,
+      "n_ok": 3,
+      "util512_pct": 53.26211613732899,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 216.90851851851852,
+          "med_us": 209.78314814814814,
+          "min_us": 174.90333333333334
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 216.7225925925926,
+          "med_us": 209.93592592592591,
+          "min_us": 197.28518518518518
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 216.5951851851852,
+          "med_us": 209.86944444444444,
+          "min_us": 175.0462962962963
+        }
+      },
+      "vs_bank_pct": 0.0,
+      "vs_mm0_pct": 1.4445161535249218
+    },
+    "mm0": {
+      "mask": 16384,
+      "walls": [
+        214.42333333333335,
+        214.63037037037037,
+        214.9
+      ],
+      "med_us": 214.63037037037037,
+      "n_ok": 3,
+      "util512_pct": 54.0314960086419,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 214.01037037037037,
+          "med_us": 207.50240740740742,
+          "min_us": 173.98000000000002
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 213.1562962962963,
+          "med_us": 208.1222222222222,
+          "min_us": 193.92592592592592
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 213.6125925925926,
+          "med_us": 208.10055555555556,
+          "min_us": 174.12148148148148
+        }
+      },
+      "vs_bank_pct": -1.4239470089628226,
+      "vs_mm0_pct": 0.0
+    },
+    "maxedge": {
+      "mask": 0,
+      "walls": [
+        213.2611111111111,
+        213.28629629629629,
+        213.79925925925926
+      ],
+      "med_us": 213.28629629629629,
+      "n_ok": 3,
+      "util512_pct": 54.37198826824665,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 212.8511111111111,
+          "med_us": 207.04333333333335,
+          "min_us": 173.01333333333335
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 212.6914814814815,
+          "med_us": 207.86296296296297,
+          "min_us": 193.76851851851853
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 212.48555555555555,
+          "med_us": 207.49444444444444,
+          "min_us": 173.1562962962963
+        }
+      },
+      "vs_bank_pct": -2.041257210315839,
+      "vs_mm0_pct": -0.6262273469289203
+    },
+    "maxring": {
+      "mask": 32768,
+      "walls": [
+        213.94296296296295,
+        214.15296296296296,
+        214.16518518518518
+      ],
+      "med_us": 214.15296296296296,
+      "n_ok": 3,
+      "util512_pct": 54.1519474657263,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 213.56555555555556,
+          "med_us": 207.44351851851852,
+          "min_us": 174.36
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 213.5425925925926,
+          "med_us": 208.4787037037037,
+          "min_us": 193.79777777777778
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 213.2511111111111,
+          "med_us": 208.17870370370372,
+          "min_us": 174.50111111111113
+        }
+      },
+      "vs_bank_pct": -1.6432120543042439,
+      "vs_mm0_pct": -0.22243236434041913
+    },
+    "total": {
+      "mask": 65536,
+      "walls": [
+        213.02185185185184,
+        213.24666666666667,
+        213.70407407407407
+      ],
+      "med_us": 213.24666666666667,
+      "n_ok": 3,
+      "util512_pct": 54.382092725169606,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 212.20185185185187,
+          "med_us": 206.52537037037038,
+          "min_us": 172.38925925925926
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 212.24037037037039,
+          "med_us": 207.665,
+          "min_us": 193.1837037037037
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 211.87777777777777,
+          "med_us": 207.2348148148148,
+          "min_us": 172.5288888888889
+        }
+      },
+      "vs_bank_pct": -2.0594584204411515,
+      "vs_mm0_pct": -0.6446914764746237
+    },
+    "pareto": {
+      "mask": 131072,
+      "walls": [
+        212.4388888888889,
+        212.58962962962963,
+        214.09148148148148
+      ],
+      "med_us": 212.58962962962963,
+      "n_ok": 3,
+      "util512_pct": 54.550167946591586,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 212.03814814814817,
+          "med_us": 206.55314814814815,
+          "min_us": 172.90148148148148
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 211.82925925925926,
+          "med_us": 207.66092592592594,
+          "min_us": 192.4759259259259
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 211.73925925925926,
+          "med_us": 207.2901851851852,
+          "min_us": 173.04925925925926
+        }
+      },
+      "vs_bank_pct": -2.3612242780328474,
+      "vs_mm0_pct": -0.9508163906250533
+    }
+  },
+  {
+    "group": "sm4",
+    "label": "256x2048x1024_sm4",
+    "M": 256,
+    "K": 2048,
+    "N": 1024,
+    "cfg": [
+      1,
+      1,
+      4,
+      2,
+      2
+    ],
+    "ideal_us": 11.264,
+    "route_cost": {
+      "bank": {
+        "max_edge": 22,
+        "total_hops": 328,
+        "max_ring_total": 99
+      },
+      "greedy": {
+        "max_edge": 27,
+        "total_hops": 244,
+        "max_ring_total": 87
+      },
+      "mm0": {
+        "max_edge": 22,
+        "total_hops": 273,
+        "max_ring_total": 109
+      },
+      "maxedge": {
+        "max_edge": 16,
+        "total_hops": 280,
+        "max_ring_total": 70
+      },
+      "maxring": {
+        "max_edge": 23,
+        "total_hops": 229,
+        "max_ring_total": 65
+      },
+      "total": {
+        "max_edge": 19,
+        "total_hops": 215,
+        "max_ring_total": 75
+      },
+      "pareto": {
+        "max_edge": 18,
+        "total_hops": 253,
+        "max_ring_total": 70
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "Sm": "4",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 22,
+        "bank_aggtot": 328,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 27,
+        "greedy_aggtot": 244,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 22,
+        "mm0_aggtot": 273,
+        "mm0_maxringtot": 109,
+        "maxedge_aggmax": 16,
+        "maxedge_aggtot": 280,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 23,
+        "maxring_aggtot": 229,
+        "maxring_maxringtot": 65,
+        "total_aggmax": 19,
+        "total_aggtot": 215,
+        "total_maxringtot": 75,
+        "pareto_aggmax": 18,
+        "pareto_aggtot": 253,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(10:41)(22:58)(20:65)(22:109)"
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        72.4162962962963,
+        72.57555555555555,
+        72.75962962962963
+      ],
+      "med_us": 72.57555555555555,
+      "n_ok": 3,
+      "util512_pct": 15.520377231391041,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 32,
+          "max_us": 71.36592592592594,
+          "med_us": 64.3012962962963,
+          "min_us": 62.66333333333333
+        },
+        "NCRISC": {
+          "n": 32,
+          "max_us": 72.57555555555555,
+          "med_us": 65.51074074074074,
+          "min_us": 63.83296296296296
+        },
+        "TRISC": {
+          "n": 96,
+          "max_us": 72.08851851851851,
+          "med_us": 64.90185185185186,
+          "min_us": 63.20407407407408
+        }
+      },
+      "vs_bank_pct": 0.0,
+      "vs_mm0_pct": 1.5716196182913311
+    },
+    "mm0": {
+      "mask": 16384,
+      "walls": [
+        71.05592592592593,
+        71.4525925925926,
+        71.53814814814815
+      ],
+      "med_us": 71.4525925925926,
+      "n_ok": 3,
+      "util512_pct": 15.764298524792403,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 32,
+          "max_us": 70.11777777777777,
+          "med_us": 63.05351851851852,
+          "min_us": 61.391851851851854
+        },
+        "NCRISC": {
+          "n": 32,
+          "max_us": 71.3274074074074,
+          "med_us": 64.34722222222221,
+          "min_us": 62.556296296296296
+        },
+        "TRISC": {
+          "n": 96,
+          "max_us": 70.84962962962963,
+          "med_us": 63.65962962962963,
+          "min_us": 61.91851851851851
+        }
+      },
+      "vs_bank_pct": -1.5473019177970282,
+      "vs_mm0_pct": 0.0
+    },
+    "maxedge": {
+      "mask": 0,
+      "walls": [
+        72.57148148148148,
+        73.3962962962963,
+        73.97074074074074
+      ],
+      "med_us": 73.3962962962963,
+      "n_ok": 3,
+      "util512_pct": 15.346823434424985,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 32,
+          "max_us": 70.80703703703703,
+          "med_us": 64.19851851851853,
+          "min_us": 62.000370370370376
+        },
+        "NCRISC": {
+          "n": 32,
+          "max_us": 72.07777777777778,
+          "med_us": 65.46185185185185,
+          "min_us": 63.25555555555555
+        },
+        "TRISC": {
+          "n": 96,
+          "max_us": 71.51629629629629,
+          "med_us": 64.79592592592593,
+          "min_us": 62.534814814814816
+        }
+      },
+      "vs_bank_pct": 1.1308776549598498,
+      "vs_mm0_pct": 2.720270368335398
+    },
+    "maxring": {
+      "mask": 32768,
+      "walls": [
+        71.60555555555555,
+        71.76962962962962,
+        72.42185185185186
+      ],
+      "med_us": 71.76962962962962,
+      "n_ok": 3,
+      "util512_pct": 15.694660900618235,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 32,
+          "max_us": 70.35592592592593,
+          "med_us": 63.381851851851856,
+          "min_us": 61.86851851851853
+        },
+        "NCRISC": {
+          "n": 32,
+          "max_us": 71.55444444444446,
+          "med_us": 64.60222222222222,
+          "min_us": 63.09148148148149
+        },
+        "TRISC": {
+          "n": 96,
+          "max_us": 71.06703703703704,
+          "med_us": 63.97,
+          "min_us": 62.41777777777778
+        }
+      },
+      "vs_bank_pct": -1.1104647008992052,
+      "vs_mm0_pct": 0.44370263629858187
+    },
+    "total": {
+      "mask": 65536,
+      "walls": [
+        69.8525925925926,
+        70.16703703703703,
+        70.73444444444443
+      ],
+      "med_us": 70.16703703703703,
+      "n_ok": 3,
+      "util512_pct": 16.05312191542932,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 32,
+          "max_us": 68.63037037037037,
+          "med_us": 62.507777777777775,
+          "min_us": 61.827407407407414
+        },
+        "NCRISC": {
+          "n": 32,
+          "max_us": 69.8525925925926,
+          "med_us": 63.93962962962963,
+          "min_us": 63.01111111111111
+        },
+        "TRISC": {
+          "n": 96,
+          "max_us": 69.36555555555555,
+          "med_us": 63.11222222222222,
+          "min_us": 62.358888888888885
+        }
+      },
+      "vs_bank_pct": -3.31863600640967,
+      "vs_mm0_pct": -1.7991727226547627
+    },
+    "pareto": {
+      "mask": 131072,
+      "walls": [
+        71.32444444444445,
+        72.14481481481481,
+        72.32518518518519
+      ],
+      "med_us": 72.14481481481481,
+      "n_ok": 3,
+      "util512_pct": 15.613041670303044,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 32,
+          "max_us": 70.83814814814814,
+          "med_us": 63.97166666666667,
+          "min_us": 61.71666666666667
+        },
+        "NCRISC": {
+          "n": 32,
+          "max_us": 72.1048148148148,
+          "med_us": 65.16981481481483,
+          "min_us": 62.90037037037037
+        },
+        "TRISC": {
+          "n": 96,
+          "max_us": 71.54888888888888,
+          "med_us": 64.56907407407408,
+          "min_us": 62.24999999999999
+        }
+      },
+      "vs_bank_pct": -0.5935066393133126,
+      "vs_mm0_pct": 0.9687853121987056
+    }
+  },
+  {
+    "group": "sm4",
+    "label": "256x6144x4608_sm4",
+    "M": 256,
+    "K": 6144,
+    "N": 4608,
+    "cfg": [
+      1,
+      3,
+      4,
+      2,
+      1
+    ],
+    "ideal_us": 121.344,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1210,
+        "max_ring_total": 133
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 1135,
+        "max_ring_total": 116
+      },
+      "mm0": {
+        "max_edge": 24,
+        "total_hops": 946,
+        "max_ring_total": 111
+      },
+      "maxedge": {
+        "max_edge": 16,
+        "total_hops": 936,
+        "max_ring_total": 82
+      },
+      "maxring": {
+        "max_edge": 17,
+        "total_hops": 888,
+        "max_ring_total": 82
+      },
+      "total": {
+        "max_edge": 20,
+        "total_hops": 828,
+        "max_ring_total": 82
+      },
+      "pareto": {
+        "max_edge": 19,
+        "total_hops": 857,
+        "max_ring_total": 82
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "Sm": "4",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 24,
+        "bank_aggtot": 464,
+        "bank_maxringtot": 133,
+        "greedy_aggmax": 23,
+        "greedy_aggtot": 384,
+        "greedy_maxringtot": 111,
+        "mm0_aggmax": 19,
+        "mm0_aggtot": 263,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 15,
+        "maxedge_aggtot": 328,
+        "maxedge_maxringtot": 82,
+        "maxring_aggmax": 17,
+        "maxring_aggtot": 280,
+        "maxring_maxringtot": 70,
+        "total_aggmax": 19,
+        "total_aggtot": 249,
+        "total_maxringtot": 75,
+        "pareto_aggmax": 19,
+        "pareto_aggtot": 249,
+        "pareto_maxringtot": 75,
+        "sel_perring": "(12:53)(16:70)(18:70)(19:70)"
+      },
+      {
+        "group": "4",
+        "Sm": "4",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 23,
+        "bank_aggtot": 299,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 24,
+        "greedy_aggtot": 389,
+        "greedy_maxringtot": 116,
+        "mm0_aggmax": 24,
+        "mm0_aggtot": 321,
+        "mm0_maxringtot": 111,
+        "maxedge_aggmax": 16,
+        "maxedge_aggtot": 292,
+        "maxedge_maxringtot": 82,
+        "maxring_aggmax": 16,
+        "maxring_aggtot": 292,
+        "maxring_maxringtot": 82,
+        "total_aggmax": 16,
+        "total_aggtot": 292,
+        "total_maxringtot": 82,
+        "pareto_aggmax": 16,
+        "pareto_aggtot": 292,
+        "pareto_maxringtot": 82,
+        "sel_perring": "(14:53)(22:70)(24:111)(24:87)"
+      },
+      {
+        "group": "8",
+        "Sm": "4",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 25,
+        "bank_aggtot": 447,
+        "bank_maxringtot": 121,
+        "greedy_aggmax": 22,
+        "greedy_aggtot": 362,
+        "greedy_maxringtot": 111,
+        "mm0_aggmax": 22,
+        "mm0_aggtot": 362,
+        "mm0_maxringtot": 111,
+        "maxedge_aggmax": 16,
+        "maxedge_aggtot": 316,
+        "maxedge_maxringtot": 82,
+        "maxring_aggmax": 16,
+        "maxring_aggtot": 316,
+        "maxring_maxringtot": 82,
+        "total_aggmax": 20,
+        "total_aggtot": 287,
+        "total_maxringtot": 82,
+        "pareto_aggmax": 16,
+        "pareto_aggtot": 316,
+        "pareto_maxringtot": 82,
+        "sel_perring": "(11:70)(20:111)(20:87)(22:94)"
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        525.3440740740741,
+        526.8485185185185,
+        528.4644444444444
+      ],
+      "med_us": 526.8485185185185,
+      "n_ok": 3,
+      "util512_pct": 23.03204730293548,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 527.6877777777778,
+          "med_us": 485.2685185185185,
+          "min_us": 434.24666666666667
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 528.0225925925926,
+          "med_us": 491.31074074074075,
+          "min_us": 457.68333333333334
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 527.6003703703703,
+          "med_us": 485.4948148148148,
+          "min_us": 434.4137037037037
+        }
+      },
+      "vs_bank_pct": 0.0,
+      "vs_mm0_pct": 0.7503380204080035
+    },
+    "mm0": {
+      "mask": 16384,
+      "walls": [
+        522.3648148148147,
+        522.9248148148148,
+        523.2611111111111
+      ],
+      "med_us": 522.9248148148148,
+      "n_ok": 3,
+      "util512_pct": 23.204865510727764,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 521.8348148148148,
+          "med_us": 478.5912962962963,
+          "min_us": 424.61703703703705
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 521.9492592592593,
+          "med_us": 481.9025925925926,
+          "min_us": 451.43296296296296
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 521.6470370370371,
+          "med_us": 479.0892592592593,
+          "min_us": 424.7555555555556
+        }
+      },
+      "vs_bank_pct": -0.7447498789096119,
+      "vs_mm0_pct": 0.0
+    },
+    "maxedge": {
+      "mask": 0,
+      "walls": [
+        525.7037037037037,
+        526.4418518518519,
+        527.3966666666668
+      ],
+      "med_us": 526.4418518518519,
+      "n_ok": 3,
+      "util512_pct": 23.049839136677893,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 525.3840740740741,
+          "med_us": 479.37018518518516,
+          "min_us": 428.90000000000003
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 525.4977777777779,
+          "med_us": 484.0561111111111,
+          "min_us": 451.6481481481481
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 525.2166666666667,
+          "med_us": 479.8155555555556,
+          "min_us": 429.0525925925926
+        }
+      },
+      "vs_bank_pct": -0.07718853757245903,
+      "vs_mm0_pct": 0.6725703078907408
+    },
+    "maxring": {
+      "mask": 32768,
+      "walls": [
+        520.445925925926,
+        522.3181481481482,
+        523.2892592592592
+      ],
+      "med_us": 522.3181481481482,
+      "n_ok": 3,
+      "util512_pct": 23.231817701571124,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 520.3222222222222,
+          "med_us": 479.5051851851852,
+          "min_us": 426.8962962962963
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 520.445925925926,
+          "med_us": 484.82462962962967,
+          "min_us": 452.0744444444444
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 520.1374074074074,
+          "med_us": 479.47425925925927,
+          "min_us": 427.0659259259259
+        }
+      },
+      "vs_bank_pct": -0.8598999923373762,
+      "vs_mm0_pct": -0.11601412850935633
+    },
+    "total": {
+      "mask": 65536,
+      "walls": [
+        520.1344444444445,
+        520.7618518518518,
+        520.9744444444444
+      ],
+      "med_us": 520.7618518518518,
+      "n_ok": 3,
+      "util512_pct": 23.301245966557545,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 520.6414814814815,
+          "med_us": 478.2514814814815,
+          "min_us": 427.89629629629627
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 520.7588888888889,
+          "med_us": 483.6362962962963,
+          "min_us": 449.5755555555556
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 520.4755555555555,
+          "med_us": 478.6433333333333,
+          "min_us": 428.04703703703706
+        }
+      },
+      "vs_bank_pct": -1.1552972918633664,
+      "vs_mm0_pct": -0.4136279062849524
+    },
+    "pareto": {
+      "mask": 131072,
+      "walls": [
+        520.2137037037037,
+        521.3596296296297,
+        521.422962962963
+      ],
+      "med_us": 521.3596296296297,
+      "n_ok": 3,
+      "util512_pct": 23.274529346701037,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 519.9222222222222,
+          "med_us": 477.86018518518523,
+          "min_us": 426.3337037037037
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 520.2133333333334,
+          "med_us": 483.68,
+          "min_us": 449.8451851851852
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 519.8288888888889,
+          "med_us": 478.54314814814813,
+          "min_us": 426.5074074074074
+        }
+      },
+      "vs_bank_pct": -1.0418343595846924,
+      "vs_mm0_pct": -0.29931361848631877
+    }
+  },
+  {
+    "group": "sm3",
+    "label": "256x2048x1024_sm3",
+    "M": 256,
+    "K": 2048,
+    "N": 1024,
+    "cfg": [
+      1,
+      1,
+      3,
+      2,
+      2
+    ],
+    "ideal_us": 11.264,
+    "route_cost": {
+      "bank": {
+        "max_edge": 19,
+        "total_hops": 195,
+        "max_ring_total": 65
+      },
+      "greedy": {
+        "max_edge": 18,
+        "total_hops": 140,
+        "max_ring_total": 58
+      },
+      "mm0": {
+        "max_edge": 20,
+        "total_hops": 152,
+        "max_ring_total": 70
+      },
+      "maxedge": {
+        "max_edge": 15,
+        "total_hops": 123,
+        "max_ring_total": 41
+      },
+      "maxring": {
+        "max_edge": 15,
+        "total_hops": 123,
+        "max_ring_total": 41
+      },
+      "total": {
+        "max_edge": 15,
+        "total_hops": 123,
+        "max_ring_total": 41
+      },
+      "pareto": {
+        "max_edge": 15,
+        "total_hops": 123,
+        "max_ring_total": 41
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "Sm": "3",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 19,
+        "bank_aggtot": 195,
+        "bank_maxringtot": 65,
+        "greedy_aggmax": 18,
+        "greedy_aggtot": 140,
+        "greedy_maxringtot": 58,
+        "mm0_aggmax": 20,
+        "mm0_aggtot": 152,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 15,
+        "maxedge_aggtot": 123,
+        "maxedge_maxringtot": 41,
+        "maxring_aggmax": 15,
+        "maxring_aggtot": 123,
+        "maxring_maxringtot": 41,
+        "total_aggmax": 15,
+        "total_aggtot": 123,
+        "total_maxringtot": 41,
+        "pareto_aggmax": 15,
+        "pareto_aggtot": 123,
+        "pareto_maxringtot": 41,
+        "sel_perring": "(10:41)(12:41)(20:70)"
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        71.85777777777778,
+        71.93703703703704,
+        72.11740740740741
+      ],
+      "med_us": 71.93703703703704,
+      "n_ok": 3,
+      "util512_pct": 15.658137259949543,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 24,
+          "max_us": 70.46962962962964,
+          "med_us": 65.72648148148147,
+          "min_us": 61.41592592592593
+        },
+        "NCRISC": {
+          "n": 24,
+          "max_us": 71.89222222222223,
+          "med_us": 67.09296296296296,
+          "min_us": 62.69185185185185
+        },
+        "TRISC": {
+          "n": 72,
+          "max_us": 71.28888888888889,
+          "med_us": 66.43925925925926,
+          "min_us": 62.04444444444444
+        }
+      },
+      "vs_bank_pct": 0.0,
+      "vs_mm0_pct": 13.10723145549202
+    },
+    "mm0": {
+      "mask": 16384,
+      "walls": [
+        63.41296296296296,
+        63.60074074074075,
+        64.63814814814816
+      ],
+      "med_us": 63.60074074074075,
+      "n_ok": 3,
+      "util512_pct": 17.710485552229763,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 24,
+          "max_us": 62.169999999999995,
+          "med_us": 59.565185185185186,
+          "min_us": 57.96185185185185
+        },
+        "NCRISC": {
+          "n": 24,
+          "max_us": 63.56851851851851,
+          "med_us": 60.90148148148148,
+          "min_us": 59.32259259259259
+        },
+        "TRISC": {
+          "n": 72,
+          "max_us": 63.00111111111111,
+          "med_us": 60.2624074074074,
+          "min_us": 58.61148148148148
+        }
+      },
+      "vs_bank_pct": -11.588323122071776,
+      "vs_mm0_pct": 0.0
+    },
+    "maxedge": {
+      "mask": 0,
+      "walls": [
+        61.40333333333333,
+        61.568518518518516,
+        61.65666666666666
+      ],
+      "med_us": 61.568518518518516,
+      "n_ok": 3,
+      "util512_pct": 18.29506421632027,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 24,
+          "max_us": 59.69962962962963,
+          "med_us": 58.89555555555555,
+          "min_us": 58.153703703703705
+        },
+        "NCRISC": {
+          "n": 24,
+          "max_us": 61.23444444444444,
+          "med_us": 60.42685185185186,
+          "min_us": 59.41888888888889
+        },
+        "TRISC": {
+          "n": 72,
+          "max_us": 60.50592592592593,
+          "med_us": 59.6862962962963,
+          "min_us": 58.78074074074074
+        }
+      },
+      "vs_bank_pct": -14.413324409205597,
+      "vs_mm0_pct": -3.1952807444590836
+    },
+    "maxring": {
+      "mask": 32768,
+      "walls": [
+        60.915925925925926,
+        61.014074074074074,
+        61.177407407407415
+      ],
+      "med_us": 61.014074074074074,
+      "n_ok": 3,
+      "util512_pct": 18.46131432942005,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 24,
+          "max_us": 59.29481481481481,
+          "med_us": 58.94740740740741,
+          "min_us": 57.87185185185185
+        },
+        "NCRISC": {
+          "n": 24,
+          "max_us": 60.784814814814816,
+          "med_us": 60.431296296296296,
+          "min_us": 59.20962962962963
+        },
+        "TRISC": {
+          "n": 72,
+          "max_us": 60.12481481481481,
+          "med_us": 59.69611111111111,
+          "min_us": 58.50925925925926
+        }
+      },
+      "vs_bank_pct": -15.18406013489163,
+      "vs_mm0_pct": -4.067038585620953
+    },
+    "total": {
+      "mask": 65536,
+      "walls": [
+        61.09444444444444,
+        61.3962962962963,
+        61.601851851851855
+      ],
+      "med_us": 61.3962962962963,
+      "n_ok": 3,
+      "util512_pct": 18.346383543463833,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 24,
+          "max_us": 59.2462962962963,
+          "med_us": 58.965555555555554,
+          "min_us": 58.132222222222225
+        },
+        "NCRISC": {
+          "n": 24,
+          "max_us": 60.794074074074075,
+          "med_us": 60.47277777777778,
+          "min_us": 59.407037037037036
+        },
+        "TRISC": {
+          "n": 72,
+          "max_us": 60.07037037037037,
+          "med_us": 59.77981481481481,
+          "min_us": 58.75925925925926
+        }
+      },
+      "vs_bank_pct": -14.652731297945742,
+      "vs_mm0_pct": -3.4660672482267896
+    },
+    "pareto": {
+      "mask": 131072,
+      "walls": [
+        60.96370370370371,
+        61.11555555555555,
+        61.4237037037037
+      ],
+      "med_us": 61.11555555555555,
+      "n_ok": 3,
+      "util512_pct": 18.43065958839357,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 24,
+          "max_us": 58.87814814814815,
+          "med_us": 58.45518518518519,
+          "min_us": 57.78962962962963
+        },
+        "NCRISC": {
+          "n": 24,
+          "max_us": 60.429259259259254,
+          "med_us": 60.03166666666667,
+          "min_us": 59.24740740740741
+        },
+        "TRISC": {
+          "n": 72,
+          "max_us": 59.69555555555556,
+          "med_us": 59.22314814814815,
+          "min_us": 58.49037037037037
+        }
+      },
+      "vs_bank_pct": -15.042990269268408,
+      "vs_mm0_pct": -3.9074783661965373
+    }
+  },
+  {
+    "group": "control",
+    "label": "256x6144x768",
+    "M": 256,
+    "K": 6144,
+    "N": 768,
+    "cfg": [
+      1,
+      12,
+      1,
+      2,
+      1
+    ],
+    "ideal_us": 25.344,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1159,
+        "max_ring_total": 133
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 891,
+        "max_ring_total": 87
+      },
+      "mm0": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      },
+      "maxedge": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      },
+      "maxring": {
+        "max_edge": 16,
+        "total_hops": 668,
+        "max_ring_total": 70
+      },
+      "total": {
+        "max_edge": 16,
+        "total_hops": 668,
+        "max_ring_total": 70
+      },
+      "pareto": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 20,
+        "bank_aggtot": 99,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 15,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 12,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(12:53)"
+      },
+      {
+        "group": "1",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 13,
+        "bank_aggtot": 65,
+        "bank_maxringtot": 65,
+        "greedy_aggmax": 22,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 10,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 10,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(10:58)"
+      },
+      {
+        "group": "2",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 24,
+        "bank_aggtot": 133,
+        "bank_maxringtot": 133,
+        "greedy_aggmax": 17,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 10,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 10,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(10:58)"
+      },
+      {
+        "group": "3",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 19,
+        "bank_aggtot": 99,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 20,
+        "greedy_aggtot": 82,
+        "greedy_maxringtot": 82,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 12,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(12:58)"
+      },
+      {
+        "group": "4",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 21,
+        "bank_aggtot": 116,
+        "bank_maxringtot": 116,
+        "greedy_aggmax": 16,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 14,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 14,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 14,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 14,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 14,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(14:53)"
+      },
+      {
+        "group": "5",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 12,
+        "bank_aggtot": 53,
+        "bank_maxringtot": 53,
+        "greedy_aggmax": 21,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 7,
+        "mm0_aggtot": 41,
+        "mm0_maxringtot": 41,
+        "maxedge_aggmax": 7,
+        "maxedge_aggtot": 41,
+        "maxedge_maxringtot": 41,
+        "maxring_aggmax": 7,
+        "maxring_aggtot": 41,
+        "maxring_maxringtot": 41,
+        "total_aggmax": 7,
+        "total_aggtot": 41,
+        "total_maxringtot": 41,
+        "pareto_aggmax": 7,
+        "pareto_aggtot": 41,
+        "pareto_maxringtot": 41,
+        "sel_perring": "(7:41)"
+      },
+      {
+        "group": "6",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 22,
+        "bank_aggtot": 116,
+        "bank_maxringtot": 116,
+        "greedy_aggmax": 22,
+        "greedy_aggtot": 82,
+        "greedy_maxringtot": 82,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 65,
+        "mm0_maxringtot": 65,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 65,
+        "maxedge_maxringtot": 65,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 65,
+        "maxring_maxringtot": 65,
+        "total_aggmax": 12,
+        "total_aggtot": 65,
+        "total_maxringtot": 65,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 65,
+        "pareto_maxringtot": 65,
+        "sel_perring": "(12:65)"
+      },
+      {
+        "group": "7",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 23,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 24,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 11,
+        "mm0_aggtot": 70,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 11,
+        "maxedge_aggtot": 70,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 11,
+        "maxring_aggtot": 70,
+        "maxring_maxringtot": 70,
+        "total_aggmax": 11,
+        "total_aggtot": 70,
+        "total_maxringtot": 70,
+        "pareto_aggmax": 11,
+        "pareto_aggtot": 70,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(11:70)"
+      },
+      {
+        "group": "8",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 21,
+        "bank_aggtot": 111,
+        "bank_maxringtot": 111,
+        "greedy_aggmax": 11,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 11,
+        "mm0_aggtot": 70,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 11,
+        "maxedge_aggtot": 70,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 16,
+        "maxring_aggtot": 65,
+        "maxring_maxringtot": 65,
+        "total_aggmax": 16,
+        "total_aggtot": 65,
+        "total_maxringtot": 65,
+        "pareto_aggmax": 11,
+        "pareto_aggtot": 70,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(11:70)"
+      },
+      {
+        "group": "9",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 20,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 21,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 9,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 9,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 9,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 9,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 9,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(9:53)"
+      },
+      {
+        "group": "10",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 25,
+        "bank_aggtot": 121,
+        "bank_maxringtot": 121,
+        "greedy_aggmax": 14,
+        "greedy_aggtot": 46,
+        "greedy_maxringtot": 46,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 46,
+        "mm0_maxringtot": 46,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 46,
+        "maxedge_maxringtot": 46,
+        "maxring_aggmax": 11,
+        "maxring_aggtot": 41,
+        "maxring_maxringtot": 41,
+        "total_aggmax": 11,
+        "total_aggtot": 41,
+        "total_maxringtot": 41,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 46,
+        "pareto_maxringtot": 46,
+        "sel_perring": "(10:46)"
+      },
+      {
+        "group": "11",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 15,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 18,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 13,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 13,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(12:58)"
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        51.08962962962963,
+        51.43185185185185,
+        52.031111111111116
+      ],
+      "med_us": 51.43185185185185,
+      "n_ok": 3,
+      "util512_pct": 49.27685682600493,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 51.16,
+          "med_us": 43.31944444444444,
+          "min_us": 30.58666666666667
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 50.10814814814815,
+          "med_us": 43.522592592592595,
+          "min_us": 34.24925925925926
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 50.51111111111111,
+          "med_us": 44.03148148148148,
+          "min_us": 32.32666666666667
+        }
+      },
+      "vs_bank_pct": 0.0,
+      "vs_mm0_pct": 9.28393235171443
+    },
+    "mm0": {
+      "mask": 16384,
+      "walls": [
+        46.49148148148148,
+        47.062592592592594,
+        47.30407407407408
+      ],
+      "med_us": 47.062592592592594,
+      "n_ok": 3,
+      "util512_pct": 53.85168687878239,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 47.30407407407408,
+          "med_us": 38.44111111111111,
+          "min_us": 25.35148148148148
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 46.25962962962963,
+          "med_us": 38.60037037037037,
+          "min_us": 28.77925925925926
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 46.66222222222222,
+          "med_us": 39.00888888888889,
+          "min_us": 27.080000000000002
+        }
+      },
+      "vs_bank_pct": -8.495240015554561,
+      "vs_mm0_pct": 0.0
+    },
+    "maxedge": {
+      "mask": 0,
+      "walls": [
+        46.83925925925926,
+        47.64037037037037,
+        47.68333333333333
+      ],
+      "med_us": 47.64037037037037,
+      "n_ok": 3,
+      "util512_pct": 53.198578858577775,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 47.50185185185185,
+          "med_us": 38.57629629629629,
+          "min_us": 25.57296296296296
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 46.464814814814815,
+          "med_us": 38.88481481481481,
+          "min_us": 29.047407407407405
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 46.86,
+          "med_us": 39.15833333333333,
+          "min_us": 27.34740740740741
+        }
+      },
+      "vs_bank_pct": -7.371854881684503,
+      "vs_mm0_pct": 1.227679449747776
+    },
+    "maxring": {
+      "mask": 32768,
+      "walls": [
+        47.99777777777778,
+        48.135925925925925,
+        48.27037037037037
+      ],
+      "med_us": 48.135925925925925,
+      "n_ok": 3,
+      "util512_pct": 52.650903690936936,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 48.242592592592594,
+          "med_us": 40.195740740740746,
+          "min_us": 28.535555555555558
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 47.18518518518518,
+          "med_us": 40.48074074074074,
+          "min_us": 29.819259259259262
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 47.601851851851855,
+          "med_us": 40.742037037037036,
+          "min_us": 30.222962962962963
+        }
+      },
+      "vs_bank_pct": -6.408336093788258,
+      "vs_mm0_pct": 2.280650670108364
+    },
+    "total": {
+      "mask": 65536,
+      "walls": [
+        47.613703703703706,
+        47.809999999999995,
+        47.93851851851852
+      ],
+      "med_us": 47.809999999999995,
+      "n_ok": 3,
+      "util512_pct": 53.009830579376704,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 47.50555555555555,
+          "med_us": 39.894444444444446,
+          "min_us": 28.69703703703704
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 46.67,
+          "med_us": 39.930925925925926,
+          "min_us": 30.023333333333333
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 46.931481481481484,
+          "med_us": 40.303703703703704,
+          "min_us": 30.266666666666666
+        }
+      },
+      "vs_bank_pct": -7.04204052827907,
+      "vs_mm0_pct": 1.588113544609615
+    },
+    "pareto": {
+      "mask": 131072,
+      "walls": [
+        47.22925925925926,
+        47.30407407407408,
+        47.42074074074074
+      ],
+      "med_us": 47.30407407407408,
+      "n_ok": 3,
+      "util512_pct": 53.57678063904917,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 47.00333333333333,
+          "med_us": 38.44,
+          "min_us": 25.68740740740741
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 45.95444444444444,
+          "med_us": 38.788518518518515,
+          "min_us": 28.916666666666668
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 46.36037037037037,
+          "med_us": 39.09092592592592,
+          "min_us": 27.381481481481483
+        }
+      },
+      "vs_bank_pct": -8.025722639090915,
+      "vs_mm0_pct": 0.5131070520740799
+    }
+  },
+  {
+    "group": "control",
+    "label": "256x6144x4608",
+    "M": 256,
+    "K": 6144,
+    "N": 4608,
+    "cfg": [
+      1,
+      12,
+      1,
+      2,
+      1
+    ],
+    "ideal_us": 121.344,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1159,
+        "max_ring_total": 133
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 891,
+        "max_ring_total": 87
+      },
+      "mm0": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      },
+      "maxedge": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      },
+      "maxring": {
+        "max_edge": 16,
+        "total_hops": 668,
+        "max_ring_total": 70
+      },
+      "total": {
+        "max_edge": 16,
+        "total_hops": 668,
+        "max_ring_total": 70
+      },
+      "pareto": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 20,
+        "bank_aggtot": 99,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 15,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 12,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(12:53)"
+      },
+      {
+        "group": "1",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 13,
+        "bank_aggtot": 65,
+        "bank_maxringtot": 65,
+        "greedy_aggmax": 22,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 10,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 10,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(10:58)"
+      },
+      {
+        "group": "2",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 24,
+        "bank_aggtot": 133,
+        "bank_maxringtot": 133,
+        "greedy_aggmax": 17,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 10,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 10,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(10:58)"
+      },
+      {
+        "group": "3",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 19,
+        "bank_aggtot": 99,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 20,
+        "greedy_aggtot": 82,
+        "greedy_maxringtot": 82,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 12,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(12:58)"
+      },
+      {
+        "group": "4",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 21,
+        "bank_aggtot": 116,
+        "bank_maxringtot": 116,
+        "greedy_aggmax": 16,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 14,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 14,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 14,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 14,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 14,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(14:53)"
+      },
+      {
+        "group": "5",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 12,
+        "bank_aggtot": 53,
+        "bank_maxringtot": 53,
+        "greedy_aggmax": 21,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 7,
+        "mm0_aggtot": 41,
+        "mm0_maxringtot": 41,
+        "maxedge_aggmax": 7,
+        "maxedge_aggtot": 41,
+        "maxedge_maxringtot": 41,
+        "maxring_aggmax": 7,
+        "maxring_aggtot": 41,
+        "maxring_maxringtot": 41,
+        "total_aggmax": 7,
+        "total_aggtot": 41,
+        "total_maxringtot": 41,
+        "pareto_aggmax": 7,
+        "pareto_aggtot": 41,
+        "pareto_maxringtot": 41,
+        "sel_perring": "(7:41)"
+      },
+      {
+        "group": "6",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 22,
+        "bank_aggtot": 116,
+        "bank_maxringtot": 116,
+        "greedy_aggmax": 22,
+        "greedy_aggtot": 82,
+        "greedy_maxringtot": 82,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 65,
+        "mm0_maxringtot": 65,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 65,
+        "maxedge_maxringtot": 65,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 65,
+        "maxring_maxringtot": 65,
+        "total_aggmax": 12,
+        "total_aggtot": 65,
+        "total_maxringtot": 65,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 65,
+        "pareto_maxringtot": 65,
+        "sel_perring": "(12:65)"
+      },
+      {
+        "group": "7",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 23,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 24,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 11,
+        "mm0_aggtot": 70,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 11,
+        "maxedge_aggtot": 70,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 11,
+        "maxring_aggtot": 70,
+        "maxring_maxringtot": 70,
+        "total_aggmax": 11,
+        "total_aggtot": 70,
+        "total_maxringtot": 70,
+        "pareto_aggmax": 11,
+        "pareto_aggtot": 70,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(11:70)"
+      },
+      {
+        "group": "8",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 21,
+        "bank_aggtot": 111,
+        "bank_maxringtot": 111,
+        "greedy_aggmax": 11,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 11,
+        "mm0_aggtot": 70,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 11,
+        "maxedge_aggtot": 70,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 16,
+        "maxring_aggtot": 65,
+        "maxring_maxringtot": 65,
+        "total_aggmax": 16,
+        "total_aggtot": 65,
+        "total_maxringtot": 65,
+        "pareto_aggmax": 11,
+        "pareto_aggtot": 70,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(11:70)"
+      },
+      {
+        "group": "9",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 20,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 21,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 9,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 9,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 9,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 9,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 9,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(9:53)"
+      },
+      {
+        "group": "10",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 25,
+        "bank_aggtot": 121,
+        "bank_maxringtot": 121,
+        "greedy_aggmax": 14,
+        "greedy_aggtot": 46,
+        "greedy_maxringtot": 46,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 46,
+        "mm0_maxringtot": 46,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 46,
+        "maxedge_maxringtot": 46,
+        "maxring_aggmax": 11,
+        "maxring_aggtot": 41,
+        "maxring_maxringtot": 41,
+        "total_aggmax": 11,
+        "total_aggtot": 41,
+        "total_maxringtot": 41,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 46,
+        "pareto_maxringtot": 46,
+        "sel_perring": "(10:46)"
+      },
+      {
+        "group": "11",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 15,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 18,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 13,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 13,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(12:58)"
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        150.0348148148148,
+        150.66037037037037,
+        151.00148148148148
+      ],
+      "med_us": 150.66037037037037,
+      "n_ok": 3,
+      "util512_pct": 80.54141888918662,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 150.51962962962963,
+          "med_us": 141.31666666666666,
+          "min_us": 112.10185185185185
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 150.38,
+          "med_us": 141.50333333333333,
+          "min_us": 124.46666666666667
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 150.0211111111111,
+          "med_us": 142.14425925925926,
+          "min_us": 115.75259259259259
+        }
+      },
+      "vs_bank_pct": 0.0,
+      "vs_mm0_pct": 3.4644752036056214
+    },
+    "mm0": {
+      "mask": 16384,
+      "walls": [
+        145.36962962962963,
+        145.61555555555557,
+        146.73962962962963
+      ],
+      "med_us": 145.61555555555557,
+      "n_ok": 3,
+      "util512_pct": 83.33175637523462,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 146.55962962962963,
+          "med_us": 135.6424074074074,
+          "min_us": 107.30222222222223
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 146.37333333333333,
+          "med_us": 135.8311111111111,
+          "min_us": 118.3125925925926
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 146.09444444444446,
+          "med_us": 136.33481481481482,
+          "min_us": 110.78037037037036
+        }
+      },
+      "vs_bank_pct": -3.3484683479889643,
+      "vs_mm0_pct": 0.0
+    },
+    "maxedge": {
+      "mask": 0,
+      "walls": [
+        145.8374074074074,
+        146.00296296296295,
+        146.02703703703702
+      ],
+      "med_us": 146.00296296296295,
+      "n_ok": 3,
+      "util512_pct": 83.11064209757285,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 145.7685185185185,
+          "med_us": 135.9737037037037,
+          "min_us": 107.69185185185185
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 145.79925925925926,
+          "med_us": 136.51425925925926,
+          "min_us": 118.42703703703704
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 145.27592592592595,
+          "med_us": 136.75148148148148,
+          "min_us": 110.62666666666667
+        }
+      },
+      "vs_bank_pct": -3.0913287920095067,
+      "vs_mm0_pct": 0.26604809213504055
+    },
+    "maxring": {
+      "mask": 32768,
+      "walls": [
+        146.69703703703703,
+        146.97407407407408,
+        147.04999999999998
+      ],
+      "med_us": 146.97407407407408,
+      "n_ok": 3,
+      "util512_pct": 82.56149988660131,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 146.4362962962963,
+          "med_us": 137.84425925925925,
+          "min_us": 110.02222222222221
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 145.60814814814816,
+          "med_us": 137.80740740740742,
+          "min_us": 118.62777777777777
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 145.65555555555557,
+          "med_us": 138.55148148148146,
+          "min_us": 111.57814814814814
+        }
+      },
+      "vs_bank_pct": -2.446759082852523,
+      "vs_mm0_pct": 0.9329487590357122
+    },
+    "total": {
+      "mask": 65536,
+      "walls": [
+        146.9285185185185,
+        147.05851851851853,
+        147.39037037037036
+      ],
+      "med_us": 147.05851851851853,
+      "n_ok": 3,
+      "util512_pct": 82.51409114033717,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 146.97333333333333,
+          "med_us": 137.62314814814815,
+          "min_us": 109.24962962962962
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 146.6211111111111,
+          "med_us": 138.00944444444443,
+          "min_us": 118.5937037037037
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 146.49888888888887,
+          "med_us": 138.57574074074074,
+          "min_us": 110.4888888888889
+        }
+      },
+      "vs_bank_pct": -2.3907095429258285,
+      "vs_mm0_pct": 0.9909401213749058
+    },
+    "pareto": {
+      "mask": 131072,
+      "walls": [
+        145.74962962962962,
+        145.7814814814815,
+        146.39370370370372
+      ],
+      "med_us": 145.7814814814815,
+      "n_ok": 3,
+      "util512_pct": 83.23690963136097,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 145.6811111111111,
+          "med_us": 135.7014814814815,
+          "min_us": 107.53666666666666
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 145.60407407407408,
+          "med_us": 135.96888888888887,
+          "min_us": 117.78851851851852
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 145.20074074074074,
+          "med_us": 136.5277777777778,
+          "min_us": 109.45407407407407
+        }
+      },
+      "vs_bank_pct": -3.2383359186593186,
+      "vs_mm0_pct": 0.1139479400348975
+    }
+  },
+  {
+    "group": "control",
+    "label": "256x6144x2304",
+    "M": 256,
+    "K": 6144,
+    "N": 2304,
+    "cfg": [
+      1,
+      12,
+      1,
+      2,
+      1
+    ],
+    "ideal_us": 63.74400000000001,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1159,
+        "max_ring_total": 133
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 891,
+        "max_ring_total": 87
+      },
+      "mm0": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      },
+      "maxedge": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      },
+      "maxring": {
+        "max_edge": 16,
+        "total_hops": 668,
+        "max_ring_total": 70
+      },
+      "total": {
+        "max_edge": 16,
+        "total_hops": 668,
+        "max_ring_total": 70
+      },
+      "pareto": {
+        "max_edge": 14,
+        "total_hops": 683,
+        "max_ring_total": 70
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 20,
+        "bank_aggtot": 99,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 15,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 12,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(12:53)"
+      },
+      {
+        "group": "1",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 13,
+        "bank_aggtot": 65,
+        "bank_maxringtot": 65,
+        "greedy_aggmax": 22,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 10,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 10,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(10:58)"
+      },
+      {
+        "group": "2",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 24,
+        "bank_aggtot": 133,
+        "bank_maxringtot": 133,
+        "greedy_aggmax": 17,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 10,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 10,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(10:58)"
+      },
+      {
+        "group": "3",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 19,
+        "bank_aggtot": 99,
+        "bank_maxringtot": 99,
+        "greedy_aggmax": 20,
+        "greedy_aggtot": 82,
+        "greedy_maxringtot": 82,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 58,
+        "maxring_maxringtot": 58,
+        "total_aggmax": 12,
+        "total_aggtot": 58,
+        "total_maxringtot": 58,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(12:58)"
+      },
+      {
+        "group": "4",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 21,
+        "bank_aggtot": 116,
+        "bank_maxringtot": 116,
+        "greedy_aggmax": 16,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 14,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 14,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 14,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 14,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 14,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(14:53)"
+      },
+      {
+        "group": "5",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 12,
+        "bank_aggtot": 53,
+        "bank_maxringtot": 53,
+        "greedy_aggmax": 21,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 7,
+        "mm0_aggtot": 41,
+        "mm0_maxringtot": 41,
+        "maxedge_aggmax": 7,
+        "maxedge_aggtot": 41,
+        "maxedge_maxringtot": 41,
+        "maxring_aggmax": 7,
+        "maxring_aggtot": 41,
+        "maxring_maxringtot": 41,
+        "total_aggmax": 7,
+        "total_aggtot": 41,
+        "total_maxringtot": 41,
+        "pareto_aggmax": 7,
+        "pareto_aggtot": 41,
+        "pareto_maxringtot": 41,
+        "sel_perring": "(7:41)"
+      },
+      {
+        "group": "6",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 22,
+        "bank_aggtot": 116,
+        "bank_maxringtot": 116,
+        "greedy_aggmax": 22,
+        "greedy_aggtot": 82,
+        "greedy_maxringtot": 82,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 65,
+        "mm0_maxringtot": 65,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 65,
+        "maxedge_maxringtot": 65,
+        "maxring_aggmax": 12,
+        "maxring_aggtot": 65,
+        "maxring_maxringtot": 65,
+        "total_aggmax": 12,
+        "total_aggtot": 65,
+        "total_maxringtot": 65,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 65,
+        "pareto_maxringtot": 65,
+        "sel_perring": "(12:65)"
+      },
+      {
+        "group": "7",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 23,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 24,
+        "greedy_aggtot": 87,
+        "greedy_maxringtot": 87,
+        "mm0_aggmax": 11,
+        "mm0_aggtot": 70,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 11,
+        "maxedge_aggtot": 70,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 11,
+        "maxring_aggtot": 70,
+        "maxring_maxringtot": 70,
+        "total_aggmax": 11,
+        "total_aggtot": 70,
+        "total_maxringtot": 70,
+        "pareto_aggmax": 11,
+        "pareto_aggtot": 70,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(11:70)"
+      },
+      {
+        "group": "8",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 21,
+        "bank_aggtot": 111,
+        "bank_maxringtot": 111,
+        "greedy_aggmax": 11,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 11,
+        "mm0_aggtot": 70,
+        "mm0_maxringtot": 70,
+        "maxedge_aggmax": 11,
+        "maxedge_aggtot": 70,
+        "maxedge_maxringtot": 70,
+        "maxring_aggmax": 16,
+        "maxring_aggtot": 65,
+        "maxring_maxringtot": 65,
+        "total_aggmax": 16,
+        "total_aggtot": 65,
+        "total_maxringtot": 65,
+        "pareto_aggmax": 11,
+        "pareto_aggtot": 70,
+        "pareto_maxringtot": 70,
+        "sel_perring": "(11:70)"
+      },
+      {
+        "group": "9",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 20,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 21,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 9,
+        "mm0_aggtot": 53,
+        "mm0_maxringtot": 53,
+        "maxedge_aggmax": 9,
+        "maxedge_aggtot": 53,
+        "maxedge_maxringtot": 53,
+        "maxring_aggmax": 9,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 9,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 9,
+        "pareto_aggtot": 53,
+        "pareto_maxringtot": 53,
+        "sel_perring": "(9:53)"
+      },
+      {
+        "group": "10",
+        "Sm": "1",
+        "wnoc": "1",
+        "sel": "mm0",
+        "bank_aggmax": 25,
+        "bank_aggtot": 121,
+        "bank_maxringtot": 121,
+        "greedy_aggmax": 14,
+        "greedy_aggtot": 46,
+        "greedy_maxringtot": 46,
+        "mm0_aggmax": 10,
+        "mm0_aggtot": 46,
+        "mm0_maxringtot": 46,
+        "maxedge_aggmax": 10,
+        "maxedge_aggtot": 46,
+        "maxedge_maxringtot": 46,
+        "maxring_aggmax": 11,
+        "maxring_aggtot": 41,
+        "maxring_maxringtot": 41,
+        "total_aggmax": 11,
+        "total_aggtot": 41,
+        "total_maxringtot": 41,
+        "pareto_aggmax": 10,
+        "pareto_aggtot": 46,
+        "pareto_maxringtot": 46,
+        "sel_perring": "(10:46)"
+      },
+      {
+        "group": "11",
+        "Sm": "1",
+        "wnoc": "0",
+        "sel": "mm0",
+        "bank_aggmax": 15,
+        "bank_aggtot": 82,
+        "bank_maxringtot": 82,
+        "greedy_aggmax": 18,
+        "greedy_aggtot": 70,
+        "greedy_maxringtot": 70,
+        "mm0_aggmax": 12,
+        "mm0_aggtot": 58,
+        "mm0_maxringtot": 58,
+        "maxedge_aggmax": 12,
+        "maxedge_aggtot": 58,
+        "maxedge_maxringtot": 58,
+        "maxring_aggmax": 13,
+        "maxring_aggtot": 53,
+        "maxring_maxringtot": 53,
+        "total_aggmax": 13,
+        "total_aggtot": 53,
+        "total_maxringtot": 53,
+        "pareto_aggmax": 12,
+        "pareto_aggtot": 58,
+        "pareto_maxringtot": 58,
+        "sel_perring": "(12:58)"
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        89.88888888888889,
+        91.01925925925926,
+        92.39407407407407
+      ],
+      "med_us": 91.01925925925926,
+      "n_ok": 3,
+      "util512_pct": 70.03352973729613,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 89.72259259259259,
+          "med_us": 82.07870370370371,
+          "min_us": 60.9962962962963
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 88.98296296296296,
+          "med_us": 81.89018518518519,
+          "min_us": 67.74925925925926
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 89.09074074074073,
+          "med_us": 82.66907407407406,
+          "min_us": 61.82925925925927
+        }
+      },
+      "vs_bank_pct": 0.0,
+      "vs_mm0_pct": 6.594259788591561
+    },
+    "mm0": {
+      "mask": 16384,
+      "walls": [
+        85.21888888888888,
+        85.38851851851852,
+        85.80333333333334
+      ],
+      "med_us": 85.38851851851852,
+      "n_ok": 3,
+      "util512_pct": 74.65172262729398,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 84.80851851851853,
+          "med_us": 76.40166666666667,
+          "min_us": 57.93888888888888
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 84.64370370370371,
+          "med_us": 76.65296296296296,
+          "min_us": 63.07481481481481
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 84.23666666666666,
+          "med_us": 77.18666666666667,
+          "min_us": 58.77444444444445
+        }
+      },
+      "vs_bank_pct": -6.186317913994587,
+      "vs_mm0_pct": 0.0
+    },
+    "maxedge": {
+      "mask": 0,
+      "walls": [
+        84.7562962962963,
+        85.09666666666666,
+        86.20666666666666
+      ],
+      "med_us": 85.09666666666666,
+      "n_ok": 3,
+      "util512_pct": 74.90775196834973,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 84.58185185185185,
+          "med_us": 76.60981481481483,
+          "min_us": 57.12888888888889
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 84.49148148148147,
+          "med_us": 76.72796296296296,
+          "min_us": 62.970740740740744
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 84.08777777777777,
+          "med_us": 77.35240740740741,
+          "min_us": 57.96925925925926
+        }
+      },
+      "vs_bank_pct": -6.506966372603273,
+      "vs_mm0_pct": -0.3417928509774626
+    },
+    "maxring": {
+      "mask": 32768,
+      "walls": [
+        86.06851851851852,
+        86.58481481481482,
+        86.81777777777778
+      ],
+      "med_us": 86.58481481481482,
+      "n_ok": 3,
+      "util512_pct": 73.62029951364323,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 86.40333333333332,
+          "med_us": 78.79629629629629,
+          "min_us": 60.25777777777778
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 86.47888888888889,
+          "med_us": 78.94703703703703,
+          "min_us": 63.31888888888889
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 86.04851851851852,
+          "med_us": 79.79518518518519,
+          "min_us": 61.0862962962963
+        }
+      },
+      "vs_bank_pct": -4.871984765129067,
+      "vs_mm0_pct": 1.4010036911892954
+    },
+    "total": {
+      "mask": 65536,
+      "walls": [
+        86.31074074074074,
+        86.33925925925926,
+        86.34222222222223
+      ],
+      "med_us": 86.33925925925926,
+      "n_ok": 3,
+      "util512_pct": 73.82968136035278,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 85.88037037037037,
+          "med_us": 78.33666666666667,
+          "min_us": 59.44851851851852
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 85.88148148148147,
+          "med_us": 78.01055555555556,
+          "min_us": 62.940740740740736
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 85.46296296296296,
+          "med_us": 78.65537037037038,
+          "min_us": 60.27148148148148
+        }
+      },
+      "vs_bank_pct": -5.1417689377909355,
+      "vs_mm0_pct": 1.113429249313591
+    },
+    "pareto": {
+      "mask": 131072,
+      "walls": [
+        85.07037037037037,
+        85.38481481481482,
+        85.8174074074074
+      ],
+      "med_us": 85.38481481481482,
+      "n_ok": 3,
+      "util512_pct": 74.65496076585741,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 85.47148148148149,
+          "med_us": 76.44277777777778,
+          "min_us": 57.47296296296297
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 85.35703703703705,
+          "med_us": 77.01314814814815,
+          "min_us": 62.29481481481482
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 84.9462962962963,
+          "med_us": 77.52592592592593,
+          "min_us": 58.31074074074074
+        }
+      },
+      "vs_bank_pct": -6.190387056870339,
+      "vs_mm0_pct": -0.0043374727281442205
+    }
+  }
+]
