@@ -26,6 +26,12 @@ from pathlib import Path
 
 from models.tt_transformers.tt.model_config import ModelArgs
 
+# l1_small_size (device-open scratch) the GDN prefill depthwise ttnn.conv1d requires. Empirically
+# established minimum; the production demo/vLLM open the device with this value. Single source of
+# truth for the runtime guard (gdn/tp.py) and the TP test decorator (tests/test_factory.py) so the
+# check, the tests, and device setup cannot drift apart.
+GDN_CONV1D_L1_SMALL_SIZE = 24576
+
 
 class Qwen36ModelArgs(ModelArgs):
     """Model configuration for Qwen3.5-9B on Blackhole P150."""

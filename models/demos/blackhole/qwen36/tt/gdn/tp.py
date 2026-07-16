@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
@@ -253,7 +254,13 @@ class TPGatedDeltaNet:
             self._conv1d_ccfg = ttnn.init_device_compute_kernel_config(
                 self.mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
             )
-        cfg = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+        # SiLU fused into the conv epilogue — runs on the sharded output in-kernel, so it costs
+        # no extra dispatch or DRAM round-trip vs. a standalone ttnn.silu.
+        cfg = ttnn.Conv1dConfig(
+            weights_dtype=ttnn.bfloat16,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        )
         w = self._conv1d_w_dev if self._conv1d_w_dev is not None else self._conv1d_w
         try:
             out, _, [w_dev, _] = ttnn.conv1d(
@@ -281,10 +288,10 @@ class TPGatedDeltaNet:
             # "bank size is 0 B" message. Surface the real cause + fix instead.
             if "L1_SMALL" in str(e) or "bank size is 0" in str(e):
                 raise RuntimeError(
-                    "GDN prefill conv1d failed to allocate its L1_SMALL scratch buffer. The device "
-                    "must be opened with l1_small_size >= 24576 (the production demo/vLLM value). "
-                    "Set it in the device open, e.g. device_params={'l1_small_size': 24576} "
-                    "(see models/demos/blackhole/qwen36/demo/text_demo.py DEVICE_PARAMS). "
+                    f"GDN prefill conv1d failed to allocate its L1_SMALL scratch buffer. The device "
+                    f"must be opened with l1_small_size >= {GDN_CONV1D_L1_SMALL_SIZE} (the production demo/vLLM "
+                    f"value). Set it in the device open, e.g. device_params={{'l1_small_size': {GDN_CONV1D_L1_SMALL_SIZE}}} "
+                    f"(see models/demos/blackhole/qwen36/demo/text_demo.py DEVICE_PARAMS). "
                     f"Original error: {e}"
                 ) from e
             raise
@@ -292,7 +299,7 @@ class TPGatedDeltaNet:
         ttnn.deallocate(xp_rm)
         out = ttnn.to_memory_config(out, DR)  # sharded -> DRAM interleaved for the head-split
         out = ttnn.reshape(out, (1, T, C))
-        return ttnn.silu(out, memory_config=DR), new_state
+        return out, new_state  # SiLU already applied in the conv epilogue (cfg.activation)
 
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
