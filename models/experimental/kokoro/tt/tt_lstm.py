@@ -40,6 +40,11 @@ _L1_STEP_HIDDEN_MAX = 64
 # L<=128 at B=2/H=256 — verified to fit BH L1 with margin (tested at L=48 ~1.5 MiB); longer
 # sequences fall back to DRAM. Only consulted when a tuned recurrent program config is supplied.
 _FUSED_L1_ACCUM_BUDGET_BYTES = 4 * 1024 * 1024
+# Per-direction (non-fused) fp32 path P1+P2: max ``2 * L * [B,H]`` output-accumulation footprint kept
+# on L1 (the two direction output lists are the sole L-scaling term; the [L,B,4H] gx buffer stays
+# DRAM, only its per-step [B,4H] slice is L1). 8 MiB ≈ L<=128 at B=1/H=256 fp32 — F0Ntrain has ample
+# free L1 (decoder not yet resident); longer sequences fall back to the DRAM per-step path. Tunable.
+_PERDIR_L1_ACCUM_BUDGET_BYTES = 8 * 1024 * 1024
 
 
 def _dtype_nbytes(dtype) -> int:
@@ -187,11 +192,33 @@ def _lstm_step(
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     fold_bias: bool = False,
+    program_config=None,
+    out_dtype=None,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     # ``gates_x`` (= x_t @ W_x^T + b, shape [B, 4H]) is precomputed for the whole sequence
     # by the caller (one batched matmul with the bias folded into its epilogue, see
     # tt_bilstm_nlc) — it doesn't depend on the recurrent state. Only the recurrent
     # ``h @ W_h^T`` is per-step, and the gate sum is then a single add.
+    #
+    # ``program_config`` (P2, L1 fp32 per-direction path only) bounds the recurrent matmul CBs so
+    # it can run L1-resident at H=256 without the CB-overlap that otherwise forces DRAM. Its output
+    # is width-sharded over the config's grid; pin the dtype to the state dtype (``out_dtype``) so
+    # the L1 placement is numerics-neutral — ttnn.matmul otherwise defaults a *sharded* fp32 output
+    # to bf16, which would silently downcast the F0-sensitive fp32 cell-state chain. The gate ``add``
+    # below writes ``memory_config`` (interleaved L1), absorbing the shard->interleaved relayout into
+    # its own kernel (no extra per-step reshard op).
+    _mm_mem = memory_config
+    _mm_dtype = None
+    if program_config is not None:
+        _grid = program_config.compute_with_storage_grid_size
+        _padded_m = ((int(h.shape[0]) + _TILE - 1) // _TILE) * _TILE
+        _mm_mem = ttnn.create_sharded_memory_config(
+            (_padded_m, int(params.w_h.shape[-1])),  # [pad(B), 4H] width-sharded over the matmul grid
+            core_grid=ttnn.CoreGrid(y=_grid.y, x=_grid.x),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        _mm_dtype = out_dtype or h.dtype
     if fold_bias:
         # Fold gates_x into the recurrent matmul bias epilogue: gates = h@W_h + gates_x in one
         # fp32 epilogue add — drops one BinaryNg/step AND is closer to the torch fp32 reference
@@ -201,16 +228,20 @@ def _lstm_step(
             h,
             params.w_h,
             bias=gates_x,
-            memory_config=memory_config,
+            memory_config=_mm_mem,
+            dtype=_mm_dtype,
             compute_kernel_config=compute_kernel_config,
+            program_config=program_config,
         )
     else:
         gates_h = ttnn.linear(
             h,
             params.w_h,
             bias=None,
-            memory_config=memory_config,
+            memory_config=_mm_mem,
+            dtype=_mm_dtype,
             compute_kernel_config=compute_kernel_config,
+            program_config=program_config,
         )
         gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
         ttnn.deallocate(gates_h)
@@ -398,6 +429,50 @@ def _gatex_program_config(*, batch: int, seq_len: int, four_hidden: int, in_dim:
         per_core_N=per_core_n,
         transpose_mcast=False,
         fused_activation=None,
+    )
+
+
+def _perdir_recurrent_program_config(*, batch: int, hidden: int, device):
+    """1D-mcast config for the per-direction recurrent matmul ``[B, H] @ [H, 4H]`` (P2).
+
+    Used ONLY by the L1-resident fp32 per-direction path (the shared F0/N BiLSTM). Its sole job is
+    to bound the matmul's circular-buffer footprint so the recurrent ``h @ W_h`` can run with L1
+    in0/out without the CB-overlap that forces H=256 to DRAM under the default config (see the
+    ``_L1_STEP_HIDDEN_MAX`` note). It is **schedule/placement only**: ``in0_block_w`` is the FULL K
+    (``hidden//32`` tiles → a single accumulation pass, no K-reordering), and grid/subblock choices
+    do not change the math — so it must not perturb the F0-sensitive gate arithmetic. The output is
+    width-sharded over the grid (per_core_N tiles/core); the consumer add relayouts it back to
+    interleaved (see :func:`_lstm_step`). Returns ``None`` off Blackhole or if 4H-tiles don't map."""
+    if device.arch() != ttnn.device.Arch.BLACKHOLE:
+        return None
+    if (4 * hidden) % 32 or hidden % 32:
+        return None
+    n_tiles = (4 * hidden) // 32
+    k_tiles = hidden // 32
+    grid = device.compute_with_storage_grid_size()
+    gx_max, gy_max = int(grid.x), int(grid.y)
+    # Largest core grid whose total cores divide n_tiles evenly (per_core_N integer), N along gx.
+    best = None
+    for gy in range(1, gy_max + 1):
+        for gx in range(1, gx_max + 1):
+            cores = gx * gy
+            if cores <= n_tiles and n_tiles % cores == 0:
+                if best is None or cores > best[0] * best[1]:
+                    best = (gx, gy)
+    if best is None:
+        return None
+    gx, gy = best
+    per_core_n = n_tiles // (gx * gy)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=k_tiles,  # full K in one block: single accumulation pass, no K-reorder
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
     )
 
 
@@ -764,6 +839,42 @@ def tt_bilstm_nlc(
         return out
     # ---- End fused fast path ----------------------------------------------------------------
 
+    # P1+P2: L1-resident fp32 per-direction path (the shared F0/N BiLSTM — ``w_h_block`` is None so it
+    # never takes the fused loop, and ``fp32_state`` is True). The per-step elementwise/slice/sigmoid
+    # and the recurrent matmul are ~68% of F0Ntrain device time and run on DRAM at H=256 under the
+    # ``_lstm_step_memory_config`` ``hidden<=64`` gate. Move them to L1: (P1) ``step_mc``=L1 for the
+    # per-step tensors; (P2) a bounded recurrent program config (``_perdir_recurrent_program_config``)
+    # so the matmul's circular buffers don't overlap the L1 tensors (the clash that forced DRAM). The
+    # big ``[L,B,4H]`` gx buffer stays DRAM (only the per-step ``[B,4H]`` slice is L1); ``w_h`` (read
+    # every step) is staged to L1 for the call and freed after. Gated on an L1 accumulation budget so
+    # long sequences fall back to the DRAM path. Applies ONLY to the fp32 shared BiLSTM (``fp32_state``)
+    # — the bf16 fused/duration LSTMs are untouched. Numerics: L1 placement + full-K program config are
+    # intended numerics-neutral, but this feeds the F0-sensitive vocoder, so it is validated end-to-end.
+    recur_pc = None
+    out_dtype_step = None
+    l1_weights: list[ttnn.Tensor] = []
+    if (
+        fp32_state
+        and step_mc.buffer_type != ttnn.BufferType.L1
+        and 2 * L * _tensor_nbytes((B, H), state_dtype) <= _PERDIR_L1_ACCUM_BUDGET_BYTES
+    ):
+        recur_pc = _perdir_recurrent_program_config(batch=B, hidden=H, device=x_nlc.device())
+        if recur_pc is not None:
+            step_mc = ttnn.L1_MEMORY_CONFIG
+            out_dtype_step = state_dtype
+
+            def _stage_l1(t: ttnn.Tensor) -> ttnn.Tensor:
+                if t.memory_config().buffer_type == ttnn.BufferType.L1:
+                    return t
+                t_l1 = ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
+                l1_weights.append(t_l1)
+                return t_l1
+
+            # Stage only w_h (recurrent, read every step) to L1; w_x is used once (batched gate
+            # precompute) so it stays DRAM to bound the transient L1 footprint.
+            fwd = TTLSTMParams(w_x=fwd.w_x, w_h=_stage_l1(fwd.w_h), b=fwd.b, hidden_size=H)
+            rev = TTLSTMParams(w_x=rev.w_x, w_h=_stage_l1(rev.w_h), b=rev.b, hidden_size=H)
+
     gx_fwd = _precompute_gates_x(fwd)
     gx_rev = _precompute_gates_x(rev)
 
@@ -780,6 +891,8 @@ def tt_bilstm_nlc(
             compute_kernel_config=compute_kernel_config,
             memory_config=step_mc,
             fold_bias=do_fold,
+            program_config=recur_pc,
+            out_dtype=out_dtype_step,
         )
         # Forward padding is a *suffix* (t >= length): once a row is padded it never returns to a
         # valid position, and batch rows don't mix (per-row recurrence). So a padded row's evolving
@@ -807,6 +920,8 @@ def tt_bilstm_nlc(
             compute_kernel_config=compute_kernel_config,
             memory_config=step_mc,
             fold_bias=do_fold,
+            program_config=recur_pc,
+            out_dtype=out_dtype_step,
         )
         if valid_all is not None and t >= min_len:
             # Reverse hits the suffix padding *first*, so the recurrent state is still 0 across the
@@ -827,6 +942,8 @@ def tt_bilstm_nlc(
         ttnn.deallocate(valid_all)
     ttnn.deallocate(gx_fwd)
     ttnn.deallocate(gx_rev)
+    for _w in l1_weights:  # free the transient L1 w_h copies (no persistent L1 footprint leaks)
+        ttnn.deallocate(_w)
 
     outs_b = list(reversed(outs_b_rev))
 

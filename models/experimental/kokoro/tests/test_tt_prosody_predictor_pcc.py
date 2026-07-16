@@ -7,6 +7,7 @@ vs reference :class:`~models.experimental.kokoro.reference.modules.ProsodyPredic
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -26,13 +27,21 @@ from models.experimental.kokoro.tt.tt_prosody_predictor import (
 )
 
 
-# Small Kokoro-shaped config for the test; ``d_hid`` must be even (``d_hid // 2`` is the LSTM hidden
-# size). ``d_hid // 2 >= 48`` keeps the inner ``conv1d`` on the Wormhole code path that PCC-matches
-# PyTorch (matching the note in ``test_tt_adain_resblk_1d_pcc.py`` about ``C == 32`` mis-compares).
-_STYLE_DIM = 64
-_D_HID = 128
-_NLAYERS = 2
-_MAX_DUR = 16
+# Config: small bring-up dims by default; ``KOKORO_PROSODY_DIMS=prod`` selects the real Kokoro-82M
+# dims. Only the ``prod`` config (``d_hid=512`` -> shared/duration LSTM H=256) exercises the P1+P2
+# L1-resident fp32 per-direction BiLSTM path, which is gated to H>64 (H=64 is already L1-resident);
+# use ``prod`` to profile/validate that path. ``d_hid`` must be even; ``d_hid // 2 >= 48`` keeps the
+# inner ``conv1d`` on the code path that PCC-matches PyTorch (see ``test_tt_adain_resblk_1d_pcc.py``).
+if os.environ.get("KOKORO_PROSODY_DIMS", "small") == "prod":
+    _STYLE_DIM = 128
+    _D_HID = 512
+    _NLAYERS = 3
+    _MAX_DUR = 50
+else:
+    _STYLE_DIM = 64
+    _D_HID = 128
+    _NLAYERS = 2
+    _MAX_DUR = 16
 
 
 def _make_reference() -> ProsodyPredictor:
