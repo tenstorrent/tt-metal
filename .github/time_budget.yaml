@@ -169,12 +169,11 @@ shield:
     bh_p150b_civ2: 18
   unit_tier3:
     bh_p150b_civ2: 20
+    bh_p150: 2
   unit:
     wh_n150: 90
     wh_n300: 115
     bh_p150b_civ2: 125
-  unit_tier3:
-    bh_p150: 2
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
