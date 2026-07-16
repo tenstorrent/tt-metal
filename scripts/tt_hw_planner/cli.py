@@ -10552,8 +10552,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     pup.add_argument(
         "--engine",
         default="cc",
-        choices=["cc", "fsm"],
-        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
+        choices=["cc"],
+        help="cc = drive per-component bring-up through the "
         "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
         "graduation snapshot contract)",
     )
@@ -10590,8 +10590,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     paut.add_argument(
         "--engine",
         default="cc",
-        choices=["cc", "fsm"],
-        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
+        choices=["cc"],
+        help="cc = drive per-component bring-up through the "
         "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
         "graduation snapshot contract)",
     )
@@ -10769,8 +10769,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     pprom.add_argument(
         "--engine",
         default="cc",
-        choices=["cc", "fsm"],
-        help="fsm = current auto-iterate loop (default); cc = drive per-component bring-up through the "
+        choices=["cc"],
+        help="cc = drive per-component bring-up through the "
         "shared Claude-Code harness against the deterministic bring-up gate (same PCC/cap gates + "
         "graduation snapshot contract, agent+gate driven)",
     )
@@ -11262,8 +11262,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     pe2e.add_argument(
         "--engine",
         default="cc",
-        choices=["cc", "fsm"],
-        help="fsm = current build→gates→fix loop (default); cc = drive the fix loop through the shared "
+        choices=["cc"],
+        help="cc = drive the fix loop through the shared "
         "Claude-Code harness against the e2e deterministic gate (same G1–G4 gates, agent+gate driven)",
     )
     pe2e.add_argument(
@@ -11322,8 +11322,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     popt.add_argument(
         "--engine",
         default="cc",
-        choices=["cc", "fsm"],
-        help="cc = Claude-Code-native deterministic-gate engine (default); fsm = legacy state-machine loop",
+        choices=["cc"],
+        help="cc = Claude-Code-native deterministic-gate engine (the only engine; legacy fsm removed)",
     )
     popt.add_argument("--devices", default="0,1", help="single | all | explicit ids like '0,1'")
     popt.add_argument("--mesh", help="mesh shape like '2x2' for roofline calibration (needs --box)")
