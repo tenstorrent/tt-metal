@@ -265,26 +265,24 @@ void kernel_main() {
         // with the writer draining the previous batch via the double-buffered CB on the other RISC.
         cb_reserve_back(cb_input_id, read_batch_size);
         uint32_t payload_base = get_write_ptr(cb_input_id);
-        {
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(batch_start + t, input_addr_gen, payload_base + t * aligned_input_page_size);
-            }
-            // Read this batch's indices pages alongside the payload (single barrier covers all).
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
-            }
-#ifdef FP8_SCALED
-            // Read this batch's per-token fp8 scale rows into the scales CB, indexed by token_t parallel
-            // to the payload, so the writer can copy them into the metadata tail. Same batch granularity
-            // and double-buffering as c_0 so reader/writer stay in lockstep.
-            cb_reserve_back(cb_scales_id, read_batch_size);
-            uint32_t scales_base = get_write_ptr(cb_scales_id);
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(batch_start + t, scales_addr_gen, scales_base + t * aligned_scales_page_size);
-            }
-#endif
-            noc_async_read_barrier();
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, input_addr_gen, payload_base + t * aligned_input_page_size);
         }
+        // Read this batch's indices pages alongside the payload (single barrier covers all).
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+        }
+#ifdef FP8_SCALED
+        // Read this batch's per-token fp8 scale rows into the scales CB, indexed by token_t parallel
+        // to the payload, so the writer can copy them into the metadata tail. Same batch granularity
+        // and double-buffering as c_0 so reader/writer stay in lockstep.
+        cb_reserve_back(cb_scales_id, read_batch_size);
+        uint32_t scales_base = get_write_ptr(cb_scales_id);
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, scales_addr_gen, scales_base + t * aligned_scales_page_size);
+        }
+#endif
+        noc_async_read_barrier();
         cb_push_back(cb_input_id, read_batch_size);
 #ifdef FP8_SCALED
         cb_push_back(cb_scales_id, read_batch_size);
@@ -312,13 +310,10 @@ void kernel_main() {
         }
 
         // 3. Read this batch's indices pages
-        {
-            // DeviceZoneScopedN("batch-DRAM-read-indices");
-            for (uint32_t t = 0; t < batch_count; t++) {
-                noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
-            }
-            noc_async_read_barrier();
+        for (uint32_t t = 0; t < batch_count; t++) {
+            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
         }
+        noc_async_read_barrier();
 
 #endif
 
@@ -355,70 +350,67 @@ void kernel_main() {
             noc_async_read_barrier();
         }
 
-        {
-            for (uint32_t t = 0; t < batch_count; t++) {
-                tt_l1_ptr uint16_t* indices_t =
-                    reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
-                uint32_t token_idx = batch_start + t;
+        for (uint32_t t = 0; t < batch_count; t++) {
+            tt_l1_ptr uint16_t* indices_t =
+                reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
+            uint32_t token_idx = batch_start + t;
 
-                // Walk this token's top-k experts; emit a plan entry for each one routed to this
-                // dispatch core (after the ownership / mapping / capacity filters below).
-                for (uint32_t k = 0; k < num_experts_per_tok; k++) {
-                    int32_t routed_expert = indices_t[k];
-                    // Skip experts not owned by this dispatch core (low bits of the expert id
-                    // select the dispatch core), and experts the table maps nowhere (-1).
-                    if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
-                        continue;
-                    }
-                    int32_t expert_chip_og = expert_dispatch_table[routed_expert];
-                    if (expert_chip_og == -1) {
-                        continue;
-                    }
+            // Walk this token's top-k experts; emit a plan entry for each one routed to this
+            // dispatch core (after the ownership / mapping / capacity filters below).
+            for (uint32_t k = 0; k < num_experts_per_tok; k++) {
+                int32_t routed_expert = indices_t[k];
+                // Skip experts not owned by this dispatch core (low bits of the expert id
+                // select the dispatch core), and experts the table maps nowhere (-1).
+                if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                    continue;
+                }
+                int32_t expert_chip_og = expert_dispatch_table[routed_expert];
+                if (expert_chip_og == -1) {
+                    continue;
+                }
 
-                    // Allocate this token's destination DRAM page from the expert's counter.
-                    // Single shared counter; all cores grow it left-to-right from offsets[e].
-                    // If the dispatch buffer for this expert is full, still bump the counter
-                    // (so capacity accounting stays consistent) but drop the token — no entry.
-                    uint32_t& offset = offsets[routed_expert];
-                    if (offset >= max_dispatch_buffer_token_size) {
-                        offset++;
-                        continue;
-                    }
-                    uint32_t page_idx = offset++;
+                // Allocate this token's destination DRAM page from the expert's counter.
+                // Single shared counter; all cores grow it left-to-right from offsets[e].
+                // If the dispatch buffer for this expert is full, still bump the counter
+                // (so capacity accounting stays consistent) but drop the token — no entry.
+                uint32_t& offset = offsets[routed_expert];
+                if (offset >= max_dispatch_buffer_token_size) {
+                    offset++;
+                    continue;
+                }
+                uint32_t page_idx = offset++;
 
-                    uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
-                    bool is_local = (expert_chip == linearized_mesh_coord);
+                uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
+                bool is_local = (expert_chip == linearized_mesh_coord);
 
-                    volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
-                    entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
-                    entry->token_t = t;
-                    entry->routed_expert = (uint32_t)routed_expert;
-                    entry->page_idx = page_idx;
-                    entry->token_idx = token_idx;
-                    // Single aligned 32-bit store: baby-RISC sub-word L1 stores are unreliable on BH.
-                    entry->weight_k = pack_weight_k(0, (uint16_t)k);
-                    // Linearized destination device index. Under 1D it is unused by the fabric writer
-                    // (route/distance drive the send); under 2D it is the only routing input — the
-                    // writer recomputes the EDM direction and (mesh,chip) header from it.
-                    entry->dst_chip = expert_chip;
+                volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
+                entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
+                entry->token_t = t;
+                entry->routed_expert = (uint32_t)routed_expert;
+                entry->page_idx = page_idx;
+                entry->token_idx = token_idx;
+                // Single aligned 32-bit store: baby-RISC sub-word L1 stores are unreliable on BH.
+                entry->weight_k = pack_weight_k(0, (uint16_t)k);
+                // Linearized destination device index. Under 1D it is unused by the fabric writer
+                // (route/distance drive the send); under 2D it is the only routing input — the
+                // writer recomputes the EDM direction and (mesh,chip) header from it.
+                entry->dst_chip = expert_chip;
 
-                    if (!is_local) {
-                        if constexpr (is_1d_topology<topology>()) {
-                            entry->route =
-                                get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                            entry->distance =
-                                manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                        } else {
-                            entry->route = 0;
-                            entry->distance = 0;
-                        }
+                if (!is_local) {
+                    if constexpr (is_1d_topology<topology>()) {
+                        entry->route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
+                        entry->distance =
+                            manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
                     } else {
                         entry->route = 0;
                         entry->distance = 0;
                     }
-
-                    entry_count++;
+                } else {
+                    entry->route = 0;
+                    entry->distance = 0;
                 }
+
+                entry_count++;
             }
         }
 
