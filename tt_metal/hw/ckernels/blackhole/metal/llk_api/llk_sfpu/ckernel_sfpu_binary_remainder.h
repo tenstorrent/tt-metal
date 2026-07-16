@@ -41,7 +41,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     inv_b_f = e * inv_b_f + inv_b_f;
 
     // Initial quotient approximation: q = a * (1/b)
-    sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
+    sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
     sfpi::vUInt q = sfpi::exman(q_f);
 
     sfpi::vInt qb = sfpi::fractional_mul(q, b);

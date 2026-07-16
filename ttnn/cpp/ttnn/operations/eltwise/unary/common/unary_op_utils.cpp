@@ -347,7 +347,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "remainder_tile_uint32_init();",
                     fmt::format("remainder_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
             }
-            TT_FATAL(param0 != 0.0f, "Divisor must be non-zero");
             return {
                 fmt::format(
                     "remainder_tile_init({:#x}u, {:#x}u);",
