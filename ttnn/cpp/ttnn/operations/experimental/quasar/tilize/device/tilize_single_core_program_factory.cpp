@@ -119,7 +119,8 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_stick_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // -- Writer kernel --
@@ -135,7 +136,8 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SC_OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // -- Compute kernel --
