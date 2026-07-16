@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "hf_model": "openai/gpt-oss-20b",
-  "stage": "functional_decoder",
+  "stage": "optimized_decoder",
   "hf_advertised_context": 131072,
   "current_supported_context": 21248,
   "limiting_reason": "device_dram",
@@ -29,7 +29,7 @@
     "descriptor_source": "tt_metal/soc_descriptors/blackhole_140_arch.yaml: dram_view_size=4278190080 and an 8-channel DRAM grid",
     "boundary_note": "The exact logical length 21249 pads to 21280 for TILE storage. It is the first length above 21248 and fails because its requested per-bank allocation exceeds the largest contiguous free block. The constructor now rejects lengths above the measured boundary before allocating weights."
   },
-  "notes": "This correctness-first dense TP collapse evaluates all 32 experts simultaneously. A bounded serialized device sweep established 21248 as the largest complete prefill that fits and 21249 as the first failure. Later expert dispatch or chunking may extend context, but that optimization is outside this stage.",
+  "notes": "The optimized decoder preserves the inherited public maximum of 21248 and the BF16 linear KV-cache shape/dtype, so advertised capacity is not reduced. Routed BFP8 sparse experts materially lower decoder working memory versus the functional dense all-expert path, but this stage is constrained to optimized_decoder.py and cannot raise the inherited SUPPORTED_CONTEXT constructor contract without changing the completed functional decoder. Extending and re-probing that public contract is therefore deferred rather than advertising an unvalidated larger length.",
   "paths": {
     "prefill": {
       "status": "implemented",
@@ -37,12 +37,14 @@
       "pcc_validated_sequence_lengths": [17, 128, 256],
       "capacity_validated_sequence_length": 21248,
       "current_supported_context": 21248,
+      "optimized_capacity_status": "preserved from the functional contract; sparse expert working memory is lower but no larger public length is advertised",
       "cache_behavior": "fills the linear key/value cache from position zero"
     },
     "decode": {
       "status": "implemented",
       "captured_sequence_length": 1,
       "validated_cache_position": 17,
+      "optimized_validated_cache_positions": [17, 18, 19, 128, 129, 130],
       "current_supported_cache_length": 21248,
       "cache_behavior": "updates the persistent linear key/value cache in place and runs decode SDPA"
     }

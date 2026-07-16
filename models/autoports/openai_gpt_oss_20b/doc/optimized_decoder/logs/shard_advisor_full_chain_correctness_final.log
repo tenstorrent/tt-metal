@@ -1,0 +1,112 @@
+Script started on 2026-07-16 09:38:25+00:00 [COMMAND="env OPTIMIZED_DECODER_CORRECTNESS_VARIANT=advisor pytest -q -s -o junit_logging=all --junitxml=models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/logs/shard_advisor_full_chain_correctness_final.junit.xml models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc" <not executed on terminal>]
+[32m2026-07-16 09:38:27.713[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m79[0m - [34m[1mInitial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}[0m
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collecting 2 items                                                             collected 2 items
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0] [90m2026-07-16 09:38:29.233[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:228)[0m
+[90m2026-07-16 09:38:29.233[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor started.[0m [90m(cluster.cpp:348)[0m
+[90m2026-07-16 09:38:29.233[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating TopologyDiscovery for architecture: blackhole[0m [90m(topology_discovery.cpp:91)[0m
+[90m2026-07-16 09:38:29.233[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting topology discovery.[0m [90m(topology_discovery.cpp:110)[0m
+[90m2026-07-16 09:38:29.236[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.8.0[0m [90m(topology_discovery.cpp:569)[0m
+[90m2026-07-16 09:38:29.236[0m | [32minfo    [m | [35m            UMD[0m | [37mFirmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported.[0m [90m(topology_discovery.cpp:601)[0m
+[90m2026-07-16 09:38:29.239[0m | [32minfo    [m | [35m            UMD[0m | [37mCompleted topology discovery.[0m [90m(topology_discovery.cpp:114)[0m
+[90m2026-07-16 09:38:29.350[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1}/[2, 3] and remote chip ids {}[0m [90m(cluster.cpp:168)[0m
+[90m2026-07-16 09:38:29.350[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:142)[0m
+[90m2026-07-16 09:38:29.350[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.8.0[0m [90m(cluster.cpp:145)[0m
+[90m2026-07-16 09:38:29.350[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor completed.[0m [90m(cluster.cpp:520)[0m
+[90m2026-07-16 09:38:29.351[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:1024)[0m
+[90m2026-07-16 09:38:29.422[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster completed.[0m [90m(cluster.cpp:1032)[0m
+[32m2026-07-16 09:38:29.498[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-16 09:38:29.498[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-16 09:38:29.498[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-16 09:38:29.498[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-16 09:38:29.499[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-16 09:38:29.499[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-16 09:38:29.499[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-16 09:38:29.499[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-16 09:38:29.499[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-16 09:38:29.499[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-16 09:38:29.503[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:38:29.503[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:38:29.517[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[90m2026-07-16 09:38:29.556[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-16 09:38:30.134[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349971 GHz, device_time_at_sync=1224927723936 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[32m2026-07-16 09:38:30.149[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+PCC_RESULT path=optimized-real-prefill-17 threshold=0.99 0.9996387472537179
+PCC_RESULT path=optimized-real-sliding_attention-decode-17 threshold=0.99 0.9996696717466442
+PCC_RESULT path=optimized-real-sliding_attention-decode-18 threshold=0.99 0.9996434379531798
+PCC_RESULT path=optimized-real-sliding_attention-decode-19 threshold=0.99 0.9995820454665287
+PASSED
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0] [32m2026-07-16 09:38:34.103[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-16 09:38:34.103[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-16 09:38:34.110[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:38:34.111[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:38:34.125[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-07-16 09:38:34.166[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PCC_RESULT path=optimized-real-prefill-17 threshold=0.99 0.9996387472537179
+PCC_RESULT path=optimized-real-full_attention-decode-17 threshold=0.99 0.99961889656349
+PCC_RESULT path=optimized-real-full_attention-decode-18 threshold=0.99 0.999731499600209
+PCC_RESULT path=optimized-real-full_attention-decode-19 threshold=0.99 0.9995779788326479
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/logs/shard_advisor_full_chain_correctness_final.junit.xml -
+============================== slowest durations ===============================
+3.62s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]
+2.76s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]
+1.13s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]
+0.28s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]
+0.12s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]
+0.12s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]
+=========================== short test summary info ============================
+PASSED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]
+PASSED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]
+============================== 2 passed in 8.69s ===============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7699b79b0288 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7699b85dc7f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "empty"
+ - leaked function "memory_config"
+ - leaked function "get_device_ids"
+ - leaked function "host_buffer"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_descriptor"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html[90m2026-07-16 09:38:38.814[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT cache stats: 452/458 hits (98.7%) [452 cached, 517 build-once dedup, 0 merged artifacts, 0 merged genfiles][0m [90m(build_cache_telemetry.cpp:207)[0m
+[90m2026-07-16 09:38:38.814[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT telemetry: 3 registered TelemetryTokens[0m [90m(build_cache_telemetry.cpp:230)[0m
+[90m2026-07-16 09:38:38.823[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:512)[0m
+[90m2026-07-16 09:38:38.823[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1037)[0m
+[90m2026-07-16 09:38:39.154[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster completed.[0m [90m(cluster.cpp:1046)[0m
+[90m2026-07-16 09:38:39.154[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor started.[0m [90m(cluster.cpp:754)[0m
+[90m2026-07-16 09:38:39.154[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor completed.[0m [90m(cluster.cpp:757)[0m
+
+Script done on 2026-07-16 09:38:39+00:00 [COMMAND_EXIT_CODE="0"]

@@ -1,0 +1,361 @@
+Script started on 2026-07-16 09:36:42+00:00 [COMMAND="env OPTIMIZED_DECODER_CORRECTNESS_VARIANT=sparse_bfp4_5x6 OPTIMIZED_DECODER_BOUNDARY_VARIANT=sparse_bfp4_5x6 pytest -q -s -o junit_logging=all --junitxml=models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/logs/final_context_sparse_bfp4_5x6.junit.xml models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py -k "real_weight_optimized_prefill_decode_pcc or traced_decode_updates_position_across_sliding_window_boundary"" <not executed on terminal>]
+[32m2026-07-16 09:36:43.832[0m | [34m[1mDEBUG   [0m | [36mttnn[0m:[36m<module>[0m:[36m79[0m - [34m[1mInitial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}[0m
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collecting 9 items                                                             collected 9 items / 5 deselected / 4 selected
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0] [90m2026-07-16 09:36:45.388[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:228)[0m
+[90m2026-07-16 09:36:45.388[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor started.[0m [90m(cluster.cpp:348)[0m
+[90m2026-07-16 09:36:45.389[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating TopologyDiscovery for architecture: blackhole[0m [90m(topology_discovery.cpp:91)[0m
+[90m2026-07-16 09:36:45.389[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting topology discovery.[0m [90m(topology_discovery.cpp:110)[0m
+[90m2026-07-16 09:36:45.392[0m | [32minfo    [m | [35m            UMD[0m | [37mEstablished firmware bundle version: 19.8.0[0m [90m(topology_discovery.cpp:569)[0m
+[90m2026-07-16 09:36:45.392[0m | [32minfo    [m | [35m            UMD[0m | [37mFirmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported.[0m [90m(topology_discovery.cpp:601)[0m
+[90m2026-07-16 09:36:45.395[0m | [32minfo    [m | [35m            UMD[0m | [37mCompleted topology discovery.[0m [90m(topology_discovery.cpp:114)[0m
+[90m2026-07-16 09:36:45.505[0m | [32minfo    [m | [35m            UMD[0m | [37mOpening local chip ids/PCIe ids: {0, 1}/[2, 3] and remote chip ids {}[0m [90m(cluster.cpp:168)[0m
+[90m2026-07-16 09:36:45.505[0m | [32minfo    [m | [35m            UMD[0m | [37mIOMMU: enabled[0m [90m(cluster.cpp:142)[0m
+[90m2026-07-16 09:36:45.505[0m | [32minfo    [m | [35m            UMD[0m | [37mKMD version: 2.8.0[0m [90m(cluster.cpp:145)[0m
+[90m2026-07-16 09:36:45.505[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster constructor completed.[0m [90m(cluster.cpp:520)[0m
+[90m2026-07-16 09:36:45.506[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:1024)[0m
+[90m2026-07-16 09:36:45.610[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster completed.[0m [90m(cluster.cpp:1032)[0m
+[32m2026-07-16 09:36:45.685[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-16 09:36:45.685[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-16 09:36:45.685[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing auto discovery to generate mesh graph.[0m [90m(metal_env.cpp:367)[0m
+[90m2026-07-16 09:36:45.685[0m | [32minfo    [m | [35m    Distributed[0m | [37mConstructing control plane using auto-discovery (no mesh graph descriptor).[0m [90m(metal_env.cpp:429)[0m
+[90m2026-07-16 09:36:45.685[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-16 09:36:45.685[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-16 09:36:45.685[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-16 09:36:45.685[0m | [33m[1mwarning [m | [35m         Always[0m | [37mUnknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.[0m [90m(physical_system_discovery.cpp:89)[0m
+[90m2026-07-16 09:36:45.685[0m | [32minfo    [m | [35m         Fabric[0m | [37mLogical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2}[0m [90m(topology_mapper_utils.cpp:2342)[0m
+[90m2026-07-16 09:36:45.685[0m | [32minfo    [m | [35m         Fabric[0m | [37mPhysical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2}[0m [90m(topology_mapper_utils.cpp:2350)[0m
+[90m2026-07-16 09:36:45.689[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:36:45.689[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:36:45.703[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[90m2026-07-16 09:36:45.742[0m | [32minfo    [m | [35m          Metal[0m | [37mShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory'[0m [90m(shm_resource_tracker.cpp:282)[0m
+[90m2026-07-16 09:36:46.321[0m | [32minfo    [m | [35m          Metal[0m | [37m[Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=1160114670037 cycles[0m [90m(realtime_profiler_manager.cpp:1127)[0m
+[32m2026-07-16 09:36:46.337[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+PCC_RESULT path=optimized-real-prefill-17 threshold=0.99 0.9761267200914278
+FAILED[32m2026-07-16 09:36:57.400[0m | [1mINFO    [0m | [36mconftest[0m:[36mpytest_runtest_teardown[0m:[36m1140[0m - [1mIn custom teardown, open device ids: {0, 1}[0m
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-sliding_attention-mesh_device0] [32m2026-07-16 09:36:57.605[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-16 09:36:57.605[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-16 09:36:57.613[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:36:57.614[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:36:57.628[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-07-16 09:36:57.668[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PCC_RESULT path=optimized-boundary-sliding_attention-prefill threshold=0.99 0.9736672297105942
+FAILED[32m2026-07-16 09:37:09.123[0m | [1mINFO    [0m | [36mconftest[0m:[36mpytest_runtest_teardown[0m:[36m1140[0m - [1mIn custom teardown, open device ids: {0, 1}[0m
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0] [32m2026-07-16 09:37:09.407[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-16 09:37:09.408[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-16 09:37:09.415[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:37:09.416[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:37:09.430[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-07-16 09:37:09.472[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PCC_RESULT path=optimized-real-prefill-17 threshold=0.99 0.9761267200914278
+FAILED[32m2026-07-16 09:37:20.253[0m | [1mINFO    [0m | [36mconftest[0m:[36mpytest_runtest_teardown[0m:[36m1140[0m - [1mIn custom teardown, open device ids: {0, 1}[0m
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-full_attention-mesh_device0] [32m2026-07-16 09:37:20.521[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m152[0m - [34m[1mUsing default dispatch core type for this system: DispatchCoreType.WORKER[0m
+[32m2026-07-16 09:37:20.521[0m | [34m[1mDEBUG   [0m | [36mttnn.device[0m:[36m__init__[0m:[36m154[0m - [34m[1mUsing default dispatch core axis for this system: DispatchCoreAxis.COL[0m
+[90m2026-07-16 09:37:20.529[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:37:20.530[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mUsing pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/[0m [90m(build_env_manager.cpp:347)[0m
+[90m2026-07-16 09:37:20.544[0m | [33m[1mwarning [m | [35m          Metal[0m | [37mOpening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API.[0m [90m(device_manager.cpp:261)[0m
+[32m2026-07-16 09:37:20.586[0m | [34m[1mDEBUG   [0m | [36mconftest[0m:[36mmesh_device[0m:[36m599[0m - [34m[1mmultidevice with 1 devices is created[0m
+PCC_RESULT path=optimized-boundary-full_attention-prefill threshold=0.99 0.9736672297105942
+FAILED[32m2026-07-16 09:37:31.378[0m | [1mINFO    [0m | [36mconftest[0m:[36mpytest_runtest_teardown[0m:[36m1140[0m - [1mIn custom teardown, open device ids: {0, 1}[0m
+
+
+=================================== FAILURES ===================================
+_ test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0] _
+
+mesh_device = MeshDevice(1x1 grid, 1 devices), layer_type = 'sliding_attention'
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_real_weight_optimized_prefill_decode_pcc(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        state = _real_state_dict()
+        variant = os.environ.get("OPTIMIZED_DECODER_CORRECTNESS_VARIANT", "optimized")
+        decoder = _decoder(variant, state, config, mesh_device)
+        hf_layer = _hf_layer(config, state)
+        rotary = GptOssRotaryEmbedding(config)
+        generator = torch.Generator().manual_seed(9090)
+        prefill_hidden = torch.randn(1, EMITTED_PREFILL_SEQUENCE, config.hidden_size, generator=generator).to(
+            torch.bfloat16
+        )
+        hf_cache = DynamicCache(config=config)
+        prefill_reference = _hf_forward(
+            hf_layer,
+            rotary,
+            prefill_hidden,
+            torch.arange(EMITTED_PREFILL_SEQUENCE),
+            hf_cache,
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_actual = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+>       _assert_pcc("optimized-real-prefill-17", prefill_reference, _to_torch(prefill_actual), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:449:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-real-prefill-17'
+reference = tensor([[[  5.6250,   8.0000,   6.5000,  ...,  -1.2188,  -8.2500, -13.3750],
+         [-15.2500,  16.5000,  -3.2188,  ...  13.1250],
+         [ 14.7500,   1.0000, -29.6250,  ...,   2.3281,  -6.3125,   4.8125]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 11.1250,   6.8125,  10.0000,  ...,  -1.3594, -13.5000, -14.9375],
+         [-19.3750,  20.0000,  -3.8125,  ...  17.0000],
+         [ 17.2500,  -7.8125, -31.2500,  ...,   7.5625,  -2.4375,   2.5469]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+>       assert passed, message
+E       AssertionError: 0.9761267200914278
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError
+_ test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-sliding_attention-mesh_device0] _
+
+mesh_device = MeshDevice(1x1 grid, 1 devices), layer_type = 'sliding_attention'
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_traced_decode_updates_position_across_sliding_window_boundary(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        state = _real_state_dict()
+        variant = os.environ.get("OPTIMIZED_DECODER_BOUNDARY_VARIANT", "optimized")
+        decoder = _decoder(variant, state, config, mesh_device, max_cache_len=256)
+        hf_layer = _hf_layer(config, state)
+        rotary = GptOssRotaryEmbedding(config)
+        generator = torch.Generator().manual_seed(10010)
+        prefill_len = config.sliding_window
+        prefill_hidden = torch.randn(1, prefill_len, config.hidden_size, generator=generator).to(torch.bfloat16)
+        hf_cache = DynamicCache(config=config)
+        prefill_reference = _hf_forward(
+            hf_layer,
+            rotary,
+            prefill_hidden,
+            torch.arange(prefill_len),
+            hf_cache,
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_actual = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+>       _assert_pcc(f"optimized-boundary-{layer_type}-prefill", prefill_reference, _to_torch(prefill_actual), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:535:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-boundary-sliding_attention-prefill'
+reference = tensor([[[-24.8750,   2.4688,   8.8125,  ...,  14.4375,   6.1875,  -7.1250],
+         [ -0.8125, -16.3750,   0.4688,  ...  22.5000],
+         [ 11.6250, -22.2500,  18.0000,  ...,  15.0000, -17.5000,  26.3750]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[-39.2500,  -3.3438,   9.0000,  ...,  14.2500,  12.7500, -12.6250],
+         [ -6.3125, -13.0000,  -3.5625,  ...  14.5000],
+         [ 12.1250, -29.2500,  25.0000,  ...,  17.6250, -13.5625,  29.6250]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+>       assert passed, message
+E       AssertionError: 0.9736672297105942
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError
+_ test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0] _
+
+mesh_device = MeshDevice(1x1 grid, 1 devices), layer_type = 'full_attention'
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_real_weight_optimized_prefill_decode_pcc(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        state = _real_state_dict()
+        variant = os.environ.get("OPTIMIZED_DECODER_CORRECTNESS_VARIANT", "optimized")
+        decoder = _decoder(variant, state, config, mesh_device)
+        hf_layer = _hf_layer(config, state)
+        rotary = GptOssRotaryEmbedding(config)
+        generator = torch.Generator().manual_seed(9090)
+        prefill_hidden = torch.randn(1, EMITTED_PREFILL_SEQUENCE, config.hidden_size, generator=generator).to(
+            torch.bfloat16
+        )
+        hf_cache = DynamicCache(config=config)
+        prefill_reference = _hf_forward(
+            hf_layer,
+            rotary,
+            prefill_hidden,
+            torch.arange(EMITTED_PREFILL_SEQUENCE),
+            hf_cache,
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_actual = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+>       _assert_pcc("optimized-real-prefill-17", prefill_reference, _to_torch(prefill_actual), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:449:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-real-prefill-17'
+reference = tensor([[[  5.6250,   8.0000,   6.5000,  ...,  -1.2188,  -8.2500, -13.3750],
+         [-15.2500,  16.5000,  -3.2188,  ...  13.1250],
+         [ 14.7500,   1.0000, -29.6250,  ...,   2.3281,  -6.3125,   4.8125]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 11.1250,   6.8125,  10.0000,  ...,  -1.3594, -13.5000, -14.9375],
+         [-19.3750,  20.0000,  -3.8125,  ...  17.0000],
+         [ 17.2500,  -7.8125, -31.2500,  ...,   7.5625,  -2.4375,   2.5469]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+>       assert passed, message
+E       AssertionError: 0.9761267200914278
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError
+_ test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-full_attention-mesh_device0] _
+
+mesh_device = MeshDevice(1x1 grid, 1 devices), layer_type = 'full_attention'
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_traced_decode_updates_position_across_sliding_window_boundary(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        state = _real_state_dict()
+        variant = os.environ.get("OPTIMIZED_DECODER_BOUNDARY_VARIANT", "optimized")
+        decoder = _decoder(variant, state, config, mesh_device, max_cache_len=256)
+        hf_layer = _hf_layer(config, state)
+        rotary = GptOssRotaryEmbedding(config)
+        generator = torch.Generator().manual_seed(10010)
+        prefill_len = config.sliding_window
+        prefill_hidden = torch.randn(1, prefill_len, config.hidden_size, generator=generator).to(torch.bfloat16)
+        hf_cache = DynamicCache(config=config)
+        prefill_reference = _hf_forward(
+            hf_layer,
+            rotary,
+            prefill_hidden,
+            torch.arange(prefill_len),
+            hf_cache,
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_actual = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+>       _assert_pcc(f"optimized-boundary-{layer_type}-prefill", prefill_reference, _to_torch(prefill_actual), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:535:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-boundary-full_attention-prefill'
+reference = tensor([[[-24.8750,   2.4688,   8.8125,  ...,  14.4375,   6.1875,  -7.1250],
+         [ -0.8125, -16.3750,   0.4688,  ...  22.5000],
+         [ 11.6250, -22.2500,  18.0000,  ...,  15.0000, -17.5000,  26.3750]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[-39.2500,  -3.3438,   9.0000,  ...,  14.2500,  12.7500, -12.6250],
+         [ -6.3125, -13.0000,  -3.5625,  ...  14.5000],
+         [ 12.1250, -29.2500,  25.0000,  ...,  17.6250, -13.5625,  29.6250]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+>       assert passed, message
+E       AssertionError: 0.9736672297105942
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/openai_gpt_oss_20b/doc/optimized_decoder/logs/final_context_sparse_bfp4_5x6.junit.xml -
+============================== slowest durations ===============================
+11.33s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-sliding_attention-mesh_device0]
+10.91s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]
+10.66s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-full_attention-mesh_device0]
+10.66s call     models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]
+1.15s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]
+0.35s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]
+0.33s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-full_attention-mesh_device0]
+0.27s setup    models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-sliding_attention-mesh_device0]
+0.12s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-full_attention-mesh_device0]
+0.12s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]
+0.12s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-sliding_attention-mesh_device0]
+0.12s teardown models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]
+=========================== short test summary info ============================
+FAILED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]
+FAILED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-sliding_attention-mesh_device0]
+FAILED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]
+FAILED models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py::test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-full_attention-mesh_device0]
+======================= 4 failed, 5 deselected in 46.86s =======================
+nanobind: leaked 3 instances!
+ - leaked instance 0x7583648e2328 of type "ttnn._ttnn.device.DispatchCoreConfig"
+ - leaked instance 0x7583647ca178 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x758364034288 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 35 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 305 functions!
+ - leaked function "GetPCIeDeviceID"
+ - leaked function "unpad_from_tile"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "update_tensor_topology"
+ - leaked function "pad_to_tile"
+ - leaked function "remove_sub_device_manager"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html[90m2026-07-16 09:37:33.262[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT cache stats: 350/362 hits (96.7%) [350 cached, 630 build-once dedup, 0 merged artifacts, 0 merged genfiles][0m [90m(build_cache_telemetry.cpp:207)[0m
+[90m2026-07-16 09:37:33.262[0m | [32minfo    [m | [35m   BuildKernels[0m | [37mJIT telemetry: 3 registered TelemetryTokens[0m [90m(build_cache_telemetry.cpp:230)[0m
+[90m2026-07-16 09:37:33.270[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:512)[0m
+[90m2026-07-16 09:37:33.270[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1037)[0m
+[90m2026-07-16 09:37:33.545[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster completed.[0m [90m(cluster.cpp:1046)[0m
+[90m2026-07-16 09:37:33.545[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor started.[0m [90m(cluster.cpp:754)[0m
+[90m2026-07-16 09:37:33.545[0m | [32minfo    [m | [35m            UMD[0m | [37mCluster destructor completed.[0m [90m(cluster.cpp:757)[0m
+
+Script done on 2026-07-16 09:37:33+00:00 [COMMAND_EXIT_CODE="1"]

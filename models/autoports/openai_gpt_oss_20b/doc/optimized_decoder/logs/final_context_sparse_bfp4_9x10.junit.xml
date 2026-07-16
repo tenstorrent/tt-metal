@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="4" time="47.386" timestamp="2026-07-16T09:35:01.680038+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_optimized_decoder" name="test_real_weight_optimized_prefill_decode_pcc[blackhole-sliding_attention-mesh_device0]" time="12.208"><properties><property name="start_timestamp" value="2026-07-16T09:35:02" /><property name="end_timestamp" value="2026-07-16T09:35:14" /></properties><failure message="AssertionError: 0.9761267200914278&#10;assert False">mesh_device = MeshDevice(1x1 grid, 1 devices), layer_type = 'sliding_attention'
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_real_weight_optimized_prefill_decode_pcc(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        state = _real_state_dict()
+        variant = os.environ.get("OPTIMIZED_DECODER_CORRECTNESS_VARIANT", "optimized")
+        decoder = _decoder(variant, state, config, mesh_device)
+        hf_layer = _hf_layer(config, state)
+        rotary = GptOssRotaryEmbedding(config)
+        generator = torch.Generator().manual_seed(9090)
+        prefill_hidden = torch.randn(1, EMITTED_PREFILL_SEQUENCE, config.hidden_size, generator=generator).to(
+            torch.bfloat16
+        )
+        hf_cache = DynamicCache(config=config)
+        prefill_reference = _hf_forward(
+            hf_layer,
+            rotary,
+            prefill_hidden,
+            torch.arange(EMITTED_PREFILL_SEQUENCE),
+            hf_cache,
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_actual = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+&gt;       _assert_pcc("optimized-real-prefill-17", prefill_reference, _to_torch(prefill_actual), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:449:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-real-prefill-17'
+reference = tensor([[[  5.6250,   8.0000,   6.5000,  ...,  -1.2188,  -8.2500, -13.3750],
+         [-15.2500,  16.5000,  -3.2188,  ...  13.1250],
+         [ 14.7500,   1.0000, -29.6250,  ...,   2.3281,  -6.3125,   4.8125]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 11.1250,   6.8125,  10.0000,  ...,  -1.3594, -13.5000, -14.9375],
+         [-19.3750,  20.0000,  -3.8125,  ...  17.0000],
+         [ 17.2500,  -7.8125, -31.2500,  ...,   7.5625,  -2.4375,   2.5469]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+&gt;       assert passed, message
+E       AssertionError: 0.9761267200914278
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError</failure><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_optimized_decoder" name="test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-sliding_attention-mesh_device0]" time="11.844"><properties><property name="start_timestamp" value="2026-07-16T09:35:14" /><property name="end_timestamp" value="2026-07-16T09:35:26" /></properties><failure message="AssertionError: 0.9736672297105942&#10;assert False">mesh_device = MeshDevice(1x1 grid, 1 devices), layer_type = 'sliding_attention'
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_traced_decode_updates_position_across_sliding_window_boundary(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        state = _real_state_dict()
+        variant = os.environ.get("OPTIMIZED_DECODER_BOUNDARY_VARIANT", "optimized")
+        decoder = _decoder(variant, state, config, mesh_device, max_cache_len=256)
+        hf_layer = _hf_layer(config, state)
+        rotary = GptOssRotaryEmbedding(config)
+        generator = torch.Generator().manual_seed(10010)
+        prefill_len = config.sliding_window
+        prefill_hidden = torch.randn(1, prefill_len, config.hidden_size, generator=generator).to(torch.bfloat16)
+        hf_cache = DynamicCache(config=config)
+        prefill_reference = _hf_forward(
+            hf_layer,
+            rotary,
+            prefill_hidden,
+            torch.arange(prefill_len),
+            hf_cache,
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_actual = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+&gt;       _assert_pcc(f"optimized-boundary-{layer_type}-prefill", prefill_reference, _to_torch(prefill_actual), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:535:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-boundary-sliding_attention-prefill'
+reference = tensor([[[-24.8750,   2.4688,   8.8125,  ...,  14.4375,   6.1875,  -7.1250],
+         [ -0.8125, -16.3750,   0.4688,  ...  22.5000],
+         [ 11.6250, -22.2500,  18.0000,  ...,  15.0000, -17.5000,  26.3750]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[-39.2500,  -3.3438,   9.0000,  ...,  14.2500,  12.7500, -12.6250],
+         [ -6.3125, -13.0000,  -3.5625,  ...  14.5000],
+         [ 12.1250, -29.2500,  25.0000,  ...,  17.6250, -13.5625,  29.6250]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+&gt;       assert passed, message
+E       AssertionError: 0.9736672297105942
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError</failure><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_optimized_decoder" name="test_real_weight_optimized_prefill_decode_pcc[blackhole-full_attention-mesh_device0]" time="11.156"><properties><property name="start_timestamp" value="2026-07-16T09:35:26" /><property name="end_timestamp" value="2026-07-16T09:35:37" /></properties><failure message="AssertionError: 0.9761267200914278&#10;assert False">mesh_device = MeshDevice(1x1 grid, 1 devices), layer_type = 'full_attention'
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_real_weight_optimized_prefill_decode_pcc(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        state = _real_state_dict()
+        variant = os.environ.get("OPTIMIZED_DECODER_CORRECTNESS_VARIANT", "optimized")
+        decoder = _decoder(variant, state, config, mesh_device)
+        hf_layer = _hf_layer(config, state)
+        rotary = GptOssRotaryEmbedding(config)
+        generator = torch.Generator().manual_seed(9090)
+        prefill_hidden = torch.randn(1, EMITTED_PREFILL_SEQUENCE, config.hidden_size, generator=generator).to(
+            torch.bfloat16
+        )
+        hf_cache = DynamicCache(config=config)
+        prefill_reference = _hf_forward(
+            hf_layer,
+            rotary,
+            prefill_hidden,
+            torch.arange(EMITTED_PREFILL_SEQUENCE),
+            hf_cache,
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_actual = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+&gt;       _assert_pcc("optimized-real-prefill-17", prefill_reference, _to_torch(prefill_actual), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:449:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-real-prefill-17'
+reference = tensor([[[  5.6250,   8.0000,   6.5000,  ...,  -1.2188,  -8.2500, -13.3750],
+         [-15.2500,  16.5000,  -3.2188,  ...  13.1250],
+         [ 14.7500,   1.0000, -29.6250,  ...,   2.3281,  -6.3125,   4.8125]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 11.1250,   6.8125,  10.0000,  ...,  -1.3594, -13.5000, -14.9375],
+         [-19.3750,  20.0000,  -3.8125,  ...  17.0000],
+         [ 17.2500,  -7.8125, -31.2500,  ...,   7.5625,  -2.4375,   2.5469]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+&gt;       assert passed, message
+E       AssertionError: 0.9761267200914278
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError</failure><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.openai_gpt_oss_20b.tests.test_optimized_decoder" name="test_traced_decode_updates_position_across_sliding_window_boundary[blackhole-full_attention-mesh_device0]" time="11.460"><properties><property name="start_timestamp" value="2026-07-16T09:35:37" /><property name="end_timestamp" value="2026-07-16T09:35:49" /></properties><failure message="AssertionError: 0.9736672297105942&#10;assert False">mesh_device = MeshDevice(1x1 grid, 1 devices), layer_type = 'full_attention'
+
+    @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+    @pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"])
+    def test_traced_decode_updates_position_across_sliding_window_boundary(mesh_device, layer_type):
+        config = _config()
+        config.layer_types = list(config.layer_types)
+        config.layer_types[LAYER_IDX] = layer_type
+        state = _real_state_dict()
+        variant = os.environ.get("OPTIMIZED_DECODER_BOUNDARY_VARIANT", "optimized")
+        decoder = _decoder(variant, state, config, mesh_device, max_cache_len=256)
+        hf_layer = _hf_layer(config, state)
+        rotary = GptOssRotaryEmbedding(config)
+        generator = torch.Generator().manual_seed(10010)
+        prefill_len = config.sliding_window
+        prefill_hidden = torch.randn(1, prefill_len, config.hidden_size, generator=generator).to(torch.bfloat16)
+        hf_cache = DynamicCache(config=config)
+        prefill_reference = _hf_forward(
+            hf_layer,
+            rotary,
+            prefill_hidden,
+            torch.arange(prefill_len),
+            hf_cache,
+        )
+        key_cache, value_cache = decoder.create_kv_cache()
+        prefill_actual = decoder.prefill_forward(
+            _to_tt(prefill_hidden, mesh_device),
+            key_cache=key_cache,
+            value_cache=value_cache,
+        )
+&gt;       _assert_pcc(f"optimized-boundary-{layer_type}-prefill", prefill_reference, _to_torch(prefill_actual), 0.99)
+
+models/autoports/openai_gpt_oss_20b/tests/test_optimized_decoder.py:535:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+name = 'optimized-boundary-full_attention-prefill'
+reference = tensor([[[-24.8750,   2.4688,   8.8125,  ...,  14.4375,   6.1875,  -7.1250],
+         [ -0.8125, -16.3750,   0.4688,  ...  22.5000],
+         [ 11.6250, -22.2500,  18.0000,  ...,  15.0000, -17.5000,  26.3750]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[-39.2500,  -3.3438,   9.0000,  ...,  14.2500,  12.7500, -12.6250],
+         [ -6.3125, -13.0000,  -3.5625,  ...  14.5000],
+         [ 12.1250, -29.2500,  25.0000,  ...,  17.6250, -13.5625,  29.6250]]],
+       dtype=torch.bfloat16)
+threshold = 0.99
+
+    def _assert_pcc(name, reference, actual, threshold):
+        passed, message = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC_RESULT path={name} threshold={threshold} {message}")
+&gt;       assert passed, message
+E       AssertionError: 0.9736672297105942
+E       assert False
+
+models/autoports/openai_gpt_oss_20b/tests/test_functional_decoder.py:172: AssertionError</failure><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase></testsuite></testsuites>
