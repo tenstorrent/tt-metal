@@ -443,20 +443,15 @@ DOMAIN_MATHOPS = [
     MathOperation.Xielu,
 ]
 
-# Per-op tolerance overrides for the domain suite. Ops whose kernel is a coarse
-# LUT/polynomial approximation need looser bounds than the default 0.05/0.05.
-# (atol, rtol); anything not listed uses the per-format default in passed_test.
+# Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
+# per-format default in passed_test.
 DOMAIN_CUSTOM_TOLERANCES = {
-    # sigmoid_appx is a coarse 3-segment LUT approximation of sigmoid: it tracks
-    # the true curve well (PCC ~0.997) but saturates hard to 0/1 near the knees,
-    # so per-element abs error peaks at ~0.12 over [-5, 5]. Gate correctness on
-    # PCC (default 0.99) with an atol that covers the LUT's designed error band.
+    # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
     MathOperation.SigmoidAppx: (0.13, 0.05),
 }
 
 
-# Large matrix (2 formats x ~52 ops x 2 dest_acc); gated to nightly so it does not
-# slow down presubmit CI.
+# Large matrix (2 formats x ~52 ops x 2 dest_acc); nightly-gated to keep presubmit fast.
 @pytest.mark.nightly
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
@@ -480,8 +475,7 @@ def test_eltwise_unary_sfpu_domain(
         if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
             pytest.skip(reason="This combination is not supported on BH architecture")
 
-    # Pull the safe per-op input domain and clip it to where the op is defined
-    # (erfinv: |x| < 1). Other ops have no undefined holes, so this is a no-op.
+    # Per-op input domain, clipped to where the op is defined (e.g. erfinv: |x| < 1).
     specs = for_op(mathop, formats.input_format)
     spec_A = exclude_undefined(mathop, specs.spec_A)
 
@@ -521,8 +515,7 @@ def test_eltwise_unary_sfpu_signbit(
         if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
             pytest.skip(reason="This combination is not supported on BH architecture")
 
-    # signbit depends purely on the sign bit, so sample a symmetric range spanning
-    # both signs (staying away from 0 to sidestep -0.0 / rounding ambiguity).
+    # Sample both signs, avoiding 0 to sidestep -0.0 / rounding ambiguity.
     spec_A = StimuliSpec.uniform(intervals=[(-100.0, -0.5), (0.5, 100.0)])
 
     eltwise_unary_sfpu(
@@ -537,12 +530,8 @@ def test_eltwise_unary_sfpu_signbit(
     )
 
 
-# isinf/isnan family: predicate ops that write 1.0 where the test holds, else 0.0.
-# On purely finite stimuli every output would be constant (all 0 for isinf/isnan,
-# all 1 for isfinite), which leaves PCC undefined — the same degeneracy that made
-# the eq/ne comparison ops untestable via the plain sweep. So drive them with a
-# crafted spec that interleaves +inf / -inf / nan among finite values, guaranteeing
-# a non-constant output and exercising every predicate branch.
+# Predicate ops (write 1.0/0.0). Finite-only stimuli give constant output (PCC
+# undefined), so drive them with a spec interleaving +inf / -inf / nan and finite values.
 ISINF_ISNAN_MATHOPS = [
     MathOperation.Isinf,
     MathOperation.Isposinf,
@@ -554,9 +543,8 @@ ISINF_ISNAN_MATHOPS = [
 
 def _isinf_isnan_stimuli_spec():
     def dist(size, dtype, generator):
-        # Deterministic finite ramp in [-5, 5], then overwrite regular subsets
-        # with +inf / -inf / nan so every face carries all three special classes
-        # plus finite values (covers is_pos/is_neg/is_inf/is_nan/is_finite).
+        # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
+        # face carries all special classes plus finite values.
         idx = torch.arange(size, dtype=torch.float32)
         x = (idx % 11) - 5.0
         x[0::7] = float("inf")
@@ -589,12 +577,8 @@ def test_eltwise_unary_sfpu_isinf_isnan(
         if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
             pytest.skip(reason="This combination is not supported on BH architecture")
 
-    # A non-32-bit input with dest_acc=Yes takes the Tensix unpacker's bf16->fp32
-    # dest conversion, which does not faithfully preserve -inf / nan bit patterns
-    # (they no longer read back as -inf / nan in the fp32 dest). That mangles the
-    # is_neg / is_nan predicates specifically, so skip this combo — the kernel
-    # logic for all five predicates is fully covered by the Float32-input cases
-    # and the Float16_b-input / dest_acc=No case.
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) doesn't preserve
+    # -inf/nan, mangling is_neg/is_nan; skip — covered by the other input cases.
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
@@ -616,10 +600,8 @@ def test_eltwise_unary_sfpu_isinf_isnan(
 
 
 def _logical_not_stimuli_spec():
-    # logical_not(x) = (x == 0) ? 1 : 0. Random floats never land exactly on 0, so
-    # a plain sweep would make the output all-zero (PCC undefined) and never touch
-    # the == 0 branch. Drive it with a deterministic ramp that forces a regular
-    # subset to exactly 0.0, so both branches fire and the output is non-constant.
+    # logical_not(x) = (x == 0) ? 1 : 0. Random floats never hit 0, so force a
+    # regular subset to exactly 0.0 so both branches fire and output is non-constant.
     def dist(size, dtype, generator):
         idx = torch.arange(size, dtype=torch.float32)
         x = (idx % 7) - 3.0  # spans [-3, 3], hits 0 once per 7 elements
@@ -731,7 +713,7 @@ def eltwise_unary_sfpu(
             tile_count_res=tile_cnt_A,
         ),
         dest_acc=dest_acc,
-        # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
+        # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)
         unpack_to_dest=(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
@@ -836,8 +818,8 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # When clamp_negative = False require inputs < -88 to be negative (but not necessarily correct),
-    # and don't include them in the resulting isclose check.
+    # clamp_negative=False: require inputs < -88 to be negative (not necessarily
+    # correct) and exclude them from the isclose check.
     if not clamp_negative:
         assert torch.all(
             res_tensor[:5] <= 0
