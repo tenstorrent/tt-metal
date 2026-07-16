@@ -12,7 +12,8 @@
   `tests/test_optimized_decoder.py`, and `doc/optimized_decoder/**`
 - Out of scope: multichip decoder, full model, embeddings, final norm, LM
   head, sampling, generator, vLLM, and serving
-- Final stage checkpoint SHA: recorded in the final provenance commit below
+- Optimized-decoder implementation/evidence checkpoint:
+  `5c5ef8d7f1acd51010f03f0575dad8f95e4140ef`
 
 The functional decoder is the semantic and accuracy floor. It supports one
 dense layer on a 1x1 mesh, batch 1-32, arbitrary positive logical prefill
@@ -438,8 +439,8 @@ python_env/bin/pytest \
   matmul, LM head, sampling, full-model `perf_summary.json`, and vLLM
   qualitative/serving metrics are not applicable to this single-device dense
   decoder-only stage.
-- [ ] Fresh `$stage-review` clean-pass verdict and local stage checkpoint SHA
-  are appended after independent review.
+- [x] Fresh `$stage-review` returned `clean-pass`; the local stage checkpoint
+  SHA is recorded above.
 
 ## Limitations
 
@@ -456,7 +457,14 @@ python_env/bin/pytest \
 
 ## Review and commits
 
-- Independent stage review: pending.
-- Stage implementation/evidence commit: pending.
-- Provenance/checklist follow-up commit: pending.
+- The first independent `$stage-review` found evidence-retention gaps: primary
+  runtime logs, paired batch-1 comparisons, cumulative profiler contracts, and
+  the profiler output path. All findings were fixed before rereview.
+- Independent rereview verdict on the exact staged implementation/evidence
+  tree: `clean-pass`; no required work remained.
+- Stage implementation/evidence commit:
+  `5c5ef8d7f1acd51010f03f0575dad8f95e4140ef`.
+- This review/provenance record is committed locally immediately after that
+  checkpoint; its SHA is reported in the final handoff because a commit cannot
+  contain its own content-derived SHA.
 - No push is performed.
