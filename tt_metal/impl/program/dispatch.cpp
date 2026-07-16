@@ -2481,8 +2481,8 @@ void update_program_dispatch_commands(
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
     static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
     static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 3);
-    static constexpr uint32_t program_host_id_offset =
-        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
+    static constexpr uint32_t host_runtime_id_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.host_runtime_id));
     // Update Stall Command Sequence
     if (program_binary_status != ProgramBinaryStatus::Committed) {
         // Program binary is in flight. Issue a Prefetch Stall
@@ -2507,13 +2507,12 @@ void update_program_dispatch_commands(
         tensix_l1_binary_write_offset_offset,
         &dispatch_md.kernel_config_addrs[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)],
         sizeof(uint32_t));
-    // May truncate to fit the space.
     static_assert(
-        std::is_same_v<uint16_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.program_host_id)>,
-        "program_host_id type should be uint16_t");
-    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
+        std::is_same_v<uint32_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.host_runtime_id)>,
+        "host_runtime_id type should be uint32_t");
+    uint32_t runtime_id = static_cast<uint32_t>(program.get_runtime_id());
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
-        program_host_id_offset, &runtime_id, sizeof(runtime_id));
+        host_runtime_id_offset, &runtime_id, sizeof(runtime_id));
 
     RecordProgramMetadata(program);
 
@@ -2684,8 +2683,8 @@ void update_traced_program_dispatch_commands(
     static constexpr uint32_t tensix_l1_write_offset_offset = write_offsets_offset + sizeof(uint32_t);
     static constexpr uint32_t tensix_l1_binary_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 2);
     static constexpr uint32_t eth_l1_write_offset_offset = write_offsets_offset + (sizeof(uint32_t) * 3);
-    static constexpr uint32_t program_host_id_offset =
-        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
+    static constexpr uint32_t host_runtime_id_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.host_runtime_id));
     // Update Stall Command Sequence
     if (program_binary_status != ProgramBinaryStatus::Committed) {
         // Program binary is in flight. Issue a Prefetch Stall
@@ -2711,13 +2710,12 @@ void update_traced_program_dispatch_commands(
         dispatch_md.binary_kernel_config_addrs[tensix_index].addr - program_config.kernel_text_offset;
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         tensix_l1_binary_write_offset_offset, &binary_write_offset, sizeof(uint32_t));
-    // May truncate to fit the space.
     static_assert(
-        std::is_same_v<uint16_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.program_host_id)>,
-        "program_host_id type should be uint16_t");
-    uint16_t runtime_id = trace_node.program_runtime_id;
+        std::is_same_v<uint32_t, decltype(std::declval<CQDispatchCmd>().set_write_offset.host_runtime_id)>,
+        "host_runtime_id type should be uint32_t");
+    uint32_t runtime_id = trace_node.program_runtime_id;
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
-        program_host_id_offset, &runtime_id, sizeof(runtime_id));
+        host_runtime_id_offset, &runtime_id, sizeof(runtime_id));
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset,

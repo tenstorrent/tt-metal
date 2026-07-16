@@ -119,6 +119,7 @@ void enqueue_sanity_program(
 
 TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     constexpr int kDeviceId = 0;
+    const std::set<uint32_t> expected_runtime_ids = {1, 2, 3, 0x12345678u, 0x12345679u};
 
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(
         kDeviceId,
@@ -149,10 +150,8 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
 
     CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
     CoreRange all_cores(CoreCoord{0, 0}, CoreCoord{compute_grid.x - 1, compute_grid.y - 1});
-    for (uint32_t i = 0; i < kNumPrograms; ++i) {
-        // Runtime IDs start at 1 so every program emits a record (runtime_id == 0
-        // is reserved for infrastructure traffic and filtered host-side).
-        enqueue_sanity_program(mesh_device, /*runtime_id=*/i + 1, all_cores);
+    for (uint32_t runtime_id : expected_runtime_ids) {
+        enqueue_sanity_program(mesh_device, runtime_id, all_cores);
     }
 
     mesh_device->quiesce_devices();
@@ -164,8 +163,9 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
 
     UnregisterProgramRealtimeProfilerCallback(handle);
 
-    ASSERT_GE(records.size(), kNumPrograms)
-        << "Expected at least " << kNumPrograms << " RT profiler records (one per program), got " << records.size();
+    ASSERT_GE(records.size(), expected_runtime_ids.size())
+        << "Expected at least " << expected_runtime_ids.size() << " RT profiler records (one per program), got "
+        << records.size();
     EXPECT_EQ(dropped, 0u);
 
     for (const auto& rec : records) {
@@ -188,7 +188,7 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
     // source.
     std::set<uint32_t> programs_with_correct_sources;
     for (const auto& rec : records) {
-        if (rec.runtime_id < 1 || rec.runtime_id > kNumPrograms) {
+        if (!expected_runtime_ids.contains(rec.runtime_id)) {
             continue;
         }
         ASSERT_FALSE(rec.kernel_sources.empty())
@@ -202,7 +202,7 @@ TEST(RealtimeProfilerSanity, FiveProgramsBackToBack) {
         }
         programs_with_correct_sources.insert(rec.runtime_id);
     }
-    EXPECT_EQ(programs_with_correct_sources.size(), kNumPrograms)
+    EXPECT_EQ(programs_with_correct_sources, expected_runtime_ids)
         << "Not every program's source was correctly correlated by runtime ID";
 }
 

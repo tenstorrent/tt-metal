@@ -142,7 +142,7 @@ constexpr uintptr_t cb_end = cb_base + cb_size;
 // Dispatch-core-local L1 region assigned by DispatchMemMap via
 // CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG. Address comes from host through the
 // REALTIME_PROFILER_MSG_ADDR compile-time define. See cq_dispatch.cpp for the full mailbox
-// description; this kernel is the consumer side of the embedded program_id_fifo.
+// description; this kernel is the consumer side of the embedded runtime_id_fifo.
 volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
     reinterpret_cast<volatile tt_l1_ptr realtime_profiler_msg_t*>(REALTIME_PROFILER_MSG_ADDR);
 
@@ -604,10 +604,10 @@ void kernel_main() {
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
-        uint32_t popped_pid = 0;
+        uint32_t runtime_id = 0;
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, true);
-            popped_pid = pop_program_id(rt_profiler_msg);
+            runtime_id = pop_runtime_id(rt_profiler_msg);
         }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
@@ -619,9 +619,8 @@ void kernel_main() {
         if (rt_profiler_enabled) {
             const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL ||
                                          cmd->base.cmd_id == CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
-            write_buffer_id(
-                rt_profiler_msg,
-                is_profiled_cmd ? popped_pid : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID));
+            write_buffer_runtime_id(
+                rt_profiler_msg, is_profiled_cmd ? runtime_id : REALTIME_PROFILER_UNPROFILED_RUNTIME_ID);
         }
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:

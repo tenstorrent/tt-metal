@@ -344,7 +344,7 @@ void RealtimeProfilerManager::publish_pages(
                 (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
                 (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
                 sync_frequency,
-                data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
+                data_collector->GetKernelSourcesForRuntimeId(rp[2]));
         }
     }
     if (records.empty()) {
