@@ -69,6 +69,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
         RA_NSB=str(nsb),
         RA_MASK=str(mask),
         RA_ITERS=str(iters),
+        TT_MM_RINGCOST="1",  # emit the factory's RINGCOST route-cost line (ring-order diag); harmless otherwise
     )
     cmd = ["timeout", "-s", "TERM", str(timeout), BIN, "--gtest_filter=RegimeADiagFixture.Run"]
     try:
@@ -102,12 +103,25 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
         for t, c in sorted(by.items())
     }
     maxrel = None
+    ringcost = []  # RINGCOST lines (factory, ring-order diag): per-group bank/greedy/opt max+total edge cost
     for line in r.stdout.splitlines():
         if "DIAGPCC" in line:
             maxrel = float(line.split("max_rel_err=")[1])
+        elif "RINGCOST" in line:
+            g = {}
+            for tok in line.split():
+                if tok.startswith(("group=", "wnoc=", "sel=")):
+                    k, v = tok.split("=")
+                    g[k] = v
+                for od in ("bank", "greedy", "opt"):
+                    if tok.startswith(od + "[") and "max=" in tok and "tot=" in tok:
+                        g[od + "_max"] = int(tok.split("max=")[1].split("tot=")[0])
+                        g[od + "_tot"] = int(tok.split("tot=")[1])
+            if "group" in g:
+                ringcost.append(g)
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -116,6 +130,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
         "wall_us": wall_us,
         "risc": risc,
         "max_rel_err": maxrel,
+        "ringcost": ringcost,
     }
 
 
@@ -557,6 +572,94 @@ def pipelined(relaunches=3):
     print("PIPELINED DONE", flush=True)
 
 
+RING_SHAPES = [
+    ("target", "256x2048x1024", 256, 2048, 1024, None),
+    ("target", "256x6144x768", 256, 6144, 768, None),
+    ("control", "256x6144x2304", 256, 6144, 2304, None),
+    ("control", "256x6144x4608", 256, 6144, 4608, None),
+    ("control", "mt1_32x6144x4608", 32, 6144, 4608, None),
+    ("control", "mt2_64x6144x4608", 64, 6144, 4608, None),
+    ("control", "mt4_128x6144x4608", 128, 6144, 4608, None),
+]
+
+
+def _ring_agg(ringcost):
+    # aggregate per-order route cost across ring groups: worst-group max-edge + sum of total hops.
+    agg = {}
+    for od in ("bank", "greedy", "opt"):
+        mx = [g[od + "_max"] for g in ringcost if (od + "_max") in g]
+        tt = [g[od + "_tot"] for g in ringcost if (od + "_tot") in g]
+        agg[od] = {"max_edge": (max(mx) if mx else None), "total_hops": (sum(tt) if tt else None)}
+    return agg
+
+
+def ringorder(relaunches=3):
+    # A/B: bank (default, mask 0) vs greedy (1<<12=4096) vs opt (1<<13=8192) in0 ring ordering, INTERLEAVED
+    # relaunches. Route cost (per-order max-edge/total-hops, from the factory RINGCOST lines of the opt run)
+    # + wall/%change/util/per-RISC/PCC. Raw: regime_a_ringorder_bench.json.
+    VARIANTS = [("bank", 4096), ("greedy", 8192), ("opt", 0)]  # opt = mask 0 (default); bank/greedy = diagnostics
+    out = []
+    for grp, label, M, K, N, explicit in RING_SHAPES:
+        cfg = _cfg_for(M, K, N, explicit)
+        ideal = ideal_us(M, K, N)
+        runs = {v: [] for v, _ in VARIANTS}
+        for _r in range(relaunches):  # interleaved
+            for v, mask in VARIANTS:
+                runs[v].append(run_one(M, K, N, cfg, mask))
+        per = {}
+        for v, mask in VARIANTS:
+            oks = [x for x in runs[v] if x.get("ok") and x["wall_us"]]
+            walls = sorted(x["wall_us"] for x in oks)
+            med = statistics.median(walls) if walls else None
+            per[v] = {
+                "mask": mask,
+                "walls": walls,
+                "med_us": med,
+                "n_ok": len(oks),
+                "util512_pct": (ideal / med * 100 if med else None),
+                "max_rel_err": [x.get("max_rel_err") for x in runs[v]],
+                "risc": (oks[0]["risc"] if oks else None),
+            }
+        bm = per["bank"]["med_us"]
+        for v, _ in VARIANTS:
+            m = per[v]["med_us"]
+            per[v]["vs_bank_pct"] = ((m / bm - 1) * 100) if (bm and m) else None
+        # route cost from the opt run's RINGCOST (prints bank/greedy/opt); fall back to greedy run.
+        rc = next((x["ringcost"] for x in runs["opt"] if x.get("ringcost")), None) or next(
+            (x["ringcost"] for x in runs["greedy"] if x.get("ringcost")), []
+        )
+        route = _ring_agg(rc)
+        out.append(
+            {
+                "group": grp,
+                "label": label,
+                "M": M,
+                "K": K,
+                "N": N,
+                "cfg": list(cfg),
+                "ideal_us": ideal,
+                "route_cost": route,
+                "ringcost_groups": rc,
+                "bank": per["bank"],
+                "greedy": per["greedy"],
+                "opt": per["opt"],
+            }
+        )
+        print(
+            f"[ring/{grp}] {label:18} cfg={cfg} ideal={ideal:.1f}  "
+            f"bank={bm if bm is None else round(bm,1)} "
+            f"greedy={per['greedy']['med_us'] and round(per['greedy']['med_us'],1)}"
+            f"({per['greedy']['vs_bank_pct'] and round(per['greedy']['vs_bank_pct'],1)}%) "
+            f"opt={per['opt']['med_us'] and round(per['opt']['med_us'],1)}"
+            f"({per['opt']['vs_bank_pct'] and round(per['opt']['vs_bank_pct'],1)}%)  "
+            f"route[max_edge bank={route['bank']['max_edge']}->opt={route['opt']['max_edge']} "
+            f"tot bank={route['bank']['total_hops']}->opt={route['opt']['total_hops']}]",
+            flush=True,
+        )
+        json.dump(out, open(f"{HERE}/regime_a_ringorder_bench.json", "w"), indent=2)
+    print("RINGORDER DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
     {
@@ -567,4 +670,5 @@ if __name__ == "__main__":
         "variants": variants,
         "progressive": progressive,
         "pipelined": pipelined,
+        "ringorder": ringorder,
     }[mode]()
