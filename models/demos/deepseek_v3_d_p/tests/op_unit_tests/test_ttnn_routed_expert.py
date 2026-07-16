@@ -102,6 +102,11 @@ def run_torch_routed_experts(
     return expert_outputs
 
 
+# Device count of a full Galaxy. Model configs express NUM_ROUTED_EXPERTS for this topology, so it
+# is the denominator used to scale a model's expert count down to whatever mesh a test runs on.
+GALAXY_DEVICE_COUNT = 32
+
+
 ROUTED_EXPERT_MESH_PARAMS = [
     pytest.param(
         1,
@@ -537,7 +542,10 @@ def _xfail_known_routed_expert_failures(request):
 
 def routed_expert_shape_params():
     """Build the per-model shape parametrization. Non-baseline models carry the extended_model
-    marker on their params so they stay gated exactly as the separate tests were."""
+    marker on their params so they stay gated exactly as the separate tests were.
+
+    NUM_ROUTED_EXPERTS is the model's full-Galaxy expert count; it is scaled down to the
+    per-mesh expert count inside the test body once the actual mesh size is known."""
     params = []
     for name, config, extended in ROUTED_EXPERT_MODELS:
         marks = (pytest.mark.extended_model,) if extended else ()
@@ -546,7 +554,7 @@ def routed_expert_shape_params():
                 640,
                 config.EMB_SIZE,
                 config.MOE_INTERMEDIATE_SIZE,
-                config.NUM_ROUTED_EXPERTS // 4,
+                config.NUM_ROUTED_EXPERTS,
                 2,
                 3,
                 False,
@@ -558,7 +566,7 @@ def routed_expert_shape_params():
 
 
 @pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "seq_len_per_chip, emb_dim, hidden_dim, total_expert_count, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     routed_expert_shape_params(),
 )
 @pytest.mark.parametrize(
@@ -571,12 +579,16 @@ def test_ttnn_routed_expert_models(
     seq_len_per_chip,
     emb_dim,
     hidden_dim,
-    num_routed_experts,
+    total_expert_count,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     run_pcc_check,
     use_predictable_data,
 ):
+    # total_expert_count is the model's full-Galaxy (GALAXY_DEVICE_COUNT devices) expert count.
+    # Scale it down to the number of experts hosted by the mesh we're actually running on.
+    # To keep real per-chip workload.
+    num_routed_experts = total_expert_count // GALAXY_DEVICE_COUNT * mesh_device.get_num_devices()
     run_routed_expert(
         mesh_device,
         device_params,
