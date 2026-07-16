@@ -31,7 +31,7 @@ from models.common.utility_functions import (
     "M, K, N, dim, other_dim, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights, ag_offset",
     [
         (
-            49152,  # 4608 per device (SP=8): 144 tiles -> 12 rows/injector (12 injectors) -> band_rows=3 at SUB=4; every level divides
+            38912,  # 4864 per device (SP=8): 152 tiles; against a 16-tile mm_block_m this is 9.5 blocks -> ragged last M-block (hang repro)
             4096,
             1024,
             3,
