@@ -303,18 +303,29 @@ void kernel_main() {
                                     // in1_policy=WaitAndRetainOnLastBlock: weights stay across all
                                     // matmul_M_t/subblock_h invocations within this output block
                                     // (popped at the c_out_block level, see end of c_out_block loop).
-                                    // InitMode::Short (default reconfig=InputAndOutput):
+                                    // InitMode::Short, reconfig gated on use_fp32_partials:
                                     //   - kernel's boot mm_init at the top of kernel_main owns
                                     //     hw_configure (the only place hw_configure is safe);
                                     //   - the helper's per-call Short does reconfig_data_format
-                                    //     (in1, in0) + pack_reconfig_data_format(interm) +
-                                    //     matmul_block_init, which both restores matmul-mode
-                                    //     unpack/math state after the tilize above AND brings
-                                    //     the dataformats back to weights/vol2col_tiled (the
-                                    //     pre-tilize reconfig on the use_fp32_partials path is
-                                    //     what tilize itself needs; the helper handles the
-                                    //     post-tilize → matmul restore automatically).
+                                    //     (in1, in0) + matmul_block_init, restoring matmul-mode
+                                    //     unpack/math state after the tilize above (always needed).
+                                    //   - the pack (output) reconfig is needed ONLY when partials
+                                    //     are fp32: then interm is fp32 while the preceding tilize
+                                    //     left the packer at the bf16 vol2col format, so it must be
+                                    //     reprogrammed (reconfig=InputAndOutput). For bf16 partials
+                                    //     interm == vol2col format == out, so the packer is already
+                                    //     correct and pack_reconfig_data_format is pure per-call
+                                    //     overhead — main's hand-written matmul_blocks gated it the
+                                    //     same way (pack reconfig only `if constexpr (use_fp32_partials)`).
+                                    //     Since this call runs once per (Cin-block × Cout-block ×
+                                    //     spatial-block × M_t/subblock_h), that redundant reconfig
+                                    //     scaled with the reduction-block count and drove the conv3d
+                                    //     regressions on high-Cin-block shapes; reconfig=Input drops it.
                                     // interm_buf = out_buf because num_k_blocks==1: interm is unused.
+                                    constexpr auto mm_reconfig =
+                                        use_fp32_partials
+                                            ? compute_kernel_lib::matmul_config::DataFormatReconfig::InputAndOutput
+                                            : compute_kernel_lib::matmul_config::DataFormatReconfig::Input;
                                     compute_kernel_lib::matmul_block<
                                         /*transpose=*/false,
                                         /*packer_l1_acc=*/false,
@@ -322,7 +333,15 @@ void kernel_main() {
                                         compute_kernel_lib::OutputCBLayout::SubblockMajor,
                                         compute_kernel_lib::matmul_config::InitMode::Short,
                                         compute_kernel_lib::InputPolicy::WaitAndPopPerKBlock,
-                                        compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock>(
+                                        compute_kernel_lib::InputPolicy::WaitAndRetainOnLastBlock,
+                                        compute_kernel_lib::NoPostCompute,
+                                        compute_kernel_lib::NoPreKBlock,
+                                        compute_kernel_lib::NoPostKBlock,
+                                        compute_kernel_lib::NoKBlockInnerDimFn,
+                                        compute_kernel_lib::NoIn0Source,
+                                        compute_kernel_lib::NoIn1BaseOffset,
+                                        compute_kernel_lib::NoneActivation,
+                                        mm_reconfig>(
                                         cb_vol2col_tiled_buf,
                                         cb_weight_tiled_buf,
                                         cb_matmul_interm_tiled_buf,
