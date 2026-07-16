@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -40,6 +42,45 @@ struct SdpaDecodeParams {
     // the effective block_size and ≥ sliding_window_size when both are set. Paged-mode
     // only (validated in validate_on_program_cache_miss).
     std::optional<uint32_t> cache_position_modulo = std::nullopt;
+
+    uint8_t share_cache_hash_tag() const {
+        return share_cache.has_value() ? (share_cache.value() ? uint8_t{2} : uint8_t{1}) : uint8_t{0};
+    }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "scale",
+        "output_mem_config",
+        "program_config",
+        "compute_kernel_config",
+        "k_chunk_size",
+        "paged_attention",
+        "is_causal",
+        "share_cache_hash_tag",
+        "cur_pos",
+        "use_mla",
+        "head_dim_v",
+        "sliding_window_size",
+        "block_size_override",
+        "num_kv_heads_override",
+        "cache_position_modulo");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(scale),
+            std::cref(output_mem_config),
+            std::cref(program_config),
+            std::cref(compute_kernel_config),
+            k_chunk_size,
+            paged_attention,
+            is_causal,
+            share_cache_hash_tag(),
+            std::cref(cur_pos),
+            std::cref(use_mla),
+            std::cref(head_dim_v),
+            std::cref(sliding_window_size),
+            std::cref(block_size_override),
+            std::cref(num_kv_heads_override),
+            std::cref(cache_position_modulo));
+    }
 };
 
 struct SdpaDecodeInputs {
@@ -55,6 +96,11 @@ struct SdpaDecodeInputs {
     std::optional<Tensor> page_table_tensor;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> attention_sink;
+
+    tt::tt_metal::Shape q_padded_shape;
+    tt::tt_metal::Shape k_padded_shape;
+    std::optional<tt::tt_metal::Shape> v_padded_shape;
+    std::optional<tt::tt_metal::Shape> cur_pos_tensor_logical_shape;
 };
 
 }  // namespace ttnn::prim

@@ -13,8 +13,6 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt_stl/reflection.hpp>
-
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -559,6 +557,11 @@ Tensor sdpa_decode(
         .page_table_tensor = page_table_tensor,
         .attn_mask = attn_mask,
         .attention_sink = attention_sink,
+        .q_padded_shape = input_tensor_q.padded_shape(),
+        .k_padded_shape = input_tensor_k.padded_shape(),
+        .v_padded_shape = input_tensor_v.has_value() ? std::optional{input_tensor_v->padded_shape()} : std::nullopt,
+        .cur_pos_tensor_logical_shape =
+            cur_pos_tensor.has_value() ? std::optional{cur_pos_tensor->logical_shape()} : std::nullopt,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
