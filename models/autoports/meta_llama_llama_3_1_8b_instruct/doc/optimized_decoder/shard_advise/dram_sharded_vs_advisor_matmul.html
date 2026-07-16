@@ -60,20 +60,26 @@ This isolates <b>strategy</b> at the shipped precision — the combination the b
   <p class="muted">Numbers are the mean of two bit-stable runs. The 8-core failure reproduces the log's "8 cores hit an L1 clash".</p>
 </div>
 
-<h2>Why — the QKV matmul</h2>
-<p style="max-width:1060px">Same BFP4 weights and byte counts, but the advisor's 96-core 1-D <b>QKV</b> config runs at only <b>27% DRAM bandwidth</b> (its worst matmul); the DRAM-sharded QKV hits <b>46%</b>. That ~38&nbsp;µs QKV win — partly offset by dram's slightly slower O-projection — nets the ~14&nbsp;µs end-to-end gain.</p>
+<h2>Op-by-op matmul analysis</h2>
+<p style="max-width:1060px">The five decode projection matmuls, from each config's <code>tt-perf-report</code> (same BFP4 weights, LoFi, BFP8 cache). Δ&nbsp;µs is dram − advisor (negative = dram faster). The story is <b>QKV</b>: the advisor's 96-core 1-D config is stuck at <b>27% DRAM bandwidth / 17.7 TFLOPs</b> — its worst matmul — while the DRAM-sharded QKV reaches <b>46% / 30.2 TFLOPs</b>. That −38&nbsp;µs, minus dram's +7&nbsp;µs on O-proj, nets the ~14&nbsp;µs end-to-end win.</p>
 <table class="t2">
-  <tr><th>Decode matmul</th><th>advisor_1d (optimized)</th><th>dram_sharded</th></tr>
-  <tr class="win"><td><b>QKV 4096×6144</b></td><td>91 µs · 96c · <b>27% DRAM</b></td><td><b>53 µs · 46% DRAM</b></td></tr>
-  <tr><td>O 4096×4096</td><td>33 µs · 64c · 50%</td><td>40 µs · 41%</td></tr>
-  <tr><td>gate 4096×14336</td><td>107 µs · 90c · 54%</td><td>110 µs · 52%</td></tr>
-  <tr><td>up 4096×14336</td><td>108 µs · 90c · 53%</td><td>110 µs · 52%</td></tr>
-  <tr><td>down 14336×4096</td><td>111 µs · 64c · 52%</td><td>106 µs · 54%</td></tr>
-  <tr class="win"><td><b>5-matmul device sum</b></td><td><b>450 µs</b></td><td><b>419 µs</b></td></tr>
+  <tr><th>Matmul</th><th>Strategy</th><th class="n">Device µs</th><th class="n">Cores</th><th class="n">DRAM GB/s</th><th class="n">DRAM %</th><th class="n">TFLOPs</th><th class="n">Δ µs</th></tr>
+  <tr class="win"><td rowspan="2"><b>QKV<br>4096×6144</b></td><td>advisor_1d</td><td class="n">91</td><td class="n">96</td><td class="n">138</td><td class="n">27.0%</td><td class="n">17.7</td><td class="n" rowspan="2"><b>−38</b></td></tr>
+  <tr class="win"><td><b>dram_sharded</b></td><td class="n"><b>53</b></td><td class="n">12</td><td class="n"><b>236</b></td><td class="n"><b>46.0%</b></td><td class="n"><b>30.2</b></td></tr>
+  <tr class="bad"><td rowspan="2">O<br>4096×4096</td><td>advisor_1d</td><td class="n"><b>33</b></td><td class="n">64</td><td class="n">257</td><td class="n">50.2%</td><td class="n">32.9</td><td class="n" rowspan="2">+7</td></tr>
+  <tr class="bad"><td>dram_sharded</td><td class="n">40</td><td class="n">12</td><td class="n">212</td><td class="n">41.4%</td><td class="n">27.1</td></tr>
+  <tr><td rowspan="2">gate<br>4096×14336</td><td>advisor_1d</td><td class="n"><b>107</b></td><td class="n">90</td><td class="n">274</td><td class="n">53.5%</td><td class="n">35.0</td><td class="n" rowspan="2">+3</td></tr>
+  <tr><td>dram_sharded</td><td class="n">110</td><td class="n">12</td><td class="n">267</td><td class="n">52.1%</td><td class="n">34.1</td></tr>
+  <tr><td rowspan="2">up<br>4096×14336</td><td>advisor_1d</td><td class="n"><b>108</b></td><td class="n">90</td><td class="n">271</td><td class="n">53.0%</td><td class="n">34.7</td><td class="n" rowspan="2">+2</td></tr>
+  <tr><td>dram_sharded</td><td class="n">110</td><td class="n">12</td><td class="n">266</td><td class="n">52.0%</td><td class="n">34.1</td></tr>
+  <tr class="win"><td rowspan="2">down<br>14336×4096</td><td>advisor_1d</td><td class="n">111</td><td class="n">64</td><td class="n">264</td><td class="n">51.7%</td><td class="n">33.9</td><td class="n" rowspan="2"><b>−5</b></td></tr>
+  <tr class="win"><td><b>dram_sharded</b></td><td class="n"><b>106</b></td><td class="n">12</td><td class="n"><b>276</b></td><td class="n"><b>54.0%</b></td><td class="n"><b>35.4</b></td></tr>
+  <tr class="win"><td colspan="2"><b>5-matmul device sum</b></td><td class="n"><b>450 → 419</b></td><td class="n" colspan="4"></td><td class="n"><b>−31</b></td></tr>
 </table>
 
 <h2>What the bring-up log did — and missed</h2>
 <p style="max-width:1060px">The log <em>did</em> tweak DRAM-sharded knobs (work_log:156–159): all-role core geometry 32/16/8, down-only and gate/up geometry, <code>in0_block_w=8</code>, and all-BFP8/HiFi2. Its best DRAM-sharded decode was <b>0.803 ms</b>, so it kept advisor_1d. <b>But every dram sweep ran at the dram precision (BFP8 attention/O/down)</b> — so QKV read 2× the bytes and the strategy never got a fair shot. It compared dram@BFP8 (0.803) against advisor@BFP4 (0.713–0.755): precision confounded with strategy. Running dram_sharded at the shipped all-BFP4 precision (this page) flips the result.</p>
+<p style="max-width:1060px">This is a <b>greedy-search artifact</b>: at original precision advisor_1d (0.827) beat the DRAM-sharded rewrite (0.895), so advisor_1d was <em>"retained as search base"</em> (work_log:131) and every later precision reduction was layered only onto it — the strategy was frozen before the precision that flips it. It also runs against the governing rule the log cites: <code>optimize/SKILL.md</code> <b>OPT-015</b> states the shard-advise 1D-mcast config is <em>"one candidate … not a DRAM-sharded replacement: it regresses DRAM-BW-saturated decode matmuls and wins mainly on few-core, BW-starved, or interleaved baselines — measure it against the DRAM-sharded candidates and keep the winner (OPT-004)."</em> The advisor QKV at 27% BW is exactly the case OPT-004 says DRAM-sharded should win; the log kept the 1-D config anyway because its A/B was stale.</p>
 
 <div class="legend">
   <span><span class="sw" style="background:var(--good)"></span> the win (DRAM-sharded QKV)</span>
