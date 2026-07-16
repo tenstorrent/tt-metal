@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+from loguru import logger
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
@@ -48,9 +49,7 @@ class TtTransformerBlock(LightweightModule):
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
         self.unfuse_res_add = args.unfuse_res_add
-        self.blackhole_no_prefetcher = (not getattr(args, "use_prefetcher", True)) and getattr(
-            args, "is_blackhole", False
-        )
+        self.blackhole_no_prefetcher = args.blackhole_no_prefetcher
 
         self.attention = TtLlamaAttention(
             mesh_device=mesh_device,
@@ -159,7 +158,7 @@ class TtTransformerBlock(LightweightModule):
         if mode == "decode":
             # In no-prefetcher Blackhole demo runs, layer-0 decode input can remain DRAM/interleaved.
             # Let downstream norm path handle this instead of hard-failing at the boundary check.
-            if getattr(self.args, "use_prefetcher", True):
+            if self.args.use_prefetcher:
                 assert (
                     x.memory_config() == skip_mem_cfg
                 ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
@@ -203,7 +202,7 @@ class TtTransformerBlock(LightweightModule):
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
         if mode == "decode":
             if self.unfuse_res_add:
-                if getattr(self.args, "use_prefetcher", True):
+                if self.args.use_prefetcher:
                     h = ttnn.add(attn_out, h)
                 else:
                     # No-prefetcher decode may mix DRAM/interleaved residuals with sharded attn output.
@@ -212,25 +211,16 @@ class TtTransformerBlock(LightweightModule):
                         if h.memory_config() != attn_out.memory_config():
                             h = ttnn.to_memory_config(h, attn_out.memory_config())
                         h = ttnn.add(attn_out, h, dtype=res_dtype)
-                    except RuntimeError:
+                    except RuntimeError as e:
+                        # Only a sharded-layout mismatch is expected here; log so a genuine
+                        # allocation/dispatch/kernel failure is not silently reclassified as one.
+                        logger.warning(f"decode residual add failed on sharded layout, retrying in DRAM: {e}")
                         if attn_out.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
                             attn_out = ttnn.to_memory_config(attn_out, ttnn.DRAM_MEMORY_CONFIG)
                         if h.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
                             h = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
                         h = ttnn.add(attn_out, h, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=res_dtype)
                 ff_in_sharded, _ = self.ff_norm(h, None, mode)
-            elif not getattr(self.args, "use_prefetcher", True) and getattr(self.args, "is_blackhole", False):
-                # BH no-prefetch decode: the residual stream is column-fractured (dim/4 per
-                # device). The distributed ff_norm normalizes (attn_out + h) over the full
-                # hidden dim but does not return the summed residual, so build the post-attention
-                # residual h = h + attn_out explicitly for the final residual add.
-                ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-                attn_res = (
-                    attn_out
-                    if attn_out.memory_config() == h.memory_config()
-                    else ttnn.to_memory_config(attn_out, h.memory_config())
-                )
-                h = ttnn.add(h, attn_res)
             else:
                 ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             if h is not attn_out:

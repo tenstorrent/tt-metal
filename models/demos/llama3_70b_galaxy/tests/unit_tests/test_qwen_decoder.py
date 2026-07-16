@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy runs
-# the no-prefetcher bring-up path. The architecture is detected once at import so the pytest
-# parameters (fabric config) and the in-body setup select the right path automatically.
+# Single test that adapts to the detected architecture (not parametrized across arches): the arch is
+# detected once at import, the device_params fixture is parametrized with the arch-appropriate fabric
+# config, and the test body branches on _IS_BLACKHOLE to run either the Wormhole prefetcher path
+# (original main) or the Blackhole Galaxy no-prefetcher bring-up path.
 import torch
 import pytest
 from loguru import logger

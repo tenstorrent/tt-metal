@@ -23,8 +23,11 @@ class DistributedNorm(LightweightModule):
         )
         num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
         hidden_size_per_device_distributed_ln = args.dim // 4
-        blackhole_no_prefetcher = (not getattr(args, "use_prefetcher", True)) and getattr(args, "is_blackhole", False)
-        if not blackhole_no_prefetcher:
+        # decode_shard_height (and thus gather_in_mem_cfg / ln_prg_cfg.block_h below) is only consumed
+        # by the sharded-decode path (tt_sharded_distributed_rmsnorm), which runs when
+        # use_sharded_decode=True. On that path decode_shard_height is always 32; the non-32 values
+        # derived below are inert (the no-prefetcher decode uses the distributed, non-sharded norm).
+        if not args.blackhole_no_prefetcher:
             # Wormhole / prefetcher path keeps main's fixed decode shard height (32 -> block_h 1).
             decode_shard_height = 32
         elif norm.output_mem_config is not None and norm.output_mem_config.shard_spec is not None:
@@ -34,7 +37,9 @@ class DistributedNorm(LightweightModule):
             if decode_residual_memcfg is not None and decode_residual_memcfg.shard_spec is not None:
                 decode_shard_height = decode_residual_memcfg.shard_spec.shape[0]
             else:
-                decode_shard_height = 128 if getattr(args, "is_blackhole", False) else 32
+                decode_shard_height = 128 if args.is_blackhole else 32
+        # block_h = decode_shard_height // 32 truncates silently otherwise.
+        assert decode_shard_height % 32 == 0, f"decode_shard_height must be a multiple of 32, got {decode_shard_height}"
         self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
             shape=(1, 1, decode_shard_height, hidden_size_per_device_distributed_ln // num_cores_ln),
             core_grid=ttnn.CoreRangeSet(
@@ -76,18 +81,15 @@ class DistributedNorm(LightweightModule):
         # accumulation error over 64 layers). The norm output only feeds matmuls and is not part of
         # the residual, so force it to bf8 to keep activation/CB footprint small (avoids L1 clashes
         # at long prefill sequence lengths). Other paths keep their input-derived dtype (None).
-        blackhole_no_prefetcher = (not getattr(self.args, "use_prefetcher", True)) and getattr(
-            self.args, "is_blackhole", False
-        )
-        norm_output_dtype = ttnn.bfloat8_b if blackhole_no_prefetcher else None
+        norm_output_dtype = ttnn.bfloat8_b if self.args.blackhole_no_prefetcher else None
         if mode == "decode":
             if not self.use_sharded_decode:
                 # BH no-prefetch decode. The residual stream is column-fractured (dim/4 per
                 # device), so a plain local rms_norm would (incorrectly) normalize over only
                 # dim/4. Add the residual, then run the distributed RMS norm: per-device partial
                 # stats are gathered across columns and combined so the normalization is over the
-                # full hidden dim. On BH that column-axis stats all_gather is routed to host
-                # (the fabric has no registered column-axis connection).
+                # full hidden dim. That column-axis stats all_gather runs on device over the 2D-torus
+                # fabric (see TT_CCL.line_all_gather -> ttnn.all_gather on the no-prefetch branch).
                 x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
                 if res is not None:
                     res = ttnn.to_memory_config(res, ttnn.DRAM_MEMORY_CONFIG)
