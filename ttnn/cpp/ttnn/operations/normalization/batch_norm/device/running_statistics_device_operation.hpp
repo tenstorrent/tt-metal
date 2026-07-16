@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tuple>
 #include <variant>
 
 #include "ttnn/device_operation.hpp"
@@ -20,6 +21,12 @@ struct RunningStatistics {
         DataType input_dtype;
         std::optional<DataType> dtype;
         DataType get_dtype() const;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("momentum", "memory_config", "compute_kernel_config", "input_dtype", "dtype");
+        auto attribute_values() const {
+            return std::forward_as_tuple(momentum, memory_config, compute_kernel_config, input_dtype, dtype);
+        }
     };
 
     struct tensor_args_t {
