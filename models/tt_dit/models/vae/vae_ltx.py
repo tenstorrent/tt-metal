@@ -1469,6 +1469,7 @@ class LTXVideoVAEAdapter:
             subfolder=subfolder,
             parallel_config=self._dit_parallel_config,
             mesh_shape=tuple(self._mesh_device.shape),
+            mesh_device=self._mesh_device,
             get_torch_state_dict=_state_provider,
         )
         logger.info(f"Loaded TTNN VAE decoder ({len(self.decoder_blocks)} blocks)")
@@ -1500,6 +1501,7 @@ class LTXVideoVAEAdapter:
             subfolder=subfolder,
             parallel_config=self._dit_parallel_config,
             mesh_shape=tuple(self._mesh_device.shape),
+            mesh_device=self._mesh_device,
             get_torch_state_dict=_state_provider,
         )
         logger.info(f"Loaded TTNN VAE encoder ({len(self.encoder_blocks)} blocks)")

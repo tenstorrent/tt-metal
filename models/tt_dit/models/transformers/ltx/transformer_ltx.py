@@ -1156,6 +1156,7 @@ class LTXTransformerCheckpoint:
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=mesh_shape,
+            mesh_device=model.mesh_device,
             is_fsdp=is_fsdp,
             get_torch_state_dict=lambda: self.state_dict(lora_specs),
         )
