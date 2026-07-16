@@ -114,7 +114,7 @@ void kernel_main() {
         signal_noc_y[st] = get_arg_val<uint32_t>(arg_idx++);
     }
 
-    // Per-core direction and routing args (moved from compile-time for kernel consolidation)
+    // Per-core direction and routing args passed at runtime (not compile-time) so one kernel binary serves every core
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);

@@ -10,8 +10,9 @@
 //     -> processed first, overlapping the fabric exchange.
 //   BORDER  -> from the compact halo buffer [H-top|H-bot|W-left|W-right]; depends on the exchange, so
 //     before its first border stick a core waits exchange_done >= num_readers (all fabric halo landed).
-// Same stick mapping as halo_scatter_writer (interior + 4 border sections, t-major). border_only: interior
-// already present in padded_output, work starts at the border (interior skipped, no overlap).
+// Stick order is interior then 4 border sections (H-top|H-bot|W-left|W-right), t-major — see the src_noc
+// and dst_page maps below. border_only: interior already present in padded_output, so work starts at the
+// border (interior skipped, no overlap).
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);        // interior source (input)
     const uint32_t compact_addr = get_arg_val<uint32_t>(1);  // border source (compact halo buffer)

@@ -58,7 +58,7 @@ void kernel_main() {
     // input_halo_dim_size for a contiguous input; equals the PADDED H for a padded-input (strided) read,
     // so the frame advance skips the padded border rows while the edge formula still uses the interior H.
     const uint32_t input_frame_rows = get_arg_val<uint32_t>(arg_idx++);
-    // Per-core direction args (moved from compile-time for kernel consolidation)
+    // Per-core direction args passed at runtime (not compile-time) so one kernel binary serves every core
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);

@@ -126,9 +126,9 @@ void kernel_main() {
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_count});
 
-    // No startup barrier: it was a cross-device start-of-op sync needed when the writer signaled the H->W
-    // barrier on H-SEND (to make send~=recv). np_h_reader now signals that barrier AFTER its recv drains,
-    // so W corners already wait for real H-recv and the startup barrier is redundant.
+    // No startup barrier here: np_h_reader signals the H->W barrier after its recv drains
+    // (H_SIGNAL_W_RECV), so W corners already wait on real H-recv — a send-side start sync would add
+    // nothing. opp_bar_x/y are the barrier-target args, unused on this path.
     (void)opp_bar_x;
     (void)opp_bar_y;
 
