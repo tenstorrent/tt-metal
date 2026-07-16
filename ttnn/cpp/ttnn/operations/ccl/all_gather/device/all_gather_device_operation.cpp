@@ -149,6 +149,15 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }
+    // Workaround for PR #44408 / #45332 (mirrors the all_to_all_combine fix):
+    // the GlobalSemaphore L1 addresses are minted in create_mesh_workload on a
+    // program-cache miss and baked into the cached program; they are never
+    // refreshed on a cache hit.  Within a trace, chunked-prefill replays whose
+    // CCLs are byte-identical to the first trace's cache-hit and reuse stale
+    // semaphore addresses -> hang at end_trace_capture.  Hash the input tensor
+    // buffer address so any allocation churn forces a fresh build (and fresh
+    // semaphores); stable across replays that reuse the same buffer, so real
+    // trace hits still happen.
     return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -160,7 +169,8 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
         operation_attributes.num_buffers_per_channel,
         operation_attributes.use_l1_small_for_semaphores,
         subdevice_core_range_set,
-        tensor_args);
+        tensor_args,
+        tensor_args.input_tensor.buffer()->address());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherDeviceOperation::tensor_return_value_t>
