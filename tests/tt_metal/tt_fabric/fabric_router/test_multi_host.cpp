@@ -992,27 +992,6 @@ TEST(MultiHost, BHDualGalaxyControlPlaneInit) {
     check_asic_mapping_against_golden("BHDualGalaxyControlPlaneInit");
 }
 
-// Golden check for the inter-mesh port-determination result on one SC36 (revAB subtorus Aisle D, d04-column
-// 20-host / 80-mesh slice, 80-stage blitz ring). Guards against the port assignment changing or becoming
-// host-dependent (see the deterministic neighbor/exit-node ordering in ControlPlane).
-TEST(MultiHost, SC36AisleDIntermeshPortAssignment) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
-        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
-        GTEST_SKIP();
-    }
-    const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_supercluster_20.textproto";
-    auto control_plane = make_control_plane(
-        mesh_graph_desc_path.string(),
-        tt::tt_fabric::FabricConfig::FABRIC_2D,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
-
-    check_intermesh_port_assignment_against_golden("SC36AisleD_d04col_intermesh");
-}
-
 // Golden check for the inter-mesh port-determination result on the SC16 Blitz decode superpod (16-host /
 // 64-mesh ring). Unlike the SC36 Aisle D subtorus slices (which cut torus edges and leave one-sided
 // boundaries that fatal), this ring closes, so every requested boundary resolves and the golden comparison

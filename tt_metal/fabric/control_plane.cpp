@@ -3310,10 +3310,11 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
 //   - One neighbor mesh per (node, direction), for NESW and Z alike.
 //   - count is both a target the allocator fills and a cap it will not exceed.
 // Phases:
-//   Phase 1a  marked (assign_z) boundaries claim Z first; hard-fatal only if a marked boundary cannot
-//             secure even one channel on Z. Channels that do not fit on Z spill into Phase 1b.
-//   Phase 1b  round-robin over all boundaries (marked and unmarked), placing one link each on NESW.
-//   Phase 2   round-robin placing leftover (NESW-overflow) links on remaining Z.
+//   Phase 1a  marked (assign_z) boundaries are Z-only: they claim Z here and are excluded from all later
+//             phases. Hard-fatal only if a marked boundary cannot secure even one channel on Z; channels
+//             that do not fit on Z are dropped (never fall back to NESW).
+//   Phase 1b  round-robin over unmarked boundaries, placing one link each on NESW.
+//   Phase 2   round-robin placing leftover (NESW-overflow) links from unmarked boundaries on remaining Z.
 //   The full requested count is enforced afterwards by the direction-agnostic validation step.
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const PortDescriptorTable& port_descriptors) {
     AnnotatedIntermeshConnections annotated_intermesh;
@@ -3587,13 +3588,12 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         return mesh_graph.should_assign_z_direction(MeshId{boundary.first}, MeshId{boundary.second});
     };
 
-    // Phase 1a: marked (assign_z) boundaries claim Z first. A marked boundary must secure at least one
-    // channel on the Z lane; if it cannot place even a single one, that is a hard configuration error
-    // (its Z lane is fully owned by another neighbor mesh). Channels that cannot take Z are left
-    // unplaced here and fall through to the NESW round-robin below -- assign_z is a "ride Z first"
-    // preference, not a "every channel must be on Z" requirement. The full requested count is enforced
-    // afterwards by the direction-agnostic validation step, regardless of whether a channel landed on
-    // Z or NESW.
+    // Phase 1a: marked (assign_z) boundaries are Z-only. They claim the Z lane here and are excluded from
+    // every later phase -- an assign_z boundary NEVER takes an NESW port. A marked boundary must secure at
+    // least one channel on the Z lane; if it cannot place even a single one, that is a hard configuration
+    // error (its Z lane is fully owned by another neighbor mesh). Channels that cannot take Z are simply
+    // left unplaced (dropped) -- they do NOT fall back to NESW. The full requested count is enforced
+    // afterwards by the direction-agnostic validation step.
     for (auto& [boundary, links] : links_by_boundary) {
         if (!is_marked(boundary)) {
             continue;
@@ -3602,14 +3602,14 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         Link* first_unplaceable = nullptr;  // first link that tried Z and failed (for the error message)
         for (auto& link : links) {
             if (link.placed || !within_budget(boundary, link)) {
-                continue;  // excess beyond the count cap; leave for the round-robin / validation step
+                continue;  // excess beyond the count cap; leave for the validation step
             }
             if (place_link(link, /*want_z=*/true)) {
                 account_placed(boundary, link);
                 ++placed_on_z;
             } else if (first_unplaceable == nullptr) {
                 // Z conflict / exhaustion on one or both sides. Don't fatal yet: another link on this
-                // boundary may still land on Z. Just remember it and let it fall through to NESW below.
+                // boundary may still land on Z. Remember it; if none land, this is the reported failure.
                 first_unplaceable = &link;
             }
         }
@@ -3620,15 +3620,17 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         }
     }
 
-    // Phase 1b: round-robin over all boundaries, placing one link each per round on NESW. Marked
-    // boundaries participate too: any channel they could not fit on Z above spills onto NESW here, so
-    // the requested count can still be met on either lane. This interleaving is what keeps a shared
-    // exit chip from being drained by whichever boundary is processed first (the ring-closing-hop
-    // contention bug).
+    // Phase 1b: round-robin over unmarked boundaries only, placing one link each per round on NESW.
+    // Marked (assign_z) boundaries are Z-only and are excluded here -- they are fully placed in Phase 1a.
+    // The per-round rotation keeps a shared exit chip from being drained by whichever boundary is
+    // processed first (the ring-closing-hop contention bug).
     bool progress = true;
     while (progress) {
         progress = false;
         for (auto& [boundary, links] : links_by_boundary) {
+            if (is_marked(boundary)) {
+                continue;  // assign_z boundaries never take NESW
+            }
             for (auto& link : links) {
                 if (link.placed || !within_budget(boundary, link)) {
                     continue;
@@ -3642,11 +3644,16 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
         }
     }
 
-    // Phase 2: round-robin placing NESW-overflow links on remaining Z lanes, still within the count cap.
+    // Phase 2: round-robin placing NESW-overflow links (unmarked boundaries only) on remaining Z lanes,
+    // still within the count cap. Marked boundaries are excluded -- their Z placement is complete after
+    // Phase 1a; anything they could not fit on Z stays unplaced rather than competing for leftover Z here.
     progress = true;
     while (progress) {
         progress = false;
         for (auto& [boundary, links] : links_by_boundary) {
+            if (is_marked(boundary)) {
+                continue;
+            }
             for (auto& link : links) {
                 if (link.placed || !within_budget(boundary, link)) {
                     continue;
