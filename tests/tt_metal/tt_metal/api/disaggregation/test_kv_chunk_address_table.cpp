@@ -8,10 +8,10 @@
 #include <string>
 #include <vector>
 
-#include "tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp"
+#include "tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp"
 #include "experimental/fabric/fabric_types.hpp"
 
-namespace tt::tt_metal::internal::disaggregation {
+namespace tt::tt_metal::experimental::disaggregation {
 namespace {
 
 using tt::tt_fabric::FabricNodeId;
@@ -664,4 +664,4 @@ TEST(KvChunkAddressTable, UnknownConfigNameThrows) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::internal::disaggregation
+}  // namespace tt::tt_metal::experimental::disaggregation

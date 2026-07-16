@@ -12,30 +12,14 @@
 #include <map>
 #include <span>
 
-#include <tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp>
+#include <tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-
-#include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
-
-namespace tt::tt_metal::internal::disaggregation {
-// Protobuf serializer free-functions. Declared in impl/.../kv_chunk_address_table_protobuf.hpp,
-// which is not on ttnn's include path; the definitions link from libtt_metal (the .cpp is
-// compiled into the `impl` target). Forward-declared here to bind without the impl header.
-std::string export_to_protobuf(const KvChunkAddressTable& table);
-void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string& path);
-// Deserializers — same TU/target as the exporters above, so they link the same way.
-KvChunkAddressTable import_from_protobuf(const std::string& data);
-KvChunkAddressTable import_from_protobuf_file(const std::string& path);
-// UMD-backed DRAM read (defined in umd_dram_reader.cpp, links from libtt_metal):
-// reads a chunk over a bare tt::umd::Cluster; chip selected
-// by ASIC unique_id, noc_addr = (dram_view << 32) | local_addr.
-std::vector<uint8_t> read_dram_umd(uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes);
-}  // namespace tt::tt_metal::internal::disaggregation
+#include "tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.hpp"
 
 namespace ttnn::disaggregation {
 
 void bind_disaggregation_api(nb::module_& mod) {
-    using namespace tt::tt_metal::internal::disaggregation;
+    using namespace tt::tt_metal::experimental::disaggregation;
 
     // DeviceGroupIndex - StrongType wrapper around uint32_t
     nb::class_<DeviceGroupIndex>(mod, "DeviceGroupIndex", R"(
@@ -273,110 +257,21 @@ void bind_disaggregation_api(nb::module_& mod) {
             &KvChunkAddressTable::num_position_chunks,
             nb::arg("config_id") = 0,
             "Number of position chunks for a config (default 0).")
-        .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries summed across all configs.")
-
-        // Device reads
-        .def(
-            "read_device_chunk",
-            [](const KvChunkAddressTable& table, uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id) {
-                auto buf = table.read_device_chunk(layer, position, slot, config_id);
-                return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
-            },
-            nb::arg("layer"),
-            nb::arg("position"),
-            nb::arg("slot"),
-            nb::arg("config_id") = 0,
-            R"(
-            Read the raw bytes of a single chunk from the primary replica device.
-            Resolves the device internally via the global ControlPlane.
-            Position is in tokens (chunk-aligned). config_id defaults to 0.
-            )")
-        .def(
-            "read_device_chunk",
-            [](const KvChunkAddressTable& table,
-               uint32_t layer,
-               uint32_t position,
-               uint32_t slot,
-               const std::string& config) {
-                auto buf = table.read_device_chunk(layer, position, slot, config);
-                return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
-            },
-            nb::arg("layer"),
-            nb::arg("position"),
-            nb::arg("slot"),
-            nb::arg("config"),
-            "Read the raw bytes of a single chunk (config addressed by name).");
-
-    mod.def(
-        "tensor_from_bfp8_bytes",
-        [](const nb::bytes& raw_bytes, const std::vector<uint32_t>& shape) {
-            return ttnn::experimental_disaggregation::tensor_from_bfp8_bytes(
-                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(raw_bytes.c_str()), raw_bytes.size()), shape);
-        },
-        nb::arg("raw_bytes"),
-        nb::arg("shape"),
-        R"(
-        Wrap raw bfp8-packed bytes (uint32-aligned, TILE layout) as a host-side ttnn.Tensor
-        with the given shape — no quantization round-trip.
-        Used to compare KV-table reads against the live KV cache byte-for-byte.
-        )");
-
-    mod.def(
-        "tensor_from_bf16_bytes",
-        [](const nb::bytes& raw_bytes, const std::vector<uint32_t>& shape) {
-            return ttnn::experimental_disaggregation::tensor_from_bf16_bytes(
-                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(raw_bytes.c_str()), raw_bytes.size()), shape);
-        },
-        nb::arg("raw_bytes"),
-        nb::arg("shape"),
-        R"(
-        Wrap raw bfloat16 bytes (2 bytes/element, ROW_MAJOR layout) as a host-side ttnn.Tensor
-        with the given shape — no quantization round-trip. The bf16/ROW_MAJOR analogue of
-        tensor_from_bfp8_bytes, for uncompressed (bf16 ROW_MAJOR) KV caches.
-        )");
+        .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries summed across all configs.");
 
     // Protobuf serialization — the runner publishes the table to the
     // migration_worker (SET_TABLE consumes a serialized protobuf file path).
     mod.def(
-        "export_to_protobuf_file",
-        &export_to_protobuf_file,
+        "export_kv_chunk_table_to_protobuf_file",
+        [](const KvChunkAddressTable& table, const std::string& path) { export_to_protobuf_file(table, path); },
         nb::arg("table"),
         nb::arg("path"),
-        "Serialize a KvChunkAddressTable to a protobuf file at `path`.");
-
-    // Deserialization — an external consumer (e.g. the prefill_producer) reconstructs the
-    // table the runner exported.
+        "Serialize a KvChunkAddressTable to a protobuf file at the given path.");
     mod.def(
-        "import_from_protobuf_file",
-        &import_from_protobuf_file,
+        "import_kv_chunk_table_from_protobuf_file",
+        [](const std::string& path) { return import_from_protobuf_file(path); },
         nb::arg("path"),
-        "Deserialize a KvChunkAddressTable from a protobuf file at `path`.");
-    mod.def(
-        "import_from_protobuf",
-        &import_from_protobuf,
-        nb::arg("data"),
-        "Deserialize a KvChunkAddressTable from a serialized protobuf byte string.");
-
-    // UMD-backed read: reads a KV chunk's DRAM bytes over a bare tt::umd::Cluster. The mechanism
-    // the migration worker uses (disaggregation/migration/src/worker/device_io.cpp). The chip is
-    // selected by ASIC unique_id (the caller resolves fabric_node -> unique_id from the runner's
-    // device-map sidecar); noc_addr is (dram_view << 32) | local_addr, size_bytes is the chunk size
-    // (19584 for a bfp8 KV chunk).
-    mod.def(
-        "read_dram_umd",
-        [](uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes) {
-            auto buf = tt::tt_metal::internal::disaggregation::read_dram_umd(unique_id, noc_addr, size_bytes);
-            return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
-        },
-        nb::arg("unique_id"),
-        nb::arg("noc_addr"),
-        nb::arg("size_bytes"),
-        R"(
-        Read a KV chunk's raw bytes over UMD from a device-less process, CONCURRENT with the running
-        server. Uses a bare tt::umd::Cluster, selecting the chip by ASIC unique_id and the DRAM
-        view/offset from noc_addr = (dram_view << 32) | local_addr. Mirrors the migration worker's device_io
-        read path.
-        )");
+        "Deserialize a KvChunkAddressTable from a protobuf file at the given path.");
 }
 
 }  // namespace ttnn::disaggregation

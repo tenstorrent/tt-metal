@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.hpp"
+#include "tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.hpp"
 
 #include <fstream>
 #include <map>
@@ -14,7 +14,7 @@
 
 #include "protobuf/kv_chunk_address_table.pb.h"
 
-namespace tt::tt_metal::internal::disaggregation {
+namespace tt::tt_metal::experimental::disaggregation {
 
 namespace detail {
 
@@ -231,4 +231,4 @@ KvChunkAddressTable import_from_protobuf_text_file(const std::string& path) {
     return import_from_protobuf_text(text);
 }
 
-}  // namespace tt::tt_metal::internal::disaggregation
+}  // namespace tt::tt_metal::experimental::disaggregation

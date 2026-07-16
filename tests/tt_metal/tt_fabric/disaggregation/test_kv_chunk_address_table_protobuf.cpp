@@ -12,10 +12,10 @@
 #include <string>
 #include <vector>
 
-#include "impl/internal/disaggregation/kv_chunk_address_table_protobuf.hpp"
+#include "impl/experimental/disaggregation/kv_chunk_address_table_protobuf.hpp"
 #include "protobuf/kv_chunk_address_table.pb.h"
 
-namespace tt::tt_metal::internal::disaggregation {
+namespace tt::tt_metal::experimental::disaggregation {
 namespace {
 
 using tt::tt_fabric::FabricNodeId;
@@ -449,4 +449,4 @@ TEST(KvChunkAddressTableProtobuf, EntryConfigIdxOutOfRangeThrows) {
 }
 
 }  // namespace
-}  // namespace tt::tt_metal::internal::disaggregation
+}  // namespace tt::tt_metal::experimental::disaggregation
