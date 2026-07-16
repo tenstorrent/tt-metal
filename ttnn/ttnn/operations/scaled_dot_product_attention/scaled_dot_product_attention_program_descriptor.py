@@ -1,0 +1,293 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""ProgramDescriptor for scaled_dot_product_attention (FlashAttention-2).
+
+Blocking model (see op_design.md, binding):
+  * Split B·H·q-chunks (all independent) across the grid — no cross-core combine.
+  * Each core loops its assigned work units; per work unit it streams all KV
+    chunks once and folds them into a running (m, l, O) online-softmax recurrence.
+  * Every CB page count and kernel loop bound derives from three block knobs
+    (Sq_chunk_t, Skv_chunk_t, KV_DEPTH) + Dt — no CB grows with S_q or S_kv.
+"""
+
+import struct
+from pathlib import Path
+
+import ttnn
+
+KERNEL_DIR = Path(__file__).parent / "kernels"
+TILE_DIM = 32
+
+# ---- L1 budget (bytes) for the streaming working set. Conservative. ----
+L1_BUDGET = 1_400_000
+
+# ---- CB indices (semantic names; slots are just buffer indices) ----
+CB_Q_IN = 0
+CB_K_IN = 1
+CB_V_IN = 2
+CB_MASK_IN = 3
+CB_SCALER = 4
+CB_SCALE = 5
+CB_M_NEW = 6  # scratch: new running-max before overwriting cb_row_max
+CB_SUM_CHUNK = 7  # scratch: per-chunk row-sum before folding into l
+CB_OUT = 16
+CB_Q_SCALED = 24
+CB_SCORES = 25
+CB_EXP = 26
+CB_ROW_MAX = 27
+CB_ROW_SUM = 28
+CB_PV = 29
+CB_OUT_ACCUM = 30
+CB_CORR = 31
+
+
+def _ceil_div(a, b):
+    return (a + b - 1) // b
+
+
+def _chunk_size(axis_t, target):
+    """Coarsest chunk <= min(axis_t, target) that DIVIDES axis_t exactly.
+
+    Phase-1 has no partial-chunk path (SUPPORTED is tile_aligned only), so we pick
+    the largest divisor <= target — keeps chunks exact for every shape while
+    honoring the design's `min(axis_t, 4)` coarse target. Refinement: partial chunks.
+    """
+    hi = min(axis_t, target)
+    for d in range(hi, 0, -1):
+        if axis_t % d == 0:
+            return d
+    return 1
+
+
+def _matmul_subblocks(m_tiles, n_tiles, dest_limit):
+    """out_subblock_h=1 (=> SubblockMajor output is tile-row-major, which the reduce
+    and Col-broadcast steps require) and split N into subblocks that fit DEST."""
+    out_subblock_h = 1
+    in0_num_subblocks = m_tiles
+    out_subblock_w = 1
+    for w in range(min(n_tiles, dest_limit), 0, -1):
+        if n_tiles % w == 0:
+            out_subblock_w = w
+            break
+    in1_num_subblocks = n_tiles // out_subblock_w
+    return in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w
+
+
+def _working_set_bytes(sq_chunk_t, skv_chunk_t, dt, kv_depth, out_depth, has_mask):
+    bf16 = ttnn.tile_size(ttnn.bfloat16)
+    fp32 = ttnn.tile_size(ttnn.float32)
+    total = 0
+    total += sq_chunk_t * dt * bf16  # q_in
+    total += skv_chunk_t * dt * kv_depth * bf16  # k_in
+    total += skv_chunk_t * dt * kv_depth * bf16  # v_in
+    if has_mask:
+        total += sq_chunk_t * skv_chunk_t * kv_depth * bf16  # mask_in
+    total += 2 * bf16  # scaler + scale
+    total += sq_chunk_t * dt * bf16  # q_scaled
+    total += sq_chunk_t * skv_chunk_t * bf16  # scores
+    total += sq_chunk_t * skv_chunk_t * bf16  # exp
+    total += sq_chunk_t * dt * out_depth * bf16  # out
+    total += (sq_chunk_t * 5) * fp32  # row_max, row_sum, corr, m_new, sum_chunk
+    total += (sq_chunk_t * dt * 2) * fp32  # pv, out_accum
+    return total
+
+
+def _fit_l1(sq_t, skv_t, dt, has_mask):
+    """Compute the three block knobs once; shrink Skv_chunk_t -> KV_DEPTH -> Sq_chunk_t
+    until the working set fits L1."""
+    sq_target = 4
+    skv_target = 4
+    kv_depth = 2
+    out_depth = 2
+    while True:
+        sq_chunk_t = _chunk_size(sq_t, sq_target)
+        skv_chunk_t = _chunk_size(skv_t, skv_target)
+        need = _working_set_bytes(sq_chunk_t, skv_chunk_t, dt, kv_depth, out_depth, has_mask)
+        if need <= L1_BUDGET:
+            break
+        if skv_target > 1:
+            skv_target -= 1
+        elif kv_depth > 1:
+            kv_depth = 1
+        elif sq_target > 1:
+            sq_target -= 1
+        else:
+            break
+    return sq_chunk_t, skv_chunk_t, kv_depth, out_depth
+
+
+def _f32_bits(x):
+    return struct.unpack("I", struct.pack("f", float(x)))[0]
+
+
+def _cb(index, page_size, num_pages, data_format, core_grid):
+    return ttnn.CBDescriptor(
+        total_size=num_pages * page_size,
+        core_ranges=core_grid,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=data_format, page_size=page_size)],
+    )
+
+
+def create_program_descriptor(
+    query, key, value, output_tensor, *, attn_mask=None, scale=1.0, compute_kernel_config=None
+):
+    q_shape = list(query.shape)
+    k_shape = list(key.shape)
+
+    B, H, S_q, D = q_shape
+    H_kv = k_shape[1]
+    S_kv = k_shape[-2]
+
+    Sq_t = _ceil_div(S_q, TILE_DIM)
+    Skv_t = _ceil_div(S_kv, TILE_DIM)
+    Dt = _ceil_div(D, TILE_DIM)
+
+    has_mask = attn_mask is not None
+    mask_H = attn_mask.shape[1] if has_mask else 0
+
+    Sq_chunk_t, Skv_chunk_t, KV_DEPTH, OUT_DEPTH = _fit_l1(Sq_t, Skv_t, Dt, has_mask)
+
+    n_q_chunks = _ceil_div(Sq_t, Sq_chunk_t)
+    n_kv_chunks = _ceil_div(Skv_t, Skv_chunk_t)
+    total_work = B * H * n_q_chunks
+
+    fp32_dest = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
+    dest_limit = 4 if fp32_dest else 8
+
+    qk_in0_sb, qk_in1_sb, qk_out_sb_h, qk_out_sb_w = _matmul_subblocks(Sq_chunk_t, Skv_chunk_t, dest_limit)
+    pv_in0_sb, pv_in1_sb, pv_out_sb_h, pv_out_sb_w = _matmul_subblocks(Sq_chunk_t, Dt, dest_limit)
+
+    # ---- Grid + work distribution ----
+    device = query.device()
+    grid = device.compute_with_storage_grid_size()
+    num_cores, all_cores, group1, group2, per_core_1, per_core_2 = ttnn.split_work_to_cores(grid, total_work, True)
+
+    g1_cores = ttnn.corerange_to_cores(group1, None, True) if group1.num_cores() > 0 else []
+    g2_cores = ttnn.corerange_to_cores(group2, None, True) if group2.num_cores() > 0 else []
+    ordered = list(g1_cores) + list(g2_cores)
+    counts = [per_core_1] * len(g1_cores) + [per_core_2] * len(g2_cores)
+
+    bf16 = ttnn.tile_size(ttnn.bfloat16)
+    fp32 = ttnn.tile_size(ttnn.float32)
+    in_page = query.buffer_page_size()
+    out_page = output_tensor.buffer_page_size()
+
+    # ---- Circular buffers ----
+    cbs = [
+        _cb(CB_Q_IN, in_page, Sq_chunk_t * Dt, query.dtype, all_cores),
+        _cb(CB_K_IN, in_page, Skv_chunk_t * Dt * KV_DEPTH, query.dtype, all_cores),
+        _cb(CB_V_IN, in_page, Skv_chunk_t * Dt * KV_DEPTH, query.dtype, all_cores),
+        _cb(CB_SCALER, bf16, 1, ttnn.bfloat16, all_cores),
+        _cb(CB_SCALE, bf16, 1, ttnn.bfloat16, all_cores),
+        _cb(CB_M_NEW, fp32, Sq_chunk_t, ttnn.float32, all_cores),
+        _cb(CB_SUM_CHUNK, fp32, Sq_chunk_t, ttnn.float32, all_cores),
+        _cb(CB_OUT, out_page, Sq_chunk_t * Dt * OUT_DEPTH, output_tensor.dtype, all_cores),
+        _cb(CB_Q_SCALED, bf16, Sq_chunk_t * Dt, ttnn.bfloat16, all_cores),
+        _cb(CB_SCORES, bf16, Sq_chunk_t * Skv_chunk_t, ttnn.bfloat16, all_cores),
+        _cb(CB_EXP, bf16, Sq_chunk_t * Skv_chunk_t, ttnn.bfloat16, all_cores),
+        _cb(CB_ROW_MAX, fp32, Sq_chunk_t, ttnn.float32, all_cores),
+        _cb(CB_ROW_SUM, fp32, Sq_chunk_t, ttnn.float32, all_cores),
+        _cb(CB_PV, fp32, Sq_chunk_t * Dt, ttnn.float32, all_cores),
+        _cb(CB_OUT_ACCUM, fp32, Sq_chunk_t * Dt, ttnn.float32, all_cores),
+        _cb(CB_CORR, fp32, Sq_chunk_t, ttnn.float32, all_cores),
+    ]
+    if has_mask:
+        cbs.append(_cb(CB_MASK_IN, in_page, Sq_chunk_t * Skv_chunk_t * KV_DEPTH, query.dtype, all_cores))
+
+    # ---- Reader kernel ----
+    reader_ct = [
+        B,
+        H,
+        H_kv,
+        Sq_t,
+        Skv_t,
+        Dt,
+        Sq_chunk_t,
+        Skv_chunk_t,
+        n_q_chunks,
+        n_kv_chunks,
+        mask_H,
+        1 if has_mask else 0,
+        _f32_bits(scale),
+    ]
+    reader_ct += ttnn.TensorAccessorArgs(query).get_compile_time_args()
+    reader_ct += ttnn.TensorAccessorArgs(key).get_compile_time_args()
+    reader_ct += ttnn.TensorAccessorArgs(value).get_compile_time_args()
+    reader_ct += (
+        ttnn.TensorAccessorArgs(attn_mask).get_compile_time_args()
+        if has_mask
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
+
+    reader_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+    compute_rt = ttnn.RuntimeArgs()
+    start = 0
+    for core, cnt in zip(ordered, counts):
+        reader_rt[core.x][core.y] = [
+            query.buffer_address(),
+            key.buffer_address(),
+            value.buffer_address(),
+            attn_mask.buffer_address() if has_mask else 0,
+            start,
+            cnt,
+        ]
+        writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start, cnt]
+        compute_rt[core.x][core.y] = [cnt]
+        start += cnt
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_reader.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ---- Writer kernel ----
+    writer_ct = [B, H, Sq_t, Dt, Sq_chunk_t, n_q_chunks]
+    writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    # ---- Compute kernel ----
+    compute_ct = [
+        Dt,
+        Sq_chunk_t,
+        Skv_chunk_t,
+        n_kv_chunks,
+        1 if has_mask else 0,
+        qk_in0_sb,
+        qk_in1_sb,
+        qk_out_sb_h,
+        qk_out_sb_w,
+        pv_in0_sb,
+        pv_in1_sb,
+        pv_out_sb_h,
+        pv_out_sb_w,
+    ]
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=getattr(compute_kernel_config, "math_fidelity", ttnn.MathFidelity.HiFi4),
+            fp32_dest_acc_en=fp32_dest,
+            math_approx_mode=bool(getattr(compute_kernel_config, "math_approx_mode", False)),
+        ),
+    )
+
+    descriptor = ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=[],
+        cbs=cbs,
+    )
+    ordered_inputs = [query, key, value] + ([attn_mask] if has_mask else [])
+    return descriptor, ordered_inputs
