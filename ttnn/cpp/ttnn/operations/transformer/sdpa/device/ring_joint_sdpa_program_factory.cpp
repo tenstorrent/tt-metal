@@ -1377,9 +1377,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df =
+        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
+    // Use fp32 precision for cb_sum_A/B when fp32 accumulation is enabled so
+    // the running softmax denominator doesn't lose precision with K-iter rounding.
+    tt::DataFormat sum_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
+    tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -1389,6 +1394,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    uint32_t sum_tile_size = tt::tile_size(sum_df);
+    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -1398,6 +1405,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+    log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
+    log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
 
     uint32_t next_cb_index = 0;
     const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
@@ -1433,13 +1442,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_prev_out = allocate_tile_cb(out_im_tiles, out_tile_size, out_df);
     const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
     const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
 
     const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);

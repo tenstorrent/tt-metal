@@ -267,6 +267,9 @@ TEST_F(MeshDispatchFixture, TensixDeploymentEthernet03DataIntegrityDram) {
                 get_ubb(receiver_device));
 
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
+                if (!eth_core_connects_within_cluster(sender_device, sender_core)) {
+                    continue;
+                }
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
                 if (receiver_device->id() != device_id) {
                     continue;
