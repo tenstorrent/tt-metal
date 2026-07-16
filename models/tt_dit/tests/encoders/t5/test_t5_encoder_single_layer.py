@@ -59,7 +59,7 @@ def test_t5_single_layer(
 
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
-    hf_model = T5EncoderModel.from_pretrained(model_name_checkpoint, subfolder="text_encoder_3", local_files_only=False)
+    hf_model = T5EncoderModel.from_pretrained(model_name_checkpoint, subfolder="text_encoder_3", local_files_only=True)
 
     hf_model.eval()
 
