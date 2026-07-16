@@ -67,9 +67,13 @@
 #define NRISC 5
 #define RING_CAP 512u /* producer L1 ring depth (words) */
 /* Idle poll backoff: after a whole pass drains nothing, spin ~this many cycles (X280 ~1 GHz => ~ns)
- * before re-polling. Most passes are idle, so this cuts wasted polls and frees NoC/L1 for producers;
- * a PRODUCTIVE pass skips it, so real bursts still poll at full rate. */
-#define POLL_BACKOFF_CYC 500000u
+ * before re-polling. A PRODUCTIVE pass skips it, so real bursts still poll at full rate.
+ * RETUNED 500000 (~500 us) -> 5000 (~5 us): the reader-wall breakdown (FINDINGS §23) showed the reader
+ * spent 86% of its wall asleep here, and its response latency (~500 us) -- not throughput -- was what
+ * back-pressured the producers: a marker burst landing during the 500 us nap filled a core's L1 ring
+ * and blocked it. Each poll is only ~0.3 us and a full 55-core sweep ~16 us, so a 5 us backoff keeps
+ * the reader responsive (drains rings before they fill) while still yielding NoC between idle sweeps. */
+#define POLL_BACKOFF_CYC 5000u
 #define WRITE_WIN 200u
 #define PAGE 64u
 #define CTRL_HEAD(r) (r)
@@ -254,6 +258,12 @@ int main(uint64_t hartid) {
         uint64_t scratch = SCRATCH(hartid);
         uint64_t bulk_words = 0, segs = 0;
         uint64_t passes = 0, polls = 0;
+        /* Reader-wall breakdown. rdcycle is cheap on X280 (~ns, not a trap) -- last run's wall was
+         * identical with/without these timers, so the earlier "unaccounted" was MISSING COVERAGE, not
+         * contamination. Full coverage: wall ~= poll + bulk + mwait + backoff + "other"(parse/scan).
+         * mwait_spins is a dilution-immune COUNT: high => reader blocked on a FULL mirror => collect
+         * (the reshape hart) is the burst wall, not the reader itself. */
+        uint64_t cyc_poll = 0, cyc_bulk = 0, cyc_mwait = 0, cyc_backoff = 0, mwait_spins = 0;
         uint64_t t_start = rdcycle_();
         for (;;) {
             uint64_t progressed = 0;
@@ -262,8 +272,10 @@ int main(uint64_t hartid) {
                 uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
                 uint64_t rbufs = cbase + 128;
                 /* Poll all 5 RISCs' head/tail in ONE ILP burst: ctrl[0..4]=head, ctrl[5..9]=tail. */
+                uint64_t tp = rdcycle_();
                 bulk_copy_words(scratch, cbase, 16);
                 fence_();
+                cyc_poll += rdcycle_() - tp;
                 polls++;
                 uint32_t hd[NRISC], tl[NRISC];
                 {
@@ -296,20 +308,26 @@ int main(uint64_t hartid) {
                             seg = rem;
                         }
                         /* reserve `seg` words in the mirror; block on the collect hart (consumer). */
+                        uint64_t tmw = rdcycle_();
                         while ((uint32_t)(mtail + seg - r32(MHEAD(gi))) > MIRROR_DEPTH) {
+                            mwait_spins++; /* reader blocked on a FULL mirror => collect is the wall */
                             if (r64(P_STOP)) {
+                                cyc_mwait += rdcycle_() - tmw;
                                 goto reader_done;
                             }
                         }
+                        cyc_mwait += rdcycle_() - tmw;
                         uint32_t midx = mtail % MIRROR_DEPTH;
                         uint32_t mfit = MIRROR_DEPTH - midx; /* words until mirror wraps */
                         uint64_t l1src = ring_base + (uint64_t)hidx * 4;
+                        uint64_t tb = rdcycle_();
                         if (seg <= mfit) {
                             bulk_copy_words(MSTORE(gi) + (uint64_t)midx * 4, l1src, seg);
                         } else {
                             bulk_copy_words(MSTORE(gi) + (uint64_t)midx * 4, l1src, mfit);
                             bulk_copy_words(MSTORE(gi), l1src + (uint64_t)mfit * 4, seg - mfit);
                         }
+                        cyc_bulk += rdcycle_() - tb;
                         mtail += seg;
                         fence_();              /* mirror bytes visible before the tail bump */
                         w32(MTAIL(gi), mtail); /* publish to collect */
@@ -330,6 +348,7 @@ int main(uint64_t hartid) {
                         break;
                     }
                 }
+                cyc_backoff += rdcycle_() - tbk;
             }
         }
     reader_done:
@@ -340,6 +359,13 @@ int main(uint64_t hartid) {
         w64(RES(0x80 + hartid * 8), rdcycle_() - t_start);
         w64(RES(0x90 + hartid * 8), passes);
         w64(RES(0xA0 + hartid * 8), polls);
+        /* reader-wall breakdown -> RES 0x140/0x150/0x160/0x170/0x120 + h*8 (host reads at
+         * params+0x180/0x190/0x1A0/0x1B0/0x160). */
+        w64(RES(0x140 + hartid * 8), cyc_poll);
+        w64(RES(0x150 + hartid * 8), cyc_bulk);
+        w64(RES(0x160 + hartid * 8), cyc_mwait);
+        w64(RES(0x170 + hartid * 8), cyc_backoff);
+        w64(RES(0x120 + hartid * 8), mwait_spins);
         w64(READER_DONE(hartid), 1); /* tell the collect hart this reader is finished */
         if (hartid == 0) {
             /* coordinator: wait for the relay to flush the whole pipeline (DONE_MAGIC written

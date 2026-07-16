@@ -1991,6 +1991,39 @@ void RealtimeProfilerManager::shutdown() {
                         segs,
                         segs ? bulk_words / segs : 0,
                         lap_dropped);
+                    // Full reader-wall breakdown (profzone RES 0x140/0x150/0x160/0x170/0x120 ==
+                    // params+0x180/0x190/0x1A0/0x1B0/0x160). "other" = wall - sum = per-poll parse/scan
+                    // overhead. mwait_spins is dilution-immune: high => reader blocked on a FULL mirror
+                    // => collect (reshape) is the wall, not the reader.
+                    uint64_t cyc_poll = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x180 + rh * 8);
+                    uint64_t cyc_bulk = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x190 + rh * 8);
+                    uint64_t cyc_mwait = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x1A0 + rh * 8);
+                    uint64_t cyc_backoff =
+                        dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x1B0 + rh * 8);
+                    uint64_t mwait_spins =
+                        dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x160 + rh * 8);
+                    uint64_t sum_cyc = cyc_poll + cyc_bulk + cyc_mwait + cyc_backoff;
+                    uint64_t wall_cyc = wall;  // wall was read in cycles above (params+0xC0)
+                    uint64_t other = wall_cyc > sum_cyc ? wall_cyc - sum_cyc : 0;
+                    auto pct = [&](uint64_t c) { return wall_cyc ? (uint64_t)(100.0 * c / wall_cyc) : 0; };
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: reader {} wall-split: poll={} ms ({}%), bulk={} ms ({}%), "
+                        "mwait={} ms ({}%), backoff={} ms ({}%), other/parse={} ms ({}%); mwait_spins={} "
+                        "(nonzero => blocked on FULL mirror => collect is the wall)",
+                        dev_state.chip_id,
+                        rh,
+                        (uint64_t)(cyc_poll / 1e6),
+                        pct(cyc_poll),
+                        (uint64_t)(cyc_bulk / 1e6),
+                        pct(cyc_bulk),
+                        (uint64_t)(cyc_mwait / 1e6),
+                        pct(cyc_mwait),
+                        (uint64_t)(cyc_backoff / 1e6),
+                        pct(cyc_backoff),
+                        (uint64_t)(other / 1e6),
+                        pct(other),
+                        mwait_spins);
                 }
                 // Do NOT assert_reset: the drainer, on P_STOP, jumps back to the resident idle FW
                 // (which stays up for the next run). Wait for that return instead of parking via
