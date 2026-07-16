@@ -51,6 +51,7 @@
   "dtype_policy": {
     "functional_baseline": "bf16 weights and activations; TILE layout; DRAM memory by default",
     "emitted_weights": "BF8 for most projection weights and BF4 for gate/up projection weights",
-    "deferred": "Restoring the compiler precision policy belongs to datatype selection after correctness."
+    "optimized_decoder": "BFP4 projection weights with LoFi projection math; BF16 activations and norms; caller-owned BF16 and BFP8 KV caches both validated. The optional cache dtype does not change cache shape or the advertised sequence-18/cache-128 capability.",
+    "deferred": "Full-model top-k datatype-frontier selection remains downstream work."
   }
 }
