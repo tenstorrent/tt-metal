@@ -134,8 +134,14 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
     # blocks this is meant to accelerate (M<=2048 / Mt<=64 => <=128 tiles) but below
     # the in-graph-crashing 208 — and fall back to auto (which out_block-iterates and
     # is fine at large M) above it.
+    #
+    # Also cap per_core_M alone: skinny-N shapes (MoE gate N=64 => Nt=2, gx<=2) can
+    # pass the product cap with a huge M-block. At ISL=22800 (SP-padded Mt=714) that
+    # yields per_core_M=102 / product=102 and TT_THROWs with ~2.4 MB CBs > 1.5 MB L1.
+    # Linear scale of that crash puts the safe per_core_M ceiling near ~66.
     PER_CORE_TILE_CAP = 160
-    if per_core_M * per_core_N > PER_CORE_TILE_CAP:
+    PER_CORE_M_CAP = 64
+    if per_core_M * per_core_N > PER_CORE_TILE_CAP or per_core_M > PER_CORE_M_CAP:
         return None
 
     # K reduction chunk: a divisor of Kt, capped so the in0/in1 blocks stay small.
