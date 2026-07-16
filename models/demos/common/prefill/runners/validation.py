@@ -69,8 +69,16 @@ def validate_migrations_pairwise(runtime, kv_cache, pairs):
     for src, dst in pairs:
         src_blocks = runtime.read_slot_kv(kv_cache, src)
         dst_blocks = runtime.read_slot_kv(kv_cache, dst)
+        assert len(src_blocks) == len(dst_blocks), (
+            f"[kv-migrate-validate] src_slot={src} dst_slot={dst}: cache tensor count mismatch "
+            f"{len(src_blocks)} != {len(dst_blocks)}"
+        )
         min_pcc, worst = 1.0, None
         for ti, (sb, db) in enumerate(zip(src_blocks, dst_blocks)):
+            assert sb.shape == db.shape, (
+                f"[kv-migrate-validate] src_slot={src} dst_slot={dst}: tensor {ti} shape mismatch "
+                f"{tuple(sb.shape)} != {tuple(db.shape)}"
+            )
             for layer in range(sb.shape[0]):
                 for head in range(sb.shape[1]):
                     pcc = _pcc_safe(sb[layer, head], db[layer, head])
@@ -126,13 +134,13 @@ def validate_after_prefill(runtime, kv_cache, *, chunks_per_slot, real_end_per_s
     if not hasattr(runtime, "kv_cache_pcc_check"):
         raise RuntimeError(
             f"PREFILL_VALIDATE_MIGRATION/PCC requested but runtime {type(runtime).__name__} implements no "
-            "kv_cache_pcc_check (see ADDING_A_PREFILL_MODEL.md §2)."
+            "kv_cache_pcc_check (see docs/ADDING_A_PREFILL_MODEL.md §2)."
         )
     ttnn.synchronize_device(runtime.mesh_device)
 
     if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") != "1":
         for slot, n in sorted(chunks_per_slot.items()):
-            runtime.kv_cache_pcc_check(kv_cache, slot_id=slot, n_chunks=n)
+            runtime.kv_cache_pcc_check(kv_cache, slot_id=slot, n_chunks=n, real_len=real_end_per_slot.get(slot))
         return
 
     done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
