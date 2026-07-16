@@ -759,18 +759,17 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
-    # Flux is a single-device model with no scaleout config of its own, and bh_spsg is a Count
-    # allocation (no shared MGD/rank bindings in /etc/ttop). New-mode Phase-1 discovery writes its
-    # output to worker-local storage the tt-run launcher can't see. So, like the demo spsg entry,
-    # ship STATIC single-rank bindings (no discovery): copy them to the CWD and pass
-    # --rank-bindings-mapping. The rank owns one connected 4x2 (8-device) block, so run the Flux
+    # Plain single-rank mpirun (no tt-run). For one rank, tt-run's only job was to turn the rank
+    # binding into these env vars and build the mpirun command; we set them directly. Host
+    # selection (PRTE_MCA_prte_default_hostfile=/etc/ttop/hostfile), TCP interface
+    # (OMPI_MCA_btl_tcp_if_include), and env forwarding (PRTE_MCA_prte_fwd_environment) all come
+    # from the job env. The rank owns one connected 4x2 (8-device) block, so run the Flux
     # pipeline's 8-device (2x4) parametrization.
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    CFG="${TT_METAL_HOME}/models/tt_dit/tests/models/flux1/scaleout_configs/single_galaxy"
-    cp "${CFG}/mesh_graph_descriptor.textproto" "${CFG}/rank0_binding.yaml" "${CFG}/rank_bindings_mapping.yaml" .
-    PIPELINE_HOSTS=$(awk 'NF {printf "%s:1,", $1}' /etc/ttop/hostfile | sed 's/,$//')
-    python3 "${TTRUN_PY}" --tcp-interface ens5f0np0 --rank-bindings-mapping rank_bindings_mapping.yaml \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by slot --bind-to none --tag-output --wdir ${TT_METAL_HOME}" \
+    export TT_MESH_ID=0
+    export TT_MESH_HOST_RANK=0
+    export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/flux1/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
+    export TT_VISIBLE_DEVICES=0,1,4,5,8,9,12,13
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k "flux_dev and 2x4sp0tp1"
   model: flux-multihost-tests
   skus:
