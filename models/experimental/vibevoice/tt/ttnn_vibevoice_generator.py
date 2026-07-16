@@ -358,6 +358,10 @@ class TTVibeVoiceGenerator:
         self._sf_t_tensors: Optional[list] = None
         self._sf_audio_out: Optional[ttnn.Tensor] = None
         self._sf_logits_out: Optional[ttnn.Tensor] = None
+        # Constrained-decode (split-capture path): subset lm_head + in-trace argmax → local index.
+        self._sf_tok_out: Optional[ttnn.Tensor] = None
+        self._sf_valid_ids_sorted: Optional[List[int]] = None
+        self._sf_lm_head_valid: Optional[ttnn.Tensor] = None
         # fp32 RoPE (VV_FP32_ROPE=1, default on): host-write the exact fp32 cos/sin rows per frame
         # into persistent buffers so the traced decode matches the EAGER fp32-rope path (which slices
         # the fp32 _cos_tt/_sin_tt table).  Off (=0) keeps the bf16 on-device embedding gather (A/B).
@@ -739,6 +743,10 @@ class TTVibeVoiceGenerator:
             self._sf_sin_pos = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_cos_neg = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_sin_neg = _z([1, 1, 1, _hd], ttnn.float32, ttnn.TILE_LAYOUT)
+            # Constrained-decode lm_head subset (sorted valid ids → argmax tie-break parity with the
+            # full-vocab masked argmax).  Pos-LM projects only these columns + in-trace argmax.
+            self._sf_valid_ids_sorted = sorted(self.valid_token_ids)
+            self._sf_lm_head_valid = lm.build_lm_head_subset(self._sf_valid_ids_sorted)
             self._sf_noise = _z([1, 1, 1, 64], ttnn.bfloat16, ttnn.TILE_LAYOUT)
             self.scheduler.set_timesteps(self.num_diffusion_steps)
             self._sf_t_tensors = [
@@ -814,6 +822,7 @@ class TTVibeVoiceGenerator:
                     self._sf_neg_pos,
                     kv_neg,
                     return_last_hidden=True,
+                    need_logits=False,  # neg logits are discarded — skip the full lm_head (bit-exact)
                 )
                 if self._sf_neg_hidden is None:
                     self._sf_neg_hidden = ttnn.clone(
@@ -854,10 +863,13 @@ class TTVibeVoiceGenerator:
                     self._sf_pos_pos,
                     kv_pos,
                     return_last_hidden=True,
+                    lm_head_w=self._sf_lm_head_valid,  # constrained-decode: project only selectable tokens
                 )
                 ttnn.copy(input_a=nh, input_b=self._sf_hidden_buf)  # loop-carry for next frame
                 ttnn.plus_one(self._sf_pos_pos)
-                return lg
+                # In-trace constrained argmax over the N selectable-token logits → LOCAL index
+                # (== full-vocab masked argmax; caller maps local -> token id).
+                return ttnn.argmax(lg, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             if self._sf_postrace_tid is None:
                 for _ in range(self._SF_WARMUP):
@@ -871,7 +883,7 @@ class TTVibeVoiceGenerator:
                 self._sf_audio_out = _dptrace()
                 ttnn.end_trace_capture(dev, tb, cq_id=0)
                 tc = ttnn.begin_trace_capture(dev, cq_id=0)
-                self._sf_logits_out = _postrace()
+                self._sf_tok_out = _postrace()  # constrained argmax LOCAL index (persistent)
                 ttnn.end_trace_capture(dev, tc, cq_id=0)
                 self._sf_negtrace_tid, self._sf_dptrace_tid, self._sf_postrace_tid = ta, tb, tc
                 self._sf_set_inputs(0, start_pos, noise_2x)  # reset positions/hidden/embed/rope
@@ -881,7 +893,7 @@ class TTVibeVoiceGenerator:
             ttnn.execute_trace(dev, self._sf_negtrace_tid, cq_id=0, blocking=False)
             ttnn.execute_trace(dev, self._sf_dptrace_tid, cq_id=0, blocking=False)
             ttnn.execute_trace(dev, self._sf_postrace_tid, cq_id=0, blocking=False)
-            return self._sf_audio_out, self._sf_logits_out
+            return self._sf_audio_out, self._sf_tok_out
 
         if self._sf_nocapture:
             # EAGER (no capture/replay): set_inputs already rewound frame-0 state above.
@@ -1220,7 +1232,7 @@ class TTVibeVoiceGenerator:
                     noise_2x = loopbreaker.perturb(noise_2x, diffusion_frames)
                 start_pos = prefill_len + step
                 with prof.section("segment_frame"):
-                    audio_chunk, logits = self._run_segment_frame_traced(
+                    audio_chunk, _tok_or_logits = self._run_segment_frame_traced(
                         seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg
                     )
                 neg_prev_diffusion_token = current_token
@@ -1230,12 +1242,20 @@ class TTVibeVoiceGenerator:
                     if loopbreaker.clamp_now():
                         _frame_audio = _frame_audio.clamp(-1.0, 1.0)
                 _emit_audio(_frame_audio)
-                with prof.section("token_constraint"):
-                    logits = ttnn.add(
-                        logits, self._token_constraint_mask(logits.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
-                    )
-                with prof.section("argmax"):
-                    next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)  # syncs frame (D2H)
+                if self._sf_cap_split:
+                    # Split-capture folds the constrained argmax into the trace → LOCAL index.
+                    with prof.section("argmax"):
+                        _local_idx = int(ttnn.to_torch(_tok_or_logits).reshape(-1)[-1].item())  # syncs frame
+                        next_token = self._sf_valid_ids_sorted[_local_idx]
+                else:
+                    with prof.section("token_constraint"):
+                        logits = ttnn.add(
+                            _tok_or_logits,
+                            self._token_constraint_mask(_tok_or_logits.shape[-1]),
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    with prof.section("argmax"):
+                        next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)  # syncs frame (D2H)
                 if _sf_replay:
                     _steady_decode_s += time.perf_counter() - _frame_t0
                     _steady_decode_frames += 1
