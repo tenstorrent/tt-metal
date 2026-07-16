@@ -1,0 +1,18 @@
+Fabric Status Report
+Generated: 2026-07-15 12:13:49
+==========================================
+Fabric Configured: Yes
+Fabric Initialized: No
+
+SetFabricConfig Parameters:
+  Fabric Config: FABRIC_2D
+  Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE
+  Num Routing Planes: 0
+  Fabric Tensix Config: DISABLED
+  Fabric UDM Mode: DISABLED
+  Fabric Manager: INIT_FABRIC
+
+Additional Status:
+  Number of Active Ethernet Channels: 0
+  Active Chips: 0
+  Active Hosts: 0

@@ -1,0 +1,23 @@
+PASS output — both models re-verified from the MOUNTED framework
+  /home/namvu/dual-t3k/tt-metal  commit 3632044cfd6  on 2026-07-15
+  env: TT_METAL_HOME=TT_METAL_RUNTIME_ROOT=/home/namvu/dual-t3k/tt-metal  TT_METAL_CACHE=/home/namvu/.cache/tt_metal_local (local per host)
+
+=== Big-Mesh (dual_t3k_1x16_experimental_bigmesh_mgd.textproto) ===
+[rank 0] opened Big-Mesh (1, 16) = 16 chips across 2 host(s)
+[rank 0] ADD: checked 8 local shard(s), worst PCC=1.00000 -> PASS
+[rank 1] ADD: checked 8 local shard(s), worst PCC=1.00000 -> PASS
+[rank 0] MATMUL: checked 8 local shard(s), worst PCC=0.99998 -> PASS
+[rank 1] MATMUL: checked 8 local shard(s), worst PCC=0.99998 -> PASS
+[rank 0] ALL_GATHER: checked 8 local device(s), worst PCC=1.00000 -> PASS
+[rank 0] Big-Mesh RESULTS: {'add': True, 'matmul': True, 'all_gather': True}
+[rank 0] OVERALL: PASS
+[rank 1] ALL_GATHER: checked 8 local device(s), worst PCC=1.00000 -> PASS
+=== BIGMESH EXIT CODE: 0 ===
+
+=== Multi-Mesh (dual_t3k_mesh_graph_descriptor.textproto) ===
+[rank 0] Multi-Mesh: each host owns a (2, 4) mesh; 2 meshes total
+[rank 0] ADD done on mesh 0; C sent -> mesh 1
+[rank 1] recv C, MATMUL(C,W) done; 8 local shard(s), worst PCC=0.99998 -> PASS
+[rank 1] intra-mesh ALL_GATHER worst PCC=1.00000 -> PASS
+[rank 1] Multi-Mesh pipeline OVERALL: PASS
+=== MULTIMESH EXIT CODE: 0 ===

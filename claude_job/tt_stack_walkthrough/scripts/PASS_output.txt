@@ -1,0 +1,25 @@
+# stack_workload.py — Big-Mesh 1x16 across two T3Ks (t3k-node-a + t3k-node-b)
+# Captured 2026-07-15 from the mounted framework, commit 3632044cfd6, FABRIC_2D.
+# Launch:
+#   tt-run --tcp-interface ens18 \
+#     --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_1x16_experimental_bigmesh_mgd.textproto \
+#     --hosts t3k-node-a,t3k-node-b \
+#     python3 .../claude_job/tt_stack_walkthrough/scripts/stack_workload.py
+# ----------------------------------------------------------------------------
+[rank 0] opened Big-Mesh (1, 16) = 16 chips across 2 host(s)
+==============================================================================
+[rank 0] PASS ADD           8 local shards, each(1, 1, 32, 32): min_pcc=0.999998 (>= 0.990000) at chip 5
+[rank 0] PASS MATMUL        8 local shards, each(1, 1, 32, 128): min_pcc=0.999979 (>= 0.990000) at chip 6
+[rank 0] PASS ALL_GATHER    8 local shards, each(1, 1, 32, 512): min_pcc=1.000000 (>= 0.999999) at chip 0
+[rank 0] PASS ALL_GATHER(full) full(1, 1, 32, 512): pcc=1.000000 (>= 0.999999)  rel_L2_err=0.0000%  max_abs=0.000e+00
+[rank 0] PASS ALL_REDUCE    8 local shards, each(1, 1, 32, 32): min_pcc=0.999982 (>= 0.990000) at chip 0
+[rank 0] PASS REDUCE_SCATTER 8 local shards, each(1, 1, 32, 32): min_pcc=0.999974 (>= 0.990000) at chip 0
+==============================================================================
+[rank 0] ALL PASS: add, matmul, all_gather, all_reduce, reduce_scatter verified vs torch golden across all 16 chips
+==============================================================================
+# ----------------------------------------------------------------------------
+# Fabric init (both ranks) + clean teardown (UMD cluster destructor ran on both):
+[1,0] |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D
+[1,0] |             UMD | Cluster destructor completed.
+[1,1] |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D
+[1,1] |             UMD | Cluster destructor completed.

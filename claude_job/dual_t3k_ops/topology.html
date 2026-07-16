@@ -1,0 +1,262 @@
+<title>Dual-T3K 1×16 Topology</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#141b24; --panel2:#1b232e; --border:#2b333d;
+    --text:#d7dfe8; --muted:#8b98a6; --heading:#eef3f8;
+    --accent:#46c7d0;        /* chips */
+    --accent-soft:rgba(70,199,208,.14);
+    --trace:#6ea8fe;         /* on-board internal trace */
+    --interboard:#8791a0;    /* inter-board QSFP/WARP */
+    --qsfp:#e0a72e;          /* cross-host cable */
+    --qsfp-soft:rgba(224,167,46,.16);
+    --font-sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --font-mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:light){
+    :root{
+      --bg:#eef2f6; --panel:#ffffff; --panel2:#f3f6f9; --border:#d3dbe4;
+      --text:#1d2733; --muted:#5a6773; --heading:#0f1720;
+      --accent:#0e828c; --accent-soft:rgba(14,130,140,.12);
+      --trace:#2f6fe0; --interboard:#5f6b78; --qsfp:#b5791a; --qsfp-soft:rgba(181,121,26,.14);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0d1117; --panel:#141b24; --panel2:#1b232e; --border:#2b333d;
+    --text:#d7dfe8; --muted:#8b98a6; --heading:#eef3f8;
+    --accent:#46c7d0; --accent-soft:rgba(70,199,208,.14);
+    --trace:#6ea8fe; --interboard:#8791a0; --qsfp:#e0a72e; --qsfp-soft:rgba(224,167,46,.16);
+  }
+  :root[data-theme="light"]{
+    --bg:#eef2f6; --panel:#ffffff; --panel2:#f3f6f9; --border:#d3dbe4;
+    --text:#1d2733; --muted:#5a6773; --heading:#0f1720;
+    --accent:#0e828c; --accent-soft:rgba(14,130,140,.12);
+    --trace:#2f6fe0; --interboard:#5f6b78; --qsfp:#b5791a; --qsfp-soft:rgba(181,121,26,.14);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--text);font-family:var(--font-sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:960px;margin:0 auto;padding:48px 24px 80px}
+  header{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:8px}
+  .eyebrow{font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+  h1{font-size:clamp(28px,4vw,40px);line-height:1.1;margin:0 0 12px;color:var(--heading);text-wrap:balance;letter-spacing:-.01em}
+  .sub{color:var(--muted);max-width:60ch;margin:0}
+  h2{font-size:22px;color:var(--heading);margin:48px 0 14px;letter-spacing:-.01em}
+  h2 .n{font-family:var(--font-mono);color:var(--accent);font-size:15px;margin-right:10px}
+  p{margin:0 0 14px;max-width:66ch}
+  code,.mono{font-family:var(--font-mono)}
+  code{background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px;font-size:.88em}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:22px 24px;margin:16px 0}
+  .flow{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  .step{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+  .step .k{font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .step .t{font-weight:600;color:var(--heading);margin:6px 0 4px}
+  .step .d{font-size:14px;color:var(--muted)}
+  .callout{background:var(--accent-soft);border:1px solid var(--accent);border-radius:10px;padding:14px 18px;margin:16px 0}
+  .callout strong{color:var(--heading)}
+  .diagram{overflow-x:auto;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px}
+  svg{display:block;min-width:640px;width:100%;height:auto}
+  .legend{display:flex;flex-wrap:wrap;gap:18px 26px;margin-top:16px;font-size:13px;color:var(--muted)}
+  .legend .it{display:flex;align-items:center;gap:9px}
+  .swatch{width:26px;height:0;border-top-width:3px;border-top-style:solid;border-radius:2px}
+  .chipdot{width:15px;height:12px;border-radius:3px;border:1.6px solid var(--accent);background:var(--accent-soft)}
+  .logical{overflow-x:auto;padding:6px 2px}
+  .line{display:flex;align-items:center;min-width:720px;gap:0}
+  .lchip{flex:0 0 auto;width:38px;height:38px;border-radius:7px;border:1.5px solid var(--accent);background:var(--accent-soft);
+    display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--heading)}
+  .llink{flex:0 0 auto;width:14px;height:2px;background:var(--interboard)}
+  .lhost{font-family:var(--font-mono);font-size:11px;color:var(--muted);text-align:center;margin-top:8px;letter-spacing:.05em}
+  .lrow{display:flex;gap:0}
+  .lgroup{display:flex;flex-direction:column}
+  .lgroup .lrow{align-items:center}
+  table{border-collapse:collapse;width:100%;font-size:14px;margin-top:4px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border)}
+  th{font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  td.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums;color:var(--text)}
+  .tag{display:inline-block;font-family:var(--font-mono);font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--border);background:var(--panel2);color:var(--muted)}
+  .foot{margin-top:44px;padding-top:18px;border-top:1px solid var(--border);color:var(--muted);font-size:13px}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Tenstorrent Wormhole · 2× T3K · verified 2026-07-15</p>
+    <h1>Two T3Ks as one 1×16 mesh: what the hardware actually looks like</h1>
+    <p class="sub">How <code>ttnn.open_mesh_device(MeshShape(1,16))</code> maps onto 16 Wormhole b0 chips across two cabled hosts — derived from the live mesh-graph descriptor, Fabric Manager, and the cluster descriptor.</p>
+  </header>
+
+  <h2><span class="n">01</span>Where the picture comes from</h2>
+  <p>Nothing here is guessed — three real sources, from logical intent down to physical wire:</p>
+  <div class="flow">
+    <div class="step"><div class="k">Logical intent</div><div class="t">Mesh-graph descriptor</div><div class="d"><code>dual_t3k_1x16…mgd.textproto</code>: <code>device_topology dims:[1,16]</code> over <code>host_topology dims:[1,2]</code>.</div></div>
+    <div class="step"><div class="k">Live physical</div><div class="t">Fabric Manager</div><div class="d"><code>ttfm query-physical-topology</code>: 16 ASICs across both hosts, <code>board_type n300</code>, plus the 9-entry cross-host exit table.</div></div>
+    <div class="step"><div class="k">Per-board wiring</div><div class="t">Cluster descriptor</div><div class="d">The T3K <code>ethernet_connections</code> map — 20 links = 10 edges × 2 channels each.</div></div>
+  </div>
+
+  <h2><span class="n">02</span>Q1 — what <span class="mono">MeshShape(1,16)</span> means</h2>
+  <p><code>MeshShape(1, 16)</code> is a <strong>logical</strong> grid of 1 row × 16 columns — i.e. a straight <strong>line of 16 chips</strong>, indexed 0–15. The code moves data along it with <code>topology=ttnn.Topology.Linear</code>.</p>
+  <div class="callout"><strong>It is a line — not a ring, not a torus.</strong> There is no wrap-around link from chip 15 back to chip 0 (that would be <code>Topology.Ring</code>). Chips 0–7 live on <span class="mono">node-b</span>, chips 8–15 on <span class="mono">node-a</span>; the two halves join through four cross-host QSFP cables.</div>
+  <div class="logical">
+    <div class="line">
+      <div class="lgroup">
+        <div class="lrow" id="rowb"></div>
+        <div class="lhost">node-b · rank 0 · chips 0–7</div>
+      </div>
+      <div class="lgroup">
+        <div class="lrow" id="rowa"></div>
+        <div class="lhost">node-a · rank 1 · chips 8–15</div>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="n">03</span>Q2 — the real 16-chip wiring</h2>
+  <p>Physically it is <strong>not</strong> one flat line. Each T3K is <strong>8 chips arranged as a 2×4 mesh</strong> (4× n300 boards, 2 chips per board). The two T3Ks are bridged by <strong>four QSFP cross-host cables</strong> — one from each MMIO chip (0–3), 2 channels each = 8 links. The runtime flattens all of this into the logical line above and routes over it with <code>FABRIC_2D</code>.</p>
+  <div class="diagram">
+    <svg id="topo" viewBox="0 0 920 400" role="img" aria-label="Two T3K meshes joined by a QSFP cable"></svg>
+  </div>
+  <div class="legend">
+    <div class="it"><span class="chipdot"></span> Wormhole b0 chip</div>
+    <div class="it"><span class="swatch" style="border-top-color:var(--trace)"></span> on-board trace (n300 pair, 2 eth ch)</div>
+    <div class="it"><span class="swatch" style="border-top-color:var(--interboard)"></span> inter-board link (2 eth ch)</div>
+    <div class="it"><span class="swatch" style="border-top-color:var(--qsfp);border-top-width:4px"></span> QSFP cross-host cable (×4, MMIO chips)</div>
+  </div>
+  <p style="margin-top:18px">Each edge is actually <strong>two ethernet channels</strong> (for bandwidth). Within a T3K the four n300 boards are <code>{0,7} {1,5} {2,6} {3,4}</code> — the two chips on a board are joined by an on-board trace; the four MMIO/PCIe chips <code>0–3</code> form a ring (<code>0-1-2-3-0</code>), and each one carries a QSFP cable to the matching chip on the other host. An <code>all_gather</code> on the logical line therefore hops chip→neighbor across the 2×4 grid and crosses a QSFP cable to reach the other host.</p>
+
+  <h2><span class="n">04</span>The real data — all 16 chips (live Fabric Manager)</h2>
+  <p>All 16 ASICs as reported live by Fabric Manager (both agents registered → <code>2 hosts | 16 ASICs</code>). The four MMIO chips per host each carry a QSFP cross-host cable to the matching-index chip on the other host.</p>
+  <div class="card" style="overflow-x:auto;padding:6px 0">
+    <table>
+      <thead><tr><th>host</th><th>chip</th><th>ASIC unique_id</th><th>loc</th><th>MMIO (PCIe)</th><th>n300 ↔</th><th>cross-host ↔</th></tr></thead>
+      <tbody id="asics"></tbody>
+    </table>
+  </div>
+  <p><span class="tag">cross-host bridge</span> &nbsp; 4 QSFP cables (8 eth channels): <code>b0↔a0</code>, <code>b1↔a1</code>, <code>b2↔a2</code>, <code>b3↔a3</code> — matching MMIO chips on each host. These are the entire bridge that turns two 8-chip meshes into the logical 1×16.</p>
+
+  <div class="foot">Sources: <span class="mono">dual_t3k_1x16_experimental_bigmesh_mgd.textproto</span> · <span class="mono">ttfm query-physical-topology</span> · <span class="mono">t3k_cluster_desc.yaml</span> ethernet_connections. Diagram edges reflect the descriptor exactly; ASIC ids are the live Fabric Manager values.</div>
+</div>
+
+<script>
+// ---------- logical 1x16 line ----------
+function fillRow(el, from, to){
+  for(let i=from;i<=to;i++){
+    if(i>from){const l=document.createElement('div');l.className='llink';el.appendChild(l);}
+    const c=document.createElement('div');c.className='lchip';c.textContent=i;el.appendChild(c);
+  }
+}
+fillRow(document.getElementById('rowb'),0,7);
+fillRow(document.getElementById('rowa'),8,15);
+// join the two groups with a link element between them
+(function(){
+  const rb=document.getElementById('rowb'), ra=document.getElementById('rowa');
+  const l=document.createElement('div'); l.className='llink'; l.style.width='14px';
+  ra.insertBefore(l, ra.firstChild);
+})();
+
+// ---------- physical topology SVG ----------
+const NS="http://www.w3.org/2000/svg";
+const svg=document.getElementById('topo');
+const CW=60, CH=44;                       // chip box
+const rowY=[52,148,244,340];
+// one T3K: chip -> {col,row}. Left col top->bottom: 4,0,2,6 ; right col: 5,1,3,7
+// REAL layout from node-b's live cluster descriptor (ttfm query-cluster-descriptors).
+// Left col top->bottom: 7,0,3,4 ; right col: 5,1,2,6.
+const layout={7:[0,0],5:[1,0],0:[0,1],1:[1,1],3:[0,2],2:[1,2],4:[0,3],6:[1,3]};
+// edges within a T3K: [a,b,type]  type: 'trace' (n300 on-board pair) or 'inter' (board-to-board)
+// n300 boards: {0,7}{1,5}{2,6}{3,4}. Local ring 0-1-2-3-0. Remotes: 4-6, 5-7.
+const edges=[
+  [7,5,'inter'],[0,1,'inter'],[3,2,'inter'],[4,6,'inter'],   // horizontals (5-7, 0-1, 2-3, 4-6)
+  [7,0,'trace'],[0,3,'inter'],[3,4,'trace'],                 // left verticals
+  [5,1,'trace'],[1,2,'inter'],[2,6,'trace']                  // right verticals
+];
+const hosts=[
+  {tag:'node-b',prefix:'b',colX:[70,182],x0:0},
+  {tag:'node-a',prefix:'a',colX:[738,850],x0:0}
+];
+function el(tag,attrs){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);return e;}
+function center(host,chip){const [col,row]=layout[chip];return {x:host.colX[col],y:rowY[row]};}
+function cssvar(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+
+function draw(){
+  while(svg.firstChild) svg.removeChild(svg.firstChild);
+  const C={trace:cssvar('--trace'),inter:cssvar('--interboard'),accent:cssvar('--accent'),
+    soft:cssvar('--accent-soft'),head:cssvar('--heading'),muted:cssvar('--muted'),
+    qsfp:cssvar('--qsfp'),qsoft:cssvar('--qsfp-soft'),panel2:cssvar('--panel2')};
+
+  // host labels
+  hosts.forEach(h=>{
+    const midx=(h.colX[0]+h.colX[1])/2;
+    const t=el('text',{x:midx,y:24,'text-anchor':'middle','font-family':'var(--font-mono)','font-size':13,fill:C.muted,'letter-spacing':'.08em'});
+    t.textContent=h.tag+'  ·  T3K (2×4)'; svg.appendChild(t);
+  });
+
+  // edges first (under chips)
+  hosts.forEach(h=>{
+    edges.forEach(([a,b,type])=>{
+      const p1=center(h,a),p2=center(h,b);
+      svg.appendChild(el('line',{x1:p1.x,y1:p1.y,x2:p2.x,y2:p2.y,
+        stroke:type==='trace'?C.trace:C.inter,'stroke-width':type==='trace'?3.2:2.4,
+        'stroke-linecap':'round','stroke-dasharray':type==='trace'?'':'1 7','opacity':type==='trace'?0.95:0.85}));
+    });
+  });
+
+  // 4 QSFP cross-host cables: node-b MMIO chip N <-> node-a MMIO chip N (N=0..3), 2 ch each
+  const pairs=[{c:0,ch:'0,1'},{c:1,ch:'6,7'},{c:2,ch:'6,7'},{c:3,ch:'0,1'}];
+  const lanes={0:92,1:186,2:300,3:372};
+  pairs.forEach(({c,ch})=>{
+    const s=center(hosts[0],c), d=center(hosts[1],c);
+    const midx=(s.x+d.x)/2, ly=lanes[c];
+    svg.appendChild(el('path',{d:`M ${s.x} ${s.y} Q ${midx} ${ly} ${d.x} ${d.y}`,fill:'none',
+      stroke:C.qsfp,'stroke-width':3.2,'stroke-linecap':'round',opacity:0.9}));
+    const t=el('text',{x:midx,y:ly-5,'text-anchor':'middle','font-family':'var(--font-mono)','font-size':11,fill:C.qsfp,'font-weight':600});
+    t.textContent=`b${c} ↔ a${c}  (ch ${ch})`; svg.appendChild(t);
+  });
+
+  // chips on top
+  hosts.forEach(h=>{
+    for(let chip=0;chip<8;chip++){
+      const {x,y}=center(h,chip);
+      svg.appendChild(el('rect',{x:x-CW/2,y:y-CH/2,width:CW,height:CH,rx:9,fill:C.soft,stroke:C.accent,'stroke-width':1.7}));
+      const num=el('text',{x:x,y:y+2,'text-anchor':'middle','font-family':'var(--font-mono)','font-size':16,'font-weight':700,fill:C.head});
+      num.textContent=h.prefix+chip; svg.appendChild(num);
+      const sub=el('text',{x:x,y:y+15,'text-anchor':'middle','font-family':'var(--font-mono)','font-size':8.5,fill:C.muted});
+      sub.textContent='wh_b0'; svg.appendChild(sub);
+    }
+  });
+}
+draw();
+// redraw on theme change so CSS-var colors refresh
+const mo=new MutationObserver(draw);
+mo.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+if(window.matchMedia) window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change',draw);
+
+// ---------- ASIC table ----------
+// exact per-chip data from BOTH hosts' live cluster descriptors
+// [host, chip, unique_id, asic_loc, pcie_bdf, n300_partner, cross_host]
+const asics=[
+  ['node-b',0,'10225918443',0,'00:10.0',7,'a0 (ch 0,1)'],
+  ['node-b',1,'10225917990',0,'00:11.0',5,'a1 (ch 6,7)'],
+  ['node-b',2,'10225918333',0,'00:1b.0',6,'a2 (ch 6,7)'],
+  ['node-b',3,'10225917957',0,'00:1c.0',4,'a3 (ch 0,1)'],
+  ['node-b',4,'14520885253',1,'',3,''],
+  ['node-b',5,'14520885286',1,'',1,''],
+  ['node-b',6,'14520885629',1,'',2,''],
+  ['node-b',7,'14520885739',1,'',0,''],
+  ['node-a',0,'10225918033',0,'00:10.0',7,'b0 (ch 0,1)'],
+  ['node-a',1,'10225918395',0,'00:11.0',5,'b1 (ch 6,7)'],
+  ['node-a',2,'10225918125',0,'00:1b.0',6,'b2 (ch 6,7)'],
+  ['node-a',3,'10225918159',0,'00:1c.0',4,'b3 (ch 0,1)'],
+  ['node-a',4,'14520885329',1,'',3,''],
+  ['node-a',5,'14520885421',1,'',1,''],
+  ['node-a',6,'14520885455',1,'',2,''],
+  ['node-a',7,'14520885691',1,'',0,'']
+];
+const tb=document.getElementById('asics');
+asics.forEach(([host,chip,id,loc,bdf,partner,xh])=>{
+  const tr=document.createElement('tr');
+  if(host==='node-a' && chip===0) tr.style.borderTop='2px solid var(--border)';
+  tr.innerHTML=`<td class="mono">${host}</td><td class="mono">${host[5]}${chip}</td><td class="mono">${id}</td>`+
+    `<td class="mono">${loc}</td><td class="mono">${loc===0?bdf:'—'}</td><td class="mono">↔ ${partner}</td>`+
+    `<td class="mono">${xh?('→ '+xh):'—'}</td>`;
+  tb.appendChild(tr);
+});
+</script>

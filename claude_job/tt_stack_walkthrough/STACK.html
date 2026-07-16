@@ -1,0 +1,512 @@
+<title>The TT software stack, proven on a dual T3K</title>
+<style>
+  :root {
+    --ground: #f6f8f9;
+    --surface: #ffffff;
+    --surface-2: #eef1f3;
+    --term-bg: #0f1620;
+    --term-ink: #cdd6e0;
+    --ink: #131a21;
+    --muted: #566470;
+    --hair: #dce1e5;
+    --accent: #0b7f92;
+    --accent-soft: #0b7f9218;
+    --good: #1f8a4c;
+    --good-soft: #1f8a4c1a;
+    --warn: #a9701a;
+    --warn-soft: #a9701a1a;
+    --bad: #b8412f;
+    --bad-soft: #b8412f14;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --maxw: 74ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0d1117;
+      --surface: #151b23;
+      --surface-2: #1b232d;
+      --term-bg: #080c12;
+      --term-ink: #c6d0dc;
+      --ink: #d6dde4;
+      --muted: #8b98a4;
+      --hair: #262f3a;
+      --accent: #34b6cc;
+      --accent-soft: #34b6cc1f;
+      --good: #46c07d;
+      --good-soft: #46c07d1f;
+      --warn: #e0a54a;
+      --warn-soft: #e0a54a1f;
+      --bad: #e0705f;
+      --bad-soft: #e0705f1f;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #f6f8f9; --surface: #ffffff; --surface-2: #eef1f3; --term-bg: #0f1620;
+    --term-ink: #cdd6e0; --ink: #131a21; --muted: #566470; --hair: #dce1e5;
+    --accent: #0b7f92; --accent-soft: #0b7f9218; --good: #1f8a4c; --good-soft: #1f8a4c1a;
+    --warn: #a9701a; --warn-soft: #a9701a1a; --bad: #b8412f; --bad-soft: #b8412f14;
+  }
+  :root[data-theme="dark"] {
+    --ground: #0d1117; --surface: #151b23; --surface-2: #1b232d; --term-bg: #080c12;
+    --term-ink: #c6d0dc; --ink: #d6dde4; --muted: #8b98a4; --hair: #262f3a;
+    --accent: #34b6cc; --accent-soft: #34b6cc1f; --good: #46c07d; --good-soft: #46c07d1f;
+    --warn: #e0a54a; --warn-soft: #e0a54a1f; --bad: #e0705f; --bad-soft: #e0705f1f;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground); color: var(--ink); font-family: var(--sans);
+    line-height: 1.62; font-size: 16px; margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 0 24px 96px; }
+  .col { max-width: var(--maxw); }
+
+  a { color: var(--accent); text-underline-offset: 2px; }
+
+  /* ---- masthead ---- */
+  header.mast { padding: 64px 0 30px; border-bottom: 1px solid var(--hair); margin-bottom: 40px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 18px;
+  }
+  h1 {
+    font-size: clamp(30px, 5vw, 46px); line-height: 1.08; letter-spacing: -0.02em;
+    font-weight: 660; margin: 0 0 20px; text-wrap: balance; max-width: 20ch;
+  }
+  .lede { font-size: 18px; color: var(--muted); max-width: 66ch; margin: 0 0 26px; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 10px; font-family: var(--mono); font-size: 12.5px;
+  }
+  .meta span {
+    background: var(--surface-2); border: 1px solid var(--hair); border-radius: 999px;
+    padding: 4px 11px; color: var(--muted);
+  }
+  .meta span b { color: var(--ink); font-weight: 600; }
+
+  /* ---- section rhythm ---- */
+  section { margin: 52px 0 0; }
+  h2 {
+    font-size: 13px; font-family: var(--mono); letter-spacing: .13em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 6px; font-weight: 600;
+  }
+  h2 + .h2sub { font-size: 25px; font-weight: 640; letter-spacing: -0.015em; margin: 0 0 22px; text-wrap: balance; }
+  h3 { font-size: 18px; font-weight: 640; margin: 30px 0 8px; letter-spacing: -0.01em; }
+  p { margin: 0 0 16px; }
+  strong { font-weight: 640; }
+  code {
+    font-family: var(--mono); font-size: 0.86em; background: var(--surface-2);
+    border: 1px solid var(--hair); border-radius: 5px; padding: 1px 5px; color: var(--ink);
+    word-break: break-word;
+  }
+
+  /* ---- terminal block ---- */
+  .term {
+    background: var(--term-bg); border-radius: 10px; margin: 0 0 20px; overflow: hidden;
+    box-shadow: 0 1px 0 var(--hair), 0 14px 34px -22px rgba(0,0,0,.5);
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 7px; padding: 10px 14px;
+    border-bottom: 1px solid #ffffff12;
+  }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .term-bar i:nth-child(1){ background:#e0705f; } .term-bar i:nth-child(2){ background:#e0a54a; } .term-bar i:nth-child(3){ background:#46c07d; }
+  .term-bar span {
+    margin-left: 8px; font-family: var(--mono); font-size: 11.5px; letter-spacing: .04em;
+    color: #8b98a4;
+  }
+  .term pre {
+    margin: 0; padding: 16px 18px; overflow-x: auto; color: var(--term-ink);
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.62;
+  }
+  .term pre b   { color: #e2e8f0; font-weight: 600; }
+  .term .g { color: #58c98a; } .term .a { color: #e7b45f; } .term .r { color: #ec8476; }
+  .term .c { color: #6b7a89; } .term .k { color: #56b6c7; }
+
+  /* ---- results table ---- */
+  .tablecard { border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; margin: 0 0 8px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--hair); }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--surface-2); }
+  tr:last-child td { border-bottom: 0; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px;
+    font-weight: 600; letter-spacing: .04em; padding: 3px 9px; border-radius: 999px;
+  }
+  .pill.pass { color: var(--good); background: var(--good-soft); }
+  .pill.pass::before { content:""; width:6px; height:6px; border-radius:50%; background: var(--good); }
+  .note { font-size: 14px; color: var(--muted); }
+
+  /* ---- pipeline diagram ---- */
+  .pipe { display: flex; flex-direction: column; gap: 0; margin: 8px 0 20px; }
+  .stage {
+    border: 1px solid var(--hair); border-left: 3px solid var(--accent); border-radius: 8px;
+    background: var(--surface); padding: 13px 16px;
+  }
+  .stage .sname { font-family: var(--mono); font-weight: 600; font-size: 14px; color: var(--ink); }
+  .stage .srole { font-size: 13.5px; color: var(--muted); margin-top: 2px; }
+  .handoff {
+    font-family: var(--mono); font-size: 11.5px; color: var(--accent); padding: 7px 0 7px 18px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .handoff::before { content: "↓"; font-size: 14px; }
+
+  /* ---- layer cards ---- */
+  .layer { border-top: 1px solid var(--hair); padding-top: 26px; margin-top: 30px; }
+  .layer-head { display: flex; align-items: baseline; gap: 14px; }
+  .layer-no {
+    font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 6px; padding: 2px 8px; flex: none;
+  }
+  .layer-title { font-size: 20px; font-weight: 640; letter-spacing: -0.01em; margin: 0; }
+  .layer-title .sub { color: var(--muted); font-weight: 400; font-size: 15px; }
+  .cite {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    background: var(--surface-2); border: 1px solid var(--hair); border-radius: 5px;
+    padding: 1px 6px; white-space: nowrap;
+  }
+  .handoff-out {
+    margin: 10px 0 4px; padding: 10px 14px; background: var(--accent-soft);
+    border-radius: 8px; font-size: 14px;
+  }
+  .handoff-out b { color: var(--accent); font-family: var(--mono); font-size: 12px; letter-spacing:.04em; text-transform: uppercase; }
+
+  ul { margin: 0 0 16px; padding-left: 20px; }
+  li { margin: 0 0 7px; }
+
+  /* ---- callouts ---- */
+  .callout { border-radius: 9px; padding: 14px 16px; margin: 0 0 20px; font-size: 14.5px; border: 1px solid; }
+  .callout .tag { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; display: block; margin-bottom: 5px; }
+  .callout.bad  { background: var(--bad-soft);  border-color: var(--bad);  }
+  .callout.bad .tag  { color: var(--bad); }
+  .callout.warn { background: var(--warn-soft); border-color: var(--warn); }
+  .callout.warn .tag { color: var(--warn); }
+
+  /* ---- fabric-manager phases ---- */
+  .phase { border: 1px solid var(--hair); border-radius: 9px; padding: 14px 16px; margin: 0 0 12px; background: var(--surface); }
+  .phase-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .phase-head .pn { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+  .badge { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; }
+  .badge.ok   { color: var(--good); background: var(--good-soft); }
+  .badge.fail { color: var(--bad);  background: var(--bad-soft); }
+  .phase p { margin: 0; font-size: 14px; }
+
+  footer { margin-top: 60px; border-top: 1px solid var(--hair); padding-top: 24px; font-size: 14px; color: var(--muted); }
+  footer code { font-size: 12.5px; }
+  footer ul { list-style: none; padding: 0; }
+  footer li { margin-bottom: 8px; }
+  .k-accent { color: var(--accent); }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="col">
+      <p class="eyebrow">Engineering walkthrough · scaleout</p>
+      <h1>The Tenstorrent software stack, end&#8209;to&#8209;end</h1>
+      <p class="lede">Five layers — tt&#8209;topology → tt&#8209;fabric → TTFM → tt&#8209;run → ttnn — cooperating to run one
+        program across <strong>two cabled T3Ks as a single 1×16 MeshDevice</strong>. Documented against source, and
+        proven by a workload that runs compute + three collectives across all 16 chips and checks each against a torch golden.</p>
+      <div class="meta">
+        <span><b>16</b> chips</span>
+        <span><b>2</b> hosts</span>
+        <span>commit <b>3632044cfd6</b></span>
+        <span>FABRIC_2D</span>
+        <span>t3k&#8209;node&#8209;a + t3k&#8209;node&#8209;b</span>
+        <span>2026&#8209;07&#8209;15</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== PROOF ===================== -->
+  <section>
+    <div class="col">
+      <h2>The proof</h2>
+      <div class="h2sub">One launch, five ops, sixteen chips — all green</div>
+      <p><code>stack_workload.py</code>, launched once via <code>tt-run</code> across both hosts, opens a single logical
+        1×16 MeshDevice (8 chips per host) and verifies five operations <em>per local shard</em> against a torch golden.
+        Every rank checks its own 8 shards and raises on failure, so a clean rank&#8209;0 <b>ALL PASS</b> + exit 0 means all
+        16 chips agreed with torch.</p>
+    </div>
+
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>rank 0 stdout · scripts/PASS_output.txt</span></div>
+<pre><span class="c">[rank 0] opened Big-Mesh (1, 16) = 16 chips across 2 host(s)</span>
+<b>[rank 0] PASS</b> <span class="k">ADD</span>            8 local shards, each(1,1,32,32):  min_pcc=<span class="g">0.999998</span>
+<b>[rank 0] PASS</b> <span class="k">MATMUL</span>         8 local shards, each(1,1,32,128): min_pcc=<span class="g">0.999979</span>
+<b>[rank 0] PASS</b> <span class="k">ALL_GATHER</span>     8 local shards, each(1,1,32,512): min_pcc=<span class="g">1.000000</span>
+<b>[rank 0] PASS</b> <span class="k">ALL_GATHER</span>(full) full(1,1,32,512): pcc=<span class="g">1.000000</span>  rel_L2_err=0.0000%  max_abs=0.000e+00
+<b>[rank 0] PASS</b> <span class="k">ALL_REDUCE</span>     8 local shards, each(1,1,32,32):  min_pcc=<span class="g">0.999982</span>
+<b>[rank 0] PASS</b> <span class="k">REDUCE_SCATTER</span> 8 local shards, each(1,1,32,32):  min_pcc=<span class="g">0.999974</span>
+<b class="g">[rank 0] ALL PASS: add, matmul, all_gather, all_reduce, reduce_scatter</b>
+<b class="g">          verified vs torch golden across all 16 chips</b></pre>
+    </div>
+
+    <div class="col">
+      <div class="tablecard">
+        <table>
+          <thead><tr><th>Operation</th><th>Placement</th><th>Torch golden</th><th>PCC</th><th></th></tr></thead>
+          <tbody>
+            <tr><td>add</td><td>shard dim3</td><td><code>a+b</code> per block</td><td class="num">0.999998</td><td><span class="pill pass">PASS</span></td></tr>
+            <tr><td>matmul</td><td>rows dim2, B replicated</td><td><code>A@B</code> (fp32 accum→bf16)</td><td class="num">0.999979</td><td><span class="pill pass">PASS</span></td></tr>
+            <tr><td>all_gather</td><td>shard dim3 → gather</td><td>full tensor everywhere</td><td class="num">1.000000</td><td><span class="pill pass">PASS</span></td></tr>
+            <tr><td>all_reduce</td><td>shard dim3 (16 blocks)</td><td>Σ blocks everywhere</td><td class="num">0.999982</td><td><span class="pill pass">PASS</span></td></tr>
+            <tr><td>reduce_scatter</td><td>replicate full</td><td><code>(16×full)[…,i·32:]</code></td><td class="num">0.999974</td><td><span class="pill pass">PASS</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note"><code>all_gather</code> is a pure data move → matches <em>exactly</em> (1.0). The other four re&#8209;round in
+        bf16 or sum in a different order than the CPU → ~0.9999. The check is about the multi&#8209;device <em>wiring</em>,
+        not float precision.</p>
+    </div>
+  </section>
+
+  <!-- ===================== HAND-OFF PIPELINE ===================== -->
+  <section>
+    <div class="col">
+      <h2>The shape of it</h2>
+      <div class="h2sub">Each layer produces exactly what the next one consumes</div>
+    </div>
+    <div class="col pipe">
+      <div class="stage"><div class="sname">tt-topology</div><div class="srole">Flash per-chip EthCoords onto the cards (external pip tool)</div></div>
+      <div class="handoff">a ClusterDescriptor UMD can read from NODE_INFO</div>
+      <div class="stage"><div class="sname">tt-fabric</div><div class="srole">MeshGraph + physical discovery → TopologyMapper → routing tables on every chip</div></div>
+      <div class="handoff">routing tables + live EDM ethernet routers</div>
+      <div class="stage"><div class="sname">TTFM</div><div class="srole">The fabric lifecycle: who calls init / teardown (FabricManagerMode)</div></div>
+      <div class="handoff">a fabric that is UP — or a promise that someone owns it</div>
+      <div class="stage"><div class="sname">tt-run + mpirun-ulfm</div><div class="srole">rank → {mesh_id, mesh_host_rank}; spawn the app on both hosts</div></div>
+      <div class="handoff">N processes, each knowing which half of the mesh it owns</div>
+      <div class="stage"><div class="sname">ttnn app</div><div class="srole">set_fabric_config → open_mesh_device → tensors → ops → CCL over the live fabric</div></div>
+    </div>
+  </section>
+
+  <!-- ===================== LAYERS ===================== -->
+  <section>
+    <div class="col">
+      <h2>The five layers</h2>
+      <div class="h2sub">Who does what, cited to source</div>
+
+      <div class="layer">
+        <div class="layer-head"><span class="layer-no">01</span><h3 class="layer-title" style="margin:0">tt-topology <span class="sub">— per-chip identity on the silicon</span></h3></div>
+        <p><strong>External pip tool, not in this repo.</strong> <code>tt-topology -l mesh</code> flashes each Wormhole card's
+          <code>NODE_INFO</code> with its <code>EthCoord {x,y,rack,shelf}</code> + mesh eth&#8209;routing, and it
+          <strong>persists across reboot</strong>. Run once per physical layout change, not per job.</p>
+        <ul>
+          <li>UMD reads the coords back during discovery — <span class="cite">topology_discovery_wormhole.cpp:98</span> (<code>get_local_eth_coord</code>) — assembling a <code>ClusterDescriptor</code> everything above trusts.</li>
+          <li>Stale flash → an explicit "re-run tt-topology" failure — <span class="cite">tunnels_from_mmio_device.cpp:82</span>.</li>
+          <li>Confirmed healthy by the mandatory preflight <code>test_system_health</code> → <span class="k-accent">[ PASSED ] 3 tests.</span></li>
+        </ul>
+        <div class="handoff-out"><b>hands off ➜</b> a ClusterDescriptor: the chips, their coordinates, and which eth channel connects to whom.</div>
+      </div>
+
+      <div class="layer">
+        <div class="layer-head"><span class="layer-no">02</span><h3 class="layer-title" style="margin:0">tt-fabric control plane <span class="sub">— logical mesh ⇄ physical chips ⇄ routing tables</span></h3></div>
+        <p>Source root <code>tt_metal/fabric/</code>. Turns "a pile of discovered chips" into "a routed mesh matching the logical shape you asked for."</p>
+        <ul>
+          <li><strong>MeshGraphDescriptor</strong> parses the <code>.textproto</code> MGD. Big&#8209;Mesh = one <code>mesh_id=0</code> with <code>device_topology 1×16</code> and <code>host_topology 1×2</code> — one mesh owned jointly by host_rank 0 and 1.</li>
+          <li><strong>Physical discovery</strong> — <span class="cite">physical_system_discovery.cpp:757</span>: each host discovers locally, MPI&#8209;gather, rank 0 stitches the halves over the inter&#8209;host QSFP links.</li>
+          <li><strong>TopologyMapper</strong> solves logical↔physical (SAT&#8209;style). This is why fabric node IDs are a permutation of chip IDs, not identity.</li>
+          <li><strong>RoutingTableGenerator</strong> → tables written to every chip — <span class="cite">control_plane.cpp:2068</span> — then EDM routers launch (<code>fabric_init.cpp</code>).</li>
+        </ul>
+        <div class="callout warn" style="margin-top:4px">
+          <span class="tag">FABRIC_2D, not FABRIC_1D</span>
+          A 1×16 line spanning two hosts can't be routed by FABRIC_1D (<code>Could not find any forwarding direction from src (M0,D3) to dst (M0,D0)</code>). FABRIC_2D routes it.
+        </div>
+        <div class="handoff-out"><b>hands off ➜</b> routing tables on every chip + live EDM routers. The mesh is addressable end-to-end.</div>
+      </div>
+
+      <div class="layer">
+        <div class="layer-head"><span class="layer-no">03</span><h3 class="layer-title" style="margin:0">TTFM <span class="sub">— the fabric lifecycle: who calls init and teardown</span></h3></div>
+        <p>Layer 2 <em>can</em> build the fabric; TTFM decides who owns that build and when it's torn down. The knob is the
+          <code>FabricManagerMode</code> bit&#8209;flag — <span class="cite">fabric_types.hpp:44</span> — gated in one file,
+          <span class="cite">fabric_firmware_initializer.cpp</span>:</p>
+        <div class="tablecard">
+          <table>
+            <thead><tr><th>Mode</th><th>Flags</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td><code>DEFAULT</code></td><td>INIT | TERMINATE</td><td><strong>Metal owns it</strong> — init on open, teardown on close. (What our proof uses.)</td></tr>
+              <tr><td><code>ENABLED</code></td><td><em>neither</em></td><td>Attach to a fabric someone else brought up. Teardown at <code>:347</code> is a no&#8209;op → safe.</td></tr>
+              <tr><td><code>INIT_FABRIC</code></td><td>init only</td><td>Bring up and <strong>leave up</strong>.</td></tr>
+              <tr><td><code>TERMINATE_FABRIC</code></td><td>terminate only</td><td>Tear a running fabric down.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="margin-top:16px">The <code>init()</code> path logs <b>"Initializing Fabric"</b> (<span class="cite">:296</span>) then
+          <b>"Fabric Initialized with config …"</b> (<span class="cite">:313</span>) for INIT; for ENABLED it logs
+          <b>"Fabric initialized through Fabric Manager"</b> (<span class="cite">:320</span>) and does nothing else. The split
+          lifecycle is exposed as the in&#8209;repo CLI <code>run_fabric_manager</code> — <strong>live&#8209;demoed below</strong>.</p>
+        <div class="handoff-out"><b>hands off ➜</b> a fabric that is up, and a documented contract for who tears it down.</div>
+      </div>
+
+      <div class="layer">
+        <div class="layer-head"><span class="layer-no">04</span><h3 class="layer-title" style="margin:0">tt-run + mpirun-ulfm <span class="sub">— one command → N cooperating processes</span></h3></div>
+        <p><code>ttnn/ttnn/distributed/ttrun.py</code>, in two phases:</p>
+        <ul>
+          <li><strong>Phase 1 · generate_rank_bindings</strong> — from MGD + <code>--hosts</code>, compute each rank's <code>{mesh_id, mesh_host_rank}</code> (cached under <code>generated/ttrun/</code>). Big&#8209;Mesh: rank 0 → host_rank 0 (t3k&#8209;node&#8209;b), rank 1 → host_rank 1 (t3k&#8209;node&#8209;a).</li>
+          <li><strong>Phase 2</strong> — <code>mpirun-ulfm</code> (OpenMPI 5.0.7 ULFM, <em>not</em> /usr/bin/mpirun 4.1.2) spawns the workload on both hosts, forwards every <code>TT_*</code> with <code>-x</code>, and sets <strong>per&#8209;rank <code>TT_MESH_HOST_RANK</code></strong> — <span class="cite">ttrun.py:1530</span>.</li>
+        </ul>
+        <p>That env var is the whole ballgame for multi&#8209;host: the control plane reads it — <span class="cite">control_plane.cpp:275</span> — to decide which half of the mesh a process owns. rank 0 binds 0, rank 1 binds 1, together they form <code>mesh_id=0</code>.</p>
+        <div class="handoff-out"><b>hands off ➜</b> two processes, same script, each: "I am host_rank K of mesh 0; my 8 chips are …".</div>
+      </div>
+
+      <div class="layer">
+        <div class="layer-head"><span class="layer-no">05</span><h3 class="layer-title" style="margin:0">the ttnn app <span class="sub">— open the mesh, place tensors, run ops + collectives</span></h3></div>
+        <ul>
+          <li><code>set_fabric_config(FABRIC_2D)</code> <em>before</em> opening — <span class="cite">fabric.cpp:501</span> → <span class="cite">metal_env.cpp:345</span>. This is where Layers 2–3 fire.</li>
+          <li><code>open_mesh_device(MeshShape(1,16))</code> — <span class="cite">distributed.py:644</span>. Each rank builds a <em>local</em> view (owns 8 chips via <code>get_view().is_local</code>), ranks barrier, fabric + dispatch come online.</li>
+          <li>Placement: <code>ShardTensorToMesh(dim)</code> splits across chips; <code>ReplicateTensorToMesh</code> copies to all.</li>
+          <li>Collectives over the live fabric: <code>all_gather(t, dim, cluster_axis=1, topology=Linear)</code>, <code>all_reduce(t, cluster_axis=1, …)</code> (Sum, no <code>dim</code>), <code>reduce_scatter(t, dim, cluster_axis=1, …)</code>. Worker kernels wire to the EDM routers via <code>append_fabric_connection_rt_args</code> — <span class="cite">ccl_worker_builder.cpp:1139</span>.</li>
+        </ul>
+        <div class="callout bad">
+          <span class="tag">Gotcha found this session — deallocate between ops</span>
+          A first run that let tensors accumulate crashed the <strong>remote</strong> rank with <code>SIGBUS "Non-existent physical address"</code> inside <code>fetch_queue_write</code> (the host→device command&#8209;queue ring) partway through. Fix: <code>ttnn.deallocate()</code> each op's tensors + barrier between ops. A hard rank death like this wedges the fabric → recover with the <code>tt-smi -r</code> both&#8209;hosts procedure.
+        </div>
+        <div class="handoff-out"><b>hands off ➜</b> results on the chips, read back per local shard, checked against torch. <strong>Stack proven.</strong></div>
+      </div>
+
+      <p class="note" style="margin-top:24px"><strong>tt-operator</strong> (out of scope): no in&#8209;repo source — only CI GitHub Actions (<code>.github/actions/ttop-*</code>) hitting an external Kubernetes allocation service. On a directly&#8209;owned dual T3K there's nothing to run; tt&#8209;run is the launcher.</p>
+    </div>
+  </section>
+
+  <!-- ===================== RUNTIME TRACE ===================== -->
+  <section>
+    <div class="col">
+      <h2>Runtime init trace</h2>
+      <div class="h2sub">What actually happens, in order</div>
+    </div>
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>observed · scripts/run.log</span></div>
+<pre><span class="k">tt-run Phase 1</span>  cache hit → rank_bindings.yaml  (rank0=host0 node-b, rank1=host1 node-a)
+<span class="k">tt-run Phase 2</span>  mpirun-ulfm spawns python3 stack_workload.py on both hosts, -x TT_* forwarded
+  ├─ set_fabric_config(FABRIC_2D)              <span class="c">fabric.cpp:501 → metal_env.cpp:345</span>
+  │    └─ ControlPlane: parse MGD → discovery → MPI-gather → cross-host stitch
+  │       → TopologyMapper → RoutingTableGenerator
+  ├─ open_mesh_device(1×16)                     <span class="c">distributed.py:644</span>
+  │    ├─ each rank builds its local 8-chip view (is_local)
+  │    ├─ <b>"Initializing Fabric"</b>                 <span class="c">fabric_firmware_initializer.cpp:296</span>
+  │    ├─ write_routing_tables_to_all_chips     <span class="c">control_plane.cpp:2068 (called at :311)</span>
+  │    ├─ "Fabric initialized on Device 0..7" ×2 hosts   <span class="c">device.cpp:548</span>
+  │    └─ <b class="g">"Fabric Initialized with config FabricConfig::FABRIC_2D"</b>  <span class="c">:313</span>
+  ├─ [rank 0] opened Big-Mesh (1, 16) = 16 chips across 2 host(s)
+  ├─ ADD / MATMUL / ALL_GATHER / ALL_REDUCE / REDUCE_SCATTER  <span class="c">(deallocate + barrier between each)</span>
+  ├─ <b class="g">ALL PASS</b>
+  └─ close_mesh_device → "Cluster destructor completed" ×2   <span class="c">(DEFAULT-mode teardown)</span></pre>
+    </div>
+  </section>
+
+  <!-- ===================== FABRIC MANAGER DEMO ===================== -->
+  <section>
+    <div class="col">
+      <h2>TTFM live demo</h2>
+      <div class="h2sub">run_fabric_manager split lifecycle — and a real finding</div>
+      <p>Run on a <strong>single T3K</strong> (t3k&#8209;node&#8209;b, a 2×4 mesh), because <code>run_fabric_manager</code> hard&#8209;sets
+        <code>TT_MESH_HOST_RANK=0</code> for every process — <span class="cite">run_fabric_manager.cpp:107</span> — so it's a
+        single&#8209;host tool and can't bind the two host ranks a Big&#8209;Mesh needs.</p>
+
+      <div class="phase">
+        <div class="phase-head"><span class="pn">Phase 1 — INIT</span><span class="badge ok">succeeded</span></div>
+        <p><code>--initialize-fabric --fabric-config FABRIC_2D --mesh-shape 2x4</code>. Metal takes the INIT_FABRIC path,
+          launches the EDM routers on all 8 chips, prints the fabric node IDs, writes <code>fabric_status.txt</code>,
+          forces slow&#8209;dispatch, and <strong>leaves the fabric up</strong>. Proves the INIT half + the whole mechanism.</p>
+      </div>
+      <div class="phase">
+        <div class="phase-head"><span class="pn">Phase 2 — ENABLED attach</span><span class="badge fail">failed on T3K</span></div>
+        <p><code>set_fabric_config(FABRIC_2D, RELAXED_INIT, fabric_manager_mode=ENABLED)</code> + <code>open_mesh_device</code>
+          → <code>Timed out waiting for ETH heartbeat … Stuck at 0xabcd7841</code> inside <code>discover_remote_devices</code>.</p>
+      </div>
+      <div class="phase">
+        <div class="phase-head"><span class="pn">Phase 3 — TERMINATE</span><span class="badge fail">failed the same way</span></div>
+        <p><code>--terminate-fabric</code> also opens the device first → identical eth&#8209;heartbeat wall (unhandled
+          <code>UmdException</code> → <code>std::terminate</code>). Recovery = <code>tt-smi -r</code> both hosts.</p>
+      </div>
+
+      <div class="callout warn">
+        <span class="tag">Why the CLI fails here — expected, not a mistake</span>
+        A T3K's chips 4–7 are remote n300 halves reached <strong>over ethernet</strong>. When a fresh process opens the
+        device, UMD probes those chips for an eth heartbeat — but the EDM routers the manager left running occupy those
+        eth cores, so the device won't even open. On a <strong>Galaxy</strong> every chip is PCIe&#8209;direct, so there's no
+        remote&#8209;over&#8209;ethernet discovery to conflict. That's why the in&#8209;repo FM tests
+        (<code>tests/scale_out/test_ccl_fabric_manager.py</code>) are 8×4 Galaxy&#8209;only and still gated behind
+        <code>“TODO: Enable once Fabric Manager is ready”</code>.
+      </div>
+
+      <h3 style="margin-top:30px">The fix — drive the split lifecycle in one process</h3>
+      <p>The eth&#8209;heartbeat wall only bites a <strong>fresh process</strong> (new <code>Cluster</code> → re&#8209;discovery).
+        Driving the <em>same</em> <code>FabricManagerMode</code> values in <strong>one process</strong>
+        (<code>scripts/fm_lifecycle.py</code>) builds the UMD <code>Cluster</code> exactly once — before any fabric is up —
+        and reuses it across every mesh open/close, so re&#8209;discovery never happens.</p>
+      <div class="phase" style="border-left:3px solid var(--good)">
+        <div class="phase-head"><span class="pn">In-process INIT_FABRIC → ENABLED</span><span class="badge ok">attach fixed ✓</span></div>
+        <p style="margin-bottom:8px">The ENABLED attach now reaches the exact <code>:320</code> line the CLI never could:</p>
+      </div>
+    </div>
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>scripts/fm_demo/04_lifecycle.log</span></div>
+<pre><span class="k">=== PHASE INIT (INIT_FABRIC) ===</span>
+<b>Initializing Fabric</b> → <b class="g">Fabric Initialized with config FabricConfig::FABRIC_2D</b>   <span class="c">(fabric up, LEFT UP)</span>
+[INIT] mesh open (2, 4) = 8 chips → [INIT] mesh closed
+<span class="k">=== PHASE ENABLED ===</span>
+Fabric config changed FABRIC_2D→FABRIC_2D, reinitializing control plane   <span class="c">(reuses the Cluster)</span>
+<b class="g">Fabric initialized through Fabric Manager</b>   <span class="c">fabric_firmware_initializer.cpp:320  ← ATTACH SUCCEEDS</span>
+[ENABLED] mesh open (2, 4) = 8 chips
+<span class="c"># topology discovery appears ONLY in INIT (before fabric up) — never re-run → no heartbeat probe</span></pre>
+    </div>
+    <div class="col">
+      <div class="callout warn">
+        <span class="tag">Remaining boundary — honest</span>
+        A workload <em>dispatched</em> under the in&#8209;process ENABLED reattach <strong>hangs on its first device write</strong>
+        on a T3K (diagnosed live: no compiler procs, 0 kernels built, main thread in <code>futex_wait</code>, one thread
+        spinning 99% → a hung device op, not a compile). Remote&#8209;chip dispatch tunnels over the same ethernet the
+        ENABLED&#8209;mode control&#8209;plane reconfigure disturbs while the routers are live. So a <em>fully&#8209;green</em> ENABLED
+        workload is still not achievable on this T3K/commit. <strong>Net:</strong> the FM mechanism + the ENABLED attach are
+        proven on real HW; the fully&#8209;green fabric proof stays the <strong>DEFAULT&#8209;mode</strong> 16&#8209;chip workload above
+        (DEFAULT = INIT | TERMINATE — same lifecycle, Metal owns both ends, no mid&#8209;life reattach).
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== REPRODUCE ===================== -->
+  <section>
+    <div class="col">
+      <h2>Reproduce &amp; recover</h2>
+      <div class="h2sub">The two commands that matter</div>
+    </div>
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>run the proof</span></div>
+<pre>cd /home/namvu/dual-t3k/tt-metal && source python_env/bin/activate
+export ARCH_NAME=wormhole_b0 TT_METAL_HOME=$PWD TT_METAL_RUNTIME_ROOT=$PWD \
+       TT_METAL_CACHE=/home/namvu/.cache/tt_metal_local
+<span class="c"># preflight — expect "[ PASSED ] 3 tests."</span>
+./build_Release/test/tt_metal/tt_fabric/test_system_health
+<span class="c"># run backgrounded + poll a log — a cold 16-chip compile can exceed 10 min;</span>
+<span class="c"># a foreground timeout SIGTERM wedges the fabric like a hard kill.</span>
+tt-run --tcp-interface ens18 \
+  --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_1x16_experimental_bigmesh_mgd.textproto \
+  --hosts t3k-node-a,t3k-node-b \
+  python3 $PWD/claude_job/tt_stack_walkthrough/scripts/stack_workload.py</pre>
+    </div>
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>recover a wedged fabric</span></div>
+<pre><span class="c"># reset BOTH hosts at once — sequential resets mistime the QSFP retrain</span>
+( ssh t3k-node-a 'tt-smi -r' & ); tt-smi -r; wait
+<span class="c"># wait ~90s for QSFP links to retrain, then re-check until green on both hosts</span>
+sleep 90 && ./build_Release/test/tt_metal/tt_fabric/test_system_health</pre>
+    </div>
+  </section>
+
+  <footer>
+    <div class="col">
+      <p style="color:var(--ink); font-weight:600; margin-bottom:12px">Companion artifacts (repo paths)</p>
+      <ul>
+        <li><code>claude_job/dual_t3k_ops/GUIDE.md</code> — how to run: env, both launch modes, troubleshooting.</li>
+        <li><code>claude_job/dual_t3k_ops/topology.html</code> — the physical 1×16 wiring.</li>
+        <li><code>claude_job/dual_t3k_ops/findings.md</code> — the 13 hardware gotchas this rests on.</li>
+        <li><code>claude_job/tt_stack_walkthrough/scripts/</code> — <code>stack_workload.py</code>, <code>PASS_output.txt</code>, <code>fm_demo/</code>.</li>
+        <li><code>claude_job/tt_stack_walkthrough/findings.md</code> — new facts: deallocate&#8209;between&#8209;ops; the FM T3K limitation.</li>
+      </ul>
+    </div>
+  </footer>
+
+</div>
