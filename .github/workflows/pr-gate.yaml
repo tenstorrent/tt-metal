@@ -393,7 +393,8 @@ jobs:
       - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@629b4727fa0dff3d43895601dd538e303880ecbc # main (tt-github-actions#144)
 
   # PR-gate LLK python_tests matrix (tests/pipeline_reorg/llk_pr_gate_tests.yaml).
-  # SKU coverage is narrowed below based on find-changed-files outputs.
+  # SKU coverage is narrowed via sku-allowlist from find-changed-files.
+  # merge_group prio routing is via prepare_test_matrix --event + sku_config.
   llk-smoke-tests:
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
@@ -412,9 +413,9 @@ jobs:
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
       per-test-timeout: 15
-      # Priority runners only accept merge-queue traffic. Regular PRs and
-      # other triggers must continue using the original non-priority runner.
-      enabled-skus: ${{
+      enabled-skus: ALL_SKUS_IN_TESTS
+      # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
+      sku-allowlist: ${{
           (github.ref_name == 'main'
            || needs.find-changed-files.outputs.llk-common-changed == 'true'
            || needs.find-changed-files.outputs.llk-sfpi-changed == 'true'
@@ -422,9 +423,9 @@ jobs:
            || needs.find-changed-files.outputs.llk-ci-changed == 'true'
            || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true'
                && needs.find-changed-files.outputs.llk-blackhole-changed == 'true'))
-          && (github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2')
+          && '*'
           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && (github.event_name == 'merge_group' && 'bh_p150b_civ2_viommu_prio' || 'bh_p150b_civ2'))
+          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
           || '' }}
       pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 

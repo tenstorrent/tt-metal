@@ -450,8 +450,9 @@ jobs:
   # ===========================================================================
 
   # Merge-gate LLK gtest matrix (tests/pipeline_reorg/llk_merge_gate_tests.yaml).
-  # SKU coverage is narrowed below based on find-changes outputs. L2 nightly uses
-  # tests/pipeline_reorg/llk_unit_tests.yaml.
+  # SKU coverage is narrowed via sku-allowlist from find-changes. L2 nightly uses
+  # tests/pipeline_reorg/llk_unit_tests.yaml. merge_group prio routing is via
+  # prepare_test_matrix --event + sku_config merge_queue_sku.
   llk-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes]
     if: ${{
@@ -472,10 +473,9 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       per-test-timeout: 15
-      # Prio runner pool is reserved for merge-queue traffic; any other trigger
-      # (pull_request, push, etc.) routes blackhole jobs to the non-prio viommu
-      # variant so PR runs don't starve the merge-group queue.
-      enabled-skus: ${{
+      enabled-skus: ALL_SKUS_IN_TESTS
+      # "*" = no allowlist filter; empty = skip all; else CSV of logical SKUs.
+      sku-allowlist: ${{
           (github.ref_name == 'main'
            || needs.find-changes.outputs.llk-common-changed == 'true'
            || needs.find-changes.outputs.llk-sfpi-changed == 'true'
@@ -483,9 +483,9 @@ jobs:
            || needs.find-changes.outputs.llk-ci-changed == 'true'
            || (needs.find-changes.outputs.llk-wormhole-changed == 'true'
                && needs.find-changes.outputs.llk-blackhole-changed == 'true'))
-          && (github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu')
+          && '*'
           || (needs.find-changes.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && (github.event_name == 'merge_group' && 'bh_p150b_civ2_viommu_prio' || 'bh_p150b_civ2_viommu'))
+          || (needs.find-changes.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2_viommu')
           || '' }}
 
   # ===========================================================================

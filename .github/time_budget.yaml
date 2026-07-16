@@ -254,8 +254,7 @@ triage:
 llk:
   pr_gate:
     wh_n150_civ2: 40
-    bh_p150b_civ2: 40
-    bh_p150b_civ2_viommu_prio: 40
+    bh_p150b_civ2_viommu: 40
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40
@@ -273,7 +272,6 @@ llk:
     wh_n150_civ2: 300
     bh_p150b_civ2: 160
     bh_p150b_civ2_viommu: 70
-    bh_p150b_civ2_viommu_prio: 70
 
 models:
   merge_gate:
