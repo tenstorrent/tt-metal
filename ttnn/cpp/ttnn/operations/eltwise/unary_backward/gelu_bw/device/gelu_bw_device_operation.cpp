@@ -10,16 +10,36 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary_backward::gelu_bw {
 
+namespace {
+// GELU_BW supports only floating-point dtypes.
+bool is_supported_dtype(DataType dtype) {
+    return dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT8_B ||
+           dtype == DataType::BFLOAT4_B;
+}
+}  // namespace
+
 void GeluBwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& preallocated_input_grad = tensor_args.preallocated_input_grad;
     const auto& input_tensor = tensor_args.input;
+    const auto& grad_output_tensor = tensor_args.grad_output;
     auto out_memory_config = args.output_memory_config;
     auto output_datatype = args.output_dtype;
 
     if (output_datatype == DataType::INVALID) {
         output_datatype = input_tensor.dtype();
     }
+    TT_FATAL(
+        is_supported_dtype(input_tensor.dtype()),
+        "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). Input data "
+        "type: {}",
+        static_cast<int>(input_tensor.dtype()));
+
+    TT_FATAL(
+        is_supported_dtype(grad_output_tensor.dtype()),
+        "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). Grad output "
+        "data type: {}",
+        static_cast<int>(grad_output_tensor.dtype()));
 
     if (preallocated_input_grad.has_value()) {
         out_memory_config = preallocated_input_grad->memory_config();
@@ -70,6 +90,13 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
             "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
             computed_output_shape,
             preallocated_output_shape);
+
+        TT_FATAL(
+            is_supported_dtype(preallocated_input_grad.value().dtype()),
+            "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). "
+            "Preallocated input grad "
+            "data type: {}",
+            static_cast<int>(preallocated_input_grad.value().dtype()));
     }
 }
 

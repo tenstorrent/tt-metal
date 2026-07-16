@@ -414,10 +414,10 @@ def test_gelu_bw_ulp_summary(device):
 
 
 def test_gelu_bw_bf16_exhaustive(device):
-    """Exhaustive ULP distribution test for gelu_bw (approximate='none') across all BF16 values.
+    """Exhaustive ULP distribution test for gelu_bw (approximate='tanh') across all BF16 values.
 
     Generates all valid BF16 bit patterns as input, uses grad=1.0, and measures
-    ULP distance between device output and PyTorch float32 reference (GELU derivative).
+    ULP distance between device output and PyTorch float32 reference (tanh-approximate GELU derivative).
     """
     # Generate all bf16 bit patterns
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
@@ -464,7 +464,10 @@ def test_gelu_bw_bf16_exhaustive(device):
     tt_out = tt_out[:, :N]
 
     # Filter out inf/nan results
-    valid_mask = torch.isfinite(z_torch) & torch.isfinite(tt_out)
+    valid_mask = torch.isfinite(z_torch)
+    assert torch.isfinite(
+        tt_out[valid_mask]
+    ).all(), "ttnn.gelu_bw(approximate='tanh') output is non-finite where the reference is finite"
     z_torch_valid = z_torch[valid_mask]
     tt_out_valid = tt_out[valid_mask]
     N_valid = z_torch_valid.numel()
@@ -524,5 +527,7 @@ def test_gelu_bw_bf16_exhaustive(device):
     # Verify counts sum correctly
     ulp_sum = ulp_0_count + ulp_1_count + ulp_2_count + ulp_3_to_10_count + ulp_11_to_100_count + ulp_above_100_count
     assert ulp_sum == N_valid, f"ULP counts don't sum to total valid: {ulp_sum} != {N_valid}"
-    atol = torch.allclose(z_torch_valid, tt_out_valid.to(torch.float32), atol=0.02), "Assertion Test - Atol=0.02"
-    assert atol, "Assertion Test failed"
+    # Compare device output against the float32 reference. Upcast the bf16 device output to float32 (lossless)
+    assert torch.allclose(
+        z_torch_valid, tt_out_valid.to(torch.float32), rtol=2e-2, atol=2e-2
+    ), "gelu_bw(approximate='tanh') output does not match float32 reference within tolerance"

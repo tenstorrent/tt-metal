@@ -121,7 +121,12 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
             "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
             "kernels/compute/eltwise_bw_gelu_poly.cpp";
     }
-
+    std::map<std::string, std::string> compute_defines;
+    if (input.dtype() == DataType::FLOAT32) {
+        compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float32>";
+    } else {
+        compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float16_b>";
+    }
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_kernel_path;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -131,6 +136,7 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };
+    compute_desc.defines = {compute_defines.begin(), compute_defines.end()};
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
