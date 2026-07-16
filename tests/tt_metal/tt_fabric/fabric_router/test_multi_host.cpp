@@ -1016,6 +1016,101 @@ TEST(MultiHost, SC16BlitzSuperpodIntermeshPortAssignment) {
     check_intermesh_port_assignment_against_golden("SC16BlitzSuperpod_intermesh");
 }
 
+// CPU-only channel-rule check on the SC20 80-mesh Blitz decode ring (relaxed policy). Verifies the relaxed
+// rule -- every requested inter-mesh boundary resolves at least one channel -- and reports the fulfilled-vs-
+// dropped channel tally produced by the round-robin allocator (dropped channels are the expected torus-wrap
+// shortfall, which is non-fatal in relaxed mode).
+TEST(MultiHost, SC20RelaxedChannelRules) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_supercluster_20.textproto";
+    auto control_plane = make_control_plane(
+        mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    // Assert/report on rank 0 (it holds the merged all-mesh exit/peer pairs).
+    if (*tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() != 0) {
+        return;
+    }
+    const auto& mesh_graph = control_plane->get_mesh_graph();
+    std::size_t boundaries = 0, fully_fulfilled = 0, total_requested = 0, total_resolved = 0;
+    for (const auto& [src_mesh, dst_to_count] : mesh_graph.get_requested_intermesh_connections()) {
+        for (const auto& [dst_mesh, requested] : dst_to_count) {
+            const std::size_t resolved = control_plane
+                                             ->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+                                                 tt::tt_fabric::MeshId{src_mesh}, tt::tt_fabric::MeshId{dst_mesh})
+                                             .size();
+            EXPECT_GE(resolved, 1u) << "Relaxed rule violated: boundary M" << src_mesh << "->M" << dst_mesh
+                                    << " resolved 0 channels (every requested connection must resolve >= 1).";
+            ++boundaries;
+            total_requested += requested;
+            total_resolved += resolved;
+            if (resolved >= requested) {
+                ++fully_fulfilled;
+            }
+        }
+    }
+    const std::size_t dropped = total_requested > total_resolved ? total_requested - total_resolved : 0;
+    log_info(
+        tt::LogTest,
+        "SC20 relaxed channel tally: {} boundaries ({} fully fulfilled), {} channels requested, {} resolved, "
+        "{} dropped.",
+        boundaries,
+        fully_fulfilled,
+        total_requested,
+        total_resolved,
+        dropped);
+    EXPECT_GT(boundaries, 0u) << "No requested inter-mesh connections found (MGD not loaded?).";
+}
+
+// CPU-only strict-count check on the SC20 ring: every boundary requests exactly 2 channels with STRICT
+// policy. Control-plane init hard-fails if any strict boundary cannot resolve its full requested count, so a
+// clean build already means strict passed; we additionally assert each boundary resolved its 2 channels.
+TEST(MultiHost, SC20Strict2Connections) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        log_info(tt::LogTest, "This test is only for Blackhole Galaxy");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/blitz_decode_supercluster_20_count2_strict.textproto";
+    // Strict validation throws during init if any boundary under-resolves; reaching the asserts means it held.
+    auto control_plane = make_control_plane(
+        mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    if (*tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank() != 0) {
+        return;
+    }
+    const auto& mesh_graph = control_plane->get_mesh_graph();
+    std::size_t boundaries = 0;
+    for (const auto& [src_mesh, dst_to_count] : mesh_graph.get_requested_intermesh_connections()) {
+        for (const auto& [dst_mesh, requested] : dst_to_count) {
+            const std::size_t resolved = control_plane
+                                             ->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(
+                                                 tt::tt_fabric::MeshId{src_mesh}, tt::tt_fabric::MeshId{dst_mesh})
+                                             .size();
+            EXPECT_EQ(resolved, static_cast<std::size_t>(requested))
+                << "Strict boundary M" << src_mesh << "->M" << dst_mesh << " resolved " << resolved << " of "
+                << requested << " requested.";
+            ++boundaries;
+        }
+    }
+    log_info(
+        tt::LogTest, "SC20 strict(count=2) passed: {} boundaries each resolved their requested channels.", boundaries);
+    EXPECT_GT(boundaries, 0u) << "No requested inter-mesh connections found (MGD not loaded?).";
+}
+
 TEST(MultiHost, BHDualGalaxyFabric2DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {

@@ -552,6 +552,12 @@ for mock in "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" "${SC20_REVAB_SU
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins
 done
 
+# Inter-mesh channel-rule checks on the SC20 80-mesh ring (round-robin allocator). Relaxed: every requested
+# boundary must resolve >= 1 channel; the test logs the fulfilled-vs-dropped channel tally. Strict: the same
+# ring requesting exactly 2 channels/boundary with STRICT policy must fully resolve (init hard-fails otherwise).
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_BLITZ_80}" --mock-cluster-rank-binding "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.SC20RelaxedChannelRules"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/blitz_decode_supercluster_20_count2_strict.textproto" --mock-cluster-rank-binding "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.SC20Strict2Connections"
+
 fi # bh-subtorus-sc20
 
 ######################################
