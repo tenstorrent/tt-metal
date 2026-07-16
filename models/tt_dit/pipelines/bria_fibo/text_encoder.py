@@ -153,11 +153,11 @@ class SmolLM3TextEncoderWrapper:
         else:
             stacked = self._forward(tt_ids, tt_cos, tt_sin)
 
-        # ONE readback: gather the stacked [N, seq, hidden] over the SP axis (seq dim), then split on host.
-        gather = (
-            dict(mesh_axes=[None, self._sp_axis, None], composer_device=self._device) if self._sp_factor > 1 else {}
-        )
-        stacked_host = tt_tensor.to_torch(stacked, **gather)[:, :seq_len, :]  # [N, seq_len, hidden]
+        # ONE readback, fast path: read only the SP-axis shards from one index of the (TP-replicated)
+        # other axis and concat on host. tt_tensor.to_torch's mesh composer pulls all mesh devices --
+        # including the redundant TP replicas -- and is ~17x slower for this tensor (measured ~10.5 s
+        # vs ~0.6 s), which dominated the encode. See _read_seq_sharded.
+        stacked_host = self._read_seq_sharded(stacked)[:, :seq_len, :]  # [N, seq_len, hidden]
         host_hidden_states = [stacked_host[i : i + 1] for i in range(stacked_host.shape[0])]
         # prompt_embeds = cat(last, second-last) -- diffusers pipeline_bria_fibo.py contract.
         host_prompt_embeds = torch.cat([host_hidden_states[-1], host_hidden_states[-2]], dim=-1)
@@ -202,3 +202,19 @@ class SmolLM3TextEncoderWrapper:
         """
         all_hidden_states = self._encoder.forward(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
         return ttnn.concat(all_hidden_states, dim=0)  # [N, seq_local, hidden]; seq still sharded on the SP axis
+
+    def _read_seq_sharded(self, x: ttnn.Tensor) -> torch.Tensor:
+        """Read a seq-dim-1-sharded (over the SP axis), TP-replicated tensor to host, fast.
+
+        ``tt_tensor.to_torch``'s mesh composer pulls from every device -- including the redundant TP
+        replicas along the non-SP axis -- and is ~17x slower for this tensor. Instead read only the SP
+        shards from index 0 of the (replicated) other axis via ``get_device_tensors`` and concat the seq
+        dim on host. Device order is row-major over mesh coords (axis0-major).
+        """
+        if self._sp_factor <= 1:
+            return tt_tensor.to_torch(x)
+        rows, cols = tuple(self._device.shape)
+        shards = ttnn.get_device_tensors(x)
+        # SP shards live along self._sp_axis at index 0 of the other (replicated) axis.
+        idxs = list(range(cols)) if self._sp_axis == 1 else [r * cols for r in range(rows)]
+        return torch.cat([ttnn.to_torch(shards[i]) for i in idxs], dim=1)  # concat seq (tensor dim 1)

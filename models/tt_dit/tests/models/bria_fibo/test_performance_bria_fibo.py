@@ -341,11 +341,10 @@ def test_fibo_encode_perf(*, mesh_device):
     runs SP=8 (axis 1) x TP=4 (axis 0) on the whole mesh: the token sequence (padded to the fixed 1024 bucket)
     is sharded across the SP axis (all-gather K/V per attention layer) and Q/K/V/O are tensor-parallel on the
     TP axis. The encoder device forward is captured as a ttnn trace (the warmup pass captures it at the 1024
-    bucket; the measured passes replay it), so the measured wall-clock reflects trace replay + host readback.
-    Traced measured ~10.8 s/encode vs ~12.5 s untraced (~13%): the device forward is only ~14 ms, so the
-    remaining time is the host readback -- the 37-tensor to_torch of all hidden states gathered over the SP
-    axis (~260 MB device->host per prompt), which the trace does not cover and is the next lever.
-    Positive prompt is FIBO's intended structured-JSON caption (the committed
+    bucket; the measured passes replay it). Measured ~0.53 s/encode (pos+neg), down from ~12.5 s untraced:
+    the trace removes host op-dispatch (device forward is only ~14 ms) and the hidden-state readback reads
+    only the SP shards from one TP row via get_device_tensors (~0.6 s) instead of the mesh composer over all
+    32 devices (~10 s). Positive prompt is FIBO's intended structured-JSON caption (the committed
     ``fibo_vlm_prompt.json``, ~833 tokens); negative is a short free-text string. 1 warmup (absorbs op
     compilation) + N measured passes with boundary device syncs; logs encode seconds (avg/min/max) and the
     produced output shapes. Plain pytest -- no Tracy, no signposts, no device-op CSV. Use ``-s`` to see the
