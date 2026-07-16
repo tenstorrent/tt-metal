@@ -2618,7 +2618,7 @@ MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_outpu
     return output_tensors;
 }
 
-ttsl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MatmulDeviceOperation::compute_descriptor_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     const auto& input_tensors = args.input_tensors;
     const auto& input_tensor_a = input_tensors.at(0);
