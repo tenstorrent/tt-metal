@@ -161,7 +161,7 @@ test_suite_wh_6u_metal_unit_tests() {
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
-    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_deadlock_stability_6U_galaxy.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_deadlock_stability.yaml
 }
 
 test_suite_wh_6u_model_unit_tests() {
@@ -210,7 +210,7 @@ test_suite_bh_6u_metal_unit_tests() {
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*:-*ChannelTrimming*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
     RELIABILITY_MODE=relaxed build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
     # Deadlock stability tests - These validate 2D Torus (QSFP Link) stability
-    RELIABILITY_MODE=relaxed build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_deadlock_stability_6U_galaxy.yaml
+    RELIABILITY_MODE=relaxed build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_deadlock_stability.yaml
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
