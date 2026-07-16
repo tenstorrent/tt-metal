@@ -119,9 +119,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // the forward route, and the in1 rotated read) changes — correct for ANY permutation. Emits a RINGCOST
     // line per group (bank/greedy/opt max+total edge cost) for the report. No effect on the public path.
     const bool ring_bank = (diag & RegimeADiag::DIAG_RING_BANK) != 0u;        // diagnostic: bank order [0..7]
-    const bool ring_greedy = (diag & RegimeADiag::DIAG_RING_GREEDY) != 0u;    // diagnostic: greedy (mm==0)
     const bool ring_opt_mm0 = (diag & RegimeADiag::DIAG_RING_OPT_MM0) != 0u;  // diagnostic: mm==0-only objective
-    const bool ring_maxring = (diag & RegimeADiag::DIAG_RING_MAXRING) != 0u;  // diagnostic: maxring_total
     const bool ring_total = (diag & RegimeADiag::DIAG_RING_TOTAL) != 0u;      // diagnostic: total_maxedge
     const bool ring_maxedge = (diag & RegimeADiag::DIAG_RING_MAXEDGE) != 0u;  // diagnostic: maxedge_total
     if (!ring_bank) {  // DEFAULT = PARETO across all Sm mm-rings; other objectives if selected
@@ -181,39 +179,16 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 return m;
             };
             const std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
-            // greedy nearest-neighbour on the mm==0 ring (heuristic diagnostic), start at bank 0.
-            std::array<uint32_t, 8> greedy{};
-            {
-                std::array<bool, 8> vis{};
-                greedy[0] = 0;
-                vis[0] = true;
-                for (uint32_t pos = 1; pos < 8u; ++pos) {
-                    uint32_t best = 0, bestd = 0xffffffffu;
-                    for (uint32_t c = 0; c < 8u; ++c) {
-                        if (!vis[c] && dm[0][greedy[pos - 1]][c] < bestd) {
-                            bestd = dm[0][greedy[pos - 1]][c];
-                            best = c;
-                        }
-                    }
-                    greedy[pos] = best;
-                    vis[best] = true;
-                }
-            }
             // exhaustive: fix bank 0 at pos 0, permute the other 7 (5040 cycles; directed => both orientations).
-            // Pass 1 tracks the four lexicographic objectives (each first-strict-min wins). We also record the
+            // Pass 1 tracks the lexicographic objectives (each first-strict-min wins). We also record the
             // aggtot of the MM0-selected order as the PARETO budget.
-            std::array<uint32_t, 8> opt_mm0 = bank, opt_maxedge = bank, opt_maxring = bank, opt_total = bank,
-                                    opt_pareto = bank;
+            std::array<uint32_t, 8> opt_mm0 = bank, opt_maxedge = bank, opt_total = bank, opt_pareto = bank;
             auto lt2 = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) {
                 return a0 < b0 || (a0 == b0 && a1 < b1);
             };
-            auto lt3 = [](uint32_t a0, uint32_t a1, uint32_t a2, uint32_t b0, uint32_t b1, uint32_t b2) {
-                return a0 < b0 || (a0 == b0 && (a1 < b1 || (a1 == b1 && a2 < b2)));
-            };
             {
                 std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
-                Metrics b_mm0{~0u, ~0u, ~0u, ~0u, ~0u}, b_me{~0u, ~0u, ~0u, ~0u, ~0u};
-                Metrics b_mr{~0u, ~0u, ~0u, ~0u, ~0u}, b_to{~0u, ~0u, ~0u, ~0u, ~0u};
+                Metrics b_mm0{~0u, ~0u, ~0u, ~0u, ~0u}, b_me{~0u, ~0u, ~0u, ~0u, ~0u}, b_to{~0u, ~0u, ~0u, ~0u, ~0u};
                 auto cand_of = [](const std::array<uint32_t, 7>& t) {
                     std::array<uint32_t, 8> c{};
                     c[0] = 0;
@@ -232,10 +207,6 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                     if (lt2(m.aggmax, m.aggtot, b_me.aggmax, b_me.aggtot)) {
                         b_me = m;
                         opt_maxedge = cand;
-                    }
-                    if (lt3(m.maxringtot, m.aggmax, m.aggtot, b_mr.maxringtot, b_mr.aggmax, b_mr.aggtot)) {
-                        b_mr = m;
-                        opt_maxring = cand;
                     }
                     if (lt2(m.aggtot, m.aggmax, b_to.aggtot, b_to.aggmax)) {
                         b_to = m;
@@ -259,9 +230,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 } while (std::next_permutation(tail2.begin(), tail2.end()));
             }
             // DEFAULT = PARETO (chosen after the two-run objective A/B); diagnostics select the others.
-            const std::array<uint32_t, 8>& sel = ring_greedy    ? greedy
-                                                 : ring_opt_mm0 ? opt_mm0
-                                                 : ring_maxring ? opt_maxring
+            const std::array<uint32_t, 8>& sel = ring_opt_mm0   ? opt_mm0
                                                  : ring_total   ? opt_total
                                                  : ring_maxedge ? opt_maxedge
                                                                 : opt_pareto;
@@ -295,12 +264,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                     return std::to_string(m.aggmax) + ":" + std::to_string(m.aggtot) + ":" +
                            std::to_string(m.maxringtot);
                 };
-                const char* selname = ring_greedy    ? "greedy"
-                                      : ring_opt_mm0 ? "mm0"
-                                      : ring_maxring ? "maxring"
-                                      : ring_total   ? "total"
-                                      : ring_maxedge ? "maxedge"
-                                                     : "pareto";
+                const char* selname = ring_opt_mm0 ? "mm0" : ring_total ? "total" : ring_maxedge ? "maxedge" : "pareto";
                 std::string perring;
                 for (uint32_t mm = 0; mm < Sm; ++mm) {
                     const auto [m, t] = ring_cost(sel, dm[mm]);
@@ -309,22 +273,18 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 // fields are aggmax:aggtot:maxringtot per candidate (group-aggregate). op-level aggregation is
                 // done by the harness across (kk,nn) groups.
                 fmt::print(
-                    "RINGCOST group={} Sm={} wnoc={} sel={} bank[{}]={} greedy[{}]={} mm0[{}]={} maxedge[{}]={} "
-                    "maxring[{}]={} total[{}]={} pareto[{}]={} sel_perring={}\n",
+                    "RINGCOST group={} Sm={} wnoc={} sel={} bank[{}]={} mm0[{}]={} maxedge[{}]={} total[{}]={} "
+                    "pareto[{}]={} sel_perring={}\n",
                     base,
                     Sm,
                     (wnoc == NOC::NOC_0 ? 0 : 1),
                     selname,
                     join(bank),
                     ac(bank),
-                    join(greedy),
-                    ac(greedy),
                     join(opt_mm0),
                     ac(opt_mm0),
                     join(opt_maxedge),
                     ac(opt_maxedge),
-                    join(opt_maxring),
-                    ac(opt_maxring),
                     join(opt_total),
                     ac(opt_total),
                     join(opt_pareto),
