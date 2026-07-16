@@ -34,7 +34,26 @@ struct TernaryDeviceOperation {
         std::optional<ScalarVariant> scalar_input_a;
         std::optional<ScalarVariant> scalar_input_b;
 
-        ttsl::hash::hash_t to_hash() const;
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "ternary_op_type",
+            "ternary_variant",
+            "broadcast_type",
+            "memory_config",
+            "dtype",
+            "compute_kernel_config",
+            "sub_core_grids",
+            "worker_grid");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                ternary_op_type,
+                ternary_variant,
+                broadcast_type,
+                memory_config,
+                get_dtype(),
+                compute_kernel_config,
+                sub_core_grids,
+                worker_grid);
+        }
 
         DataType get_dtype() const;
     };
@@ -57,7 +76,6 @@ struct TernaryDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
     // scalar_input_a/b are excluded from the hash; re-applied each dispatch. Mirrors the factory.
