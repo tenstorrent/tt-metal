@@ -118,7 +118,7 @@ before the row-max/exp/row-sum, reusing the existing additive-mask `add` path.
 The `_chunk_size` divisor trick was **kept** (correct + DRY + general for every
 tested/realistic shape) and its generalization deferred to R1b below.
 
-### [ ] Refinement 1b — Coarse-chunk + partial-remainder (replace `_chunk_size` divisor trick)
+### [x] Refinement 1b — Coarse-chunk + partial-remainder (replace `_chunk_size` divisor trick)
 
 **Goal** (verifier-noted "while here" from R1, deferred): replace
 `_chunk_size(axis_t, target)`'s largest-divisor rule with a coarse chunk
@@ -146,6 +146,33 @@ Gate on the full golden suite staying green (no regression) as the acceptance ne
 **Done when**: `_chunk_size` uses the coarse-chunk + partial-remainder scheme; a
 prime-`Skv_t`(>4) shape runs at chunk 4 (not 1) and is correct; the full golden
 suite + unit + regression stay green.
+
+**Landed (R1b)**: `_chunk_size` now returns a coarse chunk `min(axis_t, target)`
+with a **partial last chunk** of `axis_t % chunk` tiles; the reader/compute/writer
+thread a per-chunk runtime tile count `min(chunk, axis_t − j·chunk)` — `sq_valid`
+(M extent, per q-chunk work unit; compute decodes `qc` from `start_wu`) and
+`skv_valid` (QKᵀ N / PV K, per KV chunk) — through the read counts, the
+`MatmulBlockShape`/`ReduceInputBlockShape`/`EltwiseShape` runtime extents, and the
+write counts, for **both** axes. The matmul N-subblock decomposition is derived
+**on-device** (`decomp_n`, replacing the host `_matmul_subblocks` — single source
+of truth). Prime `Skv_t`=101 → **chunk 4** (26 chunks, last=1), not the divisor
+trick's chunk 1; no prime collapses to 1. **Constraint discovered on device:** the
+partial remainder must **divide** the chunk (`rem | chunk` ⇔ `2·rem ≤ chunk`) — the
+score-block CBs (`cb_scores`/`cb_exp`) are ring buffers read by linearly-indexed
+compute (row-max reduce + exp), and the in-place mask `add` rotates the read pointer
+by the per-chunk tile count; a remainder that doesn't divide the chunk offsets the
+reduce window past the ring wrap → OOB unpack → packer wedge (`Skv_t=7` at chunk 4
+gave remainder 3, `2·3>4`, and hung). So `_chunk_size` picks the largest straddle-safe
+chunk ≤ target (`Skv_t=7 → 3`, `Skv_t=11 → 2`, `Skv_t=101 → 4`, `Skv_t=296 → 4`);
+the granularity floor is raised from 1 to ≥2 (and 4 wherever `rem | 4`). QKᵀ
+`out_subblock_w` is held **constant** across the KV loop (optimal when no partial
+chunk — incl. the perf-flagged `Skv_t=296` shape; `1` for partial-chunk shapes) so
+`mm_block_init_short` never reconfigs the packer to a partial width mid-loop.
+Golden **252 passed / 2017 xfailed** (0 fail, 0 xpass — no SUPPORTED change); unit
+**62/62** (prod mode); `test_regression` unchanged (same 9 R2-target precision
+misses). A strict *chunk-4-for-every-prime* variant would need a pad-to-full +
+`−∞`-mask scheme (compute always full blocks) — deferred; no test/golden cell needs
+it and the perf delta is marginal.
 
 ### [ ] Refinement 2 — Numerical configurability (dtype + compute-config + intermediate precision)
 

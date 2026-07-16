@@ -86,3 +86,49 @@
   (runtime-variable matmul subblock `n` / reader-writer tile counts across the
   core loop all shapes share), benefits only prime `Skv_t`>4 shapes (none in any
   test), and risks the no-regression invariant — split out rather than bundled.
+
+## Refinement 1b — Coarse-chunk + partial-remainder (replace `_chunk_size` divisor trick)
+- Date: 2026-07-16
+- What was done: Replaced `_chunk_size`'s largest-exact-divisor rule with a coarse
+  chunk + a **partial last chunk**, so a prime tile-count > 4 no longer collapses to
+  a 1-tile chunk (which repaid per-chunk reconfig/init/fill-drain overhead every
+  tile). All three kernels now thread a per-chunk runtime tile count
+  `min(chunk, axis_t − j·chunk)` — `sq_valid` (M extent, per q-chunk work unit; the
+  compute kernel decodes `qc = (start_wu+wu) % n_q_chunks`) and `skv_valid` (QKᵀ N /
+  PV K, per KV chunk) — through the reader read counts, the compute
+  `MatmulBlockShape`/`ReduceInputBlockShape`/`EltwiseShape` runtime extents, and the
+  writer write counts, for **both** the Sq q-chunk and the Skv loop. The matmul
+  N-subblock decomposition moved **on-device** (`decomp_n`, replacing the host
+  `_matmul_subblocks` — single source of truth). CBs stay sized to the full chunk;
+  the partial chunk just uses fewer pages.
+  * **Straddle-safe remainder constraint (discovered on device):** `_chunk_size`
+    picks the largest coarse chunk ≤ target whose remainder DIVIDES the chunk
+    (`rem | chunk` ⇔ `2·rem ≤ chunk`). The score-block CBs (`cb_scores`/`cb_exp`) are
+    ring buffers read by linearly-indexed compute (row-max reduce + exp), and the
+    in-place mask `add` rotates the read pointer by the per-chunk tile count; a
+    remainder that doesn't divide the chunk offsets the reduce window past the ring
+    wrap → out-of-bounds unpack → packer wedge (`are_packers_configured_correctly`).
+    Result: `Skv_t=101 → chunk 4` (the headline case), `Skv_t=7 → 3`, `Skv_t=11 → 2`,
+    `Skv_t=296 → 4` (perf-flagged shape, exact). No prime collapses to 1.
+  * QKᵀ `out_subblock_w` is held **constant** across the KV loop (optimal when the
+    shape has no partial chunk — incl. the perf shape; `1` for partial-chunk shapes)
+    so `mm_block_init_short` never reconfigs the packer width mid-loop.
+- Accuracy achieved: PCC ≥ 0.995 / rel-RMS ≤ 0.05 (golden bf16 + fp32-DEST tolerance)
+  on all coarse-chunk cases, e.g. shapes 160×160 (Skv_t=5), 192×192 (Skv_t=6),
+  160/224 cross (Skv_t=7), 3232×3232 (Skv_t=101), 143×143 (Skv_t=5 + S_kv%32 KV pad),
+  160×160 D=96 (w_non_aligned), across none/custom masks + auto/explicit scale + GQA +
+  multi-core partial q-chunks. Golden PCC 0.99996 on the deterministic probes.
+- Golden test progress: **252 passed / 2017 xfailed** (0 failed, 0 xpass — no
+  SUPPORTED change; R1b adds no axis value, it is generality/perf hardening).
+- Issues encountered: one hang class — the CB ring-wrap straddle above. Isolated on
+  device (custom mask + partial KV width 3 hung; widths 1/2/4 and the `none` path
+  passed; phase-0 golden (2,3,192,96) with constant compile-time width-3 passed),
+  root-caused by the static analyzer to `cb_scores` sized `Sq_chunk_t·Skv_chunk_t`
+  read with non-wrapping linear indices after the in-place add's pointer rotation.
+  A first attempt (constant QKᵀ `out_subblock_w`) did not fix it and was retained as
+  a correct perf-preserving safety measure; the real fix is the `rem | chunk`
+  constraint. No outstanding issues.
+- Tests added: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/
+  test_scaled_dot_product_attention_coarse_chunk.py` (22 cases: prime/near-prime
+  tile-counts forcing partial chunks — Skv_t ∈ {5,6,7,101}, + KV-pad, w-pad, GQA,
+  multi-core partial-q — across none/custom/explicit-scale).

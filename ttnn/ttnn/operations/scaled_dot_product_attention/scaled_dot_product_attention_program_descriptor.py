@@ -48,31 +48,31 @@ def _ceil_div(a, b):
 
 
 def _chunk_size(axis_t, target):
-    """Coarsest chunk <= min(axis_t, target) that DIVIDES axis_t exactly.
+    """Coarse chunk up to `target` (capped by axis_t) with a straddle-safe remainder.
 
-    Phase-1 has no partial-chunk path (SUPPORTED is tile_aligned only), so we pick
-    the largest divisor <= target — keeps chunks exact for every shape while
-    honoring the design's `min(axis_t, 4)` coarse target. Refinement: partial chunks.
+    R1b: replaced the largest-exact-divisor rule (which collapsed a prime tile-count
+    > target to a 1-tile chunk, repaying per-chunk reconfig/init/fill-drain overhead
+    every tile) with a coarse chunk + a PARTIAL last chunk of `axis_t % chunk` tiles,
+    handled natively by the kernels via a per-chunk runtime tile count
+    `min(chunk, axis_t - j*chunk)`.
+
+    Constraint: the partial remainder `rem = axis_t % chunk` must DIVIDE `chunk`
+    (equivalently `2*rem <= chunk`). The score-block CBs (cb_scores / cb_exp) are
+    ring buffers of `Sq_chunk_t*Skv_chunk_t` pages read by linearly-indexed compute
+    (the row-max reduce + the exp), and the in-place mask `add` rotates the read
+    pointer by the per-chunk tile count; a remainder that does NOT divide the chunk
+    offsets the reduce's read window past the ring wrap (`2*rem > chunk`), an
+    out-of-bounds unpack that wedges the packer (are_packers_configured_correctly).
+    `rem | chunk` keeps every window in-bounds. We pick the largest such chunk
+    <= target, so a prime tile-count never collapses to 1: Skv_t=101 -> 4 (rem 1|4),
+    Skv_t=7 -> 3 (rem 1|3), Skv_t=6 -> 4 (rem 2|4), Skv_t=296 -> 4 (exact).
     """
     hi = min(axis_t, target)
-    for d in range(hi, 0, -1):
-        if axis_t % d == 0:
-            return d
+    for c in range(hi, 0, -1):
+        rem = axis_t % c
+        if rem == 0 or c % rem == 0:
+            return c
     return 1
-
-
-def _matmul_subblocks(m_tiles, n_tiles, dest_limit):
-    """out_subblock_h=1 (=> SubblockMajor output is tile-row-major, which the reduce
-    and Col-broadcast steps require) and split N into subblocks that fit DEST."""
-    out_subblock_h = 1
-    in0_num_subblocks = m_tiles
-    out_subblock_w = 1
-    for w in range(min(n_tiles, dest_limit), 0, -1):
-        if n_tiles % w == 0:
-            out_subblock_w = w
-            break
-    in1_num_subblocks = n_tiles // out_subblock_w
-    return in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w
 
 
 def _working_set_bytes(sq_chunk_t, skv_chunk_t, dt, kv_depth, out_depth, has_mask):
@@ -160,10 +160,11 @@ def create_program_descriptor(
     total_work = B * H * n_q_chunks
 
     fp32_dest = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
+    # DEST tile budget: fp32 accumulation halves the 8-tile bf16 budget. The matmul
+    # N-subblock decomposition (out_subblock_w <= dest_limit) is derived on-device
+    # (R1b) so the partial last chunk's runtime N re-derives cleanly — single source
+    # of truth in the compute kernel's decomp_n().
     dest_limit = 4 if fp32_dest else 8
-
-    qk_in0_sb, qk_in1_sb, qk_out_sb_h, qk_out_sb_w = _matmul_subblocks(Sq_chunk_t, Skv_chunk_t, dest_limit)
-    pv_in0_sb, pv_in1_sb, pv_out_sb_h, pv_out_sb_w = _matmul_subblocks(Sq_chunk_t, Dt, dest_limit)
 
     # ---- Grid + work distribution ----
     device = query.device()
@@ -246,7 +247,8 @@ def create_program_descriptor(
             cnt,
         ]
         writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start, cnt]
-        compute_rt[core.x][core.y] = [cnt]
+        # start_wu lets compute decode qc per work unit -> sq_valid (partial q-chunk).
+        compute_rt[core.x][core.y] = [cnt, start]
         start += cnt
 
     reader_kernel = ttnn.KernelDescriptor(
@@ -269,21 +271,20 @@ def create_program_descriptor(
     )
 
     # ---- Compute kernel ----
+    # R1b: matmul subblocks are derived on-device from the per-chunk runtime tile
+    # counts (sq_valid = M, skv_valid = QKᵀ N / PV K), so only the block knobs +
+    # axis tile-counts + dest_limit are threaded (no host subblock CT args).
     compute_ct = [
         Dt,
         Sq_chunk_t,
         Skv_chunk_t,
         n_kv_chunks,
         1 if has_mask else 0,
-        qk_in0_sb,
-        qk_in1_sb,
-        qk_out_sb_h,
-        qk_out_sb_w,
-        pv_in0_sb,
-        pv_in1_sb,
-        pv_out_sb_h,
-        pv_out_sb_w,
         skv_partial,
+        Sq_t,
+        n_q_chunks,
+        Skv_t,
+        dest_limit,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),

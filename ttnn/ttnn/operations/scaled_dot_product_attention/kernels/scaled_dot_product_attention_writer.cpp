@@ -20,6 +20,8 @@ void kernel_main() {
     constexpr uint32_t Dt = get_compile_time_arg_val(3);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t n_q_chunks = get_compile_time_arg_val(5);
+    // R1b: the last q-chunk may be a partial block — the compute kernel packs only
+    // sq_valid tile-rows to cb_out, so the writer drains exactly that many.
 
     constexpr auto dst_args = TensorAccessorArgs<6>();
 
@@ -39,9 +41,12 @@ void kernel_main() {
         const uint32_t h = r / n_q_chunks;
         const uint32_t qc = r % n_q_chunks;
 
+        const uint32_t sq_off = qc * Sq_chunk_t;
+        const uint32_t sq_valid = (Sq_chunk_t < Sq_t - sq_off) ? Sq_chunk_t : (Sq_t - sq_off);
+
         const uint32_t base = (b * H + h) * Sq_t;
-        for (uint32_t sq = 0; sq < Sq_chunk_t; ++sq) {
-            const uint32_t sq_g = qc * Sq_chunk_t + sq;
+        for (uint32_t sq = 0; sq < sq_valid; ++sq) {
+            const uint32_t sq_g = sq_off + sq;
             for (uint32_t d = 0; d < Dt; ++d) {
                 cb_wait_front(cb_out, 1);
                 noc_async_write_tile((base + sq_g) * Dt + d, acc, get_read_ptr(cb_out));

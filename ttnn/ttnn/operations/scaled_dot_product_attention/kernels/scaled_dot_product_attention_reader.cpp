@@ -151,10 +151,15 @@ void kernel_main() {
         const uint32_t kv_head = h / group;
         const uint32_t mask_head = (mask_H == 1) ? 0 : h;
 
-        // Q chunk: (Sq_chunk_t x Dt) tiles, row-major (sq, d)
+        // R1b partial q-chunk: only the valid tile-rows of the last q-chunk exist in
+        // DRAM. sq_valid <= Sq_chunk_t; compute/writer consume the same count.
+        const uint32_t sq_off = qc * Sq_chunk_t;
+        const uint32_t sq_valid = (Sq_chunk_t < Sq_t - sq_off) ? Sq_chunk_t : (Sq_t - sq_off);
+
+        // Q chunk: (sq_valid x Dt) tiles, row-major (sq, d)
         const uint32_t q_base = (b * H + h) * Sq_t;
-        for (uint32_t sq = 0; sq < Sq_chunk_t; ++sq) {
-            const uint32_t sq_g = qc * Sq_chunk_t + sq;
+        for (uint32_t sq = 0; sq < sq_valid; ++sq) {
+            const uint32_t sq_g = sq_off + sq;
             for (uint32_t d = 0; d < Dt; ++d) {
                 cb_reserve_back(cb_q_in, 1);
                 noc_async_read_tile((q_base + sq_g) * Dt + d, q_acc, get_write_ptr(cb_q_in));
@@ -167,23 +172,29 @@ void kernel_main() {
         const uint32_t mask_base = (b * mask_H + mask_head) * Sq_t;
 
         for (uint32_t j = 0; j < n_kv_chunks; ++j) {
+            // R1b partial KV chunk: skv_valid <= Skv_chunk_t whole tiles this chunk
+            // (only the last chunk is partial). The read layouts stay contiguous at
+            // width skv_valid, which is exactly the matmul N (QKᵀ) / K (PV) extent.
+            const uint32_t skv_off = j * Skv_chunk_t;
+            const uint32_t skv_valid = (Skv_chunk_t < Skv_t - skv_off) ? Skv_chunk_t : (Skv_t - skv_off);
+
             // K chunk for Q.K^T: the transposed matmul reads in1 in K-major block
-            // order (in1[k=d][n=skv] at d*Skv_chunk_t + skv), so lay K out D-major
+            // order (in1[k=d][n=skv] at d*skv_valid + skv), so lay K out D-major
             // (outer d, inner skv). The transpose flag flips each 32x32 tile's
             // contents; it does NOT reorder the block indices. DRAM page for K
             // tile (skv, d) is still (kv_base + skv_g)*Dt + d.
             for (uint32_t d = 0; d < Dt; ++d) {
-                for (uint32_t skv = 0; skv < Skv_chunk_t; ++skv) {
-                    const uint32_t skv_g = j * Skv_chunk_t + skv;
+                for (uint32_t skv = 0; skv < skv_valid; ++skv) {
+                    const uint32_t skv_g = skv_off + skv;
                     cb_reserve_back(cb_k_in, 1);
                     noc_async_read_tile((kv_base + skv_g) * Dt + d, k_acc, get_write_ptr(cb_k_in));
                     noc_async_read_barrier();
                     cb_push_back(cb_k_in, 1);
                 }
             }
-            // V chunk: (Skv_chunk_t x Dt) tiles, row-major (skv, d)
-            for (uint32_t skv = 0; skv < Skv_chunk_t; ++skv) {
-                const uint32_t skv_g = j * Skv_chunk_t + skv;
+            // V chunk: (skv_valid x Dt) tiles, row-major (skv, d)
+            for (uint32_t skv = 0; skv < skv_valid; ++skv) {
+                const uint32_t skv_g = skv_off + skv;
                 for (uint32_t d = 0; d < Dt; ++d) {
                     cb_reserve_back(cb_v_in, 1);
                     noc_async_read_tile((kv_base + skv_g) * Dt + d, v_acc, get_write_ptr(cb_v_in));
@@ -191,12 +202,12 @@ void kernel_main() {
                     cb_push_back(cb_v_in, 1);
                 }
             }
-            // mask chunk: (Sq_chunk_t x Skv_chunk_t) tiles, row-major (sq, skv)
+            // mask chunk: (sq_valid x skv_valid) tiles, row-major (sq, skv)
             if constexpr (has_mask) {
-                for (uint32_t sq = 0; sq < Sq_chunk_t; ++sq) {
-                    const uint32_t sq_g = qc * Sq_chunk_t + sq;
-                    for (uint32_t skv = 0; skv < Skv_chunk_t; ++skv) {
-                        const uint32_t skv_g = j * Skv_chunk_t + skv;
+                for (uint32_t sq = 0; sq < sq_valid; ++sq) {
+                    const uint32_t sq_g = sq_off + sq;
+                    for (uint32_t skv = 0; skv < skv_valid; ++skv) {
+                        const uint32_t skv_g = skv_off + skv;
                         cb_reserve_back(cb_mask_in, 1);
                         noc_async_read_tile((mask_base + sq_g) * Skv_t + skv_g, mask_acc, get_write_ptr(cb_mask_in));
                         noc_async_read_barrier();
@@ -209,16 +220,16 @@ void kernel_main() {
             // score-block-shaped additive mask — the last S_kv-column tile of each
             // Q row carries the vertical -inf mask, all other tiles are zero — so
             // compute drives the last KV tile's padding columns to -inf before the
-            // row-max/exp/row-sum. Divisor-trick chunking keeps every chunk whole,
-            // so the ONLY partial tile is the last chunk's last S_kv column.
+            // row-max/exp/row-sum. The boundary tile is the last VALID tile of the
+            // (possibly partial R1b) last chunk, at local index skv_valid - 1.
             if constexpr (has_kv_pad) {
                 if (j == n_kv_chunks - 1) {
                     const uint32_t mask_words = tile_bytes / 4;
-                    for (uint32_t sq = 0; sq < Sq_chunk_t; ++sq) {
-                        for (uint32_t skv = 0; skv < Skv_chunk_t; ++skv) {
+                    for (uint32_t sq = 0; sq < sq_valid; ++sq) {
+                        for (uint32_t skv = 0; skv < skv_valid; ++skv) {
                             cb_reserve_back(cb_kv_mask, 1);
                             const uint32_t wptr = get_write_ptr(cb_kv_mask);
-                            if (skv == Skv_chunk_t - 1) {
+                            if (skv == skv_valid - 1) {
                                 fill_vertical_mask_tile(wptr, skv_partial);
                             } else {
                                 fill_zeros_tile(wptr, mask_words);

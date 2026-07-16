@@ -29,6 +29,23 @@
 namespace ckl = compute_kernel_lib;
 
 namespace {
+// Derive the matmul N-subblock decomposition for an N tile-count (R1b). Replaces the
+// phase-0 host `_matmul_subblocks` (single source of truth now on-device — the
+// partial chunk's subblock count re-derives without a second host formula).
+// out_subblock_h is always 1 (=> SubblockMajor output is tile-row-major, which the
+// reduce and Col-broadcast steps downstream require), so in0_num_subblocks = M is
+// passed directly and only the N split (in1_num_subblocks, out_subblock_w) is derived
+// here. Largest divisor of n that is <= dest_limit. n >= 1 always, so out_subblock_w
+// lands in [1, min(n, dest_limit)].
+FORCE_INLINE void decomp_n(uint32_t n, uint32_t dest_limit, uint32_t& in1_num_subblocks, uint32_t& out_subblock_w) {
+    uint32_t w = (n < dest_limit) ? n : dest_limit;
+    while (w > 1 && (n % w) != 0) {
+        --w;
+    }
+    out_subblock_w = w;
+    in1_num_subblocks = n / w;
+}
+
 constexpr uint32_t cb_q_in = 0;
 constexpr uint32_t cb_k_in = 1;
 constexpr uint32_t cb_v_in = 2;
@@ -56,21 +73,33 @@ void kernel_main() {
     constexpr uint32_t n_kv_chunks = get_compile_time_arg_val(3);
     constexpr uint32_t has_mask_v = get_compile_time_arg_val(4);
     constexpr bool has_mask = has_mask_v != 0;
-    constexpr uint32_t qk_in0_sb = get_compile_time_arg_val(5);
-    constexpr uint32_t qk_in1_sb = get_compile_time_arg_val(6);
-    constexpr uint32_t qk_out_sb_h = get_compile_time_arg_val(7);
-    constexpr uint32_t qk_out_sb_w = get_compile_time_arg_val(8);
-    constexpr uint32_t pv_in0_sb = get_compile_time_arg_val(9);
-    constexpr uint32_t pv_in1_sb = get_compile_time_arg_val(10);
-    constexpr uint32_t pv_out_sb_h = get_compile_time_arg_val(11);
-    constexpr uint32_t pv_out_sb_w = get_compile_time_arg_val(12);
-    constexpr uint32_t skv_partial = get_compile_time_arg_val(13);  // valid cols in last S_kv tile (0 => aligned)
+    constexpr uint32_t skv_partial = get_compile_time_arg_val(5);  // valid cols in last S_kv tile (0 => aligned)
     constexpr bool has_kv_pad = skv_partial != 0;
+    constexpr uint32_t Sq_t = get_compile_time_arg_val(6);
+    constexpr uint32_t n_q_chunks = get_compile_time_arg_val(7);
+    constexpr uint32_t Skv_t = get_compile_time_arg_val(8);
+    constexpr uint32_t dest_limit = get_compile_time_arg_val(9);
 
     const uint32_t num_wu = get_arg_val<uint32_t>(0);
+    const uint32_t start_wu = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t sq_dt = Sq_chunk_t * Dt;
-    constexpr uint32_t sq_skv = Sq_chunk_t * Skv_chunk_t;
+    // PV pack width (N = Dt, constant across the loop) — use the optimal decomposition.
+    uint32_t pv_in1_sb = 0, pv_out_sb_w = 0;
+    decomp_n(Dt, dest_limit, pv_in1_sb, pv_out_sb_w);
+    // QKᵀ pack width (out_subblock_w) must stay CONSTANT across the KV loop:
+    // mm_block_init_short (the per-call InitMode::Short) does not fully re-issue the
+    // packer config, so changing out_subblock_w mid-loop to a non-power-of-2 partial
+    // width (e.g. 4 -> 3) wedges the packer (are_packers_configured_correctly). When
+    // Skv_t divides Skv_chunk_t there is no partial chunk (incl. the perf-flagged
+    // shape, Skv_t%4==0) -> keep the optimal full-width decomposition; otherwise force
+    // out_subblock_w = 1 (safe constant; only the small generality shapes with a
+    // partial KV chunk pay the narrower subblock — the perf path is untouched). Only
+    // the subblock COUNT (in1_num_subblocks) then varies per chunk, which is a loop
+    // bound, not a packer reconfig.
+    constexpr bool has_partial_kv = (Skv_t % Skv_chunk_t) != 0;
+    uint32_t qk_full_in1_sb = 0, qk_full_out_sb_w = 0;
+    decomp_n(Skv_chunk_t, dest_limit, qk_full_in1_sb, qk_full_out_sb_w);
+    const uint32_t qk_out_sb_w = has_partial_kv ? 1u : qk_full_out_sb_w;
 
     using ckl::BroadcastDim;
     using ckl::Dst;
@@ -91,9 +120,18 @@ void kernel_main() {
     // Boot: matmul-order hw config + one full matmul_block_init (helper's Short
     // init restores state after intervening eltwise/reduce ops per call).
     compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(cb_q_scaled, cb_k_in, cb_scores);
-    matmul_block_init(cb_q_scaled, cb_k_in, /*transpose=*/1, qk_out_sb_w, qk_out_sb_h, Dt);
+    matmul_block_init(cb_q_scaled, cb_k_in, /*transpose=*/1, qk_out_sb_w, /*out_subblock_h=*/1, Dt);
 
     for (uint32_t wu = 0; wu < num_wu; ++wu) {
+        // R1b: partial q-chunk. Decode qc for this work unit (qc = w % n_q_chunks,
+        // since n_q_chunks divides H*n_q_chunks) and take only the valid tile-rows
+        // of the last q-chunk. sq_valid is the M extent for every phase below.
+        const uint32_t w = start_wu + wu;
+        const uint32_t qc = w % n_q_chunks;
+        const uint32_t sq_off = qc * Sq_chunk_t;
+        const uint32_t sq_valid = (Sq_chunk_t < Sq_t - sq_off) ? Sq_chunk_t : (Sq_t - sq_off);
+        const uint32_t sq_dt = sq_valid * Dt;
+
         // Phase 1: pre-scale Q (folds attention scale) -> cb_q_scaled (resident).
         ckl::mul<
             cb_q_in,
@@ -110,6 +148,15 @@ void kernel_main() {
 
         for (uint32_t j = 0; j < n_kv_chunks; ++j) {
             const bool first = (j == 0);
+            // R1b: partial KV chunk. skv_valid is the QKᵀ N extent, PV K extent, and
+            // score-block width for this chunk (only the last chunk is < Skv_chunk_t).
+            const uint32_t skv_off = j * Skv_chunk_t;
+            const uint32_t skv_valid = (Skv_chunk_t < Skv_t - skv_off) ? Skv_chunk_t : (Skv_t - skv_off);
+            const uint32_t sq_skv = sq_valid * skv_valid;
+            // QKᵀ N subblock COUNT for this chunk (out_subblock_w is the loop-constant
+            // qk_out_sb_w). qk_out_sb_w divides skv_valid: it is 1 when a partial chunk
+            // exists, else the full-width divisor of Skv_chunk_t (all chunks full).
+            const uint32_t qk_in1_sb = skv_valid / qk_out_sb_w;
 
             // Phase 2: scores = Q_scaled . K^T  (transpose B; cb_q_scaled retained).
             ckl::matmul_block<
@@ -124,7 +171,7 @@ void kernel_main() {
                 k_buf,
                 scores_buf,
                 scores_buf,
-                MatmulBlockShape::of(qk_in0_sb, qk_in1_sb, qk_out_sb_h, qk_out_sb_w, Dt, 1));
+                MatmulBlockShape::of(sq_valid, qk_in1_sb, 1, qk_out_sb_w, Dt, 1));
 
             // Phase 3: additive mask (custom mode), in place, before the row-max.
             if constexpr (has_mask) {
@@ -147,16 +194,16 @@ void kernel_main() {
                 cb_scores,
                 cb_scaler,
                 cb_corr,
-                ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, Skv_chunk_t, Sq_chunk_t));
+                ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
 
             // Phase 5: update running max m, form correction alpha.
             if (first) {
-                ckl::copy<cb_corr, cb_row_max>(EltwiseShape::tiles(Sq_chunk_t));  // m = chunk_max
+                ckl::copy<cb_corr, cb_row_max>(EltwiseShape::tiles(sq_valid));  // m = chunk_max
             } else {
                 // m_new = max(chunk_max, m_old) -> cb_m_new (m_old held for alpha).
                 // The held operand is walked with Block indexing (absolute base+i):
                 // Scalar+HeldStream never advances the front (no pop), so it would
-                // re-read tile 0 for every Sq_chunk_t>1 iteration.
+                // re-read tile 0 for every sq_valid>1 iteration.
                 ckl::binary_sfpu<
                     ckl::BinaryMax<>,
                     cb_corr,
@@ -167,10 +214,10 @@ void kernel_main() {
                     OutputLifecycle::Streaming,
                     ckl::PackTileReconfig::Output,
                     OperandKind::Scalar,
-                    OperandKind::Block>(EltwiseShape::tiles(Sq_chunk_t));
+                    OperandKind::Block>(EltwiseShape::tiles(sq_valid));
                 // alpha = exp(m_old - m_new) -> cb_corr (m_old popped, m_new held).
                 ckl::eltwise_chain(
-                    EltwiseShape::tiles(Sq_chunk_t),
+                    EltwiseShape::tiles(sq_valid),
                     ckl::BinaryFpu<
                         cb_row_max,
                         cb_m_new,
@@ -185,12 +232,12 @@ void kernel_main() {
                     ckl::Exp<>{},
                     ckl::PackTile<cb_corr, OutputLifecycle::Streaming>{});
                 // m = m_new.
-                ckl::copy<cb_m_new, cb_row_max>(EltwiseShape::tiles(Sq_chunk_t));
+                ckl::copy<cb_m_new, cb_row_max>(EltwiseShape::tiles(sq_valid));
             }
 
             // Phase 6: P = exp(scores - m) -> cb_exp (Col bcast; scores popped, m held).
             ckl::eltwise_chain(
-                EltwiseShape::grid(Sq_chunk_t, Skv_chunk_t),
+                EltwiseShape::grid(sq_valid, skv_valid),
                 ckl::BinaryFpu<
                     cb_scores,
                     cb_row_max,
@@ -214,7 +261,7 @@ void kernel_main() {
                     cb_exp,
                     cb_scaler,
                     cb_row_sum,
-                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, Skv_chunk_t, Sq_chunk_t));
+                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
             } else {
                 // l = alpha * l (alpha held for phase 8; Block indexing walks the
                 // held alpha tiles without popping — see phase-5 note).
@@ -229,7 +276,7 @@ void kernel_main() {
                     ckl::BinaryDataFormatReconfig::Input,
                     ckl::PackTileReconfig::Output,
                     OperandKind::Scalar,
-                    OperandKind::Block>(EltwiseShape::tiles(Sq_chunk_t));
+                    OperandKind::Block>(EltwiseShape::tiles(sq_valid));
                 // chunk_sum -> cb_sum_chunk (cb_exp held for PV).
                 ckl::reduce<
                     ckernel::PoolType::SUM,
@@ -237,9 +284,9 @@ void kernel_main() {
                     cb_exp,
                     cb_scaler,
                     cb_sum_chunk,
-                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, Skv_chunk_t, Sq_chunk_t));
+                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
                 // l += chunk_sum.
-                ckl::add<cb_row_sum, cb_sum_chunk, cb_row_sum>(EltwiseShape::tiles(Sq_chunk_t));
+                ckl::add<cb_row_sum, cb_sum_chunk, cb_row_sum>(EltwiseShape::tiles(sq_valid));
             }
 
             // Phase 8: rescale running output O by alpha (Col bcast; pops alpha).
@@ -255,7 +302,7 @@ void kernel_main() {
                     ckl::BinaryDataFormatReconfig::Input,
                     ckl::PackTileReconfig::Output,
                     OperandKind::Scalar,
-                    OperandKind::Col>(EltwiseShape::grid(Sq_chunk_t, Dt));
+                    OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
             }
 
             // Phase 9: PV = P . V -> cb_pv (cb_exp + cb_v popped).
@@ -271,7 +318,7 @@ void kernel_main() {
                 v_buf,
                 pv_buf,
                 pv_buf,
-                MatmulBlockShape::of(pv_in0_sb, pv_in1_sb, pv_out_sb_h, pv_out_sb_w, Skv_chunk_t, 1));
+                MatmulBlockShape::of(sq_valid, pv_in1_sb, 1, pv_out_sb_w, skv_valid, 1));
 
             // Phase 10: accumulate O += PV.
             if (first) {
@@ -282,7 +329,7 @@ void kernel_main() {
         }
 
         // Phase 11: normalize O = O * (1/l), pack to bf16 -> cb_out.
-        ckl::unary<ckl::Recip<>, cb_row_sum, cb_row_sum>(EltwiseShape::tiles(Sq_chunk_t));
+        ckl::unary<ckl::Recip<>, cb_row_sum, cb_row_sum>(EltwiseShape::tiles(sq_valid));
         ckl::mul<
             cb_out_accum,
             cb_row_sum,
@@ -294,10 +341,10 @@ void kernel_main() {
             ckl::BinaryDataFormatReconfig::Input,
             ckl::PackTileReconfig::Output,
             OperandKind::Scalar,
-            OperandKind::Col>(EltwiseShape::grid(Sq_chunk_t, Dt));
+            OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
 
         // Release the retained Q-scaled block and the running max for the next q-chunk.
         cb_pop_front(cb_q_scaled, sq_dt);
-        cb_pop_front(cb_row_max, Sq_chunk_t);
+        cb_pop_front(cb_row_max, sq_valid);
     }
 }
