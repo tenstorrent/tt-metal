@@ -175,9 +175,11 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
     std::optional<GlobalSemaphore> init_barrier_semaphore;
     std::optional<GlobalSemaphore> final_barrier_semaphore;
 
-    // FullCcl and FullLocal both run the combine stage; only ComputeOnly skips it.
-    // FullLocal creates local barrier semaphores (no cross-device fabric semaphore).
-    if (args.path != MoEComputePath::ComputeOnly) {
+    // Only FullCcl needs cross-device barrier semaphores (and the host sync to publish them).
+    // FullLocal's writer compiles out all init/final barrier handling under LOCAL_COMBINE, so
+    // there is nothing to allocate; create_at passes a placeholder address of 0 to the combine
+    // builder for that path. ComputeOnly skips the combine stage entirely.
+    if (args.path == MoEComputePath::FullCcl) {
         // combine_params.has_value() is checked in validate_on_program_cache_miss.
         // mux_core_range_set comes from combine_params (empty for FullLocal).
         const auto core_ret = get_cores(
@@ -1444,9 +1446,15 @@ MoEComputeMeshWorkloadFactory::create_at(
         // combine_params validity, num_links, and axis range are all checked in
         // validate_on_program_cache_miss. Barrier semaphores are an internal contract
         // between create_mesh_workload (caller) and create_at (callee), so checked here.
-        TT_FATAL(init_barrier_semaphore.has_value(), "init_barrier_semaphore must be set when path is not ComputeOnly");
-        TT_FATAL(
-            final_barrier_semaphore.has_value(), "final_barrier_semaphore must be set when path is not ComputeOnly");
+        // FullCcl owns real GlobalSemaphores; FullLocal has none (writer compiles them out).
+        if (args.path == MoEComputePath::FullCcl) {
+            TT_FATAL(init_barrier_semaphore.has_value(), "init_barrier_semaphore must be set when path is FullCcl");
+            TT_FATAL(final_barrier_semaphore.has_value(), "final_barrier_semaphore must be set when path is FullCcl");
+        } else {
+            TT_FATAL(args.path == MoEComputePath::FullLocal, "Unexpected path in combine branch");
+            TT_FATAL(!init_barrier_semaphore.has_value(), "init_barrier_semaphore must be nullopt for FullLocal");
+            TT_FATAL(!final_barrier_semaphore.has_value(), "final_barrier_semaphore must be nullopt for FullLocal");
+        }
 
         TT_FATAL(
             tensor_return_value.size() == 6,
@@ -1479,8 +1487,8 @@ MoEComputeMeshWorkloadFactory::create_at(
             mesh_coordinates.coords(),
             combine_tensor_args,
             output_tensor,
-            *init_barrier_semaphore,
-            *final_barrier_semaphore,
+            init_barrier_semaphore,
+            final_barrier_semaphore,
             tilize_combine_sync_semaphore_id,
             matmul_combine_sync_semaphore_id,
             compute_cores_per_combine_core,
@@ -1489,7 +1497,11 @@ MoEComputeMeshWorkloadFactory::create_at(
         combine_kernel_handles = {
             selective_reduce_combine_artifacts.reader_kernel_id, selective_reduce_combine_artifacts.writer_kernel_id};
         combine_data_cb_handle = selective_reduce_combine_artifacts.data_cb_handle;
-        combine_global_semaphores = {*init_barrier_semaphore, *final_barrier_semaphore};
+        // FullCcl owns the barrier semaphores via shared_variables so addresses stay live for
+        // override_runtime_arguments. FullLocal has no semaphores; leave the vector empty.
+        if (args.path == MoEComputePath::FullCcl) {
+            combine_global_semaphores = {*init_barrier_semaphore, *final_barrier_semaphore};
+        }
     } else {
         // ComputeOnly: no combine kernels are built. The matmul/tilize kernels' increments to
         // combine semaphores are gated off via the compute_only CT arg.
@@ -1615,9 +1627,14 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
             TT_FATAL(
                 shared_variables.combine_kernel_handles.size() == 2,
                 "Expected 2 combine kernel handles when path is not ComputeOnly");
+            // FullCcl owns 2 barrier semaphores; FullLocal owns none (writer compiles them out).
+            const uint32_t expected_semaphores = shared_variables.path == MoEComputePath::FullCcl ? 2 : 0;
             TT_FATAL(
-                shared_variables.combine_global_semaphores.size() == 2,
-                "Expected 2 combine global semaphores when path is not ComputeOnly");
+                shared_variables.combine_global_semaphores.size() == expected_semaphores,
+                "Expected {} combine global semaphores for path={}, got {}",
+                expected_semaphores,
+                static_cast<int>(shared_variables.path),
+                shared_variables.combine_global_semaphores.size());
             TT_FATAL(
                 tensor_return_value.size() == 6,
                 "path=FullCcl/FullLocal expects 6 output tensors, got {}",
@@ -1629,8 +1646,13 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
             auto writer_kernel_id = shared_variables.combine_kernel_handles[1];
             auto combine_data_cb_handle = shared_variables.combine_data_cb_handle;
             auto cores = shared_variables.combine_cores;
-            auto init_semaphore = shared_variables.combine_global_semaphores[0];
-            auto cross_device_semaphore = shared_variables.combine_global_semaphores[1];
+            // 0 for FullLocal (no semaphores); real address for FullCcl.
+            const uint32_t init_semaphore_addr = shared_variables.path == MoEComputePath::FullCcl
+                                                     ? shared_variables.combine_global_semaphores[0].address()
+                                                     : 0;
+            const uint32_t cross_device_semaphore_addr = shared_variables.path == MoEComputePath::FullCcl
+                                                             ? shared_variables.combine_global_semaphores[1].address()
+                                                             : 0;
 
             // See create_at for the explanation of optional_output_tensor handling.
             ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
@@ -1647,8 +1669,8 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 cores,
                 combine_tensor_args,
                 output_tensor,
-                init_semaphore,
-                cross_device_semaphore,
+                init_semaphore_addr,
+                cross_device_semaphore_addr,
                 args.combine_params->optional_cross_device_semaphore);
         }
     }

@@ -248,8 +248,8 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         all_mesh_coordinates,
         tensor_args,
         tensor_return_value,
-        init_semaphore,
-        cross_device_semaphore,
+        std::optional<GlobalSemaphore>(init_semaphore),
+        std::optional<GlobalSemaphore>(cross_device_semaphore),
         metadata_sync_semaphore_id,
         compute_sync_semaphore_id);
     return {std::move(program), std::move(artifacts)};
@@ -269,6 +269,11 @@ void UnifiedSelectReduce::override_runtime_arguments(
             range.end_coord());
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
+        const uint32_t init_semaphore_addr =
+            shared_variables.init_semaphore.has_value() ? shared_variables.init_semaphore->address() : 0;
+        const uint32_t cross_device_semaphore_addr = shared_variables.cross_device_semaphore.has_value()
+                                                         ? shared_variables.cross_device_semaphore->address()
+                                                         : 0;
         selective_reduce_combine_helper_override_runtime_arguments(
             program,
             shared_variables.reader_kernel_id,
@@ -277,8 +282,8 @@ void UnifiedSelectReduce::override_runtime_arguments(
             shared_variables.cores,
             tensor_args,
             tensor_return_value,
-            shared_variables.init_semaphore,
-            shared_variables.cross_device_semaphore,
+            init_semaphore_addr,
+            cross_device_semaphore_addr,
             operation_attributes.optional_cross_device_semaphore);
     }
 }
@@ -290,8 +295,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const std::vector<MeshCoordinate>& all_mesh_coordinates,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
     Tensor& tensor_return_value,
-    const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore,
+    const std::optional<GlobalSemaphore>& init_semaphore,
+    const std::optional<GlobalSemaphore>& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
     const uint32_t compute_sync_semaphore_id,
     const uint32_t compute_cores_per_combine_core,
@@ -299,6 +304,12 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
+
+    // 0 when the caller has no semaphore (fused moe_compute FullLocal path: the writer
+    // compiles out all init/final barrier handling under LOCAL_COMBINE).
+    const uint32_t init_semaphore_addr = init_semaphore.has_value() ? init_semaphore->address() : 0;
+    const uint32_t cross_device_semaphore_addr =
+        cross_device_semaphore.has_value() ? cross_device_semaphore->address() : 0;
 
     const auto& input_tensor = tensor_args.dense_input_tensor;
     const auto& dense_token_maps_tensor = tensor_args.dense_token_maps_tensor;
@@ -568,8 +579,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
                 output_tensor.buffer()->address(),  // output_base_addr
                 source_token_segment_size_bytes,    // source_token_segment_size_bytes
                 dest_token_segment_offset_bytes,    // dest_token_segment_offset_bytes
-                init_semaphore.address(),           // init_semaphore_addr
-                cross_device_semaphore.address(),   // global_semaphore_addr
+                init_semaphore_addr,                // init_semaphore_addr
+                cross_device_semaphore_addr,        // global_semaphore_addr
                 is_init_sync_core                   // is_init_sync_core
             };
 
@@ -729,8 +740,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             output_tensor.buffer()->address(),  // output_base_addr
             source_token_segment_size_bytes,    // source_token_segment_size_bytes
             dest_token_segment_offset_bytes,    // dest_token_segment_size_bytes
-            init_semaphore.address(),           // init_semaphore_addr
-            cross_device_semaphore.address(),   // global_semaphore_addr
+            init_semaphore_addr,                // init_semaphore_addr
+            cross_device_semaphore_addr,        // global_semaphore_addr
             is_init_sync_core                   // is_init_sync_core
         };
 
@@ -812,8 +823,8 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     const std::vector<CoreCoord>& cores,
     const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
     Tensor& tensor_return_value,
-    const GlobalSemaphore& init_semaphore,
-    const GlobalSemaphore& cross_device_semaphore,
+    uint32_t init_semaphore_addr,
+    uint32_t cross_device_semaphore_addr,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
 
@@ -826,11 +837,11 @@ void selective_reduce_combine_helper_override_runtime_arguments(
         reader_runtime_args.at(2) = tensor_args.dense_activations_tensor.buffer()->address();
 
         writer_runtime_args.at(0) = tensor_return_value.buffer()->address();
-        writer_runtime_args.at(3) = static_cast<uint32_t>(init_semaphore.address());
+        writer_runtime_args.at(3) = init_semaphore_addr;
 
         writer_runtime_args.at(4) = (optional_cross_device_semaphore.has_value())
                                         ? optional_cross_device_semaphore->address()
-                                        : cross_device_semaphore.address();
+                                        : cross_device_semaphore_addr;
     }
 }
 
