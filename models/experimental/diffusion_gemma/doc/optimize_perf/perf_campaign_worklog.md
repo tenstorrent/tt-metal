@@ -443,3 +443,31 @@ plumbing/commit overhead per block — NOT the denoise step compute. Per-step mi
 skip-double-topk untried, entropy-accept chain) are incremental; the larger serving wins are early-halt
 (now default-on, fires ~9–17/48 on real content) and the dg-09 vLLM-overhead / long-context attention
 surface.
+
+## 2026-07-15 (cont.) — per-component profile: the step is backbone-forward-bound
+
+`prof_step_breakdown.py --num-layers 2 --iters 5` (synchronized, tuned-sparse config; `/tmp/dg_prof_breakdown.log`):
+
+| component | ms | share of ~484 ms 30L step |
+|---|---:|---:|
+| 30-layer forward (14.43 ms/layer × 30) | ~433 | **89%** |
+| terminal (sampling/entropy/accept over 262k vocab) | 28.99 | 6% |
+| soft-embedding (self-cond) | 16.04 | 3% |
+| LM head | 4.36 | 1% |
+| self-cond gated MLP | 1.69 | <1% |
+| **projected 30L step** | **483.86** | — |
+
+Within one layer (14.43 ms): **MoE experts 2.63 ms (18%, ~roofline)**; the other ~11.8 ms is
+attention/SDPA + o_proj + **2 TP all-reduce (CCL)** + norms + shared MLP.
+
+**Reconciliation / correction:** the true traced per-step is ~447 ms (probe/vLLM 350–457) ≈ this
+eager projection; the earlier "~50 t/s @48 / 3.5× vLLM overhead" was a mis-read — `bench_lever_e2e`
+left `DG_DENOISE_EARLY_HALT` default-on so its "@48" halted at ~9 steps (5.16 s block), not 48. There
+is no vLLM plumbing overhead; full-48 is ~11–12 t/s, early-halt ~9 steps is ~49 t/s.
+
+**Bottom line for dg-08:** the step is **backbone-forward-bound** (per-layer attention + TP CCL), not
+MoE (roofline), terminal, or serving glue. Remaining DG-local per-step levers are small increments
+(FUSED2 +2–5% landed; skip-double-topk untried; terminal 29 ms has some room). The dominant per-layer
+attention+CCL cost needs multi-week upstream fused kernels (fused gather-experts-combine, fused
+matmul+CCL) — not DG-local and not a gemma4 edit. The biggest practical serving lever is early-halt
+(fewer steps; already default-on, fires ~9–17/48 on convergent real content).
