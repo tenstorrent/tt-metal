@@ -40,5 +40,5 @@ training_config:
     warmup_steps: 0
 
 device_config:
-  enable_fsdp: true
-  mesh_shape: [32, 1]
+  enable_fsdp: false
+  mesh_shape: [1, 1]

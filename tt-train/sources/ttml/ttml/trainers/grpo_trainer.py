@@ -486,10 +486,10 @@ class _WeightsUpdateLogger:
 
         params_dict = model.parameters()
         for name, old in self._snapshot.items():
-            param = params_dict.get(name)
-            if param is None:
+            if name not in params_dict:
                 # Param disappeared between snapshot and finalize -- skip.
                 continue
+            param = params_dict[name]
             new = param.to_numpy(ttnn.DataType.FLOAT32, self._dp_composer)
             diff_fp32 = new - old
             # ml_dtypes.bfloat16 -> fp32 gives round-to-nearest-even bf16
