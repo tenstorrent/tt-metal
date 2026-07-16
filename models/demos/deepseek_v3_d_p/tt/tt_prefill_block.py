@@ -483,7 +483,6 @@ class TtPrefillBlock(LightweightModule):
         if d2h_service is not None:
             assert actual_end is not None, "actual_end required when d2h_service is set"
             assert record_dev is not None, "record_dev required when d2h_service is set"
-
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.

@@ -54,6 +54,7 @@ struct IndexerScoreDeviceOperation {
         std::optional<uint32_t> cache_batch_idx,
         std::optional<uint32_t> kv_len,
         std::optional<uint32_t> cluster_axis,
+        std::optional<uint32_t> seq_subshard_axis,
         std::optional<BlockCyclicLayout> block_cyclic);
 };
 
@@ -91,6 +92,7 @@ ttnn::Tensor indexer_score_dsa(
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_len = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> seq_subshard_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 
