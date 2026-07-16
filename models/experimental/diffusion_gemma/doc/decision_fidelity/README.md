@@ -175,10 +175,12 @@ the production gate itself with `DG_SPARSE_MOE=1`, `--stage-gate`,
 
 ## Remaining risk
 
-- Floor characterized on one canonical prompt at two seeds (8-step gate + 48-step
-  production). Every trajectory measured produces coherent correct text and TT
-  never falls below the bf16 floor, but a broader prompt/seed sweep would tighten
-  the "usable bar" claim.
+- Floor characterized on one canonical prompt. The fp32-vs-bf16 floor is confirmed
+  across **5 seeds** (committed `0.863 / 0.914 / 0.891 / 0.871 / 0.957`, mean `0.899`;
+  4 of 5 below the 0.95 committed bar) at 8-step, and at the 48-step production budget
+  on 2 seeds — so the "reference can't reliably match itself" result is seed-robust,
+  not a 2-seed fluke. A broader prompt sweep would further tighten the "usable bar"
+  claim; TT-side rows measured on seeds 0/1 (device).
 - TT's fidelity-to-floor is directly measured at both the 8-step gate
   (TT-vs-fp32 `0.980`) and the 48-step production budget (TT-vs-fp32 `0.992`),
   so it is no longer inferred. (A first 48-step device attempt collapsed to

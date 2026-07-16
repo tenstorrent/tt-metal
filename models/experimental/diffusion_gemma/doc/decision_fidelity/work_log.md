@@ -176,6 +176,28 @@ reference does, and TT's decoded text is essentially identical to fp32's. Artifa
 because it defaulted to the "Once upon a time" prompt — HF collapsed identically,
 so it was prompt/invocation, not the device; corrected run recorded.)
 
+### bf16 floor across 5 seeds (CPU-only, HF fp32 vs bf16, 8-step)
+
+Broader-seed check of the intrinsic bf16 floor (same HF model fp32 vs bf16, identical
+seeded 8-step noise, canonical prompt; canvas + noise generated deterministically per
+seed, no TT). seed 0/1 reproduce the earlier `0.8633`/`0.9141` exactly (validation).
+
+| seed | HF-fp32 vs HF-bf16 committed | step-0 argmax |
+| --- | --- | --- |
+| 0 | 0.8633 | 0.9531 |
+| 1 | 0.9141 | 0.9609 |
+| 2 | 0.8906 | 0.9453 |
+| 3 | 0.8711 | 0.9414 |
+| 4 | 0.9570 | 0.9258 |
+
+mean `0.8992`, range `0.863–0.957`. **4 of 5 seeds are below the 0.95 committed bar; one
+(seed 4) is at 0.957.** So the reference cannot *reliably* match itself in fp32 to 0.95 —
+the floor is seed-dependent (chaotic per noise realization), mean well below 0.95, and no
+bf16 implementation clears a committed-`>0.95`-on-every-seed bar. (Even seed 4's 0.957
+would still fail the full strict gate, which also requires per-step entropy-PCC and
+accept-IoU `>0.95` — both shown to collapse.) Artifact `/tmp/dg48291_floor_5seed.pt`;
+harness `scratchpad/floor_5seed.py`.
+
 ## Metric caveats and disclosures
 
 - **Positional token-match is corrupted by paraphrase alignment.** Non-EOS
