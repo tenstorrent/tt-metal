@@ -57,6 +57,8 @@ void kernel_main() {
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, tile_bytes);
     const auto v_acc = TensorAccessor(v_args, v_addr, tile_bytes);
+    // Mask accessor built once (constexpr args + fixed addr) — not re-created per KV chunk.
+    const auto mask_acc = TensorAccessor(mask_args, mask_addr, tile_bytes);
 
     // --- scaler (1.0) for both MAX and SUM REDUCE_ROW; one tile serves both ---
     dataflow_kernel_lib::
@@ -67,7 +69,10 @@ void kernel_main() {
         cb_reserve_back(cb_scale, 1);
         uint32_t wptr = get_write_ptr(cb_scale);
         volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
-        const uint16_t sb = static_cast<uint16_t>(scale_bits >> 16);  // fp32 -> bf16 (truncate)
+        // fp32 -> bf16 round-to-nearest-even (truncation biases the scale toward
+        // zero, shifting every softmax score low; RNE removes that systematic bias).
+        const uint32_t rne_bias = 0x7FFFu + ((scale_bits >> 16) & 1u);
+        const uint16_t sb = static_cast<uint16_t>((scale_bits + rne_bias) >> 16);
         const uint32_t packed = (static_cast<uint32_t>(sb) << 16) | sb;
         const uint32_t words = tile_bytes / 4;
         for (uint32_t i = 0; i < words; ++i) {
@@ -130,7 +135,6 @@ void kernel_main() {
             }
             // mask chunk: (Sq_chunk_t x Skv_chunk_t) tiles, row-major (sq, skv)
             if constexpr (has_mask) {
-                const auto mask_acc = TensorAccessor(mask_args, mask_addr, tile_bytes);
                 for (uint32_t sq = 0; sq < Sq_chunk_t; ++sq) {
                     const uint32_t sq_g = qc * Sq_chunk_t + sq;
                     for (uint32_t skv = 0; skv < Skv_chunk_t; ++skv) {

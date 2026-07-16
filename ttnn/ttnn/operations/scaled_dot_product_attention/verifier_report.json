@@ -1,0 +1,23 @@
+{
+  "summary": {
+    "total": 2803,
+    "supported_pass": 212,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 2473,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 118
+  },
+  "by_category_counts": {
+    "xfail_expected": 2473,
+    "supported_pass": 212,
+    "no_axes_found": 118
+  }
+}
