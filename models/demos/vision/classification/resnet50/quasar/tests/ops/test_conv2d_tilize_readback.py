@@ -11,27 +11,34 @@ per-block DPRINT probes (TZINIT / TZL1) proved the batched tilize-to-DEST INDEX 
 NOT the index computation. It must be one of: (a) the UNP_DEST tilize MOP data production, (b) the packer
 reading tile j out of DEST, or (c) the MATMUL consuming act_tilized. This test splits (a)+(b) from (c).
 
-How: run ONLY the gather+tilize half in its own program (TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 selects
-conv_tilize_only_metal2.cpp; TT_METAL_QSR_TILIZE_UNPACK_TO_DEST=1 injects the QSR_TILIZE_UNPACK_TO_DEST define
-so it runs the SAME batched UNP_DEST tilize as the fused kernel). The factory binds OUT borrowed_from the
-output tensor, so the op's OUTPUT IS the tilized activation. We read it back (to_torch untilizes it to
-row-major) and compare against the host activation matrix.
+How: run ONLY the gather+tilize half (Program A). TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 makes the factory select
+conv_tilize_only_metal2.cpp; TT_METAL_QSR_TILIZE_UNPACK_TO_DEST=1 injects QSR_TILIZE_UNPACK_TO_DEST so it runs
+the SAME batched UNP_DEST tilize as the fused kernel; TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL=1 makes conv2d.cpp
+STOP after Program A and RETURN the tilized activation [M, full_K] itself (skipping the Program B matmul it
+would otherwise chain). OUT is borrowed_from the output tensor, so to_torch(out) untilizes the tilized
+activation back to the row-major im2col matrix A[M, K].
 
-Trick for an unambiguous golden: use a 1x1 / s1 / p0 conv, so the im2col gather is the IDENTITY — the tilize
-input matrix A[m, k] is just the flattened NHWC input (m = output position = input position, k = channel). No
-im2col reconstruction to get wrong. in_channels = 128 => K = 4 tiles => block_width = 4 and FULL_CT = 4, the
-IDENTICAL tilize MOP config the failing 4x4 (in_ch=32) test hits. act_block_h_override forces >= 2 height
-blocks so the multi-block tilize is exercised.
+Shape = the proven-routing 4x4 / in_ch=32 stem-like conv (same one test_conv2d_split_program.py routes to
+tilize-only), so no new-shape routing surprises. K = 4*4*32 = 512 = 16 tiles; each tilize block is act_block_w =
+in_ch*kw/32 = 4 tiles wide — the IDENTICAL batched-tilize block width the failing fused test hits.
+
+Golden without guessing the K column order: for output position m = (oi, oj), the reader gathers the receptive
+field input[:, oi:oi+4, oj:oj+4] — exactly 4*4*32 = 512 values, no K padding. The tilize only REARRANGES those
+512 values within row m; it must not move values BETWEEN rows. So:
+  * sorted-row PCC (sort each row's 512 values, compare) is INVARIANT to K column order and only drops if the
+    tilize scrambles values across rows — i.e. a real intra-tile FACE scramble.
+  * exact-order PCC (vs the two likely K flattenings, [kh,kw,c] and [c,kh,kw]) pins whether the column order
+    also matches the weights' flattening.
 
 Verdict:
-  * PASS (tilized readback == input)  -> the UNP_DEST tilize + pack are CORRECT; the fused PCC~0 is the MATMUL
-                                         consuming act_tilized (or its CB/tensor_shape config), NOT the tilize.
-  * FAIL (tilized readback scrambled) -> the UNP_DEST tilize MOP / pack-from-DEST is broken on-target -> LLK
-                                         (tt-metal #49445); hand to /debug-kernel with the confirmed strides.
+  * sorted-row PCC ~1  AND some exact-order PCC ~1 -> tilize is CORRECT; the fused PCC~0 is the MATMUL / K-order.
+  * sorted-row PCC ~1  AND both exact-order PCC low -> rows preserved but K column order != either candidate:
+    a reader-vs-weights K-ORDERING mismatch, NOT a tilize scramble.
+  * sorted-row PCC low -> the UNP_DEST tilize MOP / pack-from-DEST SCRAMBLES data across rows -> LLK (#49445);
+    hand to /debug-kernel with the confirmed strides.
 
-Run (craq-sim / emulator, slow dispatch + forced JIT):
-  TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 TT_METAL_QSR_TILIZE_UNPACK_TO_DEST=1 \
-  TT_METAL_SIMULATOR=~/sim/libttsim.so \
+Run (craq-sim / emulator, slow dispatch + forced JIT). NOTE: rebuild first — conv2d.cpp changed.
+  TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 TT_METAL_QSR_TILIZE_UNPACK_TO_DEST=1 TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL=1 \
   TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
   pytest -s models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_tilize_readback.py
 """
@@ -42,9 +49,20 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 PCC = 0.99
+
+
+def _pcc(a, b):
+    a = a.flatten().float()
+    b = b.flatten().float()
+    if torch.allclose(a, b):
+        return 1.0
+    va, vb = a - a.mean(), b - b.mean()
+    denom = (va.norm() * vb.norm()).item()
+    if denom == 0:
+        return 0.0
+    return (torch.dot(va, vb).item()) / denom
 
 
 @pytest.mark.timeout(1200)
@@ -53,30 +71,38 @@ def test_quasar_conv2d_tilize_readback(mesh_device):
     device = mesh_device
     torch.manual_seed(0)
 
-    # 1x1 / s1 / p0 => im2col gather is the identity, so the tilize input matrix == the NHWC input (trivial
-    # golden). in_channels = 128 => K = 4 tiles => block_width = 4 / FULL_CT = 4 (same MOP config as the failing
-    # 4x4 in_ch=32 conv, which also has act_block_w = in_ch*kw/32 = 4).
+    # Proven tilize-only-routing shape (== test_conv2d_split_program.py): 4x4 / s1 / p0, in=32, K=512=16 tiles.
     batch_size = 1
-    in_channels = 128
-    out_channels = 128  # unused by the tilize-only program (no matmul); kept == in_channels so nothing hinges on it
-    kernel_size = (1, 1)
+    in_channels = 32
+    out_channels = 64  # unused by Program A (no matmul); kept for API shape inference
+    kernel_size = (4, 4)
     stride = (1, 1)
     padding = (0, 0)
-    out_h, out_w = 16, 32  # 16*32 = 512 sticks = 16 M-tiles; 1x1/s1/p0 => in_h/in_w == out_h/out_w
-    input_height = out_h
-    input_width = out_w
+    out_h, out_w = 16, 32  # M = 512 = 16 tiles
+    kh, kw = kernel_size
+    input_height = out_h + kh - 1  # 19
+    input_width = out_w + kw - 1  # 35
 
     torch_input_nchw = torch.randn((batch_size, in_channels, input_height, input_width), dtype=torch.bfloat16).float()
-    # 1x1 weight is required by the API for shape inference but the tilize-only program never binds/uses it.
     torch_weight = torch.randn((out_channels, in_channels, *kernel_size), dtype=torch.bfloat16).float()
 
-    # The tilize input matrix A [M, K]: for 1x1/s1/p0, M = nhw output positions, K = in_channels. This is exactly
-    # the flattened NHWC input. After the device tilizes it and to_torch untilizes on readback, we must recover A.
-    nhw = batch_size * input_height * input_width
-    flat = torch.permute(torch_input_nchw, (0, 2, 3, 1)).reshape(1, 1, nhw, in_channels).contiguous()
-    golden_A = flat.clone()  # [1, 1, nhw, in_channels] == [1, 1, 512, 128]
+    # ---- host goldens (order-independent multiset, plus two exact-order candidates) ----
+    m_total = out_h * out_w
+    k_total = in_channels * kh * kw  # 512
+    golden_sorted = torch.empty((m_total, k_total), dtype=torch.float32)
+    golden_khkwc = torch.empty((m_total, k_total), dtype=torch.float32)  # K order [kh][kw][c]
+    golden_ckhkw = torch.empty((m_total, k_total), dtype=torch.float32)  # K order [c][kh][kw]
+    for oi in range(out_h):
+        for oj in range(out_w):
+            m = oi * out_w + oj
+            win = torch_input_nchw[0, :, oi : oi + kh, oj : oj + kw]  # [c, kh, kw]
+            golden_sorted[m] = torch.sort(win.reshape(-1))[0]
+            golden_khkwc[m] = win.permute(1, 2, 0).reshape(-1)  # [kh, kw, c]
+            golden_ckhkw[m] = win.reshape(-1)  # [c, kh, kw]
 
     # --- pre-shard the activation into L1 (height-sharded) so conv2d takes the L1 path (not DRAM slicing) ---
+    nhw = batch_size * input_height * input_width
+    flat = torch.permute(torch_input_nchw, (0, 2, 3, 1)).reshape(1, 1, nhw, in_channels).contiguous()
     grid = device.compute_with_storage_grid_size()
     max_cores = grid.x * grid.y
     num_cores = max(c for c in range(1, max_cores + 1) if nhw % c == 0)
@@ -106,12 +132,12 @@ def test_quasar_conv2d_tilize_readback(mesh_device):
         packer_l1_acc=True,
     )
 
-    # tilize-only program (conv_tilize_only_metal2.cpp) + the batched UNP_DEST tilize (QSR_TILIZE_UNPACK_TO_DEST).
-    # Set both before the op (factory reads via std::getenv at program creation) and restore after so they don't
-    # leak into other tests sharing the process.
+    # Program A only (tilize-only + batched UNP_DEST tilize), and STOP before the Program B matmul so the op
+    # returns the tilized activation itself. Restore envs after so they don't leak across tests.
     to_set = {
         "TT_METAL_QSR_CONV_SPLIT_PROGRAM": "1",
         "TT_METAL_QSR_TILIZE_UNPACK_TO_DEST": "1",
+        "TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL": "1",
     }
     prev = {k: os.environ.get(k) for k in to_set}
     os.environ.update(to_set)
@@ -144,23 +170,34 @@ def test_quasar_conv2d_tilize_readback(mesh_device):
             else:
                 os.environ[k] = v
 
-    # OUT is borrowed from the output tensor, so this IS the tilized activation. to_torch untilizes it to
-    # row-major; flatten to [M, W] and compare the first K=in_channels columns to the host activation matrix A.
+    # OUT borrowed from the output tensor => this IS the tilized activation. to_torch untilizes to row-major.
     tt_out = ttnn.to_torch(ttnn.from_device(out)).float()
-    print(f"tilize-only readback: raw out shape={tuple(tt_out.shape)} (conv_out_hw=({oh},{ow}))")
-
-    tt_flat = tt_out.reshape(-1, tt_out.shape[-1])  # [M_padded, W]
-    m = golden_A.shape[2]
-    k = golden_A.shape[3]
-    assert tt_flat.shape[0] >= m, f"readback M {tt_flat.shape[0]} < expected {m}"
-    assert tt_flat.shape[1] >= k, f"readback width {tt_flat.shape[1]} < expected K {k}"
-    tt_A = tt_flat[:m, :k]
-    golden_flat = golden_A.reshape(m, k)
-
-    # Quick structural signal before the PCC: how many rows match vs are scrambled.
-    row_match = torch.isclose(tt_A, golden_flat, atol=0.05).all(dim=1)
+    tt_flat = tt_out.reshape(-1, tt_out.shape[-1])
     print(
-        f"tilized readback vs input matrix A[{m},{k}]: {int(row_match.sum())}/{m} rows match; "
-        f"first mismatch row = {int((~row_match).nonzero()[0][0]) if (~row_match).any() else -1}"
+        f"tilize-only readback: raw shape={tuple(tt_out.shape)} flat={tuple(tt_flat.shape)} (expected M={m_total} K={k_total})"
     )
-    assert_with_pcc(golden_flat, tt_A, pcc=PCC)
+
+    assert tt_flat.shape[0] >= m_total, f"readback rows {tt_flat.shape[0]} < M {m_total}"
+    assert tt_flat.shape[1] >= k_total, f"readback width {tt_flat.shape[1]} < K {k_total} (got {tt_flat.shape[1]})"
+    tt_A = tt_flat[:m_total, :k_total]
+
+    sorted_pcc = _pcc(torch.sort(tt_A, dim=1)[0], golden_sorted)
+    pcc_khkwc = _pcc(tt_A, golden_khkwc)
+    pcc_ckhkw = _pcc(tt_A, golden_ckhkw)
+    row_match = torch.isclose(torch.sort(tt_A, dim=1)[0], golden_sorted, atol=0.05).all(dim=1)
+    print(
+        f"TILIZE ISOLATION RESULTS:\n"
+        f"  sorted-row PCC (rows preserved / no cross-row scramble) = {sorted_pcc:.4f}\n"
+        f"  exact-order PCC [kh,kw,c]                               = {pcc_khkwc:.4f}\n"
+        f"  exact-order PCC [c,kh,kw]                               = {pcc_ckhkw:.4f}\n"
+        f"  rows with matching value-multiset                       = {int(row_match.sum())}/{m_total}\n"
+        f"  => sorted~1 & some exact~1: tilize CORRECT (fused PCC~0 is matmul/K-order)\n"
+        f"  => sorted~1 & exact low : reader-vs-weights K-ORDER mismatch (not a tilize scramble)\n"
+        f"  => sorted low           : intra-tile FACE scramble (tilize MOP / pack-from-DEST bug)"
+    )
+
+    # Primary assert: rows must be preserved (order-independent). This is the decisive tilize-correctness signal.
+    assert sorted_pcc >= PCC, (
+        f"tilize moves values BETWEEN rows (sorted-row PCC {sorted_pcc:.4f}) => intra-tile face scramble in the "
+        f"UNP_DEST tilize / pack-from-DEST path"
+    )

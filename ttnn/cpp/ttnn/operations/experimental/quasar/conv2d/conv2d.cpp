@@ -699,9 +699,15 @@ Result conv2d_L1(
         // 1x1-conv path uses (bias + activation folded into the matmul program config). Gate must match the
         // factory's split_program_tilize_only eligibility (height-sharded + full_inner_dim single-K-block; this
         // is the !mm_conv, non-depthwise branch already).
-        const bool split_program_active =
-            (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) && device->arch() == tt::ARCH::QUASAR &&
-            parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED && conv_config.full_inner_dim;
+        // DIAGNOSTIC (tilize isolation): TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL stops after Program A and returns
+        // the tilized activation [M, K] ITSELF (skips the Program B matmul), so a test can read it back and diff
+        // against a host golden — isolating the UnpackToDestEn tilize from the matmul. Program A still ran
+        // tilize-only above (the factory keys off TT_METAL_QSR_CONV_SPLIT_PROGRAM). See test_conv2d_tilize_readback.py.
+        const bool tilize_only_no_matmul = (std::getenv("TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL") != nullptr);
+        const bool split_program_active = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) &&
+                                          device->arch() == tt::ARCH::QUASAR &&
+                                          parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
+                                          conv_config.full_inner_dim && !tilize_only_no_matmul;
         if (split_program_active) {
             std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> program_config =
                 std::nullopt;
