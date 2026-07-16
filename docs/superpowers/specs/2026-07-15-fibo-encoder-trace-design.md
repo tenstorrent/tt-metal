@@ -12,6 +12,15 @@
 > short (4-token) ones — a pre-existing small-sample/padding effect, not a bug, and unrelated to tracing.
 > **Next lever: the hidden-state readback** (concat device-side before one `to_torch`, or keep them
 > on-device for the DiT to skip the device→host→device round-trip).
+>
+> **Follow-up done — readback fixed (~19×).** Profiling showed the readback was ~5 s/prompt and
+> *constant regardless of prompt length* (the 1024 padding means `to_torch` always moves the full
+> `[37,1024,hidden]`). Root cause: `tt_tensor.to_torch`'s mesh composer pulls from **all 32 devices**,
+> including the 4× TP-replicated copies of the seq-sharded tensor (~10.5 s), and a naive on-device
+> all-gather made it *worse* (64 s). Fix: read only the 8 SP shards from one TP row via
+> `ttnn.get_device_tensors` + host concat (`_read_seq_sharded`) — measured ~0.6 s (17×). Combined with
+> the trace + stacked single readback, **encode (pos+neg) is now ~0.53 s, down from ~12.5 s (~24×)**,
+> bit-exact (fidelity PCC 100%, 99.97% vs HF).
 
 ## Goal
 
