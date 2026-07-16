@@ -6,6 +6,7 @@
 
 #include <limits>
 #include <optional>
+#include <tuple>
 
 #include <tt_stl/assert.hpp>
 
@@ -33,10 +34,38 @@ struct operation_attributes_t {
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
     std::optional<uint32_t> valid_length{};
+
+    static constexpr auto attribute_names = std::forward_as_tuple("k");
+    auto attribute_values() const { return std::forward_as_tuple(k); }
 };
 
 struct tensor_args_t {
-    Tensor input_tensor;
+    const Tensor& input_tensor;
+
+    tensor_args_t() = delete;
+    explicit tensor_args_t(const Tensor& input_tensor_in) : input_tensor(input_tensor_in) {}
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "input_dtype",
+        "input_layout",
+        "input_memory_layout",
+        "input_buffer_type",
+        "compute_grid_x",
+        "compute_grid_y",
+        "input_tensor");
+    auto attribute_values() const {
+        const auto& input = input_tensor;
+        const auto grid = input.device()->compute_with_storage_grid_size();
+        const auto& mem_config = input.memory_config();
+        return std::make_tuple(
+            input.dtype(),
+            input.layout(),
+            mem_config.memory_layout(),
+            mem_config.buffer_type(),
+            grid.x,
+            grid.y,
+            std::cref(input));
+    }
 };
 
 using tensor_return_value_t = Tensor;

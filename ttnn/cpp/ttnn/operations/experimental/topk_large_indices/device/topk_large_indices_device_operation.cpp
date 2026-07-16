@@ -85,21 +85,6 @@ void TopkLargeIndicesDeviceOperation::validate_on_program_cache_miss(
     validate_runtime_args(attrs, tensor_args);
 }
 
-ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input_tensor;
-    const auto grid = input.device()->compute_with_storage_grid_size();
-
-    return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
-        attrs.k,
-        input.dtype(),
-        input.layout(),
-        input.memory_config().memory_layout(),
-        input.memory_config().buffer_type(),
-        grid.x,
-        grid.y);
-}
-
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input_shape = tensor_args.input_tensor.logical_shape();
@@ -123,7 +108,7 @@ tensor_return_value_t TopkLargeIndicesDeviceOperation::create_output_tensors(
 
 std::tuple<TopkLargeIndicesDeviceOperation::operation_attributes_t, TopkLargeIndicesDeviceOperation::tensor_args_t>
 TopkLargeIndicesDeviceOperation::invoke(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
-    return {operation_attributes_t{.k = k, .valid_length = valid_length}, tensor_args_t{.input_tensor = input_tensor}};
+    return {operation_attributes_t{.k = k, .valid_length = valid_length}, tensor_args_t(input_tensor)};
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
