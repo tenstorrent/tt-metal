@@ -126,13 +126,6 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
 
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
 
-    // Reader/writer also carry per-tensor TensorAccessorArgs compile-time blocks,
-    // appended right after {Ct, Kt, Vt} in the SAME order the kernels consume them
-    // (reader: L_unit, v_beta_sc, k_bd_sc, intra_attn, q_decay, k_decay_t, dl_exp,
-    // L_inv, initial_state; writer: out, final_state). Each interleaved-DRAM tensor
-    // appends two args, so the device-side TensorAccessorArgs<3> chain stays aligned.
-    // initial_state is optional: a null buffer still appends two (zeroed) args so the
-    // s0 accessor's compile-time offset is unconditionally present.
     std::vector<uint32_t> reader_ct_args = ct_args;
     TensorAccessorArgs(in.L_unit.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(in.v_beta_sc.buffer()).append_to(reader_ct_args);
