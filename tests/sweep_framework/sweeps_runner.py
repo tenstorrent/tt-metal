@@ -278,81 +278,25 @@ def get_github_pipeline_id() -> int | None:
         return None
 
 
-# Worker close sentinel: the persistent worker keeps the device open across
-# modules and only exits when the parent sends this on the input queue.
+# Sentinel the parent sends to end the persistent worker (a module task is a
+# (module_name, serialized_vector) tuple, so this string never collides).
 _WORKER_CLOSE = "__worker_close__"
-
-# Op-name markers for modules that open/close their OWN device inside run()
-# (their own sub-device / fabric / dispatch-axis mesh): conv2d (WORKER + FABRIC_1D
-# reshard), the CCL family, and the matmul/linear gather_in0 ring path. The
-# persistent worker must NOT share its reusable device with these — it opens each
-# one's own fixture device (kept across that module's vectors, exactly like the
-# old per-module child) and tears it down when the module changes.
-_EXCLUSIVE_DEVICE_MARKERS = (
-    "conv2d",
-    "all_gather",
-    "all_reduce",
-    "reduce_scatter",
-    "all_to_all",
-    "all_broadcast",
-    "matmul",
-    "linear",
-)
-
-
-def _module_device_key(module_name):
-    """Device-sharing key for the persistent worker.
-
-    Modules whose op opens/closes its own device return a unique key (their name)
-    so the worker gives them a dedicated device and reopens when the module
-    changes. Every other ("ordinary") module returns ``"shared"`` so the worker
-    opens the standard model-traced device ONCE and reuses it across all of them
-    — this is what keeps Galaxy from doing a fresh (racy) device open per module.
-    """
-    base = module_name.split(".")[-1]
-    if any(m in base for m in _EXCLUSIVE_DEVICE_MARKERS):
-        return module_name
-    return "shared"
-
-
-def _open_worker_device(key, test_module):
-    """Open the device for a worker task.
-
-    Returns ``(device, device_name, generator_or_None)``. ``"shared"`` opens the
-    standard model-traced device directly (the ~104 ordinary modules all use an
-    identical ``create_mesh_device(get_model_traced_mesh_shape())`` fixture, so a
-    single shared open is equivalent and reused across them). An exclusive key
-    uses the module's OWN ``mesh_device_fixture`` generator so its special
-    dispatch/fabric/sub-device config applies; the generator is returned so the
-    worker can close it (drive it to completion) on a module change.
-    """
-    if key == "shared":
-        import ttnn
-        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import create_mesh_device, get_model_traced_mesh_shape
-
-        device = create_mesh_device(get_model_traced_mesh_shape())
-        return device, ttnn.get_arch_name(), None
-    device_gen = get_devices(test_module)
-    device, device_name = next(device_gen)
-    return device, device_name, device_gen
 
 
 def run(input_queue, output_queue, config: SweepsConfig):
-    """Persistent, module-agnostic worker: opens the device ONCE and reuses it
-    across every ordinary module in the job, reopening only when the module's
-    device requirement changes (see ``_module_device_key``). Each queue item is
-    ``(module_name, serialized_vector)``; ``_WORKER_CLOSE`` ends the worker.
+    """Persistent, module-agnostic worker: one process per job that runs every
+    module's vectors, so the job-level device cache in mesh_tensor_utils
+    (TTNN_SWEEP_JOB_DEVICE) reuses ONE open device across all modules that share a
+    device config, reopening only when the config actually changes. Each queue
+    item is (module_name, serialized_vector); _WORKER_CLOSE ends the worker.
 
-    Previously this was spawned per module (a fresh device open each time); on
-    Galaxy every open force-reinits the dispatch kernels and a 2nd open in a job
-    races and wedges a dispatch core. Reusing one device across modules opens the
-    hardware once per job. On a device hang the parent kills + resets + respawns
-    this worker, which reopens the device once — the reset-and-reopen recovery.
+    Each module is entered through its own mesh_device_fixture (get_devices) as
+    before, but because create_mesh_device caches and ttnn.close_mesh_device is
+    deferred for the cached device, consecutive modules with the same config reuse
+    the device instead of the per-module reopen that force-reinitializes dispatch
+    on Galaxy. The program cache is cleared at each module boundary so a new module
+    doesn't collide with an earlier one's kernels on the reused device.
     """
-    # Enable operation tracing if --trace-params is set. Capture arguments BEFORE
-    # each op runs (not after), so in-place output buffers — e.g. all_gather_async's
-    # persistent_output_buffer — are recorded with their input topology, matching
-    # how the master was traced. See framework/preop_arg_capture.py.
     if config.trace_params:
         try:
             from tests.sweep_framework.framework.preop_arg_capture import enable_preop_capture
@@ -361,36 +305,30 @@ def run(input_queue, output_queue, config: SweepsConfig):
         except Exception as e:
             logger.warning(f"Could not enable operation tracing: {e}")
 
+    from tests.sweep_framework.sweep_utils.mesh_tensor_utils import clear_job_device_program_cache, close_job_device
+
     module_cache = {}
-    cur_key = None
+    cur_module = None
+    cur_gen = None  # current module's device fixture generator
     cur_device = None
-    cur_gen = None  # module fixture generator for an exclusive device (None for shared)
 
-    def _teardown_device():
-        nonlocal cur_device, cur_gen, cur_key
-        try:
-            if cur_gen is not None:
-                # Drive the module fixture past its yield so it closes its own device.
-                for _ in cur_gen:
+    def _exhaust_fixture():
+        nonlocal cur_gen
+        if cur_gen is not None:
+            try:
+                for _ in cur_gen:  # run the fixture past its yield -> ttnn.close_mesh_device (deferred for cached)
                     pass
-            elif cur_device is not None:
-                import ttnn
-
-                ttnn.close_mesh_device(cur_device)
-        except Exception as e:
-            logger.warning(f"Persistent worker device teardown failed (continuing): {e}")
-        cur_device = None
-        cur_gen = None
-        cur_key = None
+            except Exception as e:
+                logger.warning(f"Worker fixture teardown failed (continuing): {e}")
+            cur_gen = None
 
     try:
         while True:
             try:
                 item = input_queue.get(block=True, timeout=5)
             except Empty:
-                # No work right now — the parent is between modules or preparing
-                # the next vector. Keep the device open and keep waiting; the
-                # worker only exits on the close sentinel (or when killed).
+                # Between modules / waiting for the next vector — keep the device
+                # open and keep waiting; the worker only exits on the sentinel.
                 continue
             if item == _WORKER_CLOSE:
                 return
@@ -401,15 +339,18 @@ def run(input_queue, output_queue, config: SweepsConfig):
                 test_module = importlib.import_module("sweeps." + module_name)
                 module_cache[module_name] = test_module
 
-            key = _module_device_key(module_name)
-            if key != cur_key or cur_device is None:
-                _teardown_device()
+            if module_name != cur_module:
+                _exhaust_fixture()
+                # Clear the reused device's program cache so this module starts
+                # clean (no cross-module kernel-binary collision, kernel.cpp:443).
+                clear_job_device_program_cache()
                 try:
-                    cur_device, _device_name, cur_gen = _open_worker_device(key, test_module)
-                    cur_key = key
+                    cur_gen = get_devices(test_module)
+                    cur_device, _device_name = next(cur_gen)
                 except AssertionError as e:
                     output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None, None])
-                    continue
+                    cur_device = None
+                cur_module = module_name
 
             test_vector = deserialize_vector_structured(test_vector)
             try:
@@ -435,7 +376,8 @@ def run(input_queue, output_queue, config: SweepsConfig):
                     logger.exception(e)
                 output_queue.put([False, str(e), None, None, None])
     finally:
-        _teardown_device()
+        _exhaust_fixture()
+        close_job_device()
 
 
 MAX_RETRIES = 1
@@ -532,7 +474,7 @@ def _attempt_vector(
     if p is None and main_proc_runner is not None:
         main_proc_runner(test_vector)
     else:
-        # The persistent worker is module-agnostic: tag each vector with its module.
+        # persistent worker is module-agnostic: tag each vector with its module
         input_queue.put((module_name, test_vector))
 
     response = output_queue.get(block=True, timeout=timeout)
@@ -899,11 +841,11 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     invalid_vectors_count = 0
     # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
     child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
-    # A ``worker`` dict (from run_sweeps) means the child worker + queues persist
-    # across modules for the whole job: the device is opened once and reused, so
-    # we must NOT spawn or close it here — just borrow its queues/process and hand
-    # the (possibly respawned-on-reset) process back. Without one (debug/standalone
-    # runs), create per-suite queues + worker as before.
+    # A ``worker`` dict (from run_sweeps) means one persistent worker process + its
+    # queues span ALL modules in the job, so the job-level device is opened once
+    # and reused (TTNN_SWEEP_JOB_DEVICE). We borrow its queues/process here and DON'T
+    # spawn or close it — just hand the (possibly respawned-on-reset) process back.
+    # Without one (debug/standalone runs), keep the old per-suite queues + worker.
     owns_worker = worker is None
     if owns_worker:
         input_queue = Queue()
@@ -1095,7 +1037,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             logger.info("Device closed in main process mode")
     else:
         # Persistent worker: hand the (possibly respawned/killed) process back to
-        # run_sweeps so it (and its one open device) carry over to the next module.
+        # run_sweeps so it and its one open job device carry over to the next module.
         worker["p"] = p
 
     suite_pbar.close()
@@ -1234,31 +1176,18 @@ def run_sweeps(
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
 
-    # One persistent worker for the whole job (child_mode only): it opens the
-    # device once and reuses it across every module, reopening only when a module
-    # needs its own device (see run()/_module_device_key). This replaces the old
-    # per-module child (a fresh device open each module) — critical on Galaxy where
-    # each open force-reinits dispatch and a 2nd open in a job wedges a core.
-    # Debug modes (dry_run/vector_id/main_proc_verbose) keep per-suite workers.
+    # One persistent worker for the whole job (child_mode only). It spans every
+    # module so the job-level device cache (below) reuses ONE open device across
+    # modules that share a config — the fix for the per-module device reopen that
+    # force-reinitializes dispatch on Galaxy. Debug modes keep per-suite workers.
     job_child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
-
-    # Prime the cached device count in THIS (main) process before the persistent
-    # worker opens the device. result_destination's card-type fallback calls
-    # ttnn.GetNumAvailableDevices(), which constructs a cluster; doing that here —
-    # while the device is still free — caches the count so the per-module result
-    # export never opens a device that would collide with the worker's held one
-    # (CHIP_IN_USE deadlock). No-op when RUNNER_LABEL is set (the fallback isn't
-    # reached) or when device perf/count is otherwise unavailable.
-    if job_child_mode and not os.environ.get("RUNNER_LABEL"):
-        try:
-            from framework.result_destination import prime_device_count
-
-            prime_device_count()
-        except Exception:
-            pass
-
     job_worker = None
     if job_child_mode:
+        # Enable job-level device reuse in create_mesh_device (inherited by the
+        # forked worker). Only vectors sharing a device config reach a given
+        # process (two-pass splits by dispatch axis), so the cached device is
+        # reused, not reconfigured, within a job.
+        os.environ["TTNN_SWEEP_JOB_DEVICE"] = "1"
         job_worker = {"input_queue": Queue(), "output_queue": Queue(), "p": None}
         job_worker["p"] = Process(target=run, args=(job_worker["input_queue"], job_worker["output_queue"], config))
         job_worker["p"].start()
@@ -1340,7 +1269,7 @@ def run_sweeps(
         final_status = "failure"
         raise
     finally:
-        # Shut down the persistent job worker (closes its one open device).
+        # Shut down the persistent job worker (its finally closes the job device).
         if job_worker is not None:
             wp = job_worker.get("p")
             try:

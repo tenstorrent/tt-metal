@@ -190,7 +190,132 @@ def shard_grid_bounds(mc):
     return max_x, max_y
 
 
+# ── Job-level device reuse (opt-in via TTNN_SWEEP_JOB_DEVICE=1) ───────────────
+# When the sweeps runner keeps ONE process per job (persistent worker), a single
+# open mesh device is reused across every module/vector that needs the SAME
+# device configuration, and only reopened when the resolved config actually
+# changes. This avoids the per-module device reopen that force-reinitializes
+# dispatch on Galaxy and wedges a dispatch core (run_mailbox=0x40). Every module
+# opens its device through create_mesh_device() and closes via
+# ttnn.close_mesh_device(), so caching + a deferred-close guard here is
+# transparent to the modules (a module that opens its own device just gets the
+# cached one; its per-module close is deferred to job end / config change).
+_JOB_DEVICE = None
+_JOB_DEVICE_KEY = None
+_orig_close_mesh_device = ttnn.close_mesh_device
+
+
+def _job_device_enabled() -> bool:
+    return os.environ.get("TTNN_SWEEP_JOB_DEVICE") == "1"
+
+
+def _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth):
+    """Canonical key for the device config create_mesh_device WOULD open. Must be
+    identical for the same intended device regardless of whether the caller passes
+    an explicit axis or relies on env/auto-detect, so the worker's open and a
+    module's own _ensure_*_device() open collapse to one cached device. Returns
+    None when the config can't be keyed safely (auto axis with no env override) —
+    caching is skipped so an ambiguous config never returns the wrong device."""
+    arch = os.environ.get("ARCH_NAME", "").lower()
+    if not arch:
+        try:
+            arch = ttnn.get_arch_name().lower()
+        except Exception:
+            arch = ""
+    if "blackhole" in arch:
+        disp = ("default",)
+    else:
+        try:
+            single_host = ttnn.get_num_devices() <= 8
+        except Exception:
+            single_host = False
+        if single_host and prefer_eth:
+            disp = ("ETH",)  # ETH intent (may fall back to WORKER, but the key stays consistent)
+        elif dispatch_core_axis is not None:
+            disp = ("WORKER", str(dispatch_core_axis))
+        else:
+            env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
+            if env_axis in ("col", "row"):
+                disp = ("WORKER", env_axis)
+            else:
+                return None  # auto-detect axis is op-dependent -> not safe to share
+    return (tuple(mesh_shape), int(l1_small_size), bool(prefer_eth), disp)
+
+
 def create_mesh_device(
+    mesh_shape: Tuple[int, int],
+    device_ids: Optional[list] = None,
+    l1_small_size: int = 79104,
+    dispatch_core_axis=None,
+    prefer_eth: bool = True,
+) -> ttnn.MeshDevice:
+    """Open a mesh device, reusing a cached job-level device when
+    TTNN_SWEEP_JOB_DEVICE=1 and the resolved config matches (see
+    _job_device_key). On a config change the prior job device is closed first so
+    the reopen/reconfig is legal (SetFabricConfig requires no open devices)."""
+    if not _job_device_enabled():
+        return _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+
+    key = _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth)
+    if key is None:
+        return _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+
+    global _JOB_DEVICE, _JOB_DEVICE_KEY
+    if _JOB_DEVICE is not None and _JOB_DEVICE_KEY == key:
+        return _JOB_DEVICE
+    if _JOB_DEVICE is not None:
+        # Config changed: really close the old device (device must be closed before
+        # a fabric reconfig) then open the new one.
+        try:
+            _orig_close_mesh_device(_JOB_DEVICE)
+        except Exception:
+            pass
+        _JOB_DEVICE = None
+        _JOB_DEVICE_KEY = None
+    _JOB_DEVICE = _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+    _JOB_DEVICE_KEY = key
+    return _JOB_DEVICE
+
+
+def _guarded_close_mesh_device(device, *args, **kwargs):
+    """Deferred close: a module's per-module/per-vector close of the shared job
+    device is a no-op (it stays open for the next module); the real close happens
+    at job end (close_job_device) or on a config change (in create_mesh_device)."""
+    if _JOB_DEVICE is not None and device is _JOB_DEVICE:
+        return None
+    return _orig_close_mesh_device(device, *args, **kwargs)
+
+
+# Install the deferred-close guard. No-op behavior when the job device is disabled
+# (or nothing is cached), since it just passes through to the original close.
+ttnn.close_mesh_device = _guarded_close_mesh_device
+
+
+def clear_job_device_program_cache() -> None:
+    """Clear the cached job device's program cache — call at each module boundary
+    so a new module doesn't collide with an earlier module's cached programs /
+    kernel binaries on the reused device (TT_FATAL kernel.cpp:443 'binary not
+    found')."""
+    if _JOB_DEVICE is not None:
+        try:
+            _JOB_DEVICE.clear_program_cache()
+        except Exception:
+            pass
+
+
+def close_job_device() -> None:
+    """Really close the cached job device (job end / worker teardown)."""
+    global _JOB_DEVICE, _JOB_DEVICE_KEY
+    if _JOB_DEVICE is not None:
+        try:
+            _orig_close_mesh_device(_JOB_DEVICE)
+        except Exception:
+            pass
+        _JOB_DEVICE = None
+        _JOB_DEVICE_KEY = None
+
+
+def _create_mesh_device_uncached(
     mesh_shape: Tuple[int, int],
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
