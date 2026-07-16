@@ -46,7 +46,7 @@ When replaying, the same chain of operations is executed again. Whichever addres
 Before capturing a trace, all programs must already be compiled and present in the program cache.
 This means the exact path needs to be executed before starting capture.
 Some operations perform auto-tuning and may compile differently (with different program cache keys) based on parameters other than operation arguments, for example available L1 memory. For a detailed example, see https://github.com/tenstorrent/tt-metal/issues/46533.
-Make sure to replicate the conditions faithfully in warmup. If a program cache miss happens during trace capture, an error will be printed. 
+Make sure to replicate the conditions faithfully in warmup. If a program cache miss happens during trace capture, an error will be printed.
 
 ## Unsafe allocations
 
@@ -127,7 +127,7 @@ The checker detects live allocations that could overlap addresses used by a capt
 
 Operation arguments may be compile time constants even if you don't expect them. For example, with integer `k` in `ttnn.slice(tensor, k)`, different `k` values will lead to recompilation. When tracing, look for variants where changing parameters are runtime arguments. For example, `ttnn.slice` has a variant which accepts the slicing index as a tensor. When traced, trace execution will read new index from the captured tensor and not recompile when it changes.
 
-## Key the cache correctly 
+## Key the cache correctly
 
 Be careful when tracing bigger operation blocks, such as a full model forward pass.
 When the trace is replayed, the python code is not executed again. If there are conditional statements deciding which device operations get executed, they will not be re-evaluated on trace execution.
