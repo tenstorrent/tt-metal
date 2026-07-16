@@ -136,7 +136,10 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: 'ASan'
-      build-wheel: true
+      # No manylinux wheel in the PR gate: build-docs imports ttnn in-place
+      # from the lean ttnn-import artifact instead (no duplicate compile).
+      build-wheel: false
+      build-ttnn-import-artifact: true
       publish-artifact: false
       publish-package: true
       tracy: true
@@ -229,7 +232,7 @@ jobs:
       # build-docs runs on ubuntu-latest (external runner) — no harbor access.
       # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from asan-build.
       docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-      wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-artifact-name }}
+      ttnn-import-artifact-id: ${{ needs.asan-build.outputs.ttnn-import-artifact-id }}
       build-type: 'ASan'
 
   metalium-examples:
