@@ -113,7 +113,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
                 if tok.startswith(("group=", "wnoc=", "sel=", "Sm=", "sel_perring=")):
                     k, v = tok.split("=", 1)
                     g[k] = v
-                for od in ("bank", "greedy", "mm0", "maxedge", "maxring", "total", "pareto"):
+                for od in ("bank", "mm0", "maxedge", "total", "pareto"):
                     # token form: <od>[perm]=aggmax:aggtot:maxringtot
                     if tok.startswith(od + "[") and "]=" in tok:
                         vals = tok.split("]=", 1)[1].split(":")
@@ -125,7 +125,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
                 ringcost.append(g)
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -591,10 +591,9 @@ RING_SHAPES = [
 RING_OBJ = [
     ("bank", 4096),
     ("mm0", 16384),
-    ("maxedge", 0),  # current default
-    ("maxring", 32768),
+    ("maxedge", 262144),
     ("total", 65536),
-    ("pareto", 131072),
+    ("pareto", 0),  # production default
 ]
 
 
@@ -602,7 +601,7 @@ def _ring_agg(ringcost):
     # op-level route cost per objective, aggregated ACROSS the (kk,nn) ring groups: worst group-aggregate
     # max-edge (max over groups) + sum of group-aggregate total hops + worst group maxringtot.
     agg = {}
-    for od in ("bank", "greedy", "mm0", "maxedge", "maxring", "total", "pareto"):
+    for od in ("bank", "mm0", "maxedge", "total", "pareto"):
         mx = [g[od + "_aggmax"] for g in ringcost if (od + "_aggmax") in g]
         tt = [g[od + "_aggtot"] for g in ringcost if (od + "_aggtot") in g]
         mr = [g[od + "_maxringtot"] for g in ringcost if (od + "_maxringtot") in g]
