@@ -423,6 +423,11 @@ class ttMLA:
             weight_cache_path=self.weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.mla",
         )
+        # DSA *family* (config carries the indexer fields), independent of whether the indexer is
+        # active this layer. V3.1's dense config lacks them; V3.2's config has them even when a
+        # benchmark forces the attention dense (has_indexer=False). Dense-path tuning gates that must
+        # tell V3.1 from a dense-run V3.2 key on this, not _has_indexer (see _get_sdpa_program_config).
+        self._is_dsa_family = TtIndexer.matches_config(config)
         # GLM-5.2 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2 / GLM-5.1) every layer is
@@ -625,6 +630,17 @@ class ttMLA:
         # Like the matmul configs, an SDPA config may be head-count specific (the chunked 640 entry
         # was tuned for Kimi's 64 heads). Fall back to defaults when it doesn't match this model.
         if cfg is not None and cfg.get("num_heads") not in (None, self.num_heads):
+            cfg = None
+        # The 640 tiling's shape is head-agnostic, but its dense-path L1 footprint (full-context K over
+        # every head) only fits large head counts for the DSA family. This config is consumed ONLY on
+        # the dense path (ring_mla / ring_joint SDPA); sparse V3.2/GLM go through sparse_sdpa and never
+        # reach here. The dense consumers are pure-dense V3.1 (128 heads) and Kimi (64), plus a
+        # dense-run V3.2 benchmark (128 heads, DSA family). V3.1 and V3.2 are dimensionally identical,
+        # so num_heads can't separate them — key on the DSA family. Above dense_head_cap_non_dsa,
+        # non-DSA models (V3.1) OOM L1 at k=640, so fall back to the k=32 default; DSA-family V3.2 is
+        # exempt (validated dense) and Kimi stays under the cap.
+        cap = cfg.get("dense_head_cap_non_dsa") if cfg is not None else None
+        if cap is not None and self.num_heads > cap and not self._is_dsa_family:
             cfg = None
         # The 640 chunk tiling drives ring joint attention and is only valid in chunked mode.
         if cfg is not None and cfg.get("chunked_only") and not self.is_chunked:

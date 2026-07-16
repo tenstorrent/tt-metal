@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
@@ -24,19 +25,19 @@ void kernel_main() {
         ((in_nsticks_per_core * scale_h + 1) / 2) *
         scale_w;  // divided by 2 because each core has 2 readers which get near equal number of output sticks
 
-    experimental::CB in_cb(in_cb_id);
-    experimental::CB out_cb(out_cb_id);
-    experimental::CB config_cb(config_cb_id);
+    DataflowBuffer in_dfb(in_cb_id);
+    DataflowBuffer out_dfb(out_cb_id);
+    DataflowBuffer config_dfb(config_cb_id);
     Noc noc;
     UnicastEndpoint remote_ep;
 
-    uint32_t l1_read_addr = in_cb.get_read_ptr();
+    uint32_t l1_read_addr = in_dfb.get_read_ptr();
     uint32_t write_offset = 0;
     if (!is_reader) {
         write_offset = out_nsticks_per_core * stick_nbytes;
     }
 
-    uint32_t config_l1_addr = config_cb.get_read_ptr();
+    uint32_t config_l1_addr = config_dfb.get_read_ptr();
     // Interpreted as a vector of 32bit elements to lessen the number of l1 reads
     volatile tt_l1_ptr uint32_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
 
@@ -62,7 +63,7 @@ void kernel_main() {
             for (uint32_t sw = 0; sw < scale_w; sw++) {
                 noc.async_read(
                     remote_ep,
-                    out_cb,
+                    out_dfb,
                     stick_nbytes,
                     {.noc_x = corex, .noc_y = corey, .addr = src_addr},
                     {.offset_bytes = write_offset});

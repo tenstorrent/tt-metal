@@ -46,7 +46,7 @@ on:
 
       # ── SKU selection ─────────────────────────────────────────────
       skus:
-        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p300, bh_quietbox_2, bh_galaxy]"
+        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy]"
         required: false
         type: string
         default: "all"
@@ -118,9 +118,9 @@ jobs:
         id: resolve-skus
         run: |
           WH_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
-          BH_SKUS="bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
+          BH_SKUS="bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
           ALL_SKUS="$WH_SKUS,$BH_SKUS"
-          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p300 bh_quietbox_2 bh_galaxy wh_all bh_all"
+          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p150b_civ2 bh_p300 bh_quietbox_2 bh_galaxy wh_all bh_all"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
           # Trim leading/trailing whitespace from the entire input
@@ -137,7 +137,7 @@ jobs:
               # Skip empty tokens (e.g. from trailing commas)
               [[ -z "$item" ]] && continue
               if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
-                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p300, bh_quietbox_2, bh_galaxy]"
+                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p150b_civ2, bh_p300, bh_quietbox_2, bh_galaxy]"
                 exit 1
               fi
               if [[ "$item" == "wh_all" ]]; then

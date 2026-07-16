@@ -17,11 +17,17 @@ void kernel_main() {
     constexpr uint32_t inter_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
     constexpr uint32_t ring_size = get_compile_time_arg_val(3);
+    std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_id = {
+        get_compile_time_arg_val(4),
+        get_compile_time_arg_val(5),
+        get_compile_time_arg_val(6),
+        get_compile_time_arg_val(7),
+    };
     std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_addr = {
-        get_semaphore(get_compile_time_arg_val(4)),
-        get_semaphore(get_compile_time_arg_val(5)),
-        get_semaphore(get_compile_time_arg_val(6)),
-        get_semaphore(get_compile_time_arg_val(7)),
+        get_semaphore(fused_op_receiver_signal_semaphore_id[0]),
+        get_semaphore(fused_op_receiver_signal_semaphore_id[1]),
+        get_semaphore(fused_op_receiver_signal_semaphore_id[2]),
+        get_semaphore(fused_op_receiver_signal_semaphore_id[3]),
     };
     // runtime args
     size_t arg_idx = 0;
@@ -48,12 +54,11 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
 
     // Set up for mcasting to mm workers
-    volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[core_id]);
-    noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, VALID);
+    Semaphore<> fused_op_receiver_signal_semaphore(fused_op_receiver_signal_semaphore_id[core_id]);
+    fused_op_receiver_signal_semaphore.set(VALID);
 
-    volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr_next_core_right =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[next_core_id_to_right]);
+    Semaphore<> fused_op_receiver_signal_semaphore_next_core_right(
+        fused_op_receiver_signal_semaphore_id[next_core_id_to_right]);
 
     // 1. Wait for global signal
     {
@@ -65,8 +70,8 @@ void kernel_main() {
     // 2. multicast data to mm cores
     // 2.1. Wait for local signal, if it's not the first core
     if (core_id != ring_index) {  // don't need to wait if it's the first core
-        noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr_next_core_right, 1);
-        noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr_next_core_right, 0);
+        fused_op_receiver_signal_semaphore_next_core_right.wait_min(1);
+        fused_op_receiver_signal_semaphore_next_core_right.set(0);
     }
 
     size_t l1_read_addr = cb_inter.get_read_ptr();

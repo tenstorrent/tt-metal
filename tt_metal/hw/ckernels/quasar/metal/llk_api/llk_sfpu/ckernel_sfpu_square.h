@@ -25,7 +25,7 @@ inline void init_square() {
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 /**
@@ -37,7 +37,7 @@ inline void init_square() {
  * @note ADDR_MOD_6 must already be programmed by @ref init_square.
  */
 inline void _calculate_square_sfp_rows_() {
-    sfpi::vFloat v = sfpi::dst_reg[0];  // load x from dest (SFPLOAD)
+    sfpi::vFloat v = sfpi::dst_reg[0];                     // load x from dest (SFPLOAD)
     sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = v * v;  // x * x via SFPMUL, store back to dest (SFPSTORE)
 }
 

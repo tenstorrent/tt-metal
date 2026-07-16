@@ -138,6 +138,9 @@ class MathOperation(Enum):
     Lrelu = OpSpec("lrelu", MathOpType.SFPU_UNARY)
     AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
     SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
+    AbsInt32 = OpSpec("abs_int32", MathOpType.SFPU_UNARY)
+    BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
+    LogicalNot = OpSpec("logical_not_unary", MathOpType.SFPU_UNARY)
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
@@ -596,6 +599,20 @@ class PerfRunType(Enum):
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
     L1_CONGESTION = 5
+
+
+# Single pytest case runs every PerfRunType so the module CSV has one
+# homogeneous schema (mean/TEXT_SIZE columns for all modes in each row).
+# Pass as a nested list so @parametrize yields one value: the full mode list.
+PERF_RUN_TYPES_QUASAR = [
+    [
+        PerfRunType.L1_TO_L1,
+        PerfRunType.UNPACK_ISOLATE,
+        PerfRunType.MATH_ISOLATE,
+        PerfRunType.PACK_ISOLATE,
+        PerfRunType.L1_CONGESTION,
+    ],
+]
 
 
 # ******** QUASAR specific ********

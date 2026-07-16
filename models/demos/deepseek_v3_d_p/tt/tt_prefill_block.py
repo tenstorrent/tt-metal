@@ -477,15 +477,19 @@ class TtPrefillBlock(LightweightModule):
         # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
         if on_layer_complete is not None:
             assert actual_end is not None, "actual_end required when on_layer_complete is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.mla.layer_num,
-                actual_end,
-                seq_len_local * self.mla.sp_factor,
-                self.mla.sp_axis,
-            )
+            # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
+            # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
+            # sparse.
+            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    kvpe_cache,
+                    cache_user_id,
+                    cache_layer_idx,
+                    self.mla.layer_num,
+                    actual_end,
+                    seq_len_local * self.mla.sp_factor,
+                    self.mla.sp_axis,
+                )
             ttnn.synchronize_device(self.mesh_device)
             on_layer_complete(self.mla.layer_idx)
 

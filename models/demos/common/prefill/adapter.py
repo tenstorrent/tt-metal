@@ -150,6 +150,15 @@ class PrefillModelAdapter(ABC):
         The engine OWNS the returned caches' lifetime — see ``KvCaches``. ``params`` carries the
         per-rank knobs (max_seq_len, mesh_shape, this rank's num_layers, num_users, …)."""
 
+    def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
+        """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
+        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
+        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
+        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
+        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
+        onto these and rejects any split whose rank starts fall off them."""
+        return None
+
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return a runtime handle. The runtime
@@ -233,11 +242,12 @@ DEFAULT_MODEL = "deepseek_v3_d_p"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
-    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
-    # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
-    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
+    # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
+    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
+    "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
+    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

@@ -62,6 +62,14 @@ void bind_indexer_score(nb::module_& mod) {
                 chunk_start = chunk_start_idx + r*Sq, where r is its linearized
                 index along this axis (Sq = q seq len). None = linear device order
                 (1 on a single device, so chunk_start_idx is used as-is).
+            seq_subshard_axis: optional int, the SECOND mesh axis (TP) the query seq is
+                block-cyclically sub-sharded over, on top of the SP block-cyclic layout.
+                Set it alongside a named cluster_axis + block_cyclic when the query rows
+                are further split across TP (block_cyclic_chunk_local == tp*q_isl): the
+                exact geometry adds tp_rank*Sq to each device's block-cyclic position, so
+                the causal mask stays correct under rotated (mid-slab) starts — unlike the
+                cluster_axis=None flat path, which is linear-approximate there. Requires a
+                block-cyclic layout and an axis distinct from cluster_axis.
             block_cyclic_sp_axis: optional int. The MESH AXIS the K cache was striped
                 over (chunked prefill + SP all-gather leaves [B,1,T,D] k in per-SP-shard
                 slab / block-cyclic physical order). ``sp`` is DERIVED from the mesh
@@ -74,8 +82,11 @@ void bind_indexer_score(nb::module_& mod) {
                 The per-shard chunk length (chunk_size_global / sp). Cross-checked
                 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
                 tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp>1 (seq sharded
-                across BOTH axes) is allowed only with cluster_axis=None (flat row-major
-                linearization over all devices); with a named cluster_axis it is rejected.
+                across BOTH axes) has two forms: with cluster_axis=None it uses flat
+                row-major linearization over all devices (linear-approximate under a
+                mid-slab start); with a named cluster_axis it must also pass
+                seq_subshard_axis naming the TP axis, which gives the rotation-exact 2D
+                geometry (see seq_subshard_axis above).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -90,6 +101,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
         nb::arg("cluster_axis") = std::nullopt,
+        nb::arg("seq_subshard_axis") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt);
 

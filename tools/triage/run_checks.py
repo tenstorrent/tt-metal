@@ -421,7 +421,7 @@ class RunChecks:
             result: list[PerCoreCheckResult] = []
 
             # Get the block and its available RISC cores
-            noc_block = location._device.get_block(location)
+            noc_block = location.device.get_block(location)
             risc_names = noc_block.risc_names
 
             for risc_name in risc_names:
@@ -444,7 +444,7 @@ class RunChecks:
                     result,
                     check_result,
                     PerCoreCheckResult,
-                    device_description=DeviceDescription(location._device, self._use_unique_id),
+                    device_description=DeviceDescription(location.device, self._use_unique_id),
                     location=location,
                     risc_name=risc_name,
                 )

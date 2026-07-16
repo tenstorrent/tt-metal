@@ -1945,6 +1945,111 @@ def test_indexer_score_qb_both_axes_seq(mesh_device, case_id, heads, expect_erro
         ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, cluster_axis=0, **kw)
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["sp1xtp4"], indirect=True)
+def test_indexer_score_sp1_tp4_seq_subshard(mesh_device):
+    """A size-one SP axis is still a valid SP×TP query shard: TP rank t owns rows [t*Sq,(t+1)*Sq),
+    so its causal diagonal must start at chunk_start + t*Sq even though the block-cyclic K permutation is
+    the identity for sp=1. An omitted chunk_start must likewise deduct the full TP-sharded chunk from T.
+    This is the QuietBox chunked-indexer layout."""
+    heads, chunk, t, chunk_start = 8, 256, 512, 128
+    q_g, k_g, w_g = _global_inputs(heads, chunk, t, seed=42)
+    mesh_shape = tuple(mesh_device.shape)
+    shard_tp_seq = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(None, 2))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_tp_seq)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard_tp_seq)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat16, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    out = ttnn.experimental.indexer_score_dsa(
+        q_dev,
+        k_dev,
+        w_dev,
+        chunk_start_idx=chunk_start,
+        cluster_axis=0,
+        seq_subshard_axis=1,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=chunk,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
+    )
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(1, 2)))
+    ref = indexer_score_dsa_ref(q_g, k_g, w_g, chunk_start)
+    assert_indexer_match(out_t, ref, chunk, t, check_neg=True)
+
+    out_default = ttnn.experimental.indexer_score_dsa(
+        q_dev,
+        k_dev,
+        w_dev,
+        cluster_axis=0,
+        seq_subshard_axis=1,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=chunk,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
+    )
+    out_default_t = ttnn.to_torch(
+        out_default, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(1, 2))
+    )
+    default_start = t - chunk
+    ref_default = indexer_score_dsa_ref(q_g, k_g, w_g, default_start)
+    assert_indexer_match(out_default_t, ref_default, chunk, t, check_neg=True)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["sp1xtp4"], indirect=True)
+def test_indexer_score_sp1_tp4_rejects_undersized_causal_window(mesh_device, expect_error):
+    """Validation must include every TP sub-shard when the named SP axis has size one."""
+    heads, chunk, t, chunk_start = 8, 256, 256, 32
+    q_g, k_g, w_g = _global_inputs(heads, chunk, t, seed=42)
+    mesh_shape = tuple(mesh_device.shape)
+    shard_tp_seq = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(None, 2))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_tp_seq)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard_tp_seq)
+    k_dev = _to_mesh(mesh_device, k_g, ttnn.bfloat16, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    # Rank 3 owns [chunk_start + 3*Sq, chunk_start + 4*Sq) = [224, 288), which exceeds T=256.
+    with expect_error(RuntimeError, "exceeds T"):
+        ttnn.experimental.indexer_score_dsa(
+            q_dev,
+            k_dev,
+            w_dev,
+            chunk_start_idx=chunk_start,
+            cluster_axis=0,
+            seq_subshard_axis=1,
+            block_cyclic_sp_axis=0,
+            block_cyclic_chunk_local=chunk,
+            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["sp2xtp2"], indirect=True)
+def test_indexer_score_sp2_tp2_seq_subshard_rotated(mesh_device):
+    """Named SP + TP seq-subshard must reproduce the prefill writer's mapping for a rotated chunk."""
+    heads, sp, chunk, t, chunk_start = 8, 2, 256, 512, 160
+    q_g, k_nat, w_g = _global_inputs(heads, chunk, t, seed=42)
+    k_bc = _to_slab(k_nat, sp, chunk)
+    mesh_shape = tuple(mesh_device.shape)
+    shard_sp_seq = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard_sp_seq)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard_sp_seq)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat16, ttnn.ReplicateTensorToMesh(mesh_device))
+    q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=1)
+    w_dev = ttnn.mesh_partition(w_dev, dim=2, cluster_axis=1)
+
+    out = ttnn.experimental.indexer_score_dsa(
+        q_dev,
+        k_dev,
+        w_dev,
+        chunk_start_idx=chunk_start,
+        cluster_axis=0,
+        seq_subshard_axis=1,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=chunk // sp,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
+    )
+    shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(out.cpu())]
+    per_sp = [torch.cat(shards[r * 2 : (r + 1) * 2], dim=2) for r in range(sp)]
+    out_t = torch.cat(per_sp, dim=2)
+    ref = _straddle_ref(q_g, k_nat, w_g, sp, chunk, chunk_start, t)
+    assert_indexer_match(out_t, ref, chunk, t, check_neg=True)
+
+
 # ---- Mid-slab-boundary STRADDLE (drives the need for the straddle geometry, #48500 slice #2) ----
 # A NON-slab-aligned chunk_start makes each device's queries cross a cache-slab boundary, so the causal
 # diagonal must JUMP by (chunk_global - cl) at q-row (cl - offset). Scaled-down stand-in for the maxedge

@@ -16,16 +16,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# --- e2e ---
-- id: bh-grid-110-cores-panoptic-deeplab-demo
-  name: 110 cores panoptic-deeplab demo
-  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1800
-  skus:
-    bh_p150b_civ2:
-      timeout: 30
-  owner_id: U09LK84G4TF # Nikola Milicevic
-  team: models
-
 # --- integration ---
 - id: bh-fabric-infra-integration
   name: fabric infra unit tests
@@ -55,24 +45,6 @@
       timeout: 60
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
-
-- id: bh-grid-110-cores-panoptic-deeplab
-  name: 110 cores panoptic-deeplab
-  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/
-  skus:
-    bh_p150b_civ2:
-      timeout: 10
-  owner_id: U09LK84G4TF # Nikola Milicevic
-  team: models
-
-- id: bh-grid-110-cores-bevformer
-  name: 110 cores bevformer
-  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/
-  skus:
-    bh_p150b_civ2:
-      timeout: 15
-  owner_id: U08E1JCMAJF # Marko Bezulj
-  team: models
 
 # --- perf ---
 - id: bh-fabric-sanity-benchmark

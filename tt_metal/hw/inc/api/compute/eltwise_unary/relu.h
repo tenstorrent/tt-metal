@@ -92,8 +92,8 @@ ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _relu_max_,
-        (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
+        relu_clamp_int,
+        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, 8 /*ITERATIONS*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
@@ -155,8 +155,8 @@ ALWI void relu_min_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _relu_min_,
-        (sfpi::vInt /*VectorType*/, APPROX /*APPROXIMATION_MODE*/, 8 /*ITERATIONS*/, uint32_t /*T*/),
+        relu_clamp_int,
+        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, 8 /*ITERATIONS*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));

@@ -18,6 +18,18 @@
 
 namespace ckernel::trisc
 {
+// Fixed hardware thread ids, matching the DEST section register layout (SEC0..SEC3) and the
+// -DCOMPILE_FOR_TRISC=<n> the build assigns per thread. Use these when a call must address a specific
+// thread's slot rather than the compile-time thread it runs on -- e.g. the unpack-to-dest path, where
+// the unpack thread programs the UNP_DEST producer slot (Unpack) regardless of what it is compiled as.
+enum class TriscID : std::uint8_t
+{
+    Unpack = 0,
+    Math   = 1,
+    Pack   = 2,
+    Sfpu   = 3, // isolate-SFPU
+};
+
 // Num of words in buffer descriptor struct
 constexpr static std::uint32_t BD_NUM_WORDS = 3;
 

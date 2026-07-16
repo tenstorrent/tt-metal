@@ -87,7 +87,10 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index) {
 inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c_tiles, std::uint32_t input_tile_index = 0) {
     // Not sure if input_tile_index can be arbitrary but it works for moving across rows of files,
     // i.e. input_tile_index % block_c_tiles == 0
-    input_tile_index = input_tile_index % block_c_tiles + (input_tile_index / block_c_tiles) * block_c_tiles * TILE_R_DIM;
+    const std::uint32_t tile_r_dim = get_operand_tile_r_dim(get_operand_id(operand));
+    const auto block = input_tile_index / block_c_tiles;
+    const auto offset = input_tile_index % block_c_tiles;
+    input_tile_index = block * (block_c_tiles * tile_r_dim) + offset;
     for (std::uint32_t tile_index = 0; tile_index < block_c_tiles; tile_index++) {
         llk_unpack_tilize(operand, input_tile_index + tile_index);
     }

@@ -112,6 +112,7 @@ def _get_stable_sort_modes(mathop):
         MathOperation.Heaviside,
         MathOperation.Softshrink,
         MathOperation.Softsign,
+        MathOperation.Square,
         MathOperation.Log,
         MathOperation.TopKLocalSort,
         MathOperation.TopKMerge,

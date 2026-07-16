@@ -35,8 +35,8 @@ void kernel_main() {
     constexpr uint32_t sem_exchange_id = get_compile_time_arg_val(14);
     constexpr uint32_t sem_barrier_id = get_compile_time_arg_val(15);
     constexpr bool is_row_major = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t rm_input_cb_index = get_compile_time_arg_val(17);
-    constexpr uint32_t rm_index_output_cb_index = get_compile_time_arg_val(18);
+    constexpr uint32_t rm_input_dfb_index = get_compile_time_arg_val(17);
+    constexpr uint32_t rm_index_output_dfb_index = get_compile_time_arg_val(18);
     constexpr uint32_t W_value_slice_bytes = get_compile_time_arg_val(19);
     constexpr uint32_t W_index_slice_bytes = get_compile_time_arg_val(20);
 
@@ -56,26 +56,26 @@ void kernel_main() {
     // Input tensor config
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
-    CircularBuffer input_tensor_cb(input_tensor_cb_index);
-    CircularBuffer rm_input_cb(rm_input_cb_index);
+    DataflowBuffer input_tensor_dfb(input_tensor_cb_index);
+    DataflowBuffer rm_input_dfb(rm_input_dfb_index);
 
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
     const auto index_tensor_output_accessor = TensorAccessor(index_tensor_output_args, index_tensor_buffer_addr);
-    CircularBuffer index_output_cb(index_tensor_output_cb_index);
-    CircularBuffer rm_index_output_cb(rm_index_output_cb_index);
+    DataflowBuffer index_output_dfb(index_tensor_output_cb_index);
+    DataflowBuffer rm_index_output_dfb(rm_index_output_dfb_index);
 
     // Physical core lookup table config
     constexpr uint32_t physical_core_lookup_table_tile_size_bytes = get_tile_size(physical_core_lookup_table_cb_index);
     const auto physical_core_lookup_table_accessor =
         TensorAccessor(physical_core_lookup_table_args, physical_core_lookup_table_buffer_addr);
-    CircularBuffer physical_core_lookup_table_cb(physical_core_lookup_table_cb_index);
+    DataflowBuffer physical_core_lookup_table_dfb(physical_core_lookup_table_cb_index);
 
     // Read lookup table for physical core IDs
-    physical_core_lookup_table_cb.reserve_back(one_tile);
+    physical_core_lookup_table_dfb.reserve_back(one_tile);
     noc.async_read(
         physical_core_lookup_table_accessor,
-        physical_core_lookup_table_cb,
+        physical_core_lookup_table_dfb,
         physical_core_lookup_table_tile_size_bytes,
         {.page_id = 0, .offset_bytes = 0},
         {.offset_bytes = 0});
@@ -96,33 +96,33 @@ void kernel_main() {
         // Read input value data
         if constexpr (is_row_major) {
             // ROW_MAJOR input: read TILE_H rows of the per-core W-slice from DRAM
-            // into rm_input_cb.  Compute kernel will tilize them into
+            // into rm_input_dfb.  Compute kernel will tilize them into
             // input_tensor_cb_index for the existing TILE-format sort flow.
             const uint32_t row_base = h * TILE_H;
             for (uint32_t row = 0; row < TILE_H; row++) {
-                rm_input_cb.reserve_back(one_tile);
+                rm_input_dfb.reserve_back(one_tile);
                 noc.async_read(
                     input_tensor_accessor,
-                    rm_input_cb,
+                    rm_input_dfb,
                     W_value_slice_bytes,
                     {.page_id = row_base + row, .offset_bytes = value_slice_offset_bytes},
                     {.offset_bytes = 0});
                 noc.async_read_barrier();
-                rm_input_cb.push_back(one_tile);
+                rm_input_dfb.push_back(one_tile);
             }
         } else {
             // TILE input path
             for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-                input_tensor_cb.reserve_back(one_tile);
+                input_tensor_dfb.reserve_back(one_tile);
                 const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
                 noc.async_read(
                     input_tensor_accessor,
-                    input_tensor_cb,
+                    input_tensor_dfb,
                     input_tensor_tile_size_bytes,
                     {.page_id = tile_offset, .offset_bytes = 0},
                     {.offset_bytes = 0});
                 noc.async_read_barrier();
-                input_tensor_cb.push_back(one_tile);
+                input_tensor_dfb.push_back(one_tile);
             }  // w loop
         }
 
@@ -181,37 +181,37 @@ void kernel_main() {
         // Write output index data
         if constexpr (is_row_major) {
             // ROW_MAJOR output indices: drain TILE_H untilized index rows
-            // from rm_index_output_cb (compute pack_untilize'd them) and write
+            // from rm_index_output_dfb (compute pack_untilize'd them) and write
             // each row's per-core W-slice back to DRAM.  pack_untilize_block
             // produces little-endian uint16/uint32 elements, so no byte swap.
             const uint32_t row_base = h * TILE_H;
             for (uint32_t row = 0; row < TILE_H; row++) {
-                rm_index_output_cb.wait_front(one_tile);
+                rm_index_output_dfb.wait_front(one_tile);
                 noc.async_write(
-                    rm_index_output_cb,
+                    rm_index_output_dfb,
                     index_tensor_output_accessor,
                     W_index_slice_bytes,
                     {.offset_bytes = 0},
                     {.page_id = row_base + row, .offset_bytes = index_slice_offset_bytes});
                 noc.async_write_barrier();
-                rm_index_output_cb.pop_front(one_tile);
+                rm_index_output_dfb.pop_front(one_tile);
             }
         } else {
             // Write output index data (TILE path)
             for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-                index_output_cb.wait_front(one_tile);
+                index_output_dfb.wait_front(one_tile);
                 const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
                 noc.async_write(
-                    index_output_cb,
+                    index_output_dfb,
                     index_tensor_output_accessor,
                     index_tensor_output_tile_size_bytes,
                     {.offset_bytes = 0},
                     {.page_id = tile_offset, .offset_bytes = 0});
                 noc.async_write_barrier();
-                index_output_cb.pop_front(one_tile);
+                index_output_dfb.pop_front(one_tile);
             }  // Wt loop
         }
 
     }  // h loop
-    physical_core_lookup_table_cb.push_back(one_tile);
+    physical_core_lookup_table_dfb.push_back(one_tile);
 }

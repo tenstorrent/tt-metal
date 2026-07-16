@@ -56,6 +56,14 @@ def _dram_chunk_size_bytes(cache) -> int:
     raise ValueError(f"unsupported KV cache dtype for chunk sizing: {cache.dtype}")
 
 
+def _num_layers_from_cache(cache, num_users: int) -> int:
+    """Layer count a KV cache holds, recovered from its folded batch dim. init_kvpe_cache lays caches
+    out user-major with shape[0] = num_users * num_layers, so dividing the batch dim by num_users gives
+    this cache's layer count — all layers for the KVPE cache, full-layers-only for the GLM-5.2 index
+    cache (which allocate_kv_cache sizes to num_full)."""
+    return cache.shape[0] // num_users
+
+
 def build_and_serialize_kv_chunk_table(
     *,
     mesh_device,
@@ -137,7 +145,10 @@ def _build_and_serialize_merged_kv_chunk_table(
 
     def _table_config(cache):
         cfg = disagg.KvChunkAddressTableConfig()
-        cfg.num_layers = num_layers
+        # KVPE = all layers; the GLM-5.2 index cache = full-layers-only, so config 1 holds only num_full
+        # entries and populate_kv_chunk_address_table_kimi (which iterates config.num_layers) skips the
+        # shared-layer slots. GLM-5.1 / dense: index cache is all-layers, so this equals num_layers.
+        cfg.num_layers = _num_layers_from_cache(cache, num_users)
         cfg.max_sequence_length = seq_len
         cfg.num_slots = num_users
         cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK

@@ -11,7 +11,7 @@ on:
           Comma-separated stages to run, e.g. "mla,prefill_block,kimi_moe".
           Empty or "all" runs every stage. Valid stages: moe_gate, mla, mla_chunked,
           kv_cache_table, prefill_block, prefill_transformer, kimi_mla, kimi_moe,
-          kimi_prefill_block, kimi_chunked, dsa_mla, dsa_mla_glm, glm_moe, prefill_block_determinism,
+          kimi_prefill_block, kimi_chunked, dsa_mla, dsa_mla_glm, glm_moe, glm_prefill_block, prefill_block_determinism,
           prefill_transformer_determinism.
           The "module" group also runs every stage; the "sdpa_perf" group runs the
           ring joint SDPA perf checks.
@@ -93,27 +93,37 @@ jobs:
     needs: [validate-test-type, check-harbor, build-artifact]
     # Skip when only the perf checks were requested (they run in the focused job below).
     if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' }}
+    permissions:
+      id-token: write
+      contents: read
     secrets: inherit
     uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_galaxy
+      enabled-skus: bh_spsg
+      sp-config: spsg
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       # Keep the perf checks in a focused job so the long functional run remains unchanged.
       exclude-test-group: sdpa_perf
+      resource-prefix: module
 
   Galaxy-Blaze-models-prefill-SDPA-Perf-tests:
     needs: [validate-test-type, check-harbor, build-artifact]
     # Runs for the default "all" and when the sdpa_perf group is selected (alone or with others).
     if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'sdpa_perf') }}
+    permissions:
+      id-token: write
+      contents: read
     secrets: inherit
     uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: bh_galaxy
+      enabled-skus: bh_spsg
+      sp-config: spsg
       # Select the perf entry by its test_group so adding more perf checks needs no workflow edit.
       test-type: sdpa_perf
+      resource-prefix: sdpa-perf

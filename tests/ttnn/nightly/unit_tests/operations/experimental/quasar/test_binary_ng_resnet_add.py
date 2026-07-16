@@ -17,12 +17,12 @@ WH model config uses bf8, but Quasar's DFB data-format validation accepts bf16/M
 than the Bfp8_b block-float, so the Quasar-portable test uses bf16.
 
 Run on Wormhole:
-        pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py
+        pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py
 
 Run on the Quasar simulator:
     TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
         TT_METAL_SLOW_DISPATCH_MODE=1 \
-        pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py
+        pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_resnet_add.py
 """
 
 import pytest
