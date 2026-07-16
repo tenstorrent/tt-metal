@@ -1190,10 +1190,24 @@ on this box, per Batch D).
   op names are emitted only under `TTNN_OP_PROFILER` AND delivered via `tracy_message()` → **op names require tracy;
   the env-var-only cpp CSV can NEVER carry them.** No timing banked (per-device FW sums un-interpretable: iter0 6.2ms
   vs warm 27-30ms/dev, and sum ≠ critical path). ⇒ re-run under tracy (below).
-- [~] **stage_2 video block, WARM op-NAMED per-op FW (tracy)** — job **785**, env `opt/env_block_tracy.yaml`:
+- [x] **stage_2 video block, WARM op-NAMED per-op FW (tracy)** — job **785**, env `opt/env_block_tracy.yaml`:
   `python -m tracy -p -r -m pytest 'test_transformer_ltx.py::test_ltx_transformer_block[blackhole-ckpt_fast-pcc-video-stage_2-ring_bh_4x8sp1tp0]'`
   + `TTNN_OP_PROFILER=1`, `LTX_PROFILE_ITERS=3`. HARVEST from raw `2026-07-16_062803_785.log`: `TRACY_EXIT=0`+`1 passed`+
   `OPS_CSV=…ROWS>1` ⇒ WIN. Rank ops by device FW from `opt/block_tracy_s2_ops.csv` (filter warm invocations by GLOBAL
   CALL COUNT), bucket AllGatherMatmul/MatmulReduceScatter/RingJointSDPA/addcmul, compare warm CCL-matmul FW to cold
   11.57ms, enumerate the next CCL-matmul config batch against the WARM dominant op. If timeout / `NO_OPS_CSV` →
   read `opt/block_tracy_s2.log` tail (cold-recompile? tracy `-k` join? bracket-glob?).
+  → **HARVESTED 2026-07-16 07:14Z (job 785 WIN): TRACY_EXIT=0, 1 passed, PCC passed, `WARM_FWD_MS=19.90`, CSV
+    6561 rows.** Per-op (video-only fwd, N=96, from `opt/block_tracy_s2_ops.csv`, ranked by device-kernel ms):
+    **RingJointSDPA 4.73ms (1/fwd)** · **AllGatherMinimalMatmulAsyncOp 4.29ms (5/fwd)** · **MinimalMatmulStrided-
+    ReduceScatterAsync 2.20ms (1/fwd)** · Tilize 0.63ms (3.3/fwd) · FusedRMSNormPost-AG 0.44 · Typecast 0.44 ·
+    AllGatherAsync 0.36 (**7/fwd**) · Ternary 0.35 · FusedRMSNormPre-AG 0.19 (7/fwd). CCL-matmul bucket (AGMM+RS-MM+MM)
+    = **6.58ms/fwd**; collectives = 51.7% of kernel ms. **Answer to the OPEN cold-vs-warm Q:** warm video-self SDPA
+    4.73 ≈ cold video-self 4.62 ⇒ the cold capture was **NOT grossly fabric-setup-inflated**. **BUT this run is EAGER
+    (0 rows w/ METAL TRACE ID, 0 replay-session)** — the WARM_FWD harness runs warm cache-hit iters, NOT a metal trace.
+    Per Batch Q's indictment (eager overstates device-FW ~5–6×), these absolute per-op ms **cannot price a device-time
+    lever**; only the op **INVENTORY/COUNTS** are regime-valid. **⇒ the "enumerate next CCL-matmul config batch"
+    follow-on is VOID:** the CCL-matmul config space (topology F1 · links F2/I2 · quant H/J/Q · grid G · fidelity B/O)
+    is already swept dead on BOTH eager and (for quant) traced instruments. No new CCL-matmul no-edit cell. The one
+    count-cut lever the inventory points to (W1: merge the 7 RMSNorm-stat AllGatherAsync/fwd, eager ceiling ≈0.99ms/fwd
+    → ~0.14s E2E) is source-authoring polish below the 6.0s path, not cron.
