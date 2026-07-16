@@ -77,6 +77,9 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         "{}",
         grad_output_tensor.logical_shape(),
         input_tensor.logical_shape());
+    TT_FATAL(
+        grad_output_tensor.device() == input_tensor.device(),
+        "GELU_BW operation requires grad_output and input to be on the same device.");
 
     if (preallocated_input_grad.has_value()) {
         out_memory_config = preallocated_input_grad->memory_config();
@@ -128,6 +131,9 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
             "Input shape: {}, Preallocated output shape: {}",
             input_tensor.logical_shape(),
             preallocated.logical_shape());
+        TT_FATAL(
+            preallocated.device() == input_tensor.device(),
+            "GELU_BW operation requires the preallocated input grad tensor to be on the same device as input.");
     }
 }
 

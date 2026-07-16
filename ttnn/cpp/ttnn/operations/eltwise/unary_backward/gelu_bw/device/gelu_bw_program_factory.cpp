@@ -104,25 +104,30 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.config = WriterConfigDescriptor{};
 
-    bool fp32_dest_acc_en = (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
-                            (dst_cb_data_format == DataFormat::UInt32);
+    bool fp32_dest_acc_en = (src0_cb_data_format == DataFormat::Float32) ||
+                            (src1_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Float32);
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_to_dest_mode[src0_cb_index] =
+        (grad_output.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+    unpack_to_dest_mode[src1_cb_index] =
+        (input.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
 
     std::string compute_kernel_path;
     if (args.approximate) {
-        compute_kernel_path =
-            "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
-            "kernels/compute/eltwise_bw_gelu_tanh.cpp";
+        // For bfloat16, we have 8 DST tiles available in DstSync::SyncHalf.
+        // For float32, we have 4 DST tiles available in DstSync::SyncHalf.
+        compute_kernel_path = fp32_dest_acc_en ? "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
+                                                 "kernels/compute/eltwise_bw_gelu_tanh_fp32.cpp"
+                                               : "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
+                                                 "kernels/compute/eltwise_bw_gelu_tanh.cpp";
     } else {
         compute_kernel_path =
             "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"
             "kernels/compute/eltwise_bw_gelu_poly.cpp";
     }
     std::map<std::string, std::string> compute_defines;
-    if (input.dtype() == DataType::FLOAT32) {
+    if (fp32_dest_acc_en) {
         compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float32>";
     } else {
         compute_defines["COPY_DEST_VALUES"] = "copy_dest_values<DataFormat::Float16_b>";
