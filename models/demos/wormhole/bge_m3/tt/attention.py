@@ -334,12 +334,16 @@ class BgeM3Attention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Stage 5: concat heads. B1/B8/B32 S512: fused head-split with groups=4.
-        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
+        # Stage 5: concat heads. B1/B8/B32 S512 + S8192: fused head-split kernel
+        # (higher core utilization than stock nlp_concat_heads).
+        if (self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512) or (
+            self.config.max_seq_len == 8192
+        ):
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
 
             # B8 swept concat head_groups {1,2,4,8,16}: 16 is marginally best.
-            concat_head_groups = 16 if self.config.max_batch_size in (8, 16) else 4
+            # S8192 B6 swept {1,2,4,8,16}: 16 is best (0.598 vs stock 0.812ms/call).
+            concat_head_groups = 16 if self.config.max_batch_size in (8, 16) or self.config.max_seq_len == 8192 else 4
             context = bge_concat_heads_headsplit(
                 context, head_groups=concat_head_groups, out_memcfg=self.config.output_memcfg
             )
