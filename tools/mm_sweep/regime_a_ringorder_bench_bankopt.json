@@ -1,0 +1,1766 @@
+[
+  {
+    "group": "target",
+    "label": "256x2048x1024",
+    "M": 256,
+    "K": 2048,
+    "N": 1024,
+    "cfg": [
+      1,
+      4,
+      2,
+      2,
+      2
+    ],
+    "ideal_us": 11.264,
+    "route_cost": {
+      "bank": {
+        "max_edge": 20,
+        "total_hops": 345
+      },
+      "greedy": {
+        "max_edge": 25,
+        "total_hops": 234
+      },
+      "opt": {
+        "max_edge": 15,
+        "total_hops": 222
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 18,
+        "bank_tot": 82,
+        "greedy_max": 14,
+        "greedy_tot": 53,
+        "opt_max": 8,
+        "opt_tot": 53
+      },
+      {
+        "group": "2",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 13,
+        "bank_tot": 65,
+        "greedy_max": 12,
+        "greedy_tot": 53,
+        "opt_max": 11,
+        "opt_tot": 58
+      },
+      {
+        "group": "4",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 116,
+        "greedy_max": 25,
+        "greedy_tot": 70,
+        "opt_max": 15,
+        "opt_tot": 58
+      },
+      {
+        "group": "6",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 19,
+        "bank_tot": 82,
+        "greedy_max": 16,
+        "greedy_tot": 58,
+        "opt_max": 11,
+        "opt_tot": 53
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        28.02111111111111,
+        28.30666666666667,
+        28.890740740740743
+      ],
+      "med_us": 28.30666666666667,
+      "n_ok": 3,
+      "util512_pct": 39.79274611398963,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 28.27851851851852,
+          "med_us": 22.565185185185186,
+          "min_us": 17.89777777777778
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 27.231111111111108,
+          "med_us": 22.581111111111113,
+          "min_us": 19.497777777777777
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 27.590370370370373,
+          "med_us": 23.058703703703706,
+          "min_us": 18.75888888888889
+        }
+      },
+      "vs_bank_pct": 0.0
+    },
+    "greedy": {
+      "mask": 8192,
+      "walls": [
+        27.622222222222224,
+        28.158518518518516,
+        28.485925925925926
+      ],
+      "med_us": 28.158518518518516,
+      "n_ok": 3,
+      "util512_pct": 40.002104487820276,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 27.922962962962963,
+          "med_us": 23.005925925925926,
+          "min_us": 14.771481481481482
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 26.93925925925926,
+          "med_us": 23.13185185185185,
+          "min_us": 16.98925925925926
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 27.276666666666667,
+          "med_us": 23.87148148148148,
+          "min_us": 15.636666666666665
+        }
+      },
+      "vs_bank_pct": -0.5233683990160776
+    },
+    "opt": {
+      "mask": 0,
+      "walls": [
+        27.02740740740741,
+        27.05777777777778,
+        27.45888888888889
+      ],
+      "med_us": 27.05777777777778,
+      "n_ok": 3,
+      "util512_pct": 41.62943495400788,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 64,
+          "max_us": 27.36740740740741,
+          "med_us": 21.52574074074074,
+          "min_us": 16.71148148148148
+        },
+        "NCRISC": {
+          "n": 64,
+          "max_us": 26.236296296296295,
+          "med_us": 21.69074074074074,
+          "min_us": 18.21888888888889
+        },
+        "TRISC": {
+          "n": 192,
+          "max_us": 26.62962962962963,
+          "med_us": 22.77259259259259,
+          "min_us": 17.57962962962963
+        }
+      },
+      "vs_bank_pct": -4.411995603705443
+    }
+  },
+  {
+    "group": "target",
+    "label": "256x6144x768",
+    "M": 256,
+    "K": 6144,
+    "N": 768,
+    "cfg": [
+      1,
+      12,
+      1,
+      2,
+      1
+    ],
+    "ideal_us": 25.344,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1159
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 891
+      },
+      "opt": {
+        "max_edge": 14,
+        "total_hops": 683
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 99,
+        "greedy_max": 15,
+        "greedy_tot": 87,
+        "opt_max": 12,
+        "opt_tot": 53
+      },
+      {
+        "group": "1",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 13,
+        "bank_tot": 65,
+        "greedy_max": 22,
+        "greedy_tot": 70,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "2",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 24,
+        "bank_tot": 133,
+        "greedy_max": 17,
+        "greedy_tot": 87,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "3",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 19,
+        "bank_tot": 99,
+        "greedy_max": 20,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 58
+      },
+      {
+        "group": "4",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 116,
+        "greedy_max": 16,
+        "greedy_tot": 70,
+        "opt_max": 14,
+        "opt_tot": 53
+      },
+      {
+        "group": "5",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 12,
+        "bank_tot": 53,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 7,
+        "opt_tot": 41
+      },
+      {
+        "group": "6",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 22,
+        "bank_tot": 116,
+        "greedy_max": 22,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 65
+      },
+      {
+        "group": "7",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 23,
+        "bank_tot": 82,
+        "greedy_max": 24,
+        "greedy_tot": 87,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "8",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 111,
+        "greedy_max": 11,
+        "greedy_tot": 70,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "9",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 82,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 9,
+        "opt_tot": 53
+      },
+      {
+        "group": "10",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 25,
+        "bank_tot": 121,
+        "greedy_max": 14,
+        "greedy_tot": 46,
+        "opt_max": 10,
+        "opt_tot": 46
+      },
+      {
+        "group": "11",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 15,
+        "bank_tot": 82,
+        "greedy_max": 18,
+        "greedy_tot": 70,
+        "opt_max": 12,
+        "opt_tot": 58
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        50.514074074074074,
+        51.55222222222222,
+        52.20962962962963
+      ],
+      "med_us": 51.55222222222222,
+      "n_ok": 3,
+      "util512_pct": 49.161799254262135,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 51.18296296296296,
+          "med_us": 43.406111111111116,
+          "min_us": 30.10777777777778
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 50.03185185185185,
+          "med_us": 43.38018518518519,
+          "min_us": 32.98555555555556
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 50.531481481481485,
+          "med_us": 43.54722222222222,
+          "min_us": 31.86444444444444
+        }
+      },
+      "vs_bank_pct": 0.0
+    },
+    "greedy": {
+      "mask": 8192,
+      "walls": [
+        49.97111111111111,
+        50.37518518518518,
+        50.39259259259259
+      ],
+      "med_us": 50.37518518518518,
+      "n_ok": 3,
+      "util512_pct": 50.31048502716653,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 50.37518518518518,
+          "med_us": 40.81074074074074,
+          "min_us": 26.84037037037037
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 49.08148148148148,
+          "med_us": 41.0425925925926,
+          "min_us": 29.634814814814813
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 49.727407407407405,
+          "med_us": 41.24666666666666,
+          "min_us": 27.874814814814812
+        }
+      },
+      "vs_bank_pct": -2.283193597287181
+    },
+    "opt": {
+      "mask": 0,
+      "walls": [
+        47.06333333333333,
+        47.23444444444444,
+        47.41555555555556
+      ],
+      "med_us": 47.23444444444444,
+      "n_ok": 3,
+      "util512_pct": 53.65575968572841,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 46.95148148148148,
+          "med_us": 38.49,
+          "min_us": 25.105185185185185
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 45.895185185185184,
+          "med_us": 38.737037037037034,
+          "min_us": 29.34
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 46.30185185185185,
+          "med_us": 39.071666666666665,
+          "min_us": 26.86148148148148
+        }
+      },
+      "vs_bank_pct": -8.375541522081164
+    }
+  },
+  {
+    "group": "control",
+    "label": "256x6144x2304",
+    "M": 256,
+    "K": 6144,
+    "N": 2304,
+    "cfg": [
+      1,
+      12,
+      1,
+      2,
+      1
+    ],
+    "ideal_us": 63.74400000000001,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1159
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 891
+      },
+      "opt": {
+        "max_edge": 14,
+        "total_hops": 683
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 99,
+        "greedy_max": 15,
+        "greedy_tot": 87,
+        "opt_max": 12,
+        "opt_tot": 53
+      },
+      {
+        "group": "1",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 13,
+        "bank_tot": 65,
+        "greedy_max": 22,
+        "greedy_tot": 70,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "2",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 24,
+        "bank_tot": 133,
+        "greedy_max": 17,
+        "greedy_tot": 87,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "3",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 19,
+        "bank_tot": 99,
+        "greedy_max": 20,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 58
+      },
+      {
+        "group": "4",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 116,
+        "greedy_max": 16,
+        "greedy_tot": 70,
+        "opt_max": 14,
+        "opt_tot": 53
+      },
+      {
+        "group": "5",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 12,
+        "bank_tot": 53,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 7,
+        "opt_tot": 41
+      },
+      {
+        "group": "6",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 22,
+        "bank_tot": 116,
+        "greedy_max": 22,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 65
+      },
+      {
+        "group": "7",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 23,
+        "bank_tot": 82,
+        "greedy_max": 24,
+        "greedy_tot": 87,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "8",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 111,
+        "greedy_max": 11,
+        "greedy_tot": 70,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "9",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 82,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 9,
+        "opt_tot": 53
+      },
+      {
+        "group": "10",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 25,
+        "bank_tot": 121,
+        "greedy_max": 14,
+        "greedy_tot": 46,
+        "opt_max": 10,
+        "opt_tot": 46
+      },
+      {
+        "group": "11",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 15,
+        "bank_tot": 82,
+        "greedy_max": 18,
+        "greedy_tot": 70,
+        "opt_max": 12,
+        "opt_tot": 58
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        90.29481481481481,
+        90.47592592592594,
+        90.80444444444444
+      ],
+      "med_us": 90.47592592592594,
+      "n_ok": 3,
+      "util512_pct": 70.45410074298462,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 90.02074074074073,
+          "med_us": 82.20925925925926,
+          "min_us": 63.051111111111105
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 89.15851851851852,
+          "med_us": 82.3348148148148,
+          "min_us": 68.78333333333333
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 89.16666666666666,
+          "med_us": 82.66203703703704,
+          "min_us": 63.882222222222225
+        }
+      },
+      "vs_bank_pct": 0.0
+    },
+    "greedy": {
+      "mask": 8192,
+      "walls": [
+        87.78370370370371,
+        87.89296296296297,
+        88.01222222222223
+      ],
+      "med_us": 87.89296296296297,
+      "n_ok": 3,
+      "util512_pct": 72.5245774532154,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 87.50592592592592,
+          "med_us": 79.25407407407407,
+          "min_us": 57.035185185185185
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 87.43111111111111,
+          "med_us": 79.68888888888888,
+          "min_us": 63.34814814814815
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 86.92666666666666,
+          "med_us": 79.99685185185184,
+          "min_us": 57.87222222222222
+        }
+      },
+      "vs_bank_pct": -2.854862148719739
+    },
+    "opt": {
+      "mask": 0,
+      "walls": [
+        86.00777777777778,
+        86.09777777777778,
+        86.27999999999999
+      ],
+      "med_us": 86.09777777777778,
+      "n_ok": 3,
+      "util512_pct": 74.0367540780508,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 85.54851851851852,
+          "med_us": 76.70370370370371,
+          "min_us": 58.07370370370371
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 85.04888888888888,
+          "med_us": 77.18296296296296,
+          "min_us": 62.33074074074074
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 84.89925925925925,
+          "med_us": 77.435,
+          "min_us": 58.90481481481481
+        }
+      },
+      "vs_bank_pct": -4.839019997134509
+    }
+  },
+  {
+    "group": "control",
+    "label": "256x6144x4608",
+    "M": 256,
+    "K": 6144,
+    "N": 4608,
+    "cfg": [
+      1,
+      12,
+      1,
+      2,
+      1
+    ],
+    "ideal_us": 121.344,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1159
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 891
+      },
+      "opt": {
+        "max_edge": 14,
+        "total_hops": 683
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 99,
+        "greedy_max": 15,
+        "greedy_tot": 87,
+        "opt_max": 12,
+        "opt_tot": 53
+      },
+      {
+        "group": "1",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 13,
+        "bank_tot": 65,
+        "greedy_max": 22,
+        "greedy_tot": 70,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "2",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 24,
+        "bank_tot": 133,
+        "greedy_max": 17,
+        "greedy_tot": 87,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "3",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 19,
+        "bank_tot": 99,
+        "greedy_max": 20,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 58
+      },
+      {
+        "group": "4",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 116,
+        "greedy_max": 16,
+        "greedy_tot": 70,
+        "opt_max": 14,
+        "opt_tot": 53
+      },
+      {
+        "group": "5",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 12,
+        "bank_tot": 53,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 7,
+        "opt_tot": 41
+      },
+      {
+        "group": "6",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 22,
+        "bank_tot": 116,
+        "greedy_max": 22,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 65
+      },
+      {
+        "group": "7",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 23,
+        "bank_tot": 82,
+        "greedy_max": 24,
+        "greedy_tot": 87,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "8",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 111,
+        "greedy_max": 11,
+        "greedy_tot": 70,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "9",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 82,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 9,
+        "opt_tot": 53
+      },
+      {
+        "group": "10",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 25,
+        "bank_tot": 121,
+        "greedy_max": 14,
+        "greedy_tot": 46,
+        "opt_max": 10,
+        "opt_tot": 46
+      },
+      {
+        "group": "11",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 15,
+        "bank_tot": 82,
+        "greedy_max": 18,
+        "greedy_tot": 70,
+        "opt_max": 12,
+        "opt_tot": 58
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        150.8448148148148,
+        151.21740740740742,
+        151.3274074074074
+      ],
+      "med_us": 151.21740740740742,
+      "n_ok": 3,
+      "util512_pct": 80.24472981015805,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 150.8448148148148,
+          "med_us": 140.90092592592592,
+          "min_us": 111.99851851851852
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 150.3325925925926,
+          "med_us": 140.6988888888889,
+          "min_us": 122.98185185185184
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 150.32296296296298,
+          "med_us": 141.6053703703704,
+          "min_us": 115.02148148148149
+        }
+      },
+      "vs_bank_pct": 0.0
+    },
+    "greedy": {
+      "mask": 8192,
+      "walls": [
+        148.04962962962964,
+        148.45925925925926,
+        148.59407407407406
+      ],
+      "med_us": 148.45925925925926,
+      "n_ok": 3,
+      "util512_pct": 81.73555533379901,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 147.47296296296295,
+          "med_us": 139.13444444444445,
+          "min_us": 106.35
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 146.93,
+          "med_us": 139.29814814814816,
+          "min_us": 119.51666666666667
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 146.8411111111111,
+          "med_us": 139.96833333333333,
+          "min_us": 107.22962962962963
+        }
+      },
+      "vs_bank_pct": -1.8239620658997313
+    },
+    "opt": {
+      "mask": 0,
+      "walls": [
+        145.92222222222222,
+        146.0988888888889,
+        146.39296296296297
+      ],
+      "med_us": 146.0988888888889,
+      "n_ok": 3,
+      "util512_pct": 83.05607313159274,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 145.86296296296297,
+          "med_us": 136.0359259259259,
+          "min_us": 107.88703703703703
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 145.71814814814815,
+          "med_us": 136.25296296296295,
+          "min_us": 118.96666666666667
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 145.38814814814813,
+          "med_us": 136.87685185185185,
+          "min_us": 110.09814814814814
+        }
+      },
+      "vs_bank_pct": -3.384873875484651
+    }
+  },
+  {
+    "group": "control",
+    "label": "mt1_32x6144x4608",
+    "M": 32,
+    "K": 6144,
+    "N": 4608,
+    "cfg": [
+      1,
+      12,
+      1,
+      2,
+      1
+    ],
+    "ideal_us": 111.93599999999999,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1159
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 891
+      },
+      "opt": {
+        "max_edge": 14,
+        "total_hops": 683
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 99,
+        "greedy_max": 15,
+        "greedy_tot": 87,
+        "opt_max": 12,
+        "opt_tot": 53
+      },
+      {
+        "group": "1",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 13,
+        "bank_tot": 65,
+        "greedy_max": 22,
+        "greedy_tot": 70,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "2",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 24,
+        "bank_tot": 133,
+        "greedy_max": 17,
+        "greedy_tot": 87,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "3",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 19,
+        "bank_tot": 99,
+        "greedy_max": 20,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 58
+      },
+      {
+        "group": "4",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 116,
+        "greedy_max": 16,
+        "greedy_tot": 70,
+        "opt_max": 14,
+        "opt_tot": 53
+      },
+      {
+        "group": "5",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 12,
+        "bank_tot": 53,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 7,
+        "opt_tot": 41
+      },
+      {
+        "group": "6",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 22,
+        "bank_tot": 116,
+        "greedy_max": 22,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 65
+      },
+      {
+        "group": "7",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 23,
+        "bank_tot": 82,
+        "greedy_max": 24,
+        "greedy_tot": 87,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "8",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 111,
+        "greedy_max": 11,
+        "greedy_tot": 70,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "9",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 82,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 9,
+        "opt_tot": 53
+      },
+      {
+        "group": "10",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 25,
+        "bank_tot": 121,
+        "greedy_max": 14,
+        "greedy_tot": 46,
+        "opt_max": 10,
+        "opt_tot": 46
+      },
+      {
+        "group": "11",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 15,
+        "bank_tot": 82,
+        "greedy_max": 18,
+        "greedy_tot": 70,
+        "opt_max": 12,
+        "opt_tot": 58
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        116.70185185185186,
+        116.83555555555556,
+        116.88037037037037
+      ],
+      "med_us": 116.83555555555556,
+      "n_ok": 3,
+      "util512_pct": 95.80645161290322,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 116.52777777777777,
+          "med_us": 112.97185185185185,
+          "min_us": 106.46962962962962
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 116.59222222222222,
+          "med_us": 113.17611111111111,
+          "min_us": 107.4874074074074
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 116.26962962962962,
+          "med_us": 112.9124074074074,
+          "min_us": 105.8337037037037
+        }
+      },
+      "vs_bank_pct": 0.0
+    },
+    "greedy": {
+      "mask": 8192,
+      "walls": [
+        116.75444444444445,
+        116.89925925925927,
+        116.95703703703704
+      ],
+      "med_us": 116.89925925925927,
+      "n_ok": 3,
+      "util512_pct": 95.75424233591441,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 116.61444444444444,
+          "med_us": 113.01592592592593,
+          "min_us": 106.6088888888889
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 116.5162962962963,
+          "med_us": 113.1225925925926,
+          "min_us": 107.58
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 116.36592592592592,
+          "med_us": 112.90444444444444,
+          "min_us": 106.0011111111111
+        }
+      },
+      "vs_bank_pct": 0.054524244268616684
+    },
+    "opt": {
+      "mask": 0,
+      "walls": [
+        116.68444444444445,
+        116.79814814814814,
+        116.81074074074074
+      ],
+      "med_us": 116.79814814814814,
+      "n_ok": 3,
+      "util512_pct": 95.83713592617843,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 116.43074074074075,
+          "med_us": 113.00222222222222,
+          "min_us": 106.73703703703704
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 116.46074074074073,
+          "med_us": 113.06074074074074,
+          "min_us": 108.02851851851851
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 116.24111111111111,
+          "med_us": 112.83518518518518,
+          "min_us": 106.17703703703704
+        }
+      },
+      "vs_bank_pct": -0.03201714343681328
+    }
+  },
+  {
+    "group": "control",
+    "label": "mt2_64x6144x4608",
+    "M": 64,
+    "K": 6144,
+    "N": 4608,
+    "cfg": [
+      1,
+      6,
+      1,
+      4,
+      2
+    ],
+    "ideal_us": 113.28,
+    "route_cost": {
+      "bank": {
+        "max_edge": 22,
+        "total_hops": 480
+      },
+      "greedy": {
+        "max_edge": 27,
+        "total_hops": 333
+      },
+      "opt": {
+        "max_edge": 16,
+        "total_hops": 323
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 17,
+        "bank_tot": 65,
+        "greedy_max": 14,
+        "greedy_tot": 41,
+        "opt_max": 10,
+        "opt_tot": 41
+      },
+      {
+        "group": "1",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 16,
+        "bank_tot": 65,
+        "greedy_max": 14,
+        "greedy_tot": 41,
+        "opt_max": 12,
+        "opt_tot": 53
+      },
+      {
+        "group": "2",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 17,
+        "bank_tot": 82,
+        "greedy_max": 12,
+        "greedy_tot": 41,
+        "opt_max": 11,
+        "opt_tot": 53
+      },
+      {
+        "group": "3",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 19,
+        "bank_tot": 82,
+        "greedy_max": 17,
+        "greedy_tot": 70,
+        "opt_max": 12,
+        "opt_tot": 65
+      },
+      {
+        "group": "4",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 22,
+        "bank_tot": 99,
+        "greedy_max": 25,
+        "greedy_tot": 70,
+        "opt_max": 9,
+        "opt_tot": 53
+      },
+      {
+        "group": "5",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 87,
+        "greedy_max": 27,
+        "greedy_tot": 70,
+        "opt_max": 16,
+        "opt_tot": 58
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        118.50740740740741,
+        118.64703703703704,
+        118.67814814814814
+      ],
+      "med_us": 118.64703703703704,
+      "n_ok": 3,
+      "util512_pct": 95.47646770533204,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 48,
+          "max_us": 118.20333333333333,
+          "med_us": 115.30944444444444,
+          "min_us": 110.30148148148147
+        },
+        "NCRISC": {
+          "n": 48,
+          "max_us": 118.04666666666667,
+          "med_us": 114.43055555555556,
+          "min_us": 110.75703703703704
+        },
+        "TRISC": {
+          "n": 144,
+          "max_us": 117.73185185185184,
+          "med_us": 116.36203703703703,
+          "min_us": 111.03888888888889
+        }
+      },
+      "vs_bank_pct": 0.0
+    },
+    "greedy": {
+      "mask": 8192,
+      "walls": [
+        118.47444444444444,
+        118.60074074074075,
+        118.61296296296295
+      ],
+      "med_us": 118.60074074074075,
+      "n_ok": 3,
+      "util512_pct": 95.5137373447171,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 48,
+          "max_us": 118.27777777777777,
+          "med_us": 115.36185185185185,
+          "min_us": 112.10814814814815
+        },
+        "NCRISC": {
+          "n": 48,
+          "max_us": 118.11666666666666,
+          "med_us": 113.74851851851852,
+          "min_us": 111.38740740740741
+        },
+        "TRISC": {
+          "n": 144,
+          "max_us": 117.86259259259259,
+          "med_us": 116.5851851851852,
+          "min_us": 112.84555555555556
+        }
+      },
+      "vs_bank_pct": -0.039020187484195556
+    },
+    "opt": {
+      "mask": 0,
+      "walls": [
+        118.38074074074075,
+        118.47518518518518,
+        118.64666666666668
+      ],
+      "med_us": 118.47518518518518,
+      "n_ok": 3,
+      "util512_pct": 95.61495921946462,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 48,
+          "max_us": 117.99555555555555,
+          "med_us": 115.03611111111111,
+          "min_us": 110.50888888888889
+        },
+        "NCRISC": {
+          "n": 48,
+          "max_us": 117.97777777777779,
+          "med_us": 113.47907407407408,
+          "min_us": 111.2662962962963
+        },
+        "TRISC": {
+          "n": 144,
+          "max_us": 117.57148148148148,
+          "med_us": 116.5225925925926,
+          "min_us": 112.12333333333333
+        }
+      },
+      "vs_bank_pct": -0.14484293594133613
+    }
+  },
+  {
+    "group": "control",
+    "label": "mt4_128x6144x4608",
+    "M": 128,
+    "K": 6144,
+    "N": 4608,
+    "cfg": [
+      1,
+      12,
+      1,
+      2,
+      1
+    ],
+    "ideal_us": 115.968,
+    "route_cost": {
+      "bank": {
+        "max_edge": 25,
+        "total_hops": 1159
+      },
+      "greedy": {
+        "max_edge": 24,
+        "total_hops": 891
+      },
+      "opt": {
+        "max_edge": 14,
+        "total_hops": 683
+      }
+    },
+    "ringcost_groups": [
+      {
+        "group": "0",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 99,
+        "greedy_max": 15,
+        "greedy_tot": 87,
+        "opt_max": 12,
+        "opt_tot": 53
+      },
+      {
+        "group": "1",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 13,
+        "bank_tot": 65,
+        "greedy_max": 22,
+        "greedy_tot": 70,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "2",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 24,
+        "bank_tot": 133,
+        "greedy_max": 17,
+        "greedy_tot": 87,
+        "opt_max": 10,
+        "opt_tot": 58
+      },
+      {
+        "group": "3",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 19,
+        "bank_tot": 99,
+        "greedy_max": 20,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 58
+      },
+      {
+        "group": "4",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 116,
+        "greedy_max": 16,
+        "greedy_tot": 70,
+        "opt_max": 14,
+        "opt_tot": 53
+      },
+      {
+        "group": "5",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 12,
+        "bank_tot": 53,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 7,
+        "opt_tot": 41
+      },
+      {
+        "group": "6",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 22,
+        "bank_tot": 116,
+        "greedy_max": 22,
+        "greedy_tot": 82,
+        "opt_max": 12,
+        "opt_tot": 65
+      },
+      {
+        "group": "7",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 23,
+        "bank_tot": 82,
+        "greedy_max": 24,
+        "greedy_tot": 87,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "8",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 21,
+        "bank_tot": 111,
+        "greedy_max": 11,
+        "greedy_tot": 70,
+        "opt_max": 11,
+        "opt_tot": 70
+      },
+      {
+        "group": "9",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 20,
+        "bank_tot": 82,
+        "greedy_max": 21,
+        "greedy_tot": 70,
+        "opt_max": 9,
+        "opt_tot": 53
+      },
+      {
+        "group": "10",
+        "wnoc": "1",
+        "sel": "opt",
+        "bank_max": 25,
+        "bank_tot": 121,
+        "greedy_max": 14,
+        "greedy_tot": 46,
+        "opt_max": 10,
+        "opt_tot": 46
+      },
+      {
+        "group": "11",
+        "wnoc": "0",
+        "sel": "opt",
+        "bank_max": 15,
+        "bank_tot": 82,
+        "greedy_max": 18,
+        "greedy_tot": 70,
+        "opt_max": 12,
+        "opt_tot": 58
+      }
+    ],
+    "bank": {
+      "mask": 4096,
+      "walls": [
+        128.43037037037038,
+        128.4777777777778,
+        128.65814814814814
+      ],
+      "med_us": 128.4777777777778,
+      "n_ok": 3,
+      "util512_pct": 90.26308051543717,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 128.00296296296298,
+          "med_us": 122.6561111111111,
+          "min_us": 103.80592592592592
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 127.6688888888889,
+          "med_us": 122.79574074074075,
+          "min_us": 110.70481481481481
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 127.49296296296296,
+          "med_us": 123.2298148148148,
+          "min_us": 104.28074074074074
+        }
+      },
+      "vs_bank_pct": 0.0
+    },
+    "greedy": {
+      "mask": 8192,
+      "walls": [
+        126.50000000000001,
+        126.50037037037038,
+        126.87185185185186
+      ],
+      "med_us": 126.50037037037038,
+      "n_ok": 3,
+      "util512_pct": 91.67403989448135,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 126.15185185185186,
+          "med_us": 121.27796296296296,
+          "min_us": 102.03851851851852
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 126.06814814814814,
+          "med_us": 121.50074074074074,
+          "min_us": 108.06370370370371
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 125.74555555555555,
+          "med_us": 121.95611111111111,
+          "min_us": 102.50666666666666
+        }
+      },
+      "vs_bank_pct": -1.5391046152959165
+    },
+    "opt": {
+      "mask": 0,
+      "walls": [
+        125.18777777777778,
+        125.22555555555554,
+        125.75555555555555
+      ],
+      "med_us": 125.22555555555554,
+      "n_ok": 3,
+      "util512_pct": 92.60729528051606,
+      "max_rel_err": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "risc": {
+        "BRISC": {
+          "n": 96,
+          "max_us": 124.76074074074074,
+          "med_us": 119.91259259259259,
+          "min_us": 103.60481481481482
+        },
+        "NCRISC": {
+          "n": 96,
+          "max_us": 124.52666666666666,
+          "med_us": 119.96518518518519,
+          "min_us": 108.17370370370371
+        },
+        "TRISC": {
+          "n": 288,
+          "max_us": 124.32296296296296,
+          "med_us": 120.54518518518519,
+          "min_us": 104.0774074074074
+        }
+      },
+      "vs_bank_pct": -2.53134999567588
+    }
+  }
+]
