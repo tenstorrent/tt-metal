@@ -9,6 +9,8 @@
 #include <tuple>
 #include <vector>
 
+#include <tt_stl/reflection.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -21,6 +23,10 @@ struct PagedFusedUpdateCacheParams {
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const bool share_cache;
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("compute_kernel_config", "share_cache", "mesh_coords");
+    auto attribute_values() const { return std::forward_as_tuple(compute_kernel_config, share_cache, mesh_coords); }
 };
 
 struct PagedFusedUpdateCacheInputs {

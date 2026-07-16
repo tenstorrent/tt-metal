@@ -42,9 +42,6 @@ struct PagedFusedUpdateCacheDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
     // update_idxs is excluded from the program hash (so decode steps that differ only in position
     // cache-hit). The cache-write offsets it determines (cache_start_id, tile_update_offset_B) are
     // DYNAMIC and re-applied to the cached program on every dispatch. Returns empty in index-tensor
