@@ -65,13 +65,12 @@ class MyModelAdapter(PrefillModelAdapter):
         Mirror the layout the cache-populate run wrote so the runner reads the same files."""
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
-        """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches`
-        (ordered tuple) — the single place your model's KV layout is defined. Index 0 is the primary
-        KV cache; a dense model returns `KvCaches([kvpe])`, a sparse-attention (DSA) model appends its
-        secondary cache (`KvCaches([kvpe, index])`) instead of implementing a second method. The
-        ENGINE owns the returned caches: it allocates them once, passes them into every runtime call
-        that touches them, and frees them with the mesh at shutdown. `params` carries max_seq_len /
-        mesh_shape / this rank's num_layers / num_users / ... ."""
+        """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches` — your
+        own concrete subclass (a named struct of one or more device tensors; e.g. M3's k/v/index_k, or
+        the DeepSeek family's kvpe + optional DSA index). The single place your model's KV layout is
+        defined. The engine treats it as an opaque handle: it allocates it once, passes it into every
+        runtime call that touches it, and frees it with the mesh at shutdown. `params` carries
+        max_seq_len / mesh_shape / this rank's num_layers / num_users / ... ."""
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return the runtime handle (section 2).

@@ -43,7 +43,7 @@ def kv_cache_pcc_check(
     caps the compared extent to the real (non-pad) tokens (used by the migration validators).
 
     Env:
-      PREFILL_STANDALONE_CHUNKED_PCC          min PCC threshold (default 0.95)
+      PREFILL_STANDALONE_CHUNKED_PCC          min PCC threshold (default 0.88)
       PREFILL_STANDALONE_CHUNKED_RECORD_ONLY  "1" -> log PCC, skip the assert (record a new baseline)
     """
     from safetensors import safe_open
@@ -67,7 +67,7 @@ def kv_cache_pcc_check(
     src = _hf_to_meta_rotary_perm(head_dim, rotary_dim)
 
     kv_dir = Path(trace_dir) / "kv_cache"
-    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.85"))
+    threshold = float(os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88"))
     record_only = os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1"
 
     logger.info(

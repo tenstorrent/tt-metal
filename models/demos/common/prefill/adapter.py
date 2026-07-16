@@ -79,24 +79,13 @@ class PrefillRunParams:
         return self.mesh_shape[self.tp_axis]
 
 
-class KvCaches(tuple):
-    """The device KV cache(s) a prefill model owns, returned by ``allocate_kv_cache`` as an ORDERED
-    tuple of tensors. Callers index positionally:
-
-      * ``kv_caches[0]`` — ALWAYS the primary KV cache (the MLA KVPE cache for the DeepSeek-V3 family).
-      * ``kv_caches[1:]`` — any SECONDARY caches the model also owns. A sparse-attention (DSA) model
-        like GLM-5.1 puts its lightning-indexer block-cyclic key cache at index 1, so the engine can
-        build a single MERGED migration table over both (config 0 = KVPE, config 1 = index). A dense
-        model returns just ``KvCaches([kvpe])`` (length 1).
-
-    A tuple rather than a bare tensor plus optional allocate hooks: every model implements the same
-    single ``allocate_kv_cache`` and just returns as many caches as it owns — a model that grows a
-    third cache appends it at index 2, no new adapter method or engine argument. The engine allocates
-    these once, OWNS their lifetime — it passes them into every runtime call that touches them
-    (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check) and frees them with the mesh
-    at shutdown."""
-
-    __slots__ = ()
+class KvCaches(ABC):
+    """Opaque handle for a model's on-device KV cache(s), returned by ``allocate_kv_cache``. The engine
+    never introspects it: it allocates it once, OWNS its lifetime, passes it back into every runtime call
+    that touches it (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check / read_slot_kv),
+    and frees it with the mesh at shutdown. Each model returns its own concrete subclass shaped however
+    fits its cache (a named struct of one or more device tensors), so the engine imposes no structure and
+    growing/renaming a model's caches never touches it."""
 
 
 class PrefillModelAdapter(ABC):
@@ -143,12 +132,11 @@ class PrefillModelAdapter(ABC):
 
     @abstractmethod
     def allocate_kv_cache(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> KvCaches:
-        """Allocate (and zero) this model's KV cache(s) on device and return them as a ``KvCaches``
-        (ordered tuple): index 0 the primary KV cache, then any secondary caches the model owns. A
-        dense model returns ``KvCaches([kvpe])``; a sparse-attention (DSA) model appends its index
-        cache (``KvCaches([kvpe, index])``). This is the single place a model's KV layout is defined.
-        The engine OWNS the returned caches' lifetime — see ``KvCaches``. ``params`` carries the
-        per-rank knobs (max_seq_len, mesh_shape, this rank's num_layers, num_users, …)."""
+        """Allocate (and zero) this model's KV cache(s) on device and return them as a ``KvCaches`` — your
+        model's own concrete subclass (a named struct of one or more device tensors). This is the single
+        place a model's KV layout is defined; the engine OWNS the returned handle's lifetime (see
+        ``KvCaches``). ``params`` carries the per-rank knobs (max_seq_len, mesh_shape, this rank's
+        num_layers, num_users, …)."""
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
