@@ -269,7 +269,8 @@ struct NoIn1BaseOffset {
  *
  * ── Template parameters ──────────────────────────────────────────────────────
  *
- *   transpose          transpose B tiles before the multiply (default false).
+ *   transpose          Transposes ONLY the internal 32×32 layout of each in1 (B) tile, NOT the
+ *                      B matrix. Providing the tile grid in transposed order is the caller's responsibility.
  *   packer_l1_acc      hardware L1 K-accumulation instead of software spill/reload.
  *   last_block_target  Out / OutWithRelu / Interm / OutWithUntilize — see LastBlockTarget.
  *   tile_order         SubblockMajor / TileRowMajor — see OutputCBLayout. The helper cannot
