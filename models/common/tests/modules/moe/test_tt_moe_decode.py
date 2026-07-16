@@ -357,11 +357,9 @@ def _config_id(path: Path) -> str:
 
 # known failures
 # Note: it would be better to test all of these and let them fail but some cause hard crashes and derail the test
-SKIP_LIST = [
-    "ling_1t.yaml",
-    "mistral_large_3.yaml",
-    "deepseek_v4_pro.yaml",
-]
+# akannan/test_moe_decode: temporarily un-skipped ling_1t / mistral_large_3 / deepseek_v4_pro to
+# reproduce and capture their failing status on Galaxy hardware.
+SKIP_LIST = []
 
 
 @pytest.mark.parametrize(
