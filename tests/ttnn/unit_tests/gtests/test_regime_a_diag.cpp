@@ -108,7 +108,8 @@ TEST_F(RegimeADiagFixture, Run) {
     // Constant-input sanity for the public path (mask 0) + the correct in0-delivery variants (32=scatter,
     // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
-    if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024) {
+    if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
+        mask == 2048) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -274,6 +275,92 @@ TEST_F(RegimeADiagFixture, ProgressiveVsFullWait) {
         EXPECT_GT(p_full, 0.999) << "full-wait PCC too low: " << c.label;
         // Only the wait placement differs; matmul order identical => bit-identical output.
         EXPECT_EQ(ab_maxdiff, 0.0) << "progressive vs full-wait differ (should be bit-identical): " << c.label;
+    }
+}
+
+// Pipelined phase-2 drain (DIAG_PIPELINED_DRAIN, mask 1<<11=2048) vs the barrier baseline (mask 0). Only the
+// writer's per-block write synchronization changes (departure-flush + ordered payload->semaphore + one final
+// barrier, vs a per-block completion barrier); compute/ring/reduction are identical, so the output must be
+// BIT-IDENTICAL. Random BF16 vs a CPU f32 golden, PCC >= 0.999, fresh AND cached. The table spans Pk=1 direct
+// output, Pk=2/4/12 chains (bottom/middle/top roles), N_bpc=1/2/3 + wide-N, Sm=1/>1, and balanced K/N tails.
+TEST_F(RegimeADiagFixture, PipelinedDrainCorrectness) {
+    struct Case {
+        const char* label;
+        uint32_t M, K, N, Ns, Pk, Sm, kb, nsb;
+    };
+    const std::vector<Case> cases = {
+        {"pk1_direct_Nbpc2", 256, 2048, 1024, 1, 1, 1, 2, 2},   // Pk=1 direct DRAM output
+        {"pk2_ns2", 32, 2048, 2048, 2, 2, 1, 4, 4},             // Pk=2 chain (bottom+top), Ns>1
+        {"pk4_sm2_Nbpc2", 256, 2048, 1024, 1, 4, 2, 2, 2},      // Pk=4 chain, Sm>1
+        {"pk12_Nbpc3_roles", 256, 6144, 768, 1, 12, 1, 2, 1},   // deep chain: bottom/middle/top; N_bpc=3
+        {"pk12_Nbpc1", 256, 6144, 768, 1, 12, 1, 2, 3},         // N_bpc=1 (single output block)
+        {"wideN_pk12", 256, 6144, 4608, 1, 12, 1, 2, 1},        // wide-N, N_bpc=18
+        {"ktail_ntail_pk12", 256, 6080, 4640, 1, 12, 1, 2, 1},  // balanced K-tail (190) + N-tail (145)
+    };
+    // mask 0 = pipelined (production default); mask 1<<11 = DIAG_BARRIER_DRAIN (old per-block barrier).
+    const std::vector<std::pair<uint32_t, const char*>> masks = {{0u, "pipelined"}, {2048u, "barrier"}};
+    auto* device = device_;
+
+    for (const auto& c : cases) {
+        const uint32_t M = c.M, K = c.K, N = c.N;
+        std::mt19937 rng(4242);
+        std::normal_distribution<float> dist(0.0f, 1.0f);
+        std::vector<bfloat16> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
+        std::vector<float> af(a.size()), bf(b.size());
+        for (size_t i = 0; i < a.size(); ++i) {
+            a[i] = bfloat16(dist(rng));
+            af[i] = static_cast<float>(a[i]);
+        }
+        for (size_t i = 0; i < b.size(); ++i) {
+            b[i] = bfloat16(dist(rng));
+            bf[i] = static_cast<float>(b[i]);
+        }
+        std::vector<float> golden(static_cast<size_t>(M) * N, 0.0f);
+        for (uint32_t i = 0; i < M; ++i) {
+            for (uint32_t kk = 0; kk < K; ++kk) {
+                const float aik = af[static_cast<size_t>(i) * K + kk];
+                const float* brow = &bf[static_cast<size_t>(kk) * N];
+                float* crow = &golden[static_cast<size_t>(i) * N];
+                for (uint32_t j = 0; j < N; ++j) {
+                    crow[j] += aik * brow[j];
+                }
+            }
+        }
+
+        const MemoryConfig il{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        const TensorLayout lay(DataType::BFLOAT16, PageConfig(Layout::TILE), il);
+        Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
+        const MemoryConfig wcfg = ttnn::experimental::prim::create_regime_a_weight_memory_config(
+            ttnn::Shape({K, N}), DataType::BFLOAT16, device);
+        Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
+        const ttnn::experimental::prim::RegimeAMatmulConfig cfg{
+            .k_slices = c.Pk, .n_slices = c.Ns, .m_slices = c.Sm, .k_block_tiles = c.kb, .n_subblock_tiles = c.nsb};
+
+        std::vector<float> baseline_out;
+        for (const auto& [mask, tag] : masks) {
+            for (int pass = 0; pass < 2; ++pass) {  // fresh then cached-program
+                Tensor out =
+                    ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
+                const std::vector<float> got = out.to_vector<float>();
+                const double p = pcc(got, golden);
+                double ab = -1.0;
+                if (mask == 0u && pass == 0) {
+                    baseline_out = got;  // capture pipelined default (reference) for the A/B bit-identity check
+                } else if (mask != 0u) {
+                    ab = 0.0;
+                    for (size_t i = 0; i < got.size(); ++i) {
+                        ab = std::max(ab, std::abs(static_cast<double>(got[i]) - baseline_out[i]));
+                    }
+                }
+                fmt::print("DIAGPD case={} {} pass={} pcc={:.5f} ab_maxdiff={:.6f}\n", c.label, tag, pass, p, ab);
+                EXPECT_GT(p, 0.999) << "pipelined-drain case=" << c.label << " " << tag << " pass=" << pass
+                                    << " PCC too low (" << p << ")";
+                if (mask != 0u) {
+                    // Only write-sync differs -> barrier must match the pipelined default bit-for-bit.
+                    EXPECT_EQ(ab, 0.0) << "barrier != pipelined default (case=" << c.label << " pass=" << pass << ")";
+                }
+            }
+        }
     }
 }
 
