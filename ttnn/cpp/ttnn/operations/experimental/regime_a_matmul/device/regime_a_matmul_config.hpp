@@ -59,9 +59,16 @@ enum RegimeADiag : uint32_t {
     // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only
     // define; identical config/tensors/transport/reduction, only the CB0 wait placement differs.
     DIAG_FULL_IN0_WAIT = 1u << 10,
-    // NOTE: bits 1<<11 .. 1<<14 were grouped-K compute (DIAG_KGROUP2/4/8 + DIAG_KGROUP_PREWAIT), conclusively
-    // rejected and removed (tools/mm_sweep/GROUPED_K_REPORT.md). Recover from commits 56b37f5d5e6 / 7b3f93ddaa5
-    // (impl) and a5b7986b18f / 3593ecd4083 (experiment) if ever revisited. Reuse these bit positions freely.
+    // Phase-2 (writer) drain discipline. DEFAULT (this bit CLEAR) = PIPELINED: reuse a source CB slot once its
+    // payload has DEPARTED L1 (noc_async_writes_flushed), signal the reduction receiver with ordered
+    // payload->semaphore ops (same peer + NoC, like the in0 ring), and defer completion to ONE final
+    // write+atomic barrier before kernel return — so the split-K reduction chain and DRAM output pipeline
+    // across bands / N-sub-blocks instead of stalling on a per-block completion barrier. This bit restores the
+    // OLD per-block noc_async_write_barrier (wait remote completion before popping each CB2/CB7 slot), kept as
+    // an A/B diagnostic. Identical config/tensors/compute/ring/reduction — only per-block write sync differs.
+    // (bits 1<<12 .. 1<<14 are free — were grouped-K, removed; recover from 56b37f5d5e6/7b3f93ddaa5 +
+    // a5b7986b18f/3593ecd4083. See tools/mm_sweep/GROUPED_K_REPORT.md.)
+    DIAG_BARRIER_DRAIN = 1u << 11,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;

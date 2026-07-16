@@ -272,9 +272,16 @@ void kernel_main() {
                     }
                 }
             }
-            noc_async_write_barrier();
+#ifdef DIAG_BARRIER_DRAIN
+            noc_async_write_barrier();  // A/B baseline: wait remote completion before reusing the slot
+#else
+            noc_async_writes_flushed();  // DEFAULT (pipelined): pages departed L1 -> out_cb slot safe to reuse
+#endif
             cb_pop_front(out_cb, out_blk);
         }
+#ifndef DIAG_BARRIER_DRAIN
+        noc_async_write_barrier();  // pipelined: single deferred completion barrier before return (no atomics)
+#endif
         return;
     }
 
@@ -326,8 +333,16 @@ void kernel_main() {
             noc_semaphore_wait_min(redfree_ptr, nb + 1);  // next signalled its slot (nb%2) is free
             uint64_t dst = get_noc_addr(red_next_x, red_next_y, reduce_base + (nb % 2) * out_blk_bytes);
             noc_async_write(r, dst, out_blk_bytes);
-            noc_async_write_barrier();
+#ifdef DIAG_BARRIER_DRAIN
+            noc_async_write_barrier();        // A/B baseline: wait remote completion, then signal
             noc_semaphore_inc(next_recv, 1);  // block nb delivered
+#else
+            // DEFAULT (pipelined): payload THEN signal to the SAME peer on the SAME NoC (ordered, like the in0
+            // ring) so the receiver never observes readiness before its partial-sum has landed. Flush (not a
+            // full barrier) so the out_cb source slot is reusable; completion is deferred to the final barrier.
+            noc_semaphore_inc(next_recv, 1);  // block nb delivered (ordered after the payload write)
+            noc_async_writes_flushed();       // payload departed L1 -> out_cb slot safe to reuse
+#endif
         } else {
             const uint32_t n_off = n_start + nb * N_block;  // global N tile of this subblock
             for (uint32_t m = 0; m < M_block; ++m) {
@@ -337,9 +352,20 @@ void kernel_main() {
                     }
                 }
             }
+#ifdef DIAG_BARRIER_DRAIN
             noc_async_write_barrier();
+#else
+            noc_async_writes_flushed();  // output pages departed L1 -> out_cb slot safe to reuse
+#endif
         }
         cb_pop_front(out_cb, out_blk);
     }
+#ifndef DIAG_BARRIER_DRAIN
+    // Pipelined (default): single deferred completion before return — drain this core's forwarded partial-sums
+    // / DRAM output writes AND the non-posted reduction-readiness semaphore atomics (noc_semaphore_inc), so no
+    // in-flight NoC transaction outlives the program (writes_flushed above only guarantees source-L1 reuse).
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
+#endif
 #endif
 }
