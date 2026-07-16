@@ -61,9 +61,8 @@ def _run(mesh_device, path, scenario):
     [ccl.ccl_mesh_param(ccl.SP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_kvpe_all_gather_perf(mesh_device, device_params, scenario):
+def test_kvpe_all_gather_perf(mesh_device, scenario):
     """Profile the SP all-gather used for the GLM KVPE prefix."""
-    del device_params
     _run(mesh_device, ccl.KVPE_ALL_GATHER, scenario)
 
 
@@ -73,9 +72,8 @@ def test_kvpe_all_gather_perf(mesh_device, device_params, scenario):
     [ccl.ccl_mesh_param(ccl.TP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm_head_to_sequence_reshard_perf(mesh_device, device_params, scenario):
+def test_glm_head_to_sequence_reshard_perf(mesh_device, scenario):
     """Profile GLM's head-sharded to sequence-sharded TP redistribution."""
-    del device_params
     _run(mesh_device, ccl.GLM_HEAD_TO_SEQUENCE, scenario)
 
 
@@ -85,7 +83,6 @@ def test_glm_head_to_sequence_reshard_perf(mesh_device, device_params, scenario)
     [ccl.ccl_mesh_param(ccl.TP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm_sequence_to_head_reshard_perf(mesh_device, device_params, scenario):
+def test_glm_sequence_to_head_reshard_perf(mesh_device, scenario):
     """Profile GLM's sequence-sharded to head-sharded TP redistribution."""
-    del device_params
     _run(mesh_device, ccl.GLM_SEQUENCE_TO_HEAD, scenario)
