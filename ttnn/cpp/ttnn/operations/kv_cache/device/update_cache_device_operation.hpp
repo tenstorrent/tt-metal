@@ -33,9 +33,8 @@ struct UpdateKVCacheOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // batch_idx, update_idx and batch_offset are excluded from compute_program_hash (so calls
+    // batch_idx, update_idx and batch_offset are excluded from the default program-cache hash (so calls
     // differing only in them cache-hit), yet the factories bake the values they derive
     // (cache_start_id, tile_update_offset, batch_read_offset) into runtime args. Those must be
     // re-applied to the cached program on every dispatch or they freeze at the first cache-miss
