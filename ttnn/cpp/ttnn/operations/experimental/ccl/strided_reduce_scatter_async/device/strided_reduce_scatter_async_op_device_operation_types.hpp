@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -50,6 +51,45 @@ struct operation_attributes_t {
     uint32_t mm_block_wt;
     std::optional<uint32_t> mm_N_full_block_wt;
     std::optional<uint32_t> chunk_width_in_mm_blocks;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "optional_intermediate_mem_config",
+        "topology",
+        "has_barrier_semaphore",
+        "using_persistent_buffers",
+        "sub_device_id",
+        "cluster_axis",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
+        "mm_cores_y",
+        "mm_block_ht",
+        "mm_block_wt",
+        "mm_N_full_block_wt",
+        "chunk_width_in_mm_blocks");
+    auto attribute_values() const {
+        return std::make_tuple(
+            dim,
+            num_links,
+            ring_size,
+            output_mem_config,
+            optional_intermediate_mem_config,
+            topology,
+            barrier_semaphore.has_value(),
+            using_persistent_buffers,
+            sub_device_id,
+            cluster_axis,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            mm_cores_y,
+            mm_block_ht,
+            mm_block_wt,
+            mm_N_full_block_wt,
+            chunk_width_in_mm_blocks);
+    }
 
     // Add attributes method for reflection
     auto attributes() const {
