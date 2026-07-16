@@ -876,6 +876,20 @@ class TTVibeVoiceLM:
         x = ttnn.add(x, ffn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
 
+    def build_lm_head_subset(self, token_ids) -> ttnn.Tensor:
+        """Return a [1,1,hidden,N] tiled lm_head weight holding ONLY the columns for ``token_ids``
+        (in the given order).  For a constrained greedy decode where only a handful of tokens are
+        selectable, projecting hidden by this subset and argmax over the N logits is IDENTICAL to
+        argmax over the full vocab with all other tokens masked to -inf — but replaces the
+        [hidden x 151936] matmul + full-vocab mask-add + full-vocab argmax with a [hidden x N]
+        matmul + N-wide argmax.  Pass token_ids sorted ascending so argmax tie-breaking matches the
+        full-vocab argmax exactly."""
+        full = ttnn.to_torch(self.w.lm_head_w).to(torch.float32)  # [1,1,hidden,vocab]
+        sub = full[:, :, :, list(token_ids)].contiguous()  # [1,1,hidden,N]
+        return ttnn.as_tensor(
+            sub, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
     def forward_decode_traced_embeds(
         self,
         inputs_embeds: ttnn.Tensor,
@@ -884,8 +898,15 @@ class TTVibeVoiceLM:
         cur_pos: ttnn.Tensor,
         kv_cache: KVCache,
         return_last_hidden: bool = False,
-    ) -> Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
-        """Capturable single-token decode over an already-embedded input [1,1,1,hidden]."""
+        need_logits: bool = True,
+        lm_head_w: Optional[ttnn.Tensor] = None,
+    ) -> Tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
+        """Capturable single-token decode over an already-embedded input [1,1,1,hidden].
+
+        ``need_logits=False`` skips the lm_head projection entirely (used by the negative-CFG
+        forward, whose logits are discarded — bit-exact, saves the full lm_head).  ``lm_head_w``
+        (a [1,1,hidden,N] column subset) projects only the selectable tokens for a constrained
+        decode — argmax over its N logits == argmax over the full vocab masked to the same tokens."""
         cfg = self.cfg
         x = inputs_embeds
         if x.dtype == ttnn.float32:
@@ -900,7 +921,10 @@ class TTVibeVoiceLM:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
-        logits = ttnn.linear(x, self.w.lm_head_w, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logits = None
+        if need_logits:
+            head_w = lm_head_w if lm_head_w is not None else self.w.lm_head_w
+            logits = ttnn.linear(x, head_w, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits, last_hidden
 
     def _rope_rows_from_pos(self, cur_pos: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
