@@ -107,7 +107,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
             maxrel = float(line.split("max_rel_err=")[1])
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 18432, 20480, 24576)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -497,48 +497,57 @@ KG_SHAPES = [
     ("control", "mt2_64x6144x4608", 64, 6144, 4608, None),
     ("control", "mt4_128x6144x4608", 128, 6144, 4608, None),
 ]
-KG_MASKS = [(1, 0), (2, 2048), (4, 4096), (8, 8192)]  # Kg -> RegimeADiag mask
+# (variant label, Kg, RegimeADiag mask). Streamed (default KGROUP) vs prewait (|1<<14=16384) vs Kg=1.
+KG_VARIANTS = [
+    ("kg1", 1, 0),
+    ("strm2", 2, 2048),
+    ("strm4", 4, 4096),
+    ("strm8", 8, 8192),
+    ("pre2", 2, 2048 | 16384),
+    ("pre4", 4, 4096 | 16384),
+    ("pre8", 8, 8192 | 16384),
+]
 
 
 def kgroup(relaunches=3):
-    # Fixed-config A/B over Kg=1/2/4/8 at identical configs. Kg=1 = the current progressive baseline. Relaunches
-    # are INTERLEAVED across Kg (round-robin) so no Kg is always measured back-to-back. Reports median, %change
-    # vs Kg=1, util%512, per-RISC spans, PCC(max_rel_err), K_num_blocks, #groups, CB1 alloc. Raw:
-    # regime_a_kgroup_bench.json.
+    # Fixed-config comparison of Kg=1 vs STREAMED grouped-K (Kg=2/4/8) vs PREWAIT grouped-K (Kg=2/4/8) at
+    # identical configs. Kg=1 = the current progressive baseline. Relaunches are INTERLEAVED across variants
+    # (round-robin) so none is always measured back-to-back. Reports median, %change vs Kg=1, util%512,
+    # per-RISC spans, PCC(max_rel_err), K_num_blocks, #groups, CB1 alloc. Raw: regime_a_kgroup_bench.json.
     out = []
     for grp, label, M, K, N, explicit in KG_SHAPES:
         cfg = _cfg_for(M, K, N, explicit)
         Knb, N_sub, N_bpc = kg_geom(M, K, N, cfg)
         ideal = ideal_us(M, K, N)
-        # interleaved relaunches: round r -> each Kg once
-        runs = {kg: [] for kg, _ in KG_MASKS}
-        for _r in range(relaunches):
-            for kg, mask in KG_MASKS:
-                runs[kg].append(run_one(M, K, N, cfg, mask))
+        runs = {v: [] for v, _, _ in KG_VARIANTS}
+        for _r in range(relaunches):  # interleaved: round r -> each variant once
+            for v, kg, mask in KG_VARIANTS:
+                runs[v].append(run_one(M, K, N, cfg, mask))
         per = {}
-        for kg, mask in KG_MASKS:
-            oks = [x for x in runs[kg] if x.get("ok") and x["wall_us"]]
+        for v, kg, mask in KG_VARIANTS:
+            oks = [x for x in runs[v] if x.get("ok") and x["wall_us"]]
             walls = sorted(x["wall_us"] for x in oks)
             med = statistics.median(walls) if walls else None
             cb1b = cb1_blocks_for(Knb, N_bpc, kg)
-            per[kg] = {
+            per[v] = {
+                "kg": kg,
                 "mask": mask,
                 "walls": walls,
                 "med_us": med,
                 "min_us": (walls[0] if walls else None),
                 "n_ok": len(oks),
                 "util512_pct": (ideal / med * 100 if med else None),
-                "pcc_maxrelerr": [x.get("max_rel_err") for x in runs[kg]],
+                "pcc_maxrelerr": [x.get("max_rel_err") for x in runs[v]],
                 "risc": (oks[0]["risc"] if oks else None),
                 "k_num_blocks": Knb,
                 "n_groups": cdiv(Knb, kg),
                 "cb1_blocks": cb1b,
                 "cb1_tiles": cb1b * cfg[3] * N_sub,
             }
-        base = per[1]["med_us"]
-        for kg, _ in KG_MASKS:
-            m = per[kg]["med_us"]
-            per[kg]["vs_kg1_pct"] = ((m / base - 1) * 100) if (base and m) else None
+        base = per["kg1"]["med_us"]
+        for v, _, _ in KG_VARIANTS:
+            m = per[v]["med_us"]
+            per[v]["vs_kg1_pct"] = ((m / base - 1) * 100) if (base and m) else None
         out.append(
             {
                 "group": grp,
@@ -550,13 +559,14 @@ def kgroup(relaunches=3):
                 "ideal_us": ideal,
                 "k_num_blocks": Knb,
                 "N_sub": N_sub,
-                "kg": per,
+                "N_bpc": N_bpc,
+                "variants": per,
             }
         )
         summ = " ".join(
-            f"Kg{kg}={per[kg]['med_us'] if per[kg]['med_us'] is None else round(per[kg]['med_us'],1)}"
-            f"({'' if per[kg]['vs_kg1_pct'] is None else ('%+d' % round(per[kg]['vs_kg1_pct']))}%,cb1={per[kg]['cb1_blocks']}b)"
-            for kg, _ in KG_MASKS
+            f"{v}={per[v]['med_us'] if per[v]['med_us'] is None else round(per[v]['med_us'],1)}"
+            f"({'' if per[v]['vs_kg1_pct'] is None else ('%+d' % round(per[v]['vs_kg1_pct']))}%)"
+            for v, _, _ in KG_VARIANTS
         )
         print(f"[kgroup/{grp}] {label:20} cfg={cfg} Knb={Knb} ideal={ideal:.1f}  {summ}", flush=True)
         json.dump(out, open(f"{HERE}/regime_a_kgroup_bench.json", "w"), indent=2)
