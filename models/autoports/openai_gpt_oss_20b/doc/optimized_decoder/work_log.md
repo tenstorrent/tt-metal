@@ -441,4 +441,6 @@ verifying the dense advisor chain operation-by-operation against
 `final_ir.mlir`, the cumulative BFP4 veto, mandatory artifact hashes, current
 JUnits, selected timing, watcher output, and final profiler reports. No
 blocking finding remained. The stage implementation/evidence commit SHA is
-recorded below after the scoped local commit.
+`9949cb70f3f82cde84cd725d864bdb092c97ea62`. The commit passed all applicable
+repository hooks; the end-of-file normalizer alone was skipped to preserve the
+byte-exact generated shard-advisor report and its documented SHA-256.
