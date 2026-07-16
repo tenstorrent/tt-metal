@@ -1626,15 +1626,11 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::RSUB_INT32)
     {
-        // int32 reverse subtract: out = in1 - in0. INT32_2S_COMP selects the SM32
-        // (sign-magnitude) load/store DataLayout, which matches the harness' int32
-        // pack path, so signed results round-trip. (Plain INT32/I32 leaves the dest
-        // in two's-complement, which the sign-magnitude packer then mis-reads.)
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_rsub_int,
-            (APPROXIMATION_MODE, ckernel::InstrModLoadStore::INT32_2S_COMP, PER_FACE_ITERATIONS),
+            (APPROXIMATION_MODE, ckernel::InstrModLoadStore::INT32, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,

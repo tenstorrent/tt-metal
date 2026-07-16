@@ -517,12 +517,7 @@ def test_sfpu_binary_lcm(formats, dest_acc, mathop):
     dest_acc=[DestAccumulation.Yes],
 )
 def test_sfpu_binary_rsub_int32(formats, dest_acc, mathop):
-    # int32 reverse subtract: out = in1 - in0 (tile1 - tile0). Exact integer math on
-    # the full signed range: the kernel is driven with the SM32 (sign-magnitude)
-    # store layout, which matches the harness' int32 pack path, so negative results
-    # round-trip faithfully (unlike the divide kernels, which emit two's-complement).
-    # Uses the default int stimuli, like add/sub.
-    sfpu_binary(formats, dest_acc, mathop)
+    sfpu_binary(formats, dest_acc, mathop, twos_complement=True)
 
 
 # Number of faces per tile for the [64, 32] two-tile binary harness layout
@@ -846,6 +841,7 @@ def sfpu_binary(
     src_A_override=None,
     spec_A=None,
     spec_B=None,
+    twos_complement=False,
 ):
 
     input_dimensions = [64, 32]
@@ -923,6 +919,7 @@ def sfpu_binary(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         unpack_to_dest=formats.input_format.is_32_bit(),
