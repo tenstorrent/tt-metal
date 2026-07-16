@@ -102,9 +102,10 @@ void kernel_main() {
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // Phase 2 barrier signal targets (0 for 1D, >0 for 2D)
-    // Max targets = pad2_num_links * 2 directions (up to 8 W fabric cores)
-    constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
+    // Phase 2 barrier signal targets (0 for 1D, >0 for 2D). Under W-mux each (link,dir) fans out to
+    // num_w_workers reader cores, so the max is pad2_num_links * 2 * num_w_workers (MAX_PAD2_NUM_LINKS
+    // 4 * 2 * 4 workers = 32). Must match MAX_PHASE2_SIGNAL_TARGETS in the program factory.
+    constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 32;
     const uint32_t num_phase2_signal_targets = get_arg_val<uint32_t>(arg_idx++);
     uint8_t signal_noc_x[MAX_PHASE2_SIGNAL_TARGETS];
     uint8_t signal_noc_y[MAX_PHASE2_SIGNAL_TARGETS];

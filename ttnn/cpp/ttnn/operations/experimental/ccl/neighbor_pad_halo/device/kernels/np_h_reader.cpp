@@ -30,7 +30,9 @@ constexpr uint32_t H_COALESCE = get_compile_time_arg_val(ct_after_src + 3);
 // exchange. On the direct path (0) np_writer signals the barrier instead.
 constexpr uint32_t H_SIGNAL_W_RECV = get_compile_time_arg_val(ct_after_src + 4);
 constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
-constexpr uint32_t MAX_W_BAR_TARGETS = 16;
+// Max W reader cores this H reader signals on the H->W barrier: pad2_num_links * 2 * num_w_workers
+// under W-mux (MAX_PAD2_NUM_LINKS 4 * 2 * 4 workers = 32). Must match MAX_W_BARRIER_TARGETS in the factory.
+constexpr uint32_t MAX_W_BAR_TARGETS = 32;
 
 void kernel_main() {
     ///////////////////////////////////////////////////

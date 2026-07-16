@@ -617,9 +617,17 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     virtual_opposite_core.y};          // barrier_sem_noc0_y
                 // Phase 2 signal targets (W fabric reader cores). Mux path: signal the relocated mux
                 // worker-reader cores (each waits the H->W barrier) instead of the standard column-0 W cores.
-                constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
+                // Must match MAX_PHASE2_SIGNAL_TARGETS in np_writer.cpp.
+                constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 32;
                 const std::vector<CoreCoord>& w_sig_cores = use_w_mux ? mux_worker_virtual : w_fabric_virtual_cores;
                 const uint32_t n_w_sig = static_cast<uint32_t>(w_sig_cores.size());
+                // Every H writer signals every W reader; if this ever exceeds the array the readers past
+                // the cap never see the H->W barrier and deadlock, so fail loudly instead.
+                TT_FATAL(
+                    n_w_sig <= MAX_PHASE2_SIGNAL_TARGETS,
+                    "neighbor_pad_halo: {} W reader cores exceeds MAX_PHASE2_SIGNAL_TARGETS ({})",
+                    n_w_sig,
+                    MAX_PHASE2_SIGNAL_TARGETS);
                 writer_rt_args.push_back(n_w_sig);
                 for (uint32_t s = 0; s < MAX_PHASE2_SIGNAL_TARGETS; s++) {
                     if (s < n_w_sig) {
@@ -813,7 +821,14 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     r_rt.push_back(dir ? is_first_device : is_last_device);
                     r_rt.push_back(dir);
                     // H->W barrier targets: this reader signals these W-reader cores after its recv drains.
-                    constexpr uint32_t MAX_W_BARRIER_TARGETS = 16;
+                    // Must match MAX_W_BAR_TARGETS in np_h_reader.cpp; overflow silently strands the W
+                    // readers past the cap at the barrier, so fail loudly instead.
+                    constexpr uint32_t MAX_W_BARRIER_TARGETS = 32;
+                    TT_FATAL(
+                        w_sig.size() <= MAX_W_BARRIER_TARGETS,
+                        "neighbor_pad_halo: {} W reader cores exceeds MAX_W_BARRIER_TARGETS ({})",
+                        w_sig.size(),
+                        MAX_W_BARRIER_TARGETS);
                     r_rt.push_back(static_cast<uint32_t>(w_sig.size()));
                     for (uint32_t t = 0; t < MAX_W_BARRIER_TARGETS; t++) {
                         r_rt.push_back(t < w_sig.size() ? w_sig[t].x : 0u);
@@ -1275,8 +1290,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         true,
                         w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,
                         w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y};
-                    // No Phase 2 signal targets
-                    constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
+                    // No Phase 2 signal targets (W writer doesn't signal the H->W barrier), but the
+                    // placeholder count must match np_writer.cpp's MAX_PHASE2_SIGNAL_TARGETS read.
+                    constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 32;
                     w_writer_rt_args.push_back(0);
                     for (uint32_t s = 0; s < MAX_PHASE2_SIGNAL_TARGETS * 2; s++) {
                         w_writer_rt_args.push_back(0);
