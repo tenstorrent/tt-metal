@@ -132,3 +132,61 @@
   test_scaled_dot_product_attention_coarse_chunk.py` (22 cases: prime/near-prime
   tile-counts forcing partial chunks — Skv_t ∈ {5,6,7,101}, + KV-pad, w-pad, GQA,
   multi-core partial-q — across none/custom/explicit-scale).
+
+## Refinement 2 — Numerical configurability (dtype + compute-config + intermediate precision)
+- Date: 2026-07-16
+- What was done: Added `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`
+  and `False` to `SUPPORTED["fp32_dest_acc_en"]`, with **zero compute-kernel changes**
+  (the `/numeric-formats-metal` pass condition held — every compute phase is
+  helper-based and no format is hard-coded). All work is descriptor-level:
+  * **Intermediate precision.** `cb_scores`/`cb_exp` are promoted to **Float32 under
+    fp32-DEST accumulation** (bf16 otherwise, so the perf-flagged bf16 + 16-bit-DEST
+    regime stays byte-identical). They are consumed by FPU ops (add/reduce/sub/matmul),
+    so they are **not** `UnpackToDestFp32`-tagged (that tag is exclusive to FPU
+    consumers) — the L1 format alone lifts the softmax path from bf16 (7-bit) to fp32
+    (unpacks to TF32, 10-bit). `cb_q_scaled` stays bf16 (byte-identical); the real
+    accumulators (`row_max`/`row_sum`/`out_accum`/`pv`/`corr`/`m_new`/`sum_chunk`)
+    were already fp32.
+  * **L1 sizing.** `_fit_l1`/`_working_set_bytes` now use real per-dtype tile bytes
+    (fp32 doubles, bf8b halves) + the intermediate format, so fp32 input no longer
+    under-counts the working set and the block knobs shrink correctly for large `D`.
+  * **Compute config.** Threaded end-to-end via the caller's `compute_kernel_config`
+    (added `dst_full_sync_en`; `math_fidelity`/`fp32_dest_acc_en`/`math_approx_mode`
+    were already wired). Defaults reproduce `default_compute_kernel_config()` exactly
+    (HiFi4 + fp32 DEST) so callers passing nothing see identical results.
+  * **EXCLUSIONS** (all verifier-pre-authorized): `{float32, fp32_dest_acc_en=False}`
+    (maxed input + non-maxed accumulator is lossy — honored, not silently forced True)
+    and `{bfloat8_b, w_non_aligned}` + `{bfloat8_b, h_non_aligned}`. The bf8b
+    non-aligned failure is the canonical block-float × partial-tile incompatibility:
+    it tracks the `S_kv % 32 ≠ 0` additive-−∞ KV-padding mask path (measured PCC
+    ≈ 0.2–0.5 across the non-aligned golden cells — catastrophic, not a near-miss),
+    which appears under BOTH alignment tags, so both are refused. bf8b + tile_aligned
+    is fully supported.
+- Accuracy achieved (test_scaled_dot_product_attention_precision_matrix, 8 shapes ×
+  3 dtype × 4 fidelity × 2 acc × 2 dist, EXCLUSION cells skipped): min PCC per config
+  — fp32/HiFi4 0.99999, bf16/HiFi4 0.99984, bf8b/HiFi4 0.99892, LoFi ≈ 0.991;
+  worst non-degenerate PCC 0.9905 (bf8b/LoFi/acc=False). rtol/atol not gated (PCC is
+  the sole gate per the skill); norm-RMS + max/median abs logged. Uniform-positive
+  inputs on long sequences produce near-constant references where PCC is
+  ill-conditioned (documented metric artifact) — those cells gated on relative
+  absolute error instead. Golden `TOLERANCES` (0.999/0.02 fp32, 0.995/0.05 bf16,
+  0.99/0.12 bf16-False & bf8b) all met.
+- Golden test progress: **1181 passed / 1088 xfailed** (0 failed, 0 xpass — no
+  SUPPORTED drift), up from 252 at R1b — the dtype × fp32_dest_acc_en additions
+  multiplied the supported cartesian. The perf-flagged loose case (`1×10×9472×128`,
+  bf16, `fp32_dest_acc_en=False`, HiFi2) now **runs and passes** its soft PCC≥0.997
+  gate, unblocking R3. Unit suite **62/62**; translated bf16 sanity green (bf8b
+  translated cases are all tile-aligned → unaffected by the non-aligned EXCLUSION).
+- Issues encountered: (1) bf8b + non-tile-aligned catastrophically misses tolerance
+  on the KV-padding mask path — the anticipated block-float EXCLUSION (probes 010–012
+  characterized it across all 10 non-aligned golden shapes at both acc settings).
+  (2) `test_regression.py`: the fp32 intermediates fixed **2 of the 9** pre-existing
+  precision misses (the genuine-precision `×10`-magnitude peaked-softmax cases);
+  the remaining **7** (uniform/negative) are `max_abs = 1 bf16 ULP`, `ulp_p99 = 1` —
+  the documented normalized-RMS-on-near-constant-reference metric artifact, floored
+  by the **bf16 output** quantization. The regression tests hard-code bf16, so R2's
+  float32 path cannot reach them; not a bug, never green in prior phases, outside the
+  registry cartesian (no golden gate).
+- Tests added: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/
+  test_scaled_dot_product_attention_precision_matrix.py` (the authoritative precision
+  characterization) + `precision_matrix_results.md` (per /numeric-formats-metal §10).

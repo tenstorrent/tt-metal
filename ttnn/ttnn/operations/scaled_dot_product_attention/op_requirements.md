@@ -174,7 +174,7 @@ misses). A strict *chunk-4-for-every-prime* variant would need a pad-to-full +
 `−∞`-mask scheme (compute always full blocks) — deferred; no test/golden cell needs
 it and the perf delta is marginal.
 
-### [ ] Refinement 2 — Numerical configurability (dtype + compute-config + intermediate precision)
+### [x] Refinement 2 — Numerical configurability (dtype + compute-config + intermediate precision)
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, add
 `False` to `SUPPORTED["fp32_dest_acc_en"]`, expose the caller's
@@ -200,6 +200,35 @@ distributions back under tolerance — see verification_report.md; they are genu
 bf16 precision, ruled not-a-bug). Order after R1 so the bf8b + non-aligned
 EXCLUSIONS have their axis values to reference. Pass condition per the skill: zero
 kernel changes when helpers/descriptor precision are wired correctly.
+
+**Landed (R2)**: `SUPPORTED["dtype"] += {float32, bfloat8_b}` and
+`SUPPORTED["fp32_dest_acc_en"] += False`, with **zero compute-kernel changes** (the
+pass condition held — every phase is helper-based, no hard-coded formats). All
+descriptor-level: `cb_scores`/`cb_exp` promoted to **Float32 under fp32-DEST**
+accumulation (bf16 otherwise, so the perf-flagged bf16+16-bit-DEST shape stays
+byte-identical); consumed by FPU ops (add/reduce/sub/matmul) so **not**
+`UnpackToDestFp32`-tagged — the L1 format alone lifts bf16→TF32 through the softmax.
+`_fit_l1`/`_working_set_bytes` now use real per-dtype tile bytes + the intermediate
+format (fp32 input no longer under-counts L1). `compute_kernel_config` threaded
+end-to-end (added `dst_full_sync_en`; math_fidelity/fp32_dest_acc_en/math_approx_mode
+were already wired). **EXCLUSIONS armed** (all verifier-pre-authorized): `{float32,
+fp32_dest_acc_en=False}` (maxed input + non-maxed acc, honored not forced) and
+`{bfloat8_b, w_non_aligned}` + `{bfloat8_b, h_non_aligned}` — the canonical
+block-float × partial-tile incompatibility (measured PCC ≈ 0.2–0.5 on the `S_kv%32≠0`
+additive-−∞ mask path; both alignment tags carry it, so both refused; bf8b +
+tile_aligned is fully supported). Golden **1181 passed / 1088 xfailed** (0 failed,
+0 xpass — no drift), up from 252 at R1b; the perf-flagged loose case
+(`1×10×9472×128`, bf16, `fp32_dest_acc_en=False`) now **runs and passes**, unblocking
+R3. Unit **62/62**; translated bf16 sanity green. New
+`test_scaled_dot_product_attention_precision_matrix.py` (8 shapes × 3 dtype × 4
+fidelity × 2 acc × 2 dist, EXCLUSION cells skipped): **272 passed / 112 skipped**;
+worst non-degenerate PCC 0.9905 (bf8b/LoFi). `test_regression.py`: the fp32
+intermediates fixed **2 of the 9** pre-existing precision misses (the genuine-precision
+`×10`-magnitude peaked-softmax cases); the remaining **7** (uniform/negative) are
+`max_abs = 1 bf16 ULP`, `ulp_p99=1` — the documented normalized-RMS-on-near-constant-
+reference metric artifact, floored by the **bf16 output** quantization (the regression
+tests hard-code bf16, so R2's float32 path cannot reach them). Not a bug, never green
+in prior phases, outside the registry cartesian (no golden gate).
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile (data-movement)
 

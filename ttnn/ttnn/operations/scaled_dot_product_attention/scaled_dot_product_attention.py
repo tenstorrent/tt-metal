@@ -135,7 +135,11 @@ EXCLUSIONS = [
 PROPERTIES = {
     "multi_core": {"value": True, "source": "declared"},
     "bounded_cb": {"value": True, "source": "declared"},
-    "math_fidelity": {"value": ["HiFi4"], "source": "declared"},
+    # R2: the caller's compute_kernel_config (math_fidelity / fp32_dest_acc_en /
+    # math_approx_mode / dst_full_sync_en) is threaded end-to-end; all four
+    # fidelities are honored (default HiFi4). Characterized in
+    # test_scaled_dot_product_attention_precision_matrix.
+    "math_fidelity": {"value": ["HiFi4", "HiFi3", "HiFi2", "LoFi"], "source": "measured"},
 }
 
 
