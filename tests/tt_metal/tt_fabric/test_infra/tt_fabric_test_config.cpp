@@ -91,7 +91,7 @@ ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::N
             TT_FATAL(
                 parse_scalar<std::string>(dest_yaml["hops"]) == "full_mcast",
                 "Scalar 'hops' only supports the value 'full_mcast'.");
-            config.full_hops = true;
+            config.full_mcast_hops = true;
         } else {
             TT_FATAL(dest_yaml["hops"].IsMap(), "Expected 'hops' to be a map or the scalar 'full_mcast'.");
             std::unordered_map<RoutingDirection, uint32_t> hops_map;
@@ -2475,9 +2475,9 @@ void TestConfigBuilder::resolve_hop_sentinels(ParsedTestConfig& test) {
                 continue;
             }
             auto& dest = pattern.destination.value();
-            if (dest.full_hops) {
+            if (dest.full_mcast_hops) {
                 dest.hops = route_manager_.get_full_mcast_hops(src_node);
-                dest.full_hops = false;
+                dest.full_mcast_hops = false;
             } else if (dest.hops.has_value()) {
                 for (auto& [dir, count] : dest.hops.value()) {
                     if (count == kHopsMax) {
