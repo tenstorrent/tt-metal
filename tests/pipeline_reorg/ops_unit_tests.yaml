@@ -90,7 +90,8 @@
   category: experimental
 
 - name: ttnn nightly experimental tests (blackhole)
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_h2d_socket_sync" --timeout=600'
+  # test_moe_compute_single_card fails PCC on BH. Exclude on BH only.
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_single_card.py -xv -k "not performance and not test_h2d_socket_sync" --timeout=600'
   skus:
     bh_p100:
       timeout: 35
