@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   mirror-fork-branch:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - name: Parse input
         id: parse_input
