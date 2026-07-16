@@ -1,0 +1,863 @@
+{
+  "schema_version": 1,
+  "hf_model": "tiiuae/Falcon3-10B-Base",
+  "source_ir": {
+    "prefill": "ttnn_falcon3_10b_tp_qb2_bs32_isl128_runbd43_g0_1784012293355.mlir",
+    "decode": "ttnn_falcon3_10b_tp_qb2_bs32_isl128_runbd43_g1_1784012509714.mlir"
+  },
+  "source_ir_root": "/home/mvasiljevic/qb2-irs/ttnn-mlir-ttnn_falcon3_10b_tp_qb2_bs32_isl128_1784012293355/ttnn_falcon3_10b_tp_qb2_bs32_isl128_1784012293355",
+  "classification": {
+    "prefill": {
+      "fill_cache_ops": 2560,
+      "paged_update_cache_ops": 0,
+      "decode_sdpa_ops": 0,
+      "runtime_dump": false,
+      "returns_full_vocab_logits": false
+    },
+    "decode": {
+      "fill_cache_ops": 0,
+      "paged_update_cache_ops": 80,
+      "decode_sdpa_ops": 40,
+      "runtime_dump": false,
+      "returns_full_vocab_logits": false
+    }
+  },
+  "mesh": {
+    "shape": [
+      1,
+      4
+    ],
+    "axes": [
+      {
+        "name": "mesh_dim_0",
+        "index": 0,
+        "size": 1,
+        "role": "degenerate"
+      },
+      {
+        "name": "tp",
+        "index": 1,
+        "size": 4,
+        "role": "tensor_parallel"
+      }
+    ],
+    "tp_degree": 4,
+    "tp_mesh_dims": [
+      1
+    ],
+    "axis_name_provenance": "The TTNN IR records meshShape = 1x4 and addresses axes numerically. The name tp is assigned to mesh dimension 1 because every layer collective uses cluster_axis = 1 and every projection/head local width is one quarter of the dense width."
+  },
+  "layer_index": 20,
+  "layer_scope": {
+    "num_hidden_layers": 40,
+    "selection": "representative middle decoder layer reused from the functional-decoder translation",
+    "prefill_boundary": "input RMSNorm 40 through the residual result after all_reduce 41; RMSNorm 42 starts layer 21",
+    "decode_boundary": "input RMSNorm 40 through the residual result after all_reduce 41; RMSNorm 42 starts layer 21",
+    "excluded": [
+      "token embedding",
+      "final model norm",
+      "lm_head",
+      "sampling or argmax tail"
+    ]
+  },
+  "sharding_encoding": {
+    "form": "presharded TTNN function arguments and TP-local tensor shapes",
+    "explicit_mesh_shard_ops_in_selected_graphs": 0,
+    "explanation": "Shardy partitioning has already been lowered out of these selected TTNN graphs. Main-function tensor arguments carry ttcore.shard_status<presharded> and local_shape metadata; projection and KV-cache local shapes expose the mesh-axis-1 partition. The only explicit inter-device operations remaining in the layer are all_reduce operations."
+  },
+  "head_ownership": {
+    "full_query_heads": 12,
+    "local_query_heads": 3,
+    "full_kv_heads": 4,
+    "local_kv_heads": 1,
+    "head_dim": 256,
+    "mesh_dim": 1,
+    "coordinate_rule": "TP coordinate r in [0,4) owns query heads [3*r, 3*r+3) and KV head [r, r+1).",
+    "evidence": "Both emits split the local fused width 1280 into Q=768 (3 heads), K=256 (1 head), and V=256 (1 head); the dense functional decoder restores Q=3072 (12 heads), K=1024 (4 heads), and V=1024 (4 heads)."
+  },
+  "tensors": [
+    {
+      "name": "model.layers.20.input_layernorm.weight",
+      "source_name": "model.model.layers.20.input_layernorm.parametrizations.weight.original",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "global_shape": [
+        3072
+      ],
+      "local_shape": [
+        3072
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout48",
+        "decode": "#ttnn_layout46"
+      }
+    },
+    {
+      "name": "model.layers.20.self_attn.q_proj.weight",
+      "source_name": "model.model.layers.20.self_attn.q_proj.parametrizations.weight.original",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        3072,
+        3072
+      ],
+      "local_shape": [
+        768,
+        3072
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout10",
+        "decode": "#ttnn_layout2"
+      }
+    },
+    {
+      "name": "model.layers.20.self_attn.k_proj.weight",
+      "source_name": "model.model.layers.20.self_attn.k_proj.parametrizations.weight.original",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1024,
+        3072
+      ],
+      "local_shape": [
+        256,
+        3072
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout9",
+        "decode": "#ttnn_layout1"
+      }
+    },
+    {
+      "name": "model.layers.20.self_attn.v_proj.weight",
+      "source_name": "model.model.layers.20.self_attn.v_proj.parametrizations.weight.original",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        1024,
+        3072
+      ],
+      "local_shape": [
+        256,
+        3072
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout9",
+        "decode": "#ttnn_layout1"
+      }
+    },
+    {
+      "name": "model.layers.20.self_attn.o_proj.weight",
+      "source_name": "model.model.layers.20.self_attn.o_proj.parametrizations.weight.original",
+      "kind": "tensor_row",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "in_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        3072,
+        3072
+      ],
+      "local_shape": [
+        3072,
+        768
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout23",
+        "decode": "#ttnn_layout19"
+      }
+    },
+    {
+      "name": "model.layers.20.post_attention_layernorm.weight",
+      "source_name": "model.model.layers.20.post_attention_layernorm.parametrizations.weight.original",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "global_shape": [
+        3072
+      ],
+      "local_shape": [
+        3072
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout48",
+        "decode": "#ttnn_layout46"
+      }
+    },
+    {
+      "name": "model.layers.20.mlp.gate_proj.weight",
+      "source_name": "model.model.layers.20.mlp.gate_proj.parametrizations.weight.original",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        23040,
+        3072
+      ],
+      "local_shape": [
+        5760,
+        3072
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout1",
+        "decode": "#ttnn_layout11"
+      }
+    },
+    {
+      "name": "model.layers.20.mlp.up_proj.weight",
+      "source_name": "model.model.layers.20.mlp.up_proj.parametrizations.weight.original",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "out_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        23040,
+        3072
+      ],
+      "local_shape": [
+        5760,
+        3072
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout1",
+        "decode": "#ttnn_layout11"
+      }
+    },
+    {
+      "name": "model.layers.20.mlp.down_proj.weight",
+      "source_name": "model.model.layers.20.mlp.down_proj.parametrizations.weight.original",
+      "kind": "tensor_row",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "in_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        3072,
+        23040
+      ],
+      "local_shape": [
+        3072,
+        5760
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout5",
+        "decode": "#ttnn_layout15"
+      }
+    },
+    {
+      "name": "layer.20.key_cache",
+      "source_name": "arg427_1",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "kv_head"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        32,
+        4,
+        128,
+        256
+      ],
+      "local_shape": [
+        32,
+        1,
+        128,
+        256
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ],
+      "ownership": "TP coordinate r owns KV head r.",
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout50",
+        "decode": "#ttnn_layout48"
+      }
+    },
+    {
+      "name": "layer.20.value_cache",
+      "source_name": "arg428_1",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "kv_head"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_shape": [
+        32,
+        4,
+        128,
+        256
+      ],
+      "local_shape": [
+        32,
+        1,
+        128,
+        256
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ],
+      "ownership": "TP coordinate r owns KV head r.",
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout50",
+        "decode": "#ttnn_layout48"
+      }
+    },
+    {
+      "name": "model.rotary_emb.inv_freq",
+      "source_name": "model.model.rotary_emb.inv_freq",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "global_shape": [
+        128
+      ],
+      "local_shape": [
+        128
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ],
+      "source_ir_layouts": {
+        "prefill": "#ttnn_layout30",
+        "decode": "#ttnn_layout40"
+      }
+    },
+    {
+      "name": "rope.cos.prefill",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        17,
+        256
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        256
+      ],
+      "generated_from": "model.rotary_emb.inv_freq and replicated prefill positions"
+    },
+    {
+      "name": "rope.sin.prefill",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        17,
+        256
+      ],
+      "local_shape": [
+        1,
+        1,
+        17,
+        256
+      ],
+      "generated_from": "model.rotary_emb.inv_freq and replicated prefill positions"
+    },
+    {
+      "name": "rope.cos.decode",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        1,
+        256
+      ],
+      "local_shape": [
+        1,
+        1,
+        1,
+        256
+      ],
+      "generated_from": "model.rotary_emb.inv_freq and the replicated decode position"
+    },
+    {
+      "name": "rope.sin.decode",
+      "kind": "replicated",
+      "shard_axes": [],
+      "shard_axis_names": [],
+      "mesh_dims": [],
+      "global_shape": [
+        1,
+        1,
+        1,
+        256
+      ],
+      "local_shape": [
+        1,
+        1,
+        1,
+        256
+      ],
+      "generated_from": "model.rotary_emb.inv_freq and the replicated decode position"
+    }
+  ],
+  "activations": [
+    {
+      "name": "layer.20.input_residual.prefill",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "ir_shape": [
+        1,
+        1,
+        544,
+        3072
+      ],
+      "logical_shape": [
+        1,
+        32,
+        17,
+        3072
+      ],
+      "boundary": "layer_input"
+    },
+    {
+      "name": "layer.20.output_residual.prefill",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "ir_shape": [
+        1,
+        1,
+        544,
+        3072
+      ],
+      "logical_shape": [
+        1,
+        32,
+        17,
+        3072
+      ],
+      "boundary": "layer_output",
+      "replication_evidence": "The row-parallel down projection is sum-reduced on TP axis 1 before the final residual add."
+    },
+    {
+      "name": "layer.20.input_residual.decode",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "ir_shape": [
+        1,
+        1,
+        32,
+        3072
+      ],
+      "logical_shape": [
+        1,
+        32,
+        1,
+        3072
+      ],
+      "boundary": "layer_input"
+    },
+    {
+      "name": "layer.20.output_residual.decode",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "ir_shape": [
+        1,
+        1,
+        32,
+        3072
+      ],
+      "logical_shape": [
+        1,
+        32,
+        1,
+        3072
+      ],
+      "boundary": "layer_output",
+      "replication_evidence": "The row-parallel down projection is sum-reduced on TP axis 1 before the final residual add."
+    },
+    {
+      "name": "layer.20.input_layernorm.output",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.fused_qkv",
+      "kind": "tensor_column",
+      "shard_axes": [
+        -1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_feature_width": 5120,
+      "local_feature_width": 1280,
+      "local_partition": {
+        "query": 768,
+        "key": 256,
+        "value": 256
+      },
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.query_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_heads": 12,
+      "local_heads": 3,
+      "head_dim": 256,
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.key_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_heads": 4,
+      "local_heads": 1,
+      "head_dim": 256,
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.value_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_heads": 4,
+      "local_heads": 1,
+      "head_dim": 256,
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.attention_output_heads",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_heads": 12,
+      "local_heads": 3,
+      "head_dim": 256,
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.attention_concat_local",
+      "kind": "tensor_column",
+      "shard_axes": [
+        -1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_feature_width": 3072,
+      "local_feature_width": 768,
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.o_proj.partial",
+      "kind": "tensor_row",
+      "shard_axes": [],
+      "mesh_dims": [
+        1
+      ],
+      "feature_width": 3072,
+      "semantic": "Each TP coordinate holds a full-width partial sum from its 768-column input shard; all_reduce(sum) produces the replicated attention update.",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.post_attention_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.post_attention_layernorm.output",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.mlp.gate",
+      "kind": "tensor_column",
+      "shard_axes": [
+        -1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_feature_width": 23040,
+      "local_feature_width": 5760,
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.mlp.up",
+      "kind": "tensor_column",
+      "shard_axes": [
+        -1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_feature_width": 23040,
+      "local_feature_width": 5760,
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.mlp.silu_gate_times_up",
+      "kind": "tensor_column",
+      "shard_axes": [
+        -1
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "global_feature_width": 23040,
+      "local_feature_width": 5760,
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.down_proj.partial",
+      "kind": "tensor_row",
+      "shard_axes": [],
+      "mesh_dims": [
+        1
+      ],
+      "feature_width": 3072,
+      "semantic": "Each TP coordinate holds a full-width partial sum from its 5760-column MLP shard; all_reduce(sum) produces the replicated MLP update.",
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "layer.20.attention_mask.prefill",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "semantic": "The same causal/cache mask is supplied to the local attention heads on every TP coordinate."
+    },
+    {
+      "name": "layer.20.attention_mask.decode",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "semantic": "The position-derived mask is repeated over the three local query heads; its values are identical on every TP coordinate."
+    },
+    {
+      "name": "layer.20.cache_position.decode",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "semantic": "The single decode position is repeated over all 32 batch users and all TP coordinates."
+    }
+  ],
+  "collectives": [
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "tp",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "prefill layer 20, immediately after self_attn.o_proj and before the attention residual add"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "tp",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "prefill layer 20, immediately after mlp.down_proj and before the layer-output residual add"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "tp",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "decode layer 20, immediately after self_attn.o_proj and before the attention residual add"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "tp",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "decode layer 20, immediately after mlp.down_proj and before the layer-output residual add"
+    }
+  ],
+  "collective_inventory": {
+    "present": [
+      "ttnn.all_reduce"
+    ],
+    "absent": [
+      "ttnn.all_gather",
+      "ttnn.reduce_scatter",
+      "ttnn.all_to_all",
+      "ttnn.mesh_shard",
+      "ttnn.collective_permute"
+    ],
+    "per_path_layer_count": 2
+  },
+  "tp_collapse_cross_check": {
+    "column_parallel": [
+      "self_attn.q_proj.weight axis 0",
+      "self_attn.k_proj.weight axis 0",
+      "self_attn.v_proj.weight axis 0",
+      "mlp.gate_proj.weight axis 0",
+      "mlp.up_proj.weight axis 0"
+    ],
+    "row_parallel": [
+      "self_attn.o_proj.weight axis 1 followed by all_reduce(sum) on mesh dim 1",
+      "mlp.down_proj.weight axis 1 followed by all_reduce(sum) on mesh dim 1"
+    ],
+    "kv_head_ownership": "Four source TP coordinates each own one of four KV heads; the functional decoder restores all four heads on its 1x1 mesh.",
+    "functional_decoder_evidence": "FunctionalDecoder.from_state_dict loads the nine canonical full Hugging Face layer-20 tensors, forms dense Q/K/V widths 3072/1024/1024 and dense MLP width 23040, and its runtime forwards contain no collectives. This is consistent with dropping the two source all-reduces only after replacing local row-parallel matmuls with full dense matmuls.",
+    "result": "consistent"
+  },
+  "absent_tensor_classes": [
+    {
+      "class": "attention_projection_biases",
+      "reason": "Falcon3 attention_bias is false and neither selected IR has layer-20 attention bias arguments."
+    },
+    {
+      "class": "mlp_projection_biases",
+      "reason": "Falcon3 mlp_bias is false and neither selected IR has layer-20 MLP bias arguments."
+    },
+    {
+      "class": "query_and_key_norm_weights",
+      "reason": "The segmented layer has only input_layernorm and post_attention_layernorm; neither selected IR contains q_norm or k_norm weights or operations."
+    },
+    {
+      "class": "moe_router_and_expert_tensors",
+      "reason": "Falcon3-10B-Base layer 20 is a dense SwiGLU layer and the selected IR contains no router, expert, or all_to_all operations."
+    }
+  ]
+}

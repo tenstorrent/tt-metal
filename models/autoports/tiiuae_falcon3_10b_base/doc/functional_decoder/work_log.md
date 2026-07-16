@@ -111,3 +111,7 @@ The exact real-weight shard `model-00003-of-00005.safetensors` is cached locally
 - Complete file gate after review remediation: `3 passed in 8.16s` (static fallback audit, synthetic prefill/decode, and real-weight prefill/decode). Structured pytest outcomes and all ten reported PCC values are retained as JUnit properties in `doc/functional_decoder/pytest_results.xml`.
 - Independent `$stage-review`: initial verdict `more-work-needed`; required measured context-capacity evidence and an exact configured-cache invariant. Both were remediated. A fresh independent rereview returned `clean-pass` with no required work or hard-check gaps.
 - Stage implementation checkpoint: `4ed7c269820843621d1b5d326859badd9891a622` (`Add Falcon3 10B IR functional decoder`).
+
+## Multichip provenance
+
+`multichip_provenance.json` retro-captures the selected prefill/decode IR sharding for representative layer 20: a 1×4 mesh with TP degree 4 on mesh/cluster axis 1. Q/K/V and gate/up are column-parallel, O/down are row-parallel, and the complete per-layer collective set is two ring-sum `ttnn.all_reduce` operations per path (after O and down); the selected graphs contain no other collective type.
