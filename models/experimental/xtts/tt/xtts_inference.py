@@ -24,6 +24,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.xtts.reference.xtts_conditioning import chunk_cond_mel
 from models.experimental.xtts.reference.xtts_gpt_generate import MAX_AUDIO_TOKENS
 from models.experimental.xtts.tt.xtts_conditioning import TtXttsConditioning
 from models.experimental.xtts.tt.xtts_full_decoder import TtXttsHifiDecoder
@@ -45,7 +46,18 @@ class TtXtts(LightweightModule):
         self.decoder = TtXttsHifiDecoder(device, ref_decoder_full)
 
     def _cond_latents(self, cond_mel):  # torch [1, 80, s] -> ttnn [1, 32, 1024]
-        return ttnn.permute(self.conditioning(cond_mel), (0, 2, 1))  # [1, 1024, 32] -> [1, 32, 1024]
+        # coqui get_gpt_cond_latents: chunk the mel into gpt_cond_chunk_len windows, encode
+        # each (get_style_emb -> [1, 1024, 32]), and average the style embeddings. A mel
+        # shorter than one chunk yields a single window == the previous single-pass behaviour.
+        parts = [self.conditioning(m) for m in chunk_cond_mel(cond_mel)]  # each [1, 1024, 32]
+        if len(parts) == 1:
+            style = parts[0]
+        else:
+            acc = parts[0]
+            for p in parts[1:]:
+                acc = ttnn.add(acc, p)
+            style = ttnn.multiply(acc, 1.0 / len(parts))
+        return ttnn.permute(style, (0, 2, 1))  # [1, 1024, 32] -> [1, 32, 1024]
 
     def _decode_wav(self, latents_tt, ref_wav_spk):
         # bf16 GPT latents -> fp32 ROW_MAJOR for the fp32 HiFi-GAN decoder.
