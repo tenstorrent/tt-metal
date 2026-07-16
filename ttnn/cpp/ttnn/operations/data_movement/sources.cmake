@@ -126,8 +126,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     squeeze/squeeze.cpp
     stack/stack.cpp
     tilize/device/tilize_device_operation.cpp
-    tilize/device/tilize_multi_core_default_program_factory.cpp
     tilize/device/tilize_multi_core_block_program_factory.cpp
+    tilize/device/tilize_multi_core_default_program_factory.cpp
+    tilize/device/tilize_multi_core_retile_program_factory.cpp
     tilize/device/tilize_single_core_program_factory.cpp
     tilize/device/tilize_multi_core_sharded_program_factory.cpp
     tilize/tilize.cpp

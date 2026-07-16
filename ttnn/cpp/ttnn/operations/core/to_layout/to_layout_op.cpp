@@ -128,9 +128,9 @@ Tensor to_layout_impl(
                 TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
                 return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize, sub_core_grids);
             }
+            tt::tt_metal::Tile tensor_tile = tt::tt_metal::Tile();
             if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
-                    tt::tt_metal::Tile tensor_tile = tt::tt_metal::Tile();
                     if (tensor.layout() == ttnn::TILE_LAYOUT) {
                         tensor_tile = tensor.tensor_spec().tile();
                     }
@@ -158,6 +158,7 @@ Tensor to_layout_impl(
                     dtype,
                     use_multicore_tilize,
                     false /* low perf mode */,
+                    tensor_tile,
                     sub_core_grids);
             }
             throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
