@@ -24,7 +24,7 @@ auto-falls back to `recurrent` whenever `T<=64`, so plain decode, `T=1`, is the 
 <details><summary>mermaid source</summary>
 
 ```mermaid
-flowchart LR
+flowchart TD
     classDef tensor fill:#eef,stroke:#448,color:#000;
     classDef op fill:#fed,stroke:#a52,color:#000;
 
