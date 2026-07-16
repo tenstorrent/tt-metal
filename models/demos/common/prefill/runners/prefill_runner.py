@@ -911,10 +911,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
 
 if __name__ == "__main__":
-    # This fixes issue with small RLIMIT_NPROC value on some galaxies.
-    import resource
+    # Best-effort: some galaxies ship a small RLIMIT_NPROC soft limit that starves the runner's threads, so
+    # raise it to the hard limit. Guarded — get/setrlimit can raise OSError/ValueError when the limit is
+    # immutable or the process lacks permission, and that must not crash the runner before main().
+    try:
+        import resource
 
-    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
-    resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+        _, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+        resource.setrlimit(resource.RLIMIT_NPROC, (hard, hard))
+    except (OSError, ValueError) as e:
+        logger.warning(f"[prefill] could not raise RLIMIT_NPROC to the hard limit: {e}")
 
     main()

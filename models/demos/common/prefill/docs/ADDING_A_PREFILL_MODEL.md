@@ -133,32 +133,27 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output)."""
 
-    # --- OPTIONAL hooks; only if the model supports golden-trace bring-up / cache migration. The
-    #     engine guards kv_cache_pcc_check with getattr, so a model that omits it just can't run
-    #     PREFILL_STANDALONE_PCC=1. Production serving never calls any of these. Keep the heavy PCC /
-    #     table logic in your model's own validation module (a thin forwarder on the runtime), not
-    #     inline here — see deepseek_v3_d_p/tt/runners/prefill_kv_validation.py. ---
+    # --- OPTIONAL hooks — implement only if your model supports golden-trace bring-up / cache migration;
+    #     production serving never calls them. Keep the heavy PCC / table logic in your model's own
+    #     validation module (a thin forwarder on the runtime), not inline here — see
+    #     deepseek_v3_d_p/tt/runners/prefill_kv_validation.py. ---
     def kv_cache_pcc_check(self, kv_cache, *, slot_id, n_chunks, trace_dir=None,
                            first_layer_idx=0, real_len=None, pt_path_override=None) -> float:
-        """PCC `kv_cache` for `slot_id` against the golden trace; return the min per-layer PCC (asserting
-        on failure). The single place your model's KV layout + golden format live. Called when
-        PREFILL_STANDALONE_PCC=1, and reused by the common migration validator (burst BEFORE/AFTER, and
-        the pairwise golden anchor). `real_len` caps the compared extent to real (non-pad) tokens;
-        `pt_path_override` selects a per-slot .pt golden (raise if your model has no such path)."""
+        """PCC slot `slot_id`'s `kv_cache` against the golden trace; return the min per-layer PCC (asserting
+        on failure). The single place your model's KV layout + golden format live. `real_len` caps the
+        compared extent to real (non-pad) tokens; `pt_path_override` selects a per-slot .pt golden (raise if
+        your model has no such path)."""
 
     def read_slot_kv(self, kv_cache, slot) -> "list[torch.Tensor]":
-        """Pairwise-migration primitive: the slot's raw stored cache blocks for a dst==src compare — one
-        host tensor per cache tensor, shaped [num_layers, heads(or 1), seq_cache, head_dim] (replicas
-        collapsed to 1). No un-rotation (both migration endpoints share the block-cyclic layout, so the
-        compare is rotation-invariant). Only needed for PREFILL_MIGRATE_PAIRWISE."""
+        """Read one slot's KV cache from device to host: one host tensor per cache tensor, each
+        `[num_layers, heads(or 1), seq_cache, head_dim]` (replicas collapsed to 1), in the raw on-device
+        (block-cyclic) layout — NOT un-rotated to natural token order."""
 
     def build_kv_chunk_table(self, kv_cache, path: str) -> str:
-        """Build + serialize the KV-chunk address table for `kv_cache` (your model's
-        block-cyclic layout) to `path` and return it. The engine then PUBLISHES it to the
-        migration worker — this method issues no comms. Called when PREFILL_ENABLE_MIGRATION=1.
-        Use the shared `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py)
-        for the config-population + protobuf-serialize boilerplate; supply only your model's
-        table builder + chunk geometry."""
+        """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
+        to `path` and return it; issue no comms (the engine publishes it). Use the shared
+        `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py) for the config-population +
+        protobuf-serialize boilerplate; supply only your model's table builder + chunk geometry."""
 
     def set_layer_ack_channel(self, channel) -> None:
         """Register the per-layer LayerAck channel (the engine creates and owns it); the

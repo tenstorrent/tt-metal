@@ -338,10 +338,9 @@ class TtPrefillRuntime:
         )
 
     def read_slot_kv(self, kv_cache, slot: int):
-        """Pairwise-migration primitive (bring-up only): the slot's raw stored cache blocks for a dst==src
-        compare, one host tensor per cache tensor — ``[k, v, index_k]``, each ``[num_layers, heads(or 1),
-        seq_cache, head_dim]`` (index_k collapsed to one TP replica). No un-rotation: both migration
-        endpoints carry the same block-cyclic layout, so a raw src-vs-dst compare is rotation-invariant.
+        """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache
+        tensor, each ``[num_layers, heads(or 1), seq_cache, head_dim]`` (index_k collapsed to one TP
+        replica), in the raw on-device (block-cyclic) layout — not un-rotated to natural token order.
         DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is ND-sharded ROUND_ROBIN_1D, and slicing
         into another ND-shard miscomputes the DRAM core on host read-back."""
         mesh_device = self.mesh_device
