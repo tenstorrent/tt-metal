@@ -118,9 +118,10 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // READERS_FIRST: place every mm==0 DRAM reader (same bank targets / NoC / logical-Manhattan spiral) before
     // any slave. IN1_NEAR (implies readers-first): place each slave at the free worker minimizing the directed
     // reader->slave hop distance on the group's in1-reader NoC. Emits PLACECOST (gated by TT_MM_PLACECOST).
-    const bool place_readers_first = (diag & RegimeADiag::DIAG_PLACE_READERS_FIRST) != 0u;
-    const bool place_in1_near = (diag & RegimeADiag::DIAG_PLACE_IN1_NEAR) != 0u;
-    if ((place_readers_first || place_in1_near) && Sm > 1u) {
+    const bool place_current = (diag & RegimeADiag::DIAG_PLACE_CURRENT) != 0u;              // diag: planner's placement
+    const bool place_readers_first = (diag & RegimeADiag::DIAG_PLACE_READERS_FIRST) != 0u;  // diag: bank-spiral slaves
+    const bool place_in1_near = !place_readers_first;  // DEFAULT = in1-near slaves; readers-first bit -> bank spiral
+    if (!place_current && Sm > 1u) {  // DEFAULT (and readers-first diag) re-place; DIAG_PLACE_CURRENT keeps planner's
         namespace expd = tt::tt_metal::experimental::Device;
         const uint32_t preaders = geo.num_cores / 8u;
         const CoreCoord grid = device->compute_with_storage_grid_size();

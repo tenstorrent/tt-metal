@@ -110,7 +110,7 @@ TEST_F(RegimeADiagFixture, Run) {
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
     if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
         mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 || mask == 524288 ||
-        mask == 1048576) {
+        mask == 1048576 || mask == 2097152) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -474,8 +474,9 @@ TEST_F(RegimeADiagFixture, PlacementCorrectness) {
         {"sm4_wide", 256, 6144, 4608, 1, 3, 4, 2, 1},
         {"sm1_noop", 256, 6144, 768, 1, 12, 1, 2, 1},  // Sm=1: placement is a no-op
     };
+    // mask 0 = in1_near (default); 1<<21 = current (baseline); 1<<19 = readers_first. Reference = current.
     const std::vector<std::pair<uint32_t, const char*>> masks = {
-        {0u, "current"}, {524288u, "readers_first"}, {1048576u, "in1_near"}};
+        {2097152u, "current"}, {0u, "in1_near"}, {524288u, "readers_first"}};
     auto* device = device_;
 
     for (const auto& c : cases) {
@@ -520,8 +521,8 @@ TEST_F(RegimeADiagFixture, PlacementCorrectness) {
                 const std::vector<float> got = out.to_vector<float>();
                 const double p = pcc(got, golden);
                 double ab = -1.0;
-                if (mask == 0u && pass == 0) {
-                    cur_out = got;
+                if (cur_out.empty()) {
+                    cur_out = got;  // first entry = current (reference)
                 } else {
                     ab = 0.0;
                     for (size_t i = 0; i < got.size(); ++i) {
