@@ -42,10 +42,8 @@ from helpers.utils import passed_test
 
 PACK_UNTILIZE_TILE_SIZES = [
     (32, 32),
-    # (16, 32),
     (1, 32),
     (2, 32),
-    # (4, 32),
 ]
 
 
@@ -106,12 +104,6 @@ def generate_pack_untilize_combinations(
                     for dimensions in generate_unary_input_dimensions(
                         dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
                     ):
-                        # if dimensions != list(tile_dims):
-                        #     continue
-                        # if dimensions[1] != 32:
-                        #     continue
-                        if list(dimensions) != [32, 32]:
-                            continue
                         combinations.append(
                             (
                                 fmt,
@@ -131,10 +123,10 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Int16,
         DataFormat.Int32,
-        # DataFormat.MxFp4,
-        # DataFormat.MxInt8,
-        # DataFormat.MxInt4,
-        # DataFormat.MxInt2,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
     ],
 )
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(

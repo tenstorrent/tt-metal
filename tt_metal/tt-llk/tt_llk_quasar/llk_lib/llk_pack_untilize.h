@@ -104,7 +104,7 @@ inline void _llk_pack_untilize_strided_mop_config_(const std::uint8_t buf_desc_i
 {
     constexpr std::uint32_t ROWS_READ      = 4;
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
-    const std::uint32_t MOP_INNER_LOOP     = tensor_shape.face_r_dim == 16 ? 3 : 1;
+    const std::uint32_t MOP_INNER_LOOP     = tensor_shape.face_r_dim == FACE_R_DIM ? 3 : 1;
 
     std::uint32_t pack_instrn = TT_OP_PACR_STRIDE(1, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
     const std::uint32_t incr_L1_ptr =
@@ -213,10 +213,8 @@ inline void _llk_pack_untilize_strided_sparse_mop_config_(const std::uint8_t buf
     load_replay_buf<0, replay_buf_len>(
         [buf_desc_id]
         {
-            // packs Face 0: columns 0-15 in tile (L1_16datums_Row_Index=0)
-            TT_PACR_STRIDE(2, 1, 0, 0, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
-            // packs Face 1: columns 16-31 in tile (L1_16datums_Row_Index=1)
-            TT_PACR_STRIDE(2, 1, 0, 1, 1, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+            TT_PACR_STRIDE(2, 1, 0, 1, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+            TT_PACR_STRIDE(2, 1, 0, 1, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
         });
 
     constexpr std::uint32_t reset_src_row = TT_OP_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::ROW_SEL, p_pacr::PACK0, 0);
@@ -247,7 +245,7 @@ inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, con
     stride_cfg.f.stride_offset_0                         = tensor_shape.num_faces_c_dim * FULL_CT_DIM; // stride each row by 2*FULL_CT_DIM 16-datum rows
     cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32]  = stride_cfg.val[1];
 
-    if (tensor_shape.face_r_dim >= 8) // 32x32, 16x32, 8x32
+    if (tensor_shape.face_r_dim >= ckernel::pack::PACR_STRIDE_OFFSET_ROWS) // 32x32, 16x32, 8x32
     {
         _llk_pack_untilize_strided_mop_config_<FULL_CT_DIM>(buf_desc_id, tensor_shape);
     }
@@ -275,10 +273,10 @@ template <std::uint32_t FULL_CT_DIM>
 inline void _llk_pack_untilize_strided_(
     const std::uint8_t buf_desc_id, const TensorShape& tensor_shape, const std::uint32_t l1_tile_idx, const std::uint32_t src_tile_idx)
 {
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, src_tile_idx * tensor_shape.face_r_dim * tensor_shape.total_num_faces());
-    TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx * tensor_shape.num_faces_c_dim);
-    if (tensor_shape.face_r_dim >= 8)
+    if (tensor_shape.face_r_dim >= ckernel::pack::PACR_STRIDE_OFFSET_ROWS)
     {
+        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx * tensor_shape.num_faces_c_dim);
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, src_tile_idx * tensor_shape.face_r_dim * tensor_shape.total_num_faces());
         const std::uint32_t f1_row_idx = (tensor_shape.num_faces_c_dim == 1)
                                              ? l1_tile_idx * tensor_shape.num_faces_c_dim + tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim * FULL_CT_DIM
                                              : l1_tile_idx * tensor_shape.num_faces_c_dim + 1;
@@ -317,6 +315,13 @@ inline void _llk_pack_untilize_strided_(
     }
     else
     {
+        // PACR_STRIDE quirk: need to set BD as 1x1x16 to index rows as tiles
+        // This means that for input tensors with RT_DIM > 1, we need to multiply the l1 tile index calculation buy face_r_dim.
+        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx * tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim);
+        TT_SET_SRC_TILE_FACE_ROW_IDX(
+            p_set_inc_sel::TILE_SEL,
+            p_pacr::PACK0,
+            src_tile_idx * ckernel::pack::PACR_STRIDE_OFFSET_ROWS * tensor_shape.total_num_faces() * tensor_shape.face_r_dim);
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
 }

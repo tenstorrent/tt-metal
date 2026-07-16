@@ -149,6 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "cpack_common.h"
 #include "llk_pack_common.h"
 #include "llk_pack_untilize.h"
 #include "params.h"
@@ -173,6 +174,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t const buf_desc_id = 31;
 
     tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
+    if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS)
+    {
+        // PACR_STRIDE quirk: need to set BD as 1x1x16 to index rows as tiles
+        tdma_desc.buf_desc.f.y_dim = 1;
+    }
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
@@ -197,15 +203,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_pack_untilize_strided_init_<FULL_CT_DIM, BLOCK_CT_DIM>(buf_desc_id, tensor_shape);
 
-        // _llk_pack_untilize_ packs one block ct_dim of tiles (one tile row) at a time
-        std::uint32_t y_stride_external = FULL_CT_DIM;
-
         // Both unpack_to_dest and !unpack_to_dest produce one tile row at a time
         // into alternating banks (SyncHalf). Read from start of current bank (dest_idx 0);
         // section_done zeroes that bank and switches packer to the other bank.
         for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
         {
-            _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * y_stride_external, 0);
+            _llk_pack_untilize_strided_<FULL_CT_DIM>(buf_desc_id, tensor_shape, y * FULL_CT_DIM, 0);
             _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
