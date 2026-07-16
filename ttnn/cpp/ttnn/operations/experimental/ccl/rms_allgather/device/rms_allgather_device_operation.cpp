@@ -39,6 +39,32 @@ void RMSAllGatherDeviceOperation::validate_on_program_cache_miss(
         (tt::tt_metal::hal::get_arch_name() != "blackhole") || (a.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
+
+    // Input layout contract (see the fused_rms_minimal docstring). The op is width-sharded in L1 and does not reshard
+    // internally, so reject anything that would otherwise dereference an empty shard spec below with a bad optional.
+    TT_FATAL(
+        a.is_sharded(),
+        "fused_rms_minimal requires a width-sharded L1 input; an interleaved input is not supported. Reshard to "
+        "width-sharded L1 first.");
+    TT_FATAL(
+        a.memory_config().buffer_type() == BufferType::L1,
+        "fused_rms_minimal requires the input in L1 but got buffer type {}.",
+        a.memory_config().buffer_type());
+    TT_FATAL(
+        a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
+        "fused_rms_minimal requires a width-sharded input but got memory layout {}.",
+        a.memory_config().memory_layout());
+    // The all-gather addresses the input on the same cores the caller built the global_semaphore on, so the input
+    // shard grid must be covered by the semaphore's core range.
+    // Copy by value: attribute_values() returns a temporary tuple, so a reference into it would dangle.
+    const auto semaphore_cores = std::get<0>(args.semaphore.attribute_values());
+    TT_FATAL(
+        semaphore_cores.contains(a.shard_spec().value().grid),
+        "fused_rms_minimal requires the input to be sharded on the grid the global_semaphore was created on; the "
+        "input shard grid {} is not contained within the semaphore grid {}.",
+        a.shard_spec().value().grid,
+        semaphore_cores);
+
     uint32_t input_width = a.tensor_spec().tile().get_tile_shape()[1];
     uint32_t input_height = a.tensor_spec().tile().get_tile_shape()[0];
     TT_FATAL(
