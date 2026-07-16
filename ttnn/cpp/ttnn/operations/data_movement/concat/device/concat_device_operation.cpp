@@ -185,44 +185,6 @@ Tensor ConcatDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
 }
 
-ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto factory = select_program_factory(operation_attributes, tensor_args);
-    auto hash = tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.groups,
-        operation_attributes.output_mem_config,
-        operation_attributes.sub_core_grids,
-        factory.index(),
-        tensor_args.input_tensors.size());
-
-    for (std::size_t tensor_index = 0; tensor_index < tensor_args.input_tensors.size(); ++tensor_index) {
-        const auto& tensor = tensor_args.input_tensors[tensor_index];
-        hash = ttsl::hash::hash_objects(
-            hash,
-            tensor_index,
-            tensor.logical_shape().rank(),
-            tensor.logical_shape(),
-            tensor.padded_shape(),
-            tensor.layout(),
-            tensor.dtype(),
-            tensor.memory_config());
-    }
-
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    hash = ttsl::hash::hash_objects(
-        hash,
-        tensor_args.input_tensors.size(),
-        output_spec.logical_shape().rank(),
-        output_spec.logical_shape(),
-        output_spec.padded_shape(),
-        output_spec.layout(),
-        output_spec.data_type(),
-        output_spec.memory_config());
-
-    return hash;
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
 ConcatDeviceOperation::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
