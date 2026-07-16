@@ -204,7 +204,7 @@ def plot_step_time(
     print(f"Saved: {output_file}")
 
 
-def main():
+def main(raw_args: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(
         description="Compare training logs and generate comparison plots.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -264,7 +264,7 @@ Examples:
         help="Prefix for plot titles (e.g., 'NanoLlama SiLU ')",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(raw_args)
 
     # Collect all log files
     all_files = [args.baseline] + args.compare

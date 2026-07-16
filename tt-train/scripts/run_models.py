@@ -23,6 +23,7 @@ import yaml
 import tt_train_metrics
 import analyze_memory
 import analyze_steps
+import plot_training_comparison
 from model_tracer.generic_ops_tracer import get_machine_info
 
 
@@ -130,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extra-args",
         type=str,
-        default="",
+        default="--max_steps 100",
         help='String of args that will be concatenated and passed to all models. You can combine this with --filter-filenames or --exclude-filenames to avoid passing invalid args. Example --extra-args "--max_steps 50 --batch_size 32" --exclude-filenames linear_regression',
     )
     return parser.parse_args()
@@ -303,18 +304,25 @@ def main() -> int:
         print(pydantic_data)
 
         output_filename = output_dir / log_path.with_suffix(".json").name
+        print(f"output_filename: {output_filename}")
         tt_train_metrics.write_json(pydantic_data, output_filename)
 
         set_model_status(filename=model_filename, status="✅", elapsed_time=elapsed_time, log_path=str(log_path))
 
+        # Generate plots
+        plot_dir = output_dir / "plots" / model_filename
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Plot directory: {plot_dir}")
+        plot_training_comparison.main(["--baseline", str(log_path), "--output-dir", str(plot_dir)])
+
     # Show summary and display to Github if environment variable exists
-    df = pd.DataFrame(model_status)
-    df_md = df.to_markdown(index=False)
-    print("Summary:")
-    print(df_md)
-    if "GITHUB_STEP_SUMMARY" in os.environ:
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
-            print(df_md, file=fh)
+    # df = pd.DataFrame(model_status)
+    # df_md = df.to_markdown(index=False)
+    # print("Summary:")
+    # print(df_md)
+    # if "GITHUB_STEP_SUMMARY" in os.environ:
+    #     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+    #         print(df_md, file=fh)
 
     # Return error code 1 if any tests have failed
     return 1 if any(s["run status"] == "❌" for s in model_status) else 0
