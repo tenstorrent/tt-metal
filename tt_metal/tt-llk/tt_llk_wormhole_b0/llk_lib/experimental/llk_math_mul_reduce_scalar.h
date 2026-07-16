@@ -260,7 +260,9 @@ inline void _llk_math_mul_reduce_scalar_()
     TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
     TTI_GATESRCRST(0b1, 0b1);
 
-    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 0);
+    // WH ZEROACC signature is (clear_mode, AddrMode, dst) — BH additionally has use_32_bit_mode /
+    // clear_zero_flags fields that WH does not expose.
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, 0);
 
     execute_high_fidelity_gapool<math_fidelity>();
 }
