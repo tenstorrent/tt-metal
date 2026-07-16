@@ -244,6 +244,94 @@ def test_gptoss_bias_multi_expert(mesh_device, device_params, counts):
     run_multi_expert_bias(mesh_device, counts=counts, emb_dim=GPT_OSS_EMB, hidden_dim=GPT_OSS_HIDDEN)
 
 
+def run_bias_cache_hit(mesh_device, emb_dim, hidden_dim, num_tokens=256):
+    """Two invocations with IDENTICAL op attributes (same expert id, dims, token count,
+    and weights) but DIFFERENT bias tensors. The second call is a program-cache HIT, so
+    the reused program must patch the bias buffer addresses via runtime args; a stale
+    address would silently re-apply the first call's bias. Each output is checked against
+    its own reference, and the two outputs must differ (proving the second bias took effect)."""
+    torch.manual_seed(7)
+
+    # Shared weights across both calls — only the biases change, so the compare isolates
+    # bias-address patching rather than weight-address patching.
+    weights = {
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.08,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.08,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.05,
+    }
+
+    def _biases(scale):
+        return {
+            "gate_proj_bias": torch.randn(hidden_dim, dtype=torch.float32) * scale,
+            "up_proj_bias": torch.randn(hidden_dim, dtype=torch.float32) * scale,
+            "down_proj_bias": torch.randn(emb_dim, dtype=torch.float32) * scale,
+        }
+
+    biases_a = _biases(0.5)
+    biases_b = _biases(0.9)  # different magnitude + different values
+
+    torch_input = torch.randn(num_tokens, emb_dim, dtype=torch.float32)
+    with torch.no_grad():
+        ref_a = _torch_swigluoai_expert_with_bias(torch_input, weights, biases_a)
+        ref_b = _torch_swigluoai_expert_with_bias(torch_input, weights, biases_b)
+
+    def _idx(values):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+
+    def run_once(biases):
+        # A fresh TtRoutedExpert each call → new bias buffers, but IDENTICAL op attributes
+        # (expert id / dims / max_tokens / counts / dtypes / activation / fuse_bias), so the
+        # second invocation reuses the cached program and exercises the address override.
+        tt_expert = TtRoutedExpert(
+            mesh_device=mesh_device,
+            experts_per_chip=1,
+            global_expert_idx_table=_idx([0]),
+            emb_dim=emb_dim,
+            hidden_dim=hidden_dim,
+            max_tokens=num_tokens,
+            torch_weights=[weights],
+            torch_biases=[biases],
+            activations_dtype=ttnn.bfloat8_b,
+            weights_dtype=ttnn.bfloat4_b,
+            activation=ttnn.RoutedExpertActivation.SwiGluOai,
+        )
+        tt_input = ttnn.from_torch(
+            torch_input,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+        )
+        out = tt_expert(tt_input, _idx([num_tokens]), _idx([0]))
+        return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:num_tokens]
+
+    out_a = run_once(biases_a)
+    out_b = run_once(biases_b)  # program-cache hit on identical attrs → must patch bias addrs
+
+    pass_a, pcc_a = comp_pcc(ref_a, out_a, 0.97)
+    pass_b, pcc_b = comp_pcc(ref_b, out_b, 0.97)
+    logger.info(f"cache-hit bias: call A PCC={pcc_a}, call B (cache hit) PCC={pcc_b}")
+    assert pass_a, f"call A PCC below threshold: {pcc_a}"
+    assert pass_b, f"call B (cache hit) PCC below threshold: {pcc_b} — stale bias address on program-cache hit?"
+    # Sanity: the two biases genuinely produce different outputs, so B's pass is not a
+    # vacuous match against A's (still-resident) bias.
+    assert not torch.allclose(out_a, out_b, atol=1e-2), "outputs identical — second bias did not take effect"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_gptoss_bias_cache_hit(mesh_device, device_params):
+    """Program-cache hit must patch bias buffer addresses (no stale bias), gpt-oss dims."""
+    run_bias_cache_hit(mesh_device, emb_dim=GPT_OSS_EMB, hidden_dim=GPT_OSS_HIDDEN)
+
+
 def test_gptoss_bias_torch_reference_smoke():
     """Host-only (no device): guards the bias SwiGLU-OAI reference math and documents the gpt-oss
     expert formula. Not skipped — proves bias actually changes the output vs the bias-free path, so

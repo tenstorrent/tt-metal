@@ -166,6 +166,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t p_ts = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t im_ts = tt::tile_size(tt::DataFormat::Bfp8_b);
     const uint32_t out_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype()));
+    // Bias tile size (FUSE_BIAS): all three bias CBs share the gate-bias dtype
+    // (enforced in validation). Zero when unused so the estimators are unchanged
+    // on the bias-free path.
+    const uint32_t bias_ts =
+        op.fuse_bias ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_bias->dtype())) : 0;
     auto est_l1_bytes = [&](uint32_t gx, uint32_t pcM, uint32_t ibw_gu) -> uint64_t {
         const uint32_t pcN_gu = (N_gate_tiles_full + gx - 1) / gx;
         const uint32_t pcN_d = (N_down_tiles_full + gx - 1) / gx;
@@ -186,6 +191,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         b += 2ull * 8 * out_ts;              // CB_OUT (subblock <= 8 tiles, staged x2)
         b += 2ull * pcM * ibw_d * im_ts;     // CB_IN0_DOWN_FULL
         b += 8192;                           // counts + idx scratch
+        // Bias CBs (single-buffered, one full per-core N-slice each): gate/up use
+        // pcN_gu tiles, down uses pcN_d. Must be accounted here or a shape near the
+        // L1 limit can pass GRID_X selection and then overflow at program build.
+        b += 1ull * (2 * pcN_gu + pcN_d) * bias_ts;
         return b;
     };
 
@@ -335,6 +344,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;                  // cb_mm_partials_d
         total += static_cast<uint64_t>(d_out_subblock_h * d_out_subblock_w * 2) * out_tile_size;  // cb_out
         total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;               // cb_in0_down_full
+        // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
+        // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
+        total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
         return total;
     };
 
@@ -650,6 +662,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // per_core_N_d tiles. Bias broadcast across rows in the compute kernel.
     const bool fuse_bias = op.fuse_bias;
     if (fuse_bias) {
+        // Validation enforces gate/up/down biases share one dtype, so all three CBs
+        // (and the compute kernel's single unpack reconfig for gate/up) use it safely.
         const tt::DataFormat bias_df = tt::tt_metal::datatype_to_dataformat_converter(t.gate_bias->dtype());
         const uint32_t bias_tile_size = tt::tile_size(bias_df);
         make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);

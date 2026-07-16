@@ -215,7 +215,8 @@ FORCE_INLINE void matmul_phase(
     // holds this core's per_core_N_d columns (read once by the reader). d out
     // subblock height is 1, so the flat tile index gives col = flat % d_per_core_N.
     (void)in1_cb_id;
-    cb_wait_front(down_bias_cb_id, d_per_core_N);
+    CircularBuffer down_bias_cb(down_bias_cb_id);
+    down_bias_cb.wait_front(d_per_core_N);
     // Down matmul left SrcA on down weights (bf4), SrcB on activated (bf8).
     // Reconfig SrcA=partials (Float16_b), SrcB=down_bias before the bcast init.
     reconfig_data_format(partials_cb_id, down_bias_cb_id);
@@ -545,8 +546,10 @@ FORCE_INLINE void swiglu_oai_activation_phase(
     // NOT popped here (reused across chunks). add_bcast_rows sets SrcA=partials,
     // SrcB=bias — same format for gate and up, so one init covers both.
     (void)prev_srcA_cb_id;
-    cb_wait_front(gate_bias_cb_id, per_core_N_gu);
-    cb_wait_front(up_bias_cb_id, per_core_N_gu);
+    CircularBuffer gate_bias_cb(gate_bias_cb_id);
+    CircularBuffer up_bias_cb(up_bias_cb_id);
+    gate_bias_cb.wait_front(per_core_N_gu);
+    up_bias_cb.wait_front(per_core_N_gu);
     // The gate/up matmul left SrcA on the up weights (bf4) and SrcB on x (bf8).
     // The bcast add reads SrcA=partials (Float16_b), SrcB=bias — reconfig both
     // before the init (add_bcast uses both operands, unlike the copy path).

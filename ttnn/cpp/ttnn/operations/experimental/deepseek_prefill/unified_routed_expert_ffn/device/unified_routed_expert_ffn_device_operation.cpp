@@ -239,13 +239,34 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(b.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
             TT_FATAL(b.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
             TT_FATAL(is_dram_interleaved(b), "{} must be DRAM-interleaved", name);
+            // Exact LOGICAL shape: a single row of exactly `expected_n` columns. The
+            // padded-width check below is necessary (the kernel/reader address tiles by
+            // padded width) but not sufficient: shapes like (2, N) or (1, N-1) tile-pad
+            // to the same width and would otherwise be accepted and silently mis-applied
+            // (the reader loads only tile-row 0 and the compute kernel row-broadcasts it).
+            const auto& lshape = b.logical_shape();
+            TT_FATAL(
+                static_cast<uint32_t>(lshape[-1]) == expected_n && lshape.volume() == expected_n,
+                "{} logical shape {} must be a single row of its projection N ({})",
+                name,
+                lshape,
+                expected_n);
             TT_FATAL(
                 static_cast<uint32_t>(b.padded_shape()[-1]) == expected_n,
-                "{} last dim ({}) must match its projection N ({})",
+                "{} padded last dim ({}) must match its projection N ({})",
                 name,
                 b.padded_shape()[-1],
                 expected_n);
         }
+        // All three bias CBs are configured from the gate-bias dtype (and the compute
+        // kernel reuses one unpack format across gate/up), so the three biases must share
+        // a single dtype; a mixed-dtype call would read the wrong byte counts/formats.
+        TT_FATAL(
+            t.up_bias->dtype() == t.gate_bias->dtype() && t.down_bias->dtype() == t.gate_bias->dtype(),
+            "gate/up/down biases must share one dtype (got gate={}, up={}, down={})",
+            t.gate_bias->dtype(),
+            t.up_bias->dtype(),
+            t.down_bias->dtype());
         // Bias fusion is implemented only for the SwiGLU-OAI activation (gpt-oss):
         // the kernel adds gate/up bias before the clamp and down bias after the
         // down matmul. The SiLU path has no bias branch.
