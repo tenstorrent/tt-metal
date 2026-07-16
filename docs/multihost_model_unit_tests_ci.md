@@ -31,6 +31,17 @@ exabox infra, not the change):
 Infra-only failures seen after (unrelated to the change): `29459561439` (`curl (6)` DNS to the
 GitHub OIDC endpoint) and `29518601121` (HelmRelease not `Ready` within 5m).
 
+### Simplification: plain `mpirun` instead of `tt-run` — `fb666d4f5e1` (validated)
+
+For a single rank, `tt-run` only translated the rank binding into four env vars and built the
+`mpirun` command. Commit **`fb666d4f5e1`** replaces it with a direct `mpirun -np 1` that exports
+`TT_MESH_ID` / `TT_MESH_HOST_RANK` / `TT_MESH_GRAPH_DESC_PATH` / `TT_VISIBLE_DEVICES` itself (host
+selection, TCP interface, and env-forwarding all come from the job `env:`), and drops the
+`rank_bindings_mapping.yaml` / `rank0_binding.yaml` (only `mesh_graph_descriptor.textproto`
+remains). Run `29524718983` confirmed it reaches the **identical** result as the `tt-run` path
+(`2 failed, 2 skipped, 38 deselected`, same HF-gating stop), with `python3` correctly resolving to
+the worker venv via env-forwarding — no `bash -lc` needed.
+
 ## What is proven working
 
 The **CI infrastructure** is fully validated on hardware. The `models-unit-tests-multihost` job
