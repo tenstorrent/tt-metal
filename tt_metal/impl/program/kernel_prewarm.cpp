@@ -457,6 +457,7 @@ std::size_t run_prewarm(
     const std::string& out_kernel_root,
     const std::string& firmware_root,
     std::uint64_t build_key,
+    const std::string& root_dir,
     bool skip_device_init) {
     if (requests.empty()) {
         log_warning(tt::LogMetal, "kernel prewarm: manifest empty or unreadable; skipping");
@@ -471,6 +472,7 @@ std::size_t run_prewarm(
     size_t skipped_build_key = 0;
     size_t skipped_dup = 0;
     size_t skipped_device_init = 0;
+    size_t skipped_foreign_tree = 0;
     // A kernel is captured once per program instance, so shared kernels (dispatch, fabric, reused
     // ops) appear many times with the SAME out_dir. FileRenamer temp names are per-process, so two
     // concurrent builds of one out_dir collide on the temp .o and destructively corrupt the final
@@ -480,6 +482,18 @@ std::size_t run_prewarm(
     for (const auto& req : requests) {
         if (req.build_key != build_key) {
             ++skipped_build_key;
+            continue;
+        }
+        // build_key covers arch + compile config but NOT the source tree, so sibling trees with the
+        // same config collide on one build_key and, under a shared cache root, on this one manifest.
+        // A recipe's gpp and -I flags are absolute paths into the tree that captured it: replaying a
+        // sibling's recipe compiles that tree's headers, which mismatch this tree's binaries. gpp
+        // lives under root_dir (<root>/runtime/sfpi/...), optionally behind a ccache prefix, so it
+        // identifies the owning tree. Skip foreign recipes: a shared root then costs recompiles
+        // rather than miscompiles. An empty root_dir means the caller cannot identify the tree, so
+        // the filter is inert.
+        if (!root_dir.empty() && req.gpp.find(root_dir) == std::string::npos) {
+            ++skipped_foreign_tree;
             continue;
         }
         // Device-init dispatch/fabric kernels are compiled concurrently by device init (disjoint
@@ -539,12 +553,22 @@ std::size_t run_prewarm(
     log_info(
         tt::LogMetal,
         "kernel prewarm: built {} unique targets in {}ms ({} dup targets skipped, {} device-init entries "
-        "skipped, {} entries skipped for build_key mismatch)",
+        "skipped, {} entries skipped for build_key mismatch, {} entries skipped as foreign-tree)",
         launched,
         elapsed_ms,
         skipped_dup,
         skipped_device_init,
-        skipped_build_key);
+        skipped_build_key,
+        skipped_foreign_tree);
+    if (skipped_foreign_tree > 0) {
+        log_warning(
+            tt::LogMetal,
+            "kernel prewarm: {} manifest entries for this build_key were captured by a different source "
+            "tree and were skipped; this cache root is shared with another tree ({}). Give each tree its "
+            "own TT_METAL_CACHE to keep the prewarm effective.",
+            skipped_foreign_tree,
+            root_dir);
+    }
     return launched;
 }
 
@@ -617,7 +641,10 @@ void append_manifest_entry(const jit_server::CompileRequest& request) {
 }
 
 void maybe_launch_prewarm(
-    const std::string& out_kernel_root, const std::string& firmware_root, std::uint64_t build_key) {
+    const std::string& out_kernel_root,
+    const std::string& firmware_root,
+    std::uint64_t build_key,
+    const std::string& root_dir) {
     if (prewarm_globally_disabled()) {
         return;
     }
@@ -672,9 +699,9 @@ void maybe_launch_prewarm(
 
         g_batch_launched.store(true, std::memory_order_release);
         g_prewarm_thread =
-            std::thread([reqs = std::move(requests), out_kernel_root, firmware_root, build_key]() mutable {
+            std::thread([reqs = std::move(requests), out_kernel_root, firmware_root, build_key, root_dir]() mutable {
                 try {
-                    run_prewarm(reqs, out_kernel_root, firmware_root, build_key, /*skip_device_init=*/true);
+                    run_prewarm(reqs, out_kernel_root, firmware_root, build_key, root_dir, /*skip_device_init=*/true);
                 } catch (const std::exception& e) {
                     log_warning(tt::LogMetal, "kernel prewarm aborted: {}", e.what());
                 }
@@ -683,9 +710,12 @@ void maybe_launch_prewarm(
 }
 
 std::size_t prewarm_manifest_offline(const std::string& out_root, const std::string& root_dir) {
-    // JitBuildEnv places out_kernel_root at "<out_root><build_key>/kernels/" and the manifest two
-    // levels up (default_manifest_path). parent_path() of out_root is that manifest dir whether or not
-    // out_root carries a trailing '/': "<X>/tt-metal-cache" -> "<X>", "<X>/tt-metal-cache/" -> same.
+    // JitBuildEnv concatenates: out_kernel_root is "<out_root><build_key>/kernels/", and the manifest
+    // sits two levels above that (default_manifest_path). A single parent_path() of out_root lands
+    // there for either spelling, because the spelling decides the layout: "<X>/tt-metal-cache/" makes
+    // the build_key a subdir ("<X>/tt-metal-cache/<bk>/") whose manifest dir is "<X>/tt-metal-cache",
+    // while "<X>/tt-metal-cache" makes it a suffix ("<X>/tt-metal-cache<bk>/") whose manifest dir is
+    // "<X>". Do not "normalize" the trailing slash away: that breaks the former.
     const std::string manifest_path = (fs::path(out_root).parent_path() / "kernel_prewarm.manifest").string();
     std::vector<jit_server::CompileRequest> requests = read_manifest(manifest_path);
     if (requests.empty()) {
@@ -715,7 +745,7 @@ std::size_t prewarm_manifest_offline(const std::string& out_root, const std::str
                 firmware_root = precompiled;
             }
         }
-        total += run_prewarm(requests, out_kernel_root, firmware_root, bk, /*skip_device_init=*/false);
+        total += run_prewarm(requests, out_kernel_root, firmware_root, bk, root_dir, /*skip_device_init=*/false);
     }
     log_info(
         tt::LogMetal,

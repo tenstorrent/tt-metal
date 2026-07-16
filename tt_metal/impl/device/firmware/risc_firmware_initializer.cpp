@@ -220,7 +220,8 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
         kernel_prewarm::maybe_launch_prewarm(
             device_build_env.build_env.get_out_kernel_root_path(),
             device_build_env.build_env.get_firmware_binary_root(),
-            device_build_env.build_key());
+            device_build_env.build_key(),
+            device_build_env.build_env.get_root_path());
     }
 }
 
