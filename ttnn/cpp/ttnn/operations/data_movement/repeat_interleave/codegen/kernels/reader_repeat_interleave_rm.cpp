@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Reader for repeat_interleave on RM interleaved tensors.
 //
 // Same RM stick addressing as ops/repeat (now common/templates/reader_repeat_higherdim_rm.cpp), but the

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Reader for repeat_interleave on the LAST (within-stick, W) dim, RM interleaved.
 //
 // torch.repeat_interleave(x, R, dim=-1): each element along W is replicated R

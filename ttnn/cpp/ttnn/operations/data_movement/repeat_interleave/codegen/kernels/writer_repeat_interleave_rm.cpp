@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Sequential stick writer for RM interleaved tensors with repeat.
 // Uses get_noc_addr for aligned page addressing, writes stick_size bytes.
 //
