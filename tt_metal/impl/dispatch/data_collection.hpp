@@ -81,7 +81,7 @@ std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, ui
 
 // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
 // The returned span is valid until MetalContext teardown or reinitialization.
-std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id);
+std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint32_t runtime_id);
 
 // Register a callback to be invoked when real-time profiler data arrives.
 // Multiple callbacks can be registered; each callback is called from its own thread.
