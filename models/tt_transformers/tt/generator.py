@@ -2816,13 +2816,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return
         self._closed = True
 
-        try:
-            for model in getattr(self, "model", []):
-                prefetcher = getattr(model, "prefetcher", None)
-                if uses_tensor_prefetcher(prefetcher):
+        # Stop each active Tensor Prefetcher daemon. Log (don't swallow silently) on failure so a
+        # stuck daemon is visible; TensorPrefetcher.__del__ still retries teardown on GC since it
+        # only marks itself stopped on success. Continue to trace release regardless.
+        for model in getattr(self, "model", []):
+            prefetcher = getattr(model, "prefetcher", None)
+            if uses_tensor_prefetcher(prefetcher):
+                try:
                     prefetcher.teardown()
-        except Exception:
-            pass
+                except Exception as e:
+                    logger.warning(f"Tensor Prefetcher teardown failed during Generator.close(): {e}")
 
         # Release all captured traces to prevent nanobind memory leaks.
         # Traces must be released before closing the mesh device.

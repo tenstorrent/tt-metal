@@ -2128,7 +2128,12 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_norm_config(self, norm_type: str, mode: Mode, prefetcher: Prefetcher = None):
         """Get the norm config dict for attention, ff, or lm_head norms."""
-        prefetcher_norm_grid = prefetcher.dynamic_worker_core_grid(32) if prefetcher is not None else None
+        # Only the decode branches use this grid; building it in prefill is wasted work and can
+        # assert (e.g. a large-ring Tensor Prefetcher has too few cores below its receiver
+        # rectangle for dynamic_worker_core_grid(32)).
+        prefetcher_norm_grid = (
+            prefetcher.dynamic_worker_core_grid(32) if (prefetcher is not None and mode == Mode.DECODE) else None
+        )
         match norm_type:
             case "attn":
                 if mode == Mode.DECODE and prefetcher is not None:
