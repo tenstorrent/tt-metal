@@ -91,32 +91,31 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
-    TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
-    TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
-    TT_METAL_FORCE_REINIT,                              // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,                        // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,               // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,                 // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                           // Disable DMA operations
-    RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
-    TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
-    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
-    TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,  // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
+    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -133,6 +132,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
     TT_METAL_PROFILER_SUM,                         // Enable sum profiling
+    TT_METAL_PROFILER_ACCUMULATE,                  // Accumulate multiple kernels in L1 before DRAM push
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
@@ -354,8 +354,13 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
 
     InitializeFromEnvVars();
 
-    if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
-        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
+    // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
+    // TT_METAL_DISABLE_MULTI_AERISC override) intact so that HAL construction and kernel compilation match
+    // what a real device would produce. Architecture gating still happens downstream (only Blackhole's HAL
+    // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
+    if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
+        this->runtime_target_device_ == tt::TargetDevice::Emule) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
     }
 
@@ -726,14 +731,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->enable_2_erisc_mode = false;
             break;
 
-        // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
-        // Enable DRAM programmable cores in the Blackhole HAL on silicon.
-        // Default: false
-        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1
-        case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
-            this->enable_blackhole_dram_programmable_cores = is_env_enabled(value);
-            break;
-
         // TT_METAL_USE_MGD_2_0
         // Enables use of Mesh Graph Descriptor 2.0 format for fabric configuration.
         // Default: false (uses MGD 1.0)
@@ -958,6 +955,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILER_SUM: {
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_sum = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_ACCUMULATE
+        // Accumulate kernel invocations in per-RISC L1 (main zones use the growing index), flush to DRAM when nearly
+        // full, read residual via DRAM_AND_L1. Default: false Usage: export TT_METAL_PROFILER_ACCUMULATE=1
+        case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_accumulate = true;
             }
             break;
         }

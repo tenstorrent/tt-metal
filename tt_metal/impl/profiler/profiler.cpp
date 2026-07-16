@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <optional>
 #include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
 #include <common/TracyTTDeviceData.hpp>
@@ -1432,6 +1433,10 @@ void DeviceProfiler::resetControlBuffers(
         core_control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
         core_control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] =
             control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
+        // Preserve the dispatch-core tag across resets (set once in setControlBuffer);
+        // accumulate mode relies on it to keep dispatch cores on the classic path.
+        core_control_buffer_reset[kernel_profiler::PROFILER_DISPATCH_CORE] =
+            control_buffer[kernel_profiler::PROFILER_DISPATCH_CORE];
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] = buffer_0_address;
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] = buffer_0_address;
         core_control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS_T0_0] = buffer_0_address;
@@ -1496,7 +1501,9 @@ void DeviceProfiler::readRiscProfilerResults(
 
     const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
-    if (!rtoptions.get_profiler_trace_only()) {
+    // Skip the HOST_BUFFER_END_INDEX (DRAM flush count) early-out in trace-only/accumulate modes, where data stays in
+    // L1 and the index may never advance.
+    if (!rtoptions.get_profiler_trace_only() && !rtoptions.get_profiler_accumulate()) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
             (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
             return;
@@ -2339,6 +2346,12 @@ void DeviceProfiler::generateAnalysesForDeviceMarkers(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
+    // Accumulate mode lacks per-program op IDs (zones from many invocations are interleaved), so a per-op perf report
+    // is meaningless -- skip it.
+    if (MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
+        return;
+    }
+
     const std::filesystem::path analysis_configs_path =
         std::filesystem::path(MetalContext::instance(context_id).rtoptions().get_root_dir()) /
         "tt_metal/tools/profiler/cpp_device_analyses.json";
@@ -2841,6 +2854,9 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
     const ChipId device_id = device_core.first;
     const CoreCoord worker_core = device_core.second;
 
+    // Accumulate uses the default calibration (device_time = smallest WORKER marker); don't use the rt anchor's
+    // dispatch-core cycle here -- different clock/bit-width yields out-of-range, off-screen zones.
+
     if (!core_sync_info.contains(worker_core)) {
         const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
         // disable linting here; slicing is __intended__
@@ -2860,7 +2876,27 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
         double device_time = device_sync_info.device_time;
         double frequency = device_sync_info.frequency;
 
-        if (frequency == 0) {
+        if (realtime_sync_line.has_value() && smallest_timestamp != (1lu << 63)) {
+            // Anchor to the rt-profiler clock fit: keep device_time = smallest WORKER marker, but derive cpu_time from
+            // the fit (ratio = TracyGetTimerMul, the TSC->ns factor the fit used).
+            const double ratio = TracyGetTimerMul();
+            device_time = static_cast<double>(smallest_timestamp);
+            cpu_time = realtime_sync_line->host_anchor +
+                       (device_time - realtime_sync_line->device_anchor) / (realtime_sync_line->frequency * ratio);
+            frequency = realtime_sync_line->frequency;
+            device_sync_info = SyncInfo(cpu_time, device_time, frequency);
+            log_debug(
+                tt::LogMetal,
+                "Device {}, core {},{} anchored to realtime-profiler clock fit: smallest_ts={}, "
+                "device_anchor={:.0f}, cpu_time={:.0f}, freq={} GHz",
+                device_id,
+                worker_core.x,
+                worker_core.y,
+                smallest_timestamp,
+                realtime_sync_line->device_anchor,
+                cpu_time,
+                frequency);
+        } else if (frequency == 0) {
             cpu_time = TracyGetCpuTime();
             device_time = smallest_timestamp;
             frequency = device_core_frequency / 1000.0;

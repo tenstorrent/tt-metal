@@ -82,12 +82,15 @@ void kernel_main() {
     pack_untilize_init(cb_in0, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
+    reconfig_data_format(cb_in0, cb_in1);
+    // REDUCE_ROW+SUM swaps operands: state_configure(icb_scaler=cb_in0, icb=cb_in1, cb_out0)
+    // SrcA stays cb_in0 (unchanged from pack_untilize_init above), SrcB and Pack change.
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_in1, cb_in0, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
     reduce_uninit();
 
     tilize_init(cb_in0, 1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_PACK));
 
     fast_tilize_init(cb_in2, 1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
@@ -108,5 +111,5 @@ void kernel_main() {
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     tilizeA_B_reduce_init<false, true>(cb_in0, cb_in1, 1, cb_out1);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB));
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 }

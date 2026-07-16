@@ -9,6 +9,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -117,7 +119,7 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_stick_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
     // -- Writer kernel --
@@ -133,13 +135,17 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = SC_OUTPUT_TENSOR, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // -- Compute kernel --
-    ComputeHardwareConfig compute_hw{.fp32_dest_acc_en = fp32_llk_acc};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_llk_acc) {
-        compute_hw.unpack_to_dest_mode = {{SC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
+        std::visit(
+            [&](auto& c) { c.unpack_to_dest_mode.emplace(SC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32); },
+            compute_hw);
     }
     KernelSpec compute{
         .unique_id = SC_COMPUTE_KERNEL,
@@ -172,18 +178,17 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = SC_READER_KERNEL,
-            .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-                .node = core.start_coord,
-                .args =
-                    {{"num_sticks", num_sticks},
-                     {"num_tiles_per_block", num_tiles_per_block},
-                     {"block_width_size", block_width_size},
-                     {"num_full_blocks_in_row", num_full_blocks_in_row},
-                     {"start_stick_id", 0u}}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                core.start_coord,
+                {{"num_sticks", num_sticks},
+                 {"num_tiles_per_block", num_tiles_per_block},
+                 {"block_width_size", block_width_size},
+                 {"num_full_blocks_in_row", num_full_blocks_in_row},
+                 {"start_stick_id", 0u}})},
         KernelRunArgs{
             .kernel = SC_WRITER_KERNEL,
-            .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-                .node = core.start_coord, .args = {{"num_pages", num_tiles}, {"start_id", 0u}}}}},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(core.start_coord, {{"num_pages", num_tiles}, {"start_id", 0u}})},
     };
     run_args.tensor_args = {
         {SC_INPUT_TENSOR, TensorArgument{a.mesh_tensor()}},

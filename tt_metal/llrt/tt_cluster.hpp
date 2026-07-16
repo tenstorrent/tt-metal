@@ -268,6 +268,9 @@ public:
 
     int get_device_aiclk(const ChipId& chip_id) const;
 
+    uint32_t get_arc_timer_heartbeat(const ChipId& chip_id) const;
+    bool is_arc_telemetry_available(const ChipId& chip_id) const;
+
     void dram_barrier(ChipId chip_id) const;
     void l1_barrier(ChipId chip_id) const;
 

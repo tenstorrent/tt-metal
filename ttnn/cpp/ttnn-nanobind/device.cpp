@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -40,10 +41,10 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_prewarm_control.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
@@ -69,7 +70,7 @@ void ttnn_device(nb::module_& mod) {
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         nb::arg("num_command_queues") = 1,
-        nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("dispatch_core_config") = nb::none(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         nb::rv_policy::reference,  // cleanup has to happen in c++ land
         R"doc(
@@ -93,7 +94,11 @@ void ttnn_device(nb::module_& mod) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
+    mod.def(
+        "close_device",
+        [](ttnn::MeshDevice& device) { ttnn::close_device(device); },
+        nb::arg("device"),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "deallocate_buffers",
@@ -136,7 +141,10 @@ void py_device_module_types(nb::module_& m_device) {
             nb::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
             "Constructor with specified dispatch core type and axis.",
             nb::arg("type"),
-            nb::arg("axis"));
+            nb::arg("axis"))
+        .def_prop_ro("type", [](const tt::tt_metal::DispatchCoreConfig& self) { return self.get_dispatch_core_type(); })
+        .def_prop_ro(
+            "axis", [](const tt::tt_metal::DispatchCoreConfig& self) { return self.get_dispatch_core_axis(); });
 
     nb::class_<SubDevice>(m_device, "SubDevice", "Class describing a sub-device of a Tenstorrent accelerator device.");
 
@@ -206,19 +214,33 @@ void device_module(nb::module_& m_device) {
         .def(nb::self != nb::self);
 
     m_device.def(
+        "create_dispatch_core_config",
+        [](std::optional<tt::tt_metal::DispatchCoreType> type,
+           std::optional<tt::tt_metal::DispatchCoreAxis> axis,
+           std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
+            return ttnn::device::create_cluster_aware_dispatch_config(
+                type, axis, fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED));
+        },
+        nb::kw_only(),
+        nb::arg("type") = nb::none(),
+        nb::arg("axis") = nb::none(),
+        nb::arg("fabric_tensix_config") = nb::none(),
+        "Build a cluster/arch-aware DispatchCoreConfig (TTNN default that prefers maximum available worker cores).");
+
+    m_device.def(
         "CreateDevice",
         [](int device_id,
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
            size_t worker_l1_size) {
             return MeshDevice::create_unit_mesh(
                 device_id,
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config,
+                dispatch_core_config.value_or(ttnn::device::create_cluster_aware_dispatch_config()),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
@@ -235,7 +257,7 @@ void device_module(nb::module_& m_device) {
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def(
@@ -244,14 +266,14 @@ void device_module(nb::module_& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
            size_t worker_l1_size) {
             return MeshDevice::create_unit_meshes(
                 device_ids,
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config,
+                dispatch_core_config.value_or(ttnn::device::create_cluster_aware_dispatch_config()),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
@@ -268,10 +290,14 @@ void device_module(nb::module_& m_device) {
         nb::arg("num_command_queues") = 1,
         nb::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
+        nb::arg("DispatchCoreConfig") = nb::none(),
         nb::kw_only(),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
-    m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
+    m_device.def(
+        "CloseDevice",
+        [](MeshDevice* device) { device->close(); },
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
         +------------------+------------------------+-----------------------+-------------+----------+
@@ -287,6 +313,7 @@ void device_module(nb::module_& m_device) {
                 device_entry.second->close();
             }
         },
+        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -316,33 +343,6 @@ void device_module(nb::module_& m_device) {
         Example:
             >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
     )doc");
-
-    m_device.def(
-        "kernel_prewarm_set_capture_only",
-        &tt::tt_metal::KernelPrewarmSetCaptureOnly,
-        nb::arg("enabled"),
-        R"doc(
-            Flip kernel-prewarm capture-only mode at runtime: a pipeline run generates each model
-            kernel's genfiles and records its manifest recipe but skips the gcc compile and dispatch.
-            Used by the in-process cold-start to capture the manifest without holding the device for
-            the compile.
-        )doc");
-
-    m_device.def(
-        "kernel_prewarm_cold_start_needed",
-        &tt::tt_metal::KernelPrewarmColdStartNeeded,
-        R"doc(
-            True iff the in-process cold-start (capture warmup -> off-device batch compile -> real
-            warmup) is worth running for the current build_key. Query after device init, before warmup.
-        )doc");
-
-    m_device.def(
-        "kernel_prewarm_offline_compile",
-        &tt::tt_metal::KernelPrewarmOfflineCompile,
-        R"doc(
-            Compile every captured kernel-manifest recipe into the JIT cache without opening a device;
-            returns the number of targets built. Run after a capture-only warmup, before the real run.
-        )doc");
 
     m_device.def(  // afuller
         "SetDefaultDevice",
@@ -396,16 +396,28 @@ void device_module(nb::module_& m_device) {
         },
         nb::arg("unpadded_shape"),
         R"doc(
-        Pads the given shape to tile shape based on specified padding options.
+        Pads the given shape to tile shape (rounds last two dims up to multiples of 32).
+
+        .. deprecated::
+            This function is deprecated and will be removed in a future release.
+            Use ``ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)`` which handles
+            tile-alignment automatically.
+
+            If you only need the padded shape without converting layout, align
+            dimensions manually::
+
+                import math
+                TILE = 32
+                shape = list(original_shape)
+                shape[-1] = math.ceil(shape[-1] / TILE) * TILE
+                if len(shape) >= 2:
+                    shape[-2] = math.ceil(shape[-2] / TILE) * TILE
 
         Args:
             unpadded_shape (List of [int]): The original shape of the tensor to pad.
 
         Returns:
             List of [int]: The padded shape.
-
-        Note:
-            This functionality is planned for deprecation in the future.
 
         Example:
             >>> padded_shape = ttnn.pad_to_tile_shape(unpadded_shape=[1, 2, 2, 2])
@@ -725,7 +737,10 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "UnregisterProgramRealtimeProfilerCallback",
         [](uint64_t handle) {
-            tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            {
+                nb::gil_scoped_release release;
+                tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);
+            }
             auto it = python_realtime_callback_refs.find(handle);
             if (it != python_realtime_callback_refs.end()) {
                 Py_DECREF(it->second);
@@ -733,7 +748,6 @@ void device_module(nb::module_& m_device) {
             }
         },
         nb::arg("handle"),
-        nb::call_guard<nb::gil_scoped_release>(),
         R"doc(
             Unregister a previously registered real-time profiler callback.
             This call waits for any in-flight invocations of the callback to finish.

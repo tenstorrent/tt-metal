@@ -42,6 +42,17 @@ class LTXAttention(Module):
         (True, 2, 2): (128, 512),
         (True, 8, 4): (128, 512),
     }
+
+    # V2A cross ring-SDPA q_chunk = the per-device audio Q (audio_N / sp_factor), keyed by
+    # (is_blackhole, sp, tp); assumes audio_N=256. A q_chunk wider than the Q shard pads the
+    # query rows and burns ~2x SDPA compute, so it must track sp, not be fixed per model.
+    # k_chunk reuses the self-attn ring value; misses fall back to the self-attn ring q_chunk.
+    # TODO: audio_N depends on video duration (ceil(round((num_frames/fps)*25), 32*sp)); derive
+    # q_chunk from the actual Q shard (q_BHNE.shape[2]) instead of hardcoding per mesh.
+    cross_ring_sdpa_q_chunk_map = {
+        (True, 4, 2): 64,  # BH 2x4
+        (True, 8, 4): 32,  # BH 4x8
+    }
     default_sdpa_chunk_size = (256, 256)
 
     # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the SP-padded
@@ -201,11 +212,12 @@ class LTXAttention(Module):
             if b == mesh_key[0]
         }
 
-        # V2A cross ring SDPA: q_chunk matched to the per-device audio Q (64) to avoid wasting ~2x
-        # SDPA compute on padded query rows; k_chunk reuses the self-attn ring value.
+        # V2A cross ring SDPA: q_chunk matched to the per-device audio Q; k_chunk reuses the
+        # self-attn ring value.
+        cross_ring_q_chunk = self.cross_ring_sdpa_q_chunk_map.get(mesh_key, ring_sdpa_chunk_size[0])
         self.cross_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=64,
+            q_chunk_size=cross_ring_q_chunk,
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,
         )

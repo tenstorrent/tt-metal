@@ -85,6 +85,9 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     for (auto& cq : mesh_device_impl.mesh_command_queues_) {
         cq->finish();
     }
+    for (const auto& dev : active_devices) {
+        dev->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
+    }
     stashed_sd_queues_ = std::make_unique<StashedQueues>();
     for (auto& cq : mesh_device_impl.mesh_command_queues_) {
         stashed_sd_queues_->queues.push_back(std::move(cq));
@@ -120,7 +123,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     ContextId context_id = extract_context_id(mesh_device);
     const auto& device_manager = MetalContext::instance(context_id).device_manager();
-    const auto& active_devices = device_manager->get_all_active_devices();
+    const auto& active_devices = device_manager->get_all_active_devices_impl();
 
     auto& mesh_device_impl = mesh_device->impl();
     mesh_device_impl.mesh_command_queues_.clear();
@@ -133,10 +136,13 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         mesh_device_impl.mesh_command_queues_.push_back(std::move(cq));
     }
     stashed_sd_queues_.reset();
+    for (const auto& dev : active_devices) {
+        dev->set_smc_dispatch_telemetry_slow_dispatch_enabled(true);
+    }
 
     for (const auto& dev : active_devices) {
         for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
-            dynamic_cast<tt::tt_metal::Device*>(dev)->command_queues_[cq_id].get()->terminate();
+            dev->command_queues_[cq_id].get()->terminate();
         }
     }
 
@@ -147,7 +153,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
     // init_command_queue_host call can safely replace sysmem_manager_ without dangling references
-    for (const auto& device : device_manager->get_all_active_devices_impl()) {
+    for (const auto& device : active_devices) {
         device->command_queue_programs_.clear();
         device->command_queues_.clear();
     }

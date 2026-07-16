@@ -53,12 +53,12 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat scale = sfpi::setman(b_f, 0);
 
     // Newton-Raphson
-    sfpi::vFloat t = inv_b_f * neg_b_f + sfpi::vConst1;
+    sfpi::vFloat t = inv_b_f * neg_b_f + 1.0f;
     scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
     // Halley's Method
-    sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
+    sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
 
     sfpi::vInt a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 

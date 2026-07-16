@@ -113,8 +113,8 @@ void write_to_core_impl(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     while (size_bytes > 0) {
         const CoreType dispatch_core_type =
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
@@ -147,8 +147,8 @@ void write_to_core(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     validate_core_read_write_bounds(device, virtual_core, address, size_bytes);
     write_to_core_impl(
         device, virtual_core, src, address, size_bytes, cq_id, expected_num_workers_completed, sub_device_ids);
@@ -161,8 +161,8 @@ void write_to_core_unchecked(
     DeviceAddr address,
     uint32_t size_bytes,
     uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    ttsl::Span<const SubDeviceId> sub_device_ids) {
     // Same as write_to_core, minus validate_core_read_write_bounds: the DRAM-banked bounds
     // check would reject programmable DRAM-core (DRISC) L1.
     write_to_core_impl(

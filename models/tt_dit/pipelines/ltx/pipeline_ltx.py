@@ -389,8 +389,13 @@ class LTXPipeline:
                 # never holds the device for the ~500s op-by-op compile. Warm build_keys (in-run prewarm
                 # already handling them) skip straight to the real warmup. Tracing is suppressed for the
                 # capture pass: capture-only skips dispatch, so trace capture must wait for the real pass.
+                # The in-process cold-start hook is ours-only and absent upstream, where the kernel
+                # compile path is kernel_compile_utils and exposes no prewarm binding. Probe for it:
+                # without it _cold stays False, the capture pass below is skipped, and the kernels
+                # compile in-window during the real warmup — slower on a cold build_key, but the
+                # supported path rather than an AttributeError.
                 _kp = ttnn._ttnn.device
-                _cold = _kp.kernel_prewarm_cold_start_needed()
+                _cold = getattr(_kp, "kernel_prewarm_cold_start_needed", lambda: False)()
                 # The capture pass runs the pipeline once capture-only (no dispatch) to record the
                 # kernel manifest, then batch-compiles it off-device. A weight-evicting tier
                 # (dynamic_load / TT_DIT_HOST_WEIGHT_CACHE) frees the DiT weights during that pass, but
@@ -948,6 +953,7 @@ class LTXPipeline:
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=state.state_dict_provider,
             post_load_hook=getattr(self, "_transformer_post_load_hook", None),
@@ -1013,6 +1019,7 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             get_torch_state_dict=_vae_state_provider,
         )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
@@ -1044,6 +1051,7 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             get_torch_state_dict=_vae_encoder_state_provider,
         )
         logger.info(f"Loaded TTNN VAE encoder ({len(self._vae_encoder_blocks)} blocks)")
@@ -1258,6 +1266,7 @@ class LTXPipeline:
             subfolder=subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             get_torch_state_dict=_upsampler_state_provider,
         )
         logger.info("Loaded TTNN latent upsampler")

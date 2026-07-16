@@ -124,7 +124,7 @@ jobs:
       ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        (github.event_name != 'pull_request' || needs.find-changed-files.outputs.any-code-changed == 'true')
+        ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.find-changed-files.outputs.any-code-changed == 'true')
       }}
     needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     uses: ./.github/workflows/build-artifact.yaml
@@ -141,6 +141,9 @@ jobs:
       publish-package: true
       tracy: true
       skip-tt-train: false
+      # Treeless clone: skip the trees/blobs that dominate the tag fetch, but keep commits + tags
+      # so git describe still yields a real version. Depth stays at the default.
+      checkout-filter: tree:0
       # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
@@ -373,6 +376,18 @@ jobs:
               ));
             }
 
+  # Copilot PR type labeler — auto-label PRs by change type (feat/fix/docs/etc.)
+  copilot-pr-labeler:
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'opened' }}
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: tenstorrent/tt-github-actions/.github/actions/copilot-pr-labeler@629b4727fa0dff3d43895601dd538e303880ecbc # main (tt-github-actions#144)
+
   # PR-gate LLK python_tests matrix (tests/pipeline_reorg/llk_pr_gate_tests.yaml).
   # SKU coverage is narrowed below based on find-changed-files outputs.
   llk-smoke-tests:
@@ -392,6 +407,8 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+      # Priority runners only accept merge-queue traffic. Regular PRs and
+      # other triggers must continue using the original non-priority runner.
       enabled-skus: ${{
           (github.ref_name == 'main'
            || needs.find-changed-files.outputs.llk-common-changed == 'true'
@@ -400,11 +417,11 @@ jobs:
            || needs.find-changed-files.outputs.llk-ci-changed == 'true'
            || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true'
                && needs.find-changed-files.outputs.llk-blackhole-changed == 'true'))
-          && 'wh_n150_civ2,bh_p150b_civ2'
+          && (github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2')
           || (needs.find-changed-files.outputs.llk-wormhole-changed == 'true' && 'wh_n150_civ2')
-          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && 'bh_p150b_civ2')
+          || (needs.find-changed-files.outputs.llk-blackhole-changed == 'true' && (github.event_name == 'merge_group' && 'bh_p150b_civ2_viommu_prio' || 'bh_p150b_civ2'))
           || '' }}
-      pytest-markers: "not perf and not nightly and not quasar"
+      pytest-markers: "not perf and not nightly and not quasar and not accuracy"
 
   # LLK Quasar Build Check (compile-only, no hardware needed)
   llk-build-quasar:
@@ -419,7 +436,7 @@ jobs:
          needs.find-changed-files.outputs.llk-ci-changed == 'true')
       }}
     runs-on: tt-ubuntu-2204-xlarge-stable
-    timeout-minutes: 80
+    timeout-minutes: 20
     container:
       image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
     steps:

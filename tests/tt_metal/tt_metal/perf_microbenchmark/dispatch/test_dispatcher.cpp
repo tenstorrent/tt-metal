@@ -143,7 +143,7 @@ HostMemDeviceCommand build_packed_large_write_command(
     HostMemDeviceCommand cmd(command_size_bytes);
 
     // Build data spans pointing to the generated payloads
-    std::vector<tt::stl::Span<const uint8_t>> data_spans;
+    std::vector<ttsl::Span<const uint8_t>> data_spans;
     data_spans.reserve(payloads.size());
 
     for (const auto& payload : payloads) {
@@ -178,7 +178,7 @@ HostMemDeviceCommand build_packed_large_unicast_write_command(
     HostMemDeviceCommand cmd(command_size_bytes);
 
     // Build data spans pointing to the generated payloads
-    std::vector<tt::stl::Span<const uint8_t>> data_spans;
+    std::vector<ttsl::Span<const uint8_t>> data_spans;
     data_spans.reserve(payloads.size());
 
     for (const auto& payload : payloads) {

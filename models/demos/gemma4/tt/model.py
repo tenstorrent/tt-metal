@@ -588,20 +588,25 @@ class Gemma4Model:
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
 
-    def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False):
+    def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False, start_pos=0):
         """Get (cos, sin) for a given layer.
 
         Args:
             seq_len: If set, slice 4D cache to this length (prefill).
             for_decode: If True, return 2D caches [max_seq_len, head_dim] for embedding lookup.
+            start_pos: Absolute position of the first token in this prefill call.
+                Non-zero only for generator-level multi-chunk prefill (chunk N starts
+                at ``N*chunk_size``); the RoPE slice must cover
+                ``[start_pos, start_pos+seq_len)`` so chunk tokens get their true
+                positions instead of restarting at 0.
         """
         layer_type = self.hf_config.layer_types[layer_idx]
         if for_decode:
             return self.rope_caches_2d[layer_type]
         cos, sin = self.rope_caches[layer_type]
         if seq_len is not None:
-            cos = cos[:, :, :seq_len, :]
-            sin = sin[:, :, :seq_len, :]
+            cos = cos[:, :, start_pos : start_pos + seq_len, :]
+            sin = sin[:, :, start_pos : start_pos + seq_len, :]
         return (cos, sin)
 
     def __call__(
@@ -624,6 +629,9 @@ class Gemma4Model:
         user_id=0,
         return_hidden=False,
         sequential_kv_write=False,
+        packed=None,
+        chunk_start_idx=None,
+        chunk_page_table=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -653,6 +661,11 @@ class Gemma4Model:
                 The vLLM hybrid kv-cache manager produces this list so
                 sliding-window layers can index a smaller paged pool than
                 full-attention layers (KV cache groups).
+            packed: optional packed-verify dict (decode only). Carries the
+                P-position packed attention inputs; layer-type-specific entries
+                (attn_mask_full / attn_mask_sliding, embed_idx_full /
+                embed_idx_sliding, rope_packed per type) are selected per layer
+                here and routed to ``packed_decode_forward``.
         """
         seq_len = hidden_states.shape[2]
         rope_seq_len = seq_len // batch_size if (not is_decode and batch_size > 1) else seq_len
@@ -737,7 +750,11 @@ class Gemma4Model:
                 # Decode fallback: return 2D caches for on-device embedding lookup
                 layer_rope = self._get_rope_mats(i, for_decode=True)
             else:
-                layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len)
+                # Generator-level multi-chunk prefill: chunk N's tokens occupy
+                # absolute positions [chunk_start_idx, chunk_start_idx+seq_len);
+                # offset the RoPE slice so they aren't re-encoded from 0.
+                rope_start_pos = int(chunk_start_idx) if chunk_start_idx is not None else 0
+                layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
 
             # Convert per-layer input to device tensor if available
             pli_tt = None
@@ -775,6 +792,22 @@ class Gemma4Model:
                 keep_kv = True
 
             layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
+
+            layer_packed = None
+            if packed is not None:
+                lt = self.hf_config.layer_types[i]
+                sliding = lt == "sliding_attention"
+                rope_packed = packed.get("rope_packed") or {}
+                layer_packed = {
+                    "packed_p": packed["packed_p"],
+                    "position_idx": packed["position_idx"],
+                    "kv_write_idxs": packed.get("kv_write_idxs"),
+                    "attn_mask": packed["attn_mask_sliding"] if sliding else packed["attn_mask_full"],
+                    "rope_packed": rope_packed.get(lt),
+                    "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
+                    "hot_pt": packed.get("hot_pt"),
+                }
+
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
@@ -793,6 +826,9 @@ class Gemma4Model:
                 valid_seq_len=prefill_valid_len,
                 sequential_kv_write=sequential_kv_write,
                 rope_presliced=rope_presliced,
+                packed=layer_packed,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1020,6 +1056,87 @@ class Gemma4Model:
             # serialized KV-write loop (KV is corrupted when False — timing only).
             sequential_kv_write=getattr(self, "_verify_seq_kv_write", True),
         )
+
+    def ttnn_packed_verify_forward(
+        self,
+        x,
+        position_idx,
+        attn_mask_full,
+        attn_mask_sliding,
+        packed_p,
+        page_table=None,
+        kv_cache=None,
+        kv_write_idxs=None,
+        embed_idx_full=None,
+        embed_idx_sliding=None,
+        hot_pt=None,
+    ):
+        """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
+
+        Unlike ``ttnn_verify_forward`` (candidates in the batch dim, K+1
+        pseudo-users, sequential per-candidate KV writes), this packs the P =
+        K+1 positions into the query-heads dim: one QKV projection / norm /
+        RoPE over P rows, ONE non-causal SDPA per layer with an additive mask
+        that bakes in each packed row's causal upper bound (and the sliding
+        window on sliding layers), and a loop-free staging KV write (one
+        paged_fill_cache per K/V) when staging is provided.
+
+        Args:
+            x: [1, P] uint32 token ids ``[anchor, d1..dK]``.
+            position_idx: [1, P] uint32 positions (p..p+K), used for RoPE
+                gathers; also reused row-wise for the KV-write fallback.
+            attn_mask_full / attn_mask_sliding: [1, 1, H_local*P, S_k] bf16
+                TILE additive masks (S_k a multiple of 64).
+            packed_p: P.
+            kv_write_idxs: optional list of P int32 [1] tensors (per-position
+                fallback writes when staging isn't wired).
+            embed_idx_full / embed_idx_sliding: [1, nkv_local*S2] uint32 merge
+                gather indices (loop-free staging path; nkv differs per type).
+            hot_pt: [1, PV_HOT_BLOCKS] int32 physical fill pages (-1 = skip).
+
+        Returns:
+            (logits [1,1,P,vocab], hidden [1,1,P,hidden]) — same contract as
+            ``ttnn_verify_forward``.
+        """
+        input_embeds = self.embed_tokens(x)
+        if len(input_embeds.shape) == 3:
+            input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
+        input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
+
+        # Pre-gather RoPE once per layer type (identical for all layers of a
+        # type — saves 2 embedding gathers per layer).
+        rope_packed = {}
+        for lt, (cos_2d, sin_2d) in self.rope_caches_2d.items():
+            cos_bp = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, cos_2d, layout=ttnn.TILE_LAYOUT))
+            sin_bp = ttnn.unsqueeze_to_4D(ttnn.embedding(position_idx, sin_2d, layout=ttnn.TILE_LAYOUT))
+            rope_packed[lt] = (cos_bp, sin_bp)
+
+        packed = {
+            "packed_p": packed_p,
+            "position_idx": position_idx,
+            "kv_write_idxs": kv_write_idxs,
+            "attn_mask_full": attn_mask_full,
+            "attn_mask_sliding": attn_mask_sliding,
+            "rope_packed": rope_packed,
+            "embed_idx_full": embed_idx_full,
+            "embed_idx_sliding": embed_idx_sliding,
+            "hot_pt": hot_pt,
+        }
+
+        out = self(
+            hidden_states=input_embeds,
+            position_idx=position_idx,
+            page_table=page_table,
+            kv_caches=kv_cache,
+            is_decode=True,
+            token_index=None if self.rope_caches_2d else 0,
+            return_hidden=True,
+            packed=packed,
+        )
+        for cos_bp, sin_bp in rope_packed.values():
+            cos_bp.deallocate(True)
+            sin_bp.deallocate(True)
+        return out
 
     def compute_host_pli(self, token_id):
         """Compute per-layer input (PLI) on CPU for a single decode token.
@@ -1329,7 +1446,7 @@ class Gemma4Model:
         *before* lm_head — slicing after would still allocate full-seq
         logits first.
         """
-        del rot_mats_global, rot_mats_local, chunk_page_table, chunk_start_idx, kwargs
+        del rot_mats_global, rot_mats_local, kwargs
         if input_ids_torch is None:
             input_ids_torch = self._prefill_input_ids_torch
         if embeds_torch is None:
@@ -1350,6 +1467,8 @@ class Gemma4Model:
             page_tables_per_layer=page_tables_per_layer,
             batch_size=batch_size,
             user_id=user_id,
+            chunk_start_idx=chunk_start_idx,
+            chunk_page_table=chunk_page_table,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):

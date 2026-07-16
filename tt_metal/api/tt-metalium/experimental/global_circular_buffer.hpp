@@ -85,5 +85,18 @@ DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
 // runtime args. Empty for worker-sender GCBs.
 const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
 
+// Per-sender bank-local slab indices: entry [s][r] is the bank-local slab index
+// (recv_index_base + r) that sender s's local receiver r reads, in
+// sender_receiver_core_mapping() order. This is the same "slab" the DRAM-sender kernel
+// addresses, and the single source of truth for the recv_index_base accounting (which the
+// GCB owns because it encodes the dual-sender-per-bank split contract).
+//
+// Order-agnostic on purpose: mapping a receiver's (bank, slab index) to a global position
+// depends on the tensor's shard distribution (ROUND_ROBIN_1D strided vs CONTIGUOUS_1D
+// contiguous), which a ring-matmul consumer treats as a "ring position". That is the
+// caller's concept, not the GCB's, so the streaming Tensor prefetcher reads the raw slab
+// indices here and permutes them itself. DRAM-sender GCBs only.
+std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb);
+
 }  // namespace experimental
 }  // namespace tt::tt_metal

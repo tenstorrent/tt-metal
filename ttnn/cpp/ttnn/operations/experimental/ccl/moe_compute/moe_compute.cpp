@@ -73,15 +73,43 @@ std::vector<ttnn::Tensor> moe_compute(
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
-    const uint32_t combine_data_parallel_cores) {
-    return ttnn::prim::get_moe_combine_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores);
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set) {
+    // Ring is auto-detected from the arch — same source as moe_compute — so the combine core
+    // placement always matches the ring the op actually runs (no caller-supplied value to drift).
+    return ttnn::prim::get_moe_combine_cores(
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        effective_matmul_ring_size(mesh_device));
+}
+
+ttnn::CoreCoord get_moe_tilize_drain_core(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set) {
+    // Ring is auto-detected from the arch — same source as moe_compute — so the tilize drain
+    // core always matches the ring the op actually runs (no caller-supplied value to drift).
+    return ttnn::prim::get_moe_tilize_drain_core(
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        effective_matmul_ring_size(mesh_device));
 }
 
 ttnn::CoreRange get_moe_worker_mcast_bounding_box(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
-    const uint32_t hidden_size) {
+    const uint32_t hidden_size,
+    const CoreRangeSet& mux_core_range_set) {
     // Ring is auto-detected from the arch — same source as moe_compute — so the bounding box
     // always matches the ring the op actually runs (no caller-supplied value to drift).
     return ttnn::prim::get_moe_worker_mcast_bounding_box(
@@ -89,6 +117,7 @@ ttnn::CoreRange get_moe_worker_mcast_bounding_box(
         combine_token_parallel_cores,
         combine_data_parallel_cores,
         hidden_size,
+        mux_core_range_set,
         effective_matmul_ring_size(mesh_device));
 }
 }  // namespace ttnn::experimental

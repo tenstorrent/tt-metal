@@ -43,10 +43,8 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
-#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
@@ -77,10 +75,7 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
-#include "impl/program/kernel_prewarm.hpp"
-#ifdef GENERATE_HASH_LOG
-#include <fstream>
-#endif
+#include "kernel_compile_utils.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -92,9 +87,9 @@
 #include "impl/allocator/allocator.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt {
-class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
 namespace tt_metal::experimental {
 class GlobalCircularBuffer;
@@ -204,29 +199,6 @@ KernelCompileDescriptor build_kernel_descriptor(
     }
 
     return desc;
-}
-
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
-    // Store the build key into the KernelCompile hash. This will be unique per command queue
-    // configuration (necessary for dispatch kernels).
-    // watcher/dprint enabled are accounted for in the build key.
-    tt::StableHasher hasher;
-    hasher.update(build_key);
-    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
-    hasher.update(kernel->compute_hash());
-    size_t compile_hash = static_cast<size_t>(hasher.digest());
-
-#ifdef GENERATE_HASH_LOG
-    static std::ofstream f("/tmp/hashlog.txt");
-    static std::mutex mutex_;
-    {
-        std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
-          << std::flush;
-    }
-#endif
-    return compile_hash;
 }
 
 std::string ensure_kernel_binaries(
@@ -341,7 +313,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             kernel_descriptor.compiler_include_paths.begin(), kernel_descriptor.compiler_include_paths.end());
 
         auto config = std::visit(
-            tt::stl::overloaded{
+            ttsl::overloaded{
                 [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
@@ -1274,8 +1246,98 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
+// Scratchpad is a Metal 2.0-only construct.
+void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
+    if (this->scratchpads_allocated_) {
+        return;
+    }
+
+    const uint64_t base_l1_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+
+    for (auto& kernels_of_core_type : this->kernels_) {
+        for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            auto& scratchpad_handles = kernel->scratchpad_binding_handles();
+            if (scratchpad_handles.empty()) {
+                continue;
+            }
+            const CoreRangeSet& kernel_cores = kernel->core_range_set();
+
+            for (auto& handle : scratchpad_handles) {
+                // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
+                // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
+                // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
+                // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
+                for (const CoreRange& core_range : kernel_cores.ranges()) {
+                    bool exists = false;
+                    for (const CircularBufferAllocator& a : this->dfb_allocators_) {
+                        if (a.core_range == core_range) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        this->dfb_allocators_.emplace_back(core_range);
+                    }
+                }
+
+                // Uniform per-node base address: the scratchpad address is delivered as a CRTA.
+                // It must sit at the same L1 offset everywhere that it exists.
+                // Take the max region-end over EVERY allocator that intersects the kernel's cores
+                // (not just exact-range matches), so the scratchpad cannot overlap a DFB on
+                // an overlapping-but-different core range. Mark each such allocator exactly once.
+                std::vector<CircularBufferAllocator*> touched;
+                for (CircularBufferAllocator& a : this->dfb_allocators_) {
+                    for (const CoreRange& core_range : kernel_cores.ranges()) {
+                        if (a.core_range.intersects(core_range)) {
+                            touched.push_back(&a);
+                            break;
+                        }
+                    }
+                }
+                uint64_t addr = base_l1_address;
+                for (const CircularBufferAllocator* a : touched) {
+                    addr = std::max<uint64_t>(addr, a->get_cb_region_end());
+                }
+                addr = align(addr, alignment);
+                for (CircularBufferAllocator* a : touched) {
+                    a->mark_address(addr, handle.size_bytes, base_l1_address);
+                }
+
+                handle.allocated_address = static_cast<uint32_t>(addr);
+
+                // Patch the allocated address into the kernel's CRTA buffer. This runs at Program-compile
+                // time, upstream of where dispatch delivers runtime args to the device:
+                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+                //
+                // An implicit CRTA slot to hold the scratchpad address is reserved at Program creation.
+                // (The actual CRTA buffer itself is allocated when SetProgramRunArgs runs.)
+                // Now, we populate the scratchpad address.
+                //
+                TT_FATAL(
+                    !kernel->common_runtime_args().empty(),
+                    "CRTA buffer is not allocated; cannot populate scratchpad addresses for kernel {}. "
+                    "Ensure that SetProgramRunArgs is called before attempting to enqueue a Program.",
+                    kernel->name());
+                TT_FATAL(
+                    handle.allocated_address != 0,
+                    "Internal error: scratchpad '{}' on kernel '{}' "
+                    "has a 0 allocated address (allocation failed or was skipped).",
+                    handle.accessor_name,
+                    kernel->name());
+
+                RuntimeArgsData& crta = kernel->common_runtime_args_data();
+                crta.data()[handle.addr_crta_word] = handle.allocated_address;
+            }
+        }
+    }
+
+    this->scratchpads_allocated_ = true;
+}
+
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // If device is a MeshDevice, we need to track all its sub-devices
     std::vector<const IDevice*> devices_to_track;
@@ -1443,7 +1505,7 @@ void detail::ProgramImpl::deallocate_circular_buffers() {
 }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
 
     // TODO: Circular buffer allocation and validation could be better optimized by determining usage per sub-device
     std::optional<DeviceAddr> lowest_address =
@@ -1747,7 +1809,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
 
 void detail::ProgramImpl::set_cb_data_fmt_and_tile(
     const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
@@ -1765,11 +1827,6 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // Mock/emulated devices don't dispatch to hardware, skip dispatch data population
     if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().is_mock_or_emulated()) {
-        return;
-    }
-    // Capture-only pass: kernels have no binaries (gcc was skipped), and we never dispatch. Packing
-    // binary transfer info here reads kernel->binaries() and would fail; the transfer info is unused.
-    if (kernel_prewarm::capture_only()) {
         return;
     }
 
@@ -2019,15 +2076,15 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     }
 }
 
-void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key();
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        ttsl::hash::hash_combine(device_hash, device->id());
+        ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2040,37 +2097,35 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
 
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
 
-        // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
-        // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
     } else {
         TT_ASSERT(
             cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
-void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
-    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
+    uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
     uint64_t device_hash =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key();
+        BuildEnvManager::get_instance(extract_context_id(mesh_device))
+            .get_device_build_env(mesh_device->build_id())
+            .build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
-        // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        device_hash = (device_hash << 32) | (mesh_device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -2083,12 +2138,12 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
-        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
+        program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
-            program_command_sequence, *this, device, sub_device_id, use_prefetcher_cache);
+            program_command_sequence, *this, mesh_device, sub_device_id, use_prefetcher_cache);
         program_command_sequence.prefetcher_cache_used = use_prefetcher_cache;
         program_command_sequence.kernel_bins_sizeB = this->kernel_bins_sizeB;
         // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
@@ -2099,12 +2154,12 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
             trace_cached_program_command_sequences.at(command_hash).prefetcher_cache_used == use_prefetcher_cache,
             "Prefetcher cache used mismatch for program {} on device {}",
             this->get_id(),
-            device->id());
+            mesh_device->id());
     }
 }
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     const auto& build_env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
@@ -2125,31 +2180,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
         "dependent on information that is set during device initialization.",
         this->get_id());
-
-    // Opt-in kernel prewarm (TT_METAL_KERNEL_PREWARM_MANIFEST): a background batch launched at device
-    // init populates the JIT cache for the *model* kernels during the host-idle weight-load/warmup
-    // window. Precise barrier: only block here if THIS program compiles a kernel the batch is warming
-    // -- i.e. one whose out_dir the batch may be writing right now (FileRenamer temp names are
-    // per-process, so a concurrent same-out_dir build would corrupt the ELF). Device-init dispatch/
-    // fabric programs build a disjoint kernel set the batch intentionally skips, so they compile
-    // concurrently with the batch instead of serializing behind it. No-op when the flag is unset.
-    if (kernel_prewarm::prewarm_enabled()) {
-        bool warms_this_program = false;
-        for (const auto& kernels : kernels_) {
-            for (const auto& [id, kernel] : kernels) {
-                if (kernel_prewarm::prewarm_warms_kernel(kernel->name())) {
-                    warms_this_program = true;
-                    break;
-                }
-            }
-            if (warms_this_program) {
-                break;
-            }
-        }
-        if (warms_this_program) {
-            kernel_prewarm::wait_for_prewarm();
-        }
-    }
 
     bool remote_enabled = jit_server::JitCompileRpcClient::enabled();
     std::vector<std::shared_future<void>> events;
@@ -2182,7 +2212,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 kernel->name());
         }
 
-        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+        auto kernel_hash = detail::KernelCompileHash(kernel, build_options, build_env.build_key());
 
         const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
         kernel->set_full_name(kernel_path_suffix);
@@ -2233,39 +2263,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
-                        if (kernel_prewarm::capture_only_skip_gcc(kernel->name())) {
-                            // Generate genfiles (no compiler) so the recipe is complete, capture, and
-                            // skip the gcc compile + binary read. The model-kernel gcc runs off-device
-                            // (prewarm_manifest_offline) before the real run, so the capture pass holds
-                            // the device only for device-init + program construction. jit_build_once
-                            // dedups the genfile write for kernels shared across programs.
-                            jit_build_once(
-                                kernel_hash, [&] { generate_kernel_source_files(device, build_options, kernel); });
-                            if (kernel_prewarm::capture_needed(
-                                    build_env.build_key(), kernel->name() + "/" + std::to_string(kernel_hash))) {
-                                kernel_prewarm::append_manifest_entry(
-                                    build_kernel_descriptor(device, kernel, build_options, kernel_hash).request);
-                            }
-                            return;
-                        }
                         const std::string binary_root =
                             ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
-                        // Record this kernel in the self-bootstrapping prewarm manifest (default-on;
-                        // TT_METAL_KERNEL_PREWARM=0 opts out). capture_needed() dedups against the
-                        // on-disk manifest from the cheap (build_key, name/hash) key, so only kernels
-                        // not already recorded pay the build_kernel_descriptor read -- a cold cache
-                        // records the full set, warm runs add only new kernels. Read-only on the
-                        // genfiles: ensure_kernel_binaries() above already (re)generated them, and
-                        // regenerating here would race parallel device-init builds sharing dispatch
-                        // kernels (transient "Cannot read file").
-                        if (kernel_prewarm::capture_needed(
-                                build_env.build_key(), kernel->name() + "/" + std::to_string(kernel_hash))) {
-                            kernel_prewarm::append_manifest_entry(
-                                build_kernel_descriptor(device, kernel, build_options, kernel_hash).request);
-                        }
                     },
                     events);
             }
@@ -2464,7 +2466,7 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
-    tt::stl::Span<ProgramImpl*> programs(programs_array);
+    ttsl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
         extract_context_id(device), device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
@@ -2480,7 +2482,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    tt::stl::Span<ProgramImpl*> programs) {
+    ttsl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
     const auto& hal = MetalContext::instance(context_id).hal();

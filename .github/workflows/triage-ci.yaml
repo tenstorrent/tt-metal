@@ -55,5 +55,5 @@ jobs:
       high-volume-runs-per-day: ${{ fromJSON(inputs.high-volume-runs-per-day) }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.TT_METAL_TICKETING_TOKEN }}
       COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}

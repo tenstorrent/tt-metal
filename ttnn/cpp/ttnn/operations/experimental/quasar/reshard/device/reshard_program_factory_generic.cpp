@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -786,28 +787,32 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         {"unit_size", unit_size},
     };
 
-    const auto make_worker = [&](const char* name, DataMovementRoleHint role, DFBEndpointType endpoint) {
-        KernelSpec k{
+    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
+        return KernelSpec{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_source),
-            .hw_config = DataMovementHardwareConfig{.role = role},
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = DFBSpecName{kGenDfbName},
+                .accessor_name = kGenDfbName,
+                .endpoint_type = endpoint,
+            }},
+            .tensor_bindings =
+                {TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kGenInputTensorParam},
+                     .accessor_name = kGenInputTensorParam},
+                 TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kGenOutputTensorParam},
+                     .accessor_name = kGenOutputTensorParam}},
+            .compile_time_args = compile_time_args,
+            .hw_config = std::move(hw_config),
+            .advanced_options = {.num_runtime_varargs = num_varargs},
         };
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kGenInputTensorParam}, .accessor_name = kGenInputTensorParam});
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kGenOutputTensorParam}, .accessor_name = kGenOutputTensorParam});
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFBSpecName{kGenDfbName},
-            .accessor_name = kGenDfbName,
-            .endpoint_type = endpoint,
-        });
-        k.compile_time_args = compile_time_args;
-        k.advanced_options.num_runtime_varargs = num_varargs;
-        return k;
     };
 
-    KernelSpec k0 = make_worker("reader", DataMovementRoleHint::READER, DFBEndpointType::PRODUCER);
-    KernelSpec k1 = make_worker("writer", DataMovementRoleHint::WRITER, DFBEndpointType::CONSUMER);
+    KernelSpec k0 =
+        make_worker("reader", ttnn::create_reader_datamovement_config(device->arch()), DFBEndpointType::PRODUCER);
+    KernelSpec k1 =
+        make_worker("writer", ttnn::create_writer_datamovement_config(device->arch()), DFBEndpointType::CONSUMER);
 
     // The borrowed DFB is only an address source (the kernel writes via get_write_ptr() + offset and
     // only ever touches the real, mapped output pages). A sharded output shard shape can be padded

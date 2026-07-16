@@ -7,6 +7,7 @@ Seeds a block-cyclic cache with all-ones, runs the op, reconstructs natural orde
   * [valid_global, ceil_128(v))    zero  (pad window)
   * [ceil_128(v), :)               real (==1)  -- nothing past the window
 """
+
 import math
 
 import pytest
@@ -14,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
@@ -31,31 +33,198 @@ _CASES = [
 ]
 _IDS = [f"v{v}_chip{ch}" if ch is not None else f"v{v}_aligned" for (_c, _s, v, ch) in _CASES]
 
+_FORMATS = [
+    (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),
+]
+_FORMAT_IDS = ["bfp8_tile", "bf16_rm", "fp8_rm"]
+
+
+def _init_cache_filled_with_ones(
+    mesh_device,
+    *,
+    head_dim,
+    seq_len_cache,
+    chunk_size_global,
+    sp_axis,
+    dtype,
+    layout,
+    num_layers=1,
+    num_users=1,
+):
+    """Initialize a block-cyclic cache and overwrite every physical row with one."""
+    mesh_shape = list(mesh_device.shape)
+    cache = init_kvpe_cache(
+        head_dim,
+        mesh_device,
+        seq_len_cache,
+        mesh_shape,
+        sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+        dtype=dtype,
+        layout=layout,
+    )
+    assert cache.dtype == dtype
+    assert cache.layout == layout
+
+    # FP8 cannot enter through this mesh-mapper path directly, so create BF16 row-major and typecast
+    # on device, matching the production MLA path.
+    ones = torch.ones(1, 1, chunk_size_global, head_dim, dtype=torch.bfloat16)
+    tt_ones = ttnn.from_torch(
+        ones,
+        device=mesh_device,
+        dtype=ttnn.bfloat16 if dtype == ttnn.fp8_e4m3 else dtype,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(2, None)),
+    )
+    if dtype == ttnn.fp8_e4m3:
+        tt_ones = ttnn.typecast(tt_ones, ttnn.fp8_e4m3)
+
+    assert seq_len_cache % chunk_size_global == 0
+    for slot_idx in range(num_users):
+        for layer_idx in range(num_layers):
+            for kv_actual_global in range(0, seq_len_cache, chunk_size_global):
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    cache,
+                    tt_ones,
+                    slot_idx=slot_idx,
+                    layer_idx=layer_idx,
+                    num_layers=num_layers,
+                    kv_actual_global=kv_actual_global,
+                    cluster_axis=sp_axis,
+                )
+    ttnn.synchronize_device(mesh_device)
+    return cache
+
+
+def _cache_in_natural_order(cache, mesh_device, *, chunk_size_global, seq_len_cache, sp_axis):
+    """Gather a block-cyclic mesh cache and restore natural token order."""
+    mesh_shape = list(mesh_device.shape)
+    cache_shard_order = ttnn.to_torch(
+        cache,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.bfloat16)[:, :1]
+    positions = blockcyclic_positions(mesh_shape[sp_axis], chunk_size_global, seq_len_cache)
+    natural = torch.empty(cache_shard_order.shape[0], seq_len_cache, cache_shard_order.shape[-1], dtype=torch.bfloat16)
+    for batch_idx in range(cache_shard_order.shape[0]):
+        natural[batch_idx, positions] = cache_shard_order[batch_idx, 0]
+    return natural
+
+
+def _assert_cache_windows(
+    cache,
+    mesh_device,
+    *,
+    chunk_size_global,
+    seq_len_cache,
+    sp_axis,
+    num_layers,
+    windows,
+):
+    """Check exact zero windows while requiring every other cache element to remain one."""
+    natural = _cache_in_natural_order(
+        cache,
+        mesh_device,
+        chunk_size_global=chunk_size_global,
+        seq_len_cache=seq_len_cache,
+        sp_axis=sp_axis,
+    )
+    expected = torch.ones_like(natural)
+    for (slot_idx, layer_idx), (start, end) in windows.items():
+        expected[slot_idx * num_layers + layer_idx, start:end] = 0
+    assert torch.equal(natural, expected), (
+        f"cache mismatch: {torch.count_nonzero(natural != expected).item()} elements differ; "
+        f"actual range=[{natural.min().item()}, {natural.max().item()}]"
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("dtype,layout", _FORMATS, ids=_FORMAT_IDS)
+@pytest.mark.timeout(0)
+def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, dtype, layout):
+    """Cover one cross-chip window and a program-cache hit with new runtime args."""
+    if dtype == ttnn.fp8_e4m3 and not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
+    sp_axis = 0
+    chunk_size_global = 384  # local=192: [180,256) crosses chip0 -> chip1
+    seq_len_cache = 384
+    head_dim = 64
+    num_users = 2
+    num_layers = 1
+
+    cache = _init_cache_filled_with_ones(
+        mesh_device,
+        head_dim=head_dim,
+        seq_len_cache=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        sp_axis=sp_axis,
+        dtype=dtype,
+        layout=layout,
+        num_layers=num_layers,
+        num_users=num_users,
+    )
+
+    mesh_device.enable_program_cache()
+    cache_entries_before = mesh_device.num_program_cache_entries()
+    windows = {
+        (0, 0): (180, 256),  # crosses chip0 -> chip1
+        (1, 0): (350, 384),  # same program, different slot and valid_global
+    }
+    for (slot_idx, layer_idx), (valid_global, _pad_end) in windows.items():
+        ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+            cache,
+            slot_idx,
+            layer_idx,
+            num_layers,
+            valid_global,
+            chunk_size_global,
+            sp_axis,
+            128,
+        )
+    ttnn.synchronize_device(mesh_device)
+
+    _assert_cache_windows(
+        cache,
+        mesh_device,
+        chunk_size_global=chunk_size_global,
+        seq_len_cache=seq_len_cache,
+        sp_axis=sp_axis,
+        num_layers=num_layers,
+        windows=windows,
+    )
+
+    # Both calls share structural args, so slot/valid changes must reuse one program.
+    assert mesh_device.num_program_cache_entries() == cache_entries_before + 1
+
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("dtype,layout", _FORMATS, ids=_FORMAT_IDS)
 @pytest.mark.parametrize("chunk_size_global,seq_len_cache,valid_global,expected_chip", _CASES, ids=_IDS)
 @pytest.mark.timeout(0)
-def test_zero_padded_kv_cache(mesh_device, chunk_size_global, seq_len_cache, valid_global, expected_chip):
+def test_zero_padded_kv_cache(
+    mesh_device, dtype, layout, chunk_size_global, seq_len_cache, valid_global, expected_chip
+):
+    if dtype == ttnn.fp8_e4m3 and not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+
     mesh_shape = list(mesh_device.shape)
     sp_axis = 0
     sp = mesh_shape[sp_axis]
-    tp = mesh_shape[1]
-    kvpe = 64
-    seq_len_local = seq_len_cache // sp
+    head_dim = 64
 
-    cache = init_kvpe_cache(kvpe, mesh_device, seq_len_cache, mesh_shape, sp_axis, num_kvpe_cache_layers=1)
-
-    # seed all-ones across the whole cache
-    ones = torch.ones(1, 1, seq_len_local, kvpe, dtype=torch.bfloat16)
-    tt_ones = ttnn.from_torch(
-        ones,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    cache = _init_cache_filled_with_ones(
+        mesh_device,
+        head_dim=head_dim,
+        seq_len_cache=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        sp_axis=sp_axis,
+        dtype=dtype,
+        layout=layout,
     )
-    ttnn.fill_cache(cache, tt_ones, 0, update_idx=0)
-    ttnn.synchronize_device(mesh_device)
 
     if expected_chip is not None:
         tile_start = (valid_global // 32) * 32
@@ -69,29 +238,17 @@ def test_zero_padded_kv_cache(mesh_device, chunk_size_global, seq_len_cache, val
     )
     ttnn.synchronize_device(mesh_device)
 
-    # ---- reconstruct natural order ----
-    positions = blockcyclic_positions(sp, chunk_size_global, seq_len_cache)
-    natural = torch.zeros(seq_len_cache)
-    for di, dt in enumerate(ttnn.get_device_tensors(cache)):
-        if di % tp != 0:
-            continue
-        sp_coord = di // tp
-        rows = ttnn.to_torch(dt).float()[0, 0, :, :].mean(dim=-1)
-        for lr in range(seq_len_local):
-            natural[int(positions[sp_coord * seq_len_local + lr].item())] = rows[lr].item()
-
     ceil_v = math.ceil(valid_global / 128) * 128
-    real, pad, rest = natural[:valid_global], natural[valid_global:ceil_v], natural[ceil_v:]
-    logger.info(
-        f"v={valid_global} ceil128={ceil_v}: real.min={real.min():.2f} "
-        f"pad.max={pad.max() if len(pad) else 0:.2f} rest.min={rest.min() if len(rest) else 1:.2f}"
+    _assert_cache_windows(
+        cache,
+        mesh_device,
+        chunk_size_global=chunk_size_global,
+        seq_len_cache=seq_len_cache,
+        sp_axis=sp_axis,
+        num_layers=1,
+        windows={(0, 0): (valid_global, ceil_v)},
     )
-    assert real.min() > 0.9, f"real [0,{valid_global}) clobbered (min={real.min()})"
-    if len(pad):
-        assert pad.max() < 0.1, f"pad [{valid_global},{ceil_v}) not zeroed (max={pad.max()})"
-    if len(rest):
-        assert rest.min() > 0.9, f"rows past window [{ceil_v},:) touched (min={rest.min()})"
-    logger.success(f"zero_padded_kv_cache v={valid_global} PASSED")
+    logger.success(f"zero_padded_kv_cache {layout} {dtype} v={valid_global} PASSED")
 
 
 # (num_layers, num_users, slot_idx, layer_idx, valid_global, expected_chip) -- exercises the cache

@@ -198,9 +198,7 @@ class UpSample1d(Module):
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
 
         poly2 = self._use_polyphase and self.ratio == 2
-        # The ratio-2 polyphase path only ever reads x_pad[2:T_pad-2], so pad two fewer rows
-        # per side and consume the result directly — no crop slice, and a 2-row-lighter halo
-        # exchange. Falls back to the full pad + slice when there aren't 2 rows to drop.
+        # ratio-2 polyphase reads only x_pad[2:T_pad-2]; pad two fewer rows per side when possible.
         crop = 2 if (poly2 and self.pad >= 2) else 0
         eff_pad = self.pad - crop
 
@@ -218,10 +216,7 @@ class UpSample1d(Module):
 
         if poly2:
             B_, T_pad, C_ = x_pad.shape
-            # Both phases share one window: phase 0 reads taps at even positions, phase 1 at odd
-            # (= phase 0's window advanced one sample). Zero-padding each sub-tap vector — sub0
-            # trailing, sub1 leading — folds that one-sample offset into the filter, so both convs
-            # read the same input. Bit-identical to the historical two-offset-slice form.
+            # Zero-pad sub-taps (sub0 trailing, sub1 leading) so both phases convolve the same input.
             if crop:
                 base = x_pad
             else:

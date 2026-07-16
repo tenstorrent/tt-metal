@@ -35,7 +35,6 @@
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
-#include "impl/program/kernel_prewarm.hpp"
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tracy/Tracy.hpp"
@@ -105,6 +104,9 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().validate_circular_buffer_region(mesh_device);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(mesh_device);
+    // Metal 2.0 scratchpads stack on the DFB allocations, so must allocate them AFTER the DFBs are placed.
+    // Their locations are passed as implicit CRTAs, so allocate them BEFORE generate_dispatch_commands snapshots.
+    program.impl().allocate_scratchpads(mesh_device);
     program.impl().validate_dataflow_buffer_region(mesh_device);
 }
 
@@ -123,13 +125,6 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
                 [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
         }
         mesh_device->wait_for_thread_pool();
-    }
-    // Capture-only pass: compile_program above captured each model kernel's recipe without gcc, so the
-    // kernels have no binaries. finalize packs binary transfer info (finalize_kernel_bins /
-    // populate_dispatch_data read kernel->binaries()) for a dispatch we never do here -- skip it.
-    // Device init compiles + dispatches its cq_/fabric programs via the single-device path, not this.
-    if (kernel_prewarm::capture_only()) {
-        return;
     }
     finalize_offsets(mesh_device);
 }
@@ -422,7 +417,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     for (auto& [_, program] : programs_) {
         program_impls.push_back(&program.impl());
     }
-    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
+    ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         extract_context_id(mesh_device),

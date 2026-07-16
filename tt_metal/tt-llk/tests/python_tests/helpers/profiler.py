@@ -182,6 +182,20 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
     columns += [f"{stat}({col})" for col in timings for stat in ["mean", "std"]]
 
     result.columns = columns
+
+    # std is undefined for a single sample, so with the default run_count=1 every
+    # marker has one observation and the std(...) columns come back entirely NaN.
+    # Drop those all-empty std(...) columns so single-run reports don't carry
+    # structurally empty data; tests that repeat measurements (run_count>=2) keep
+    # their populated std columns untouched.
+    empty_std_columns = [
+        col
+        for col in result.columns
+        if col.startswith("std(") and result[col].isna().all()
+    ]
+    if empty_std_columns:
+        result = result.drop(columns=empty_std_columns)
+
     return result
 
 

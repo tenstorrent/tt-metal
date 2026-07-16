@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hostdevcommon/config.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/moe_core_placement.hpp"
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
@@ -151,8 +151,9 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     // matmul_num_cores must match the actual matmul ring size produced by program_factory:
     //   - WH: ring = num DRAM banks = 12 (1:1, no padding). args.bh_ring_size is forced to 12
     //     in invoke() for WH, so reading either source returns the same value.
-    //   - BH: ring = bh_ring_size (8 / 12 / 16). program_factory.cpp pads the 8 DRAM-adjacent
-    //     cores up to bh_ring_size via `kBhMatmulExtras` (see program_factory.cpp). Using the
+    //   - BH: ring = bh_ring_size (8 / 12 / 16). select_moe_compute_cores() pads the 8
+    //     DRAM-adjacent cores up to bh_ring_size inside build_matmul_ring_cores()
+    //     (moe_core_placement.cpp). Using the
     //     raw DRAM bank count here (=8 on BH always) would under-report and reject shapes
     //     whose width_shard_dim divides bh_ring_size but not 8 — e.g. GPT-OSS at hidden=2880
     //     forces output_width_shard_dim=3, valid at N=12 (12%3=0) but the early validate using
@@ -178,6 +179,13 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         "so RING_CORES_PER_COMBINE_COL is integral",
         matmul_num_cores,
         combine_data_parallel_cores);
+    const uint32_t hidden_tiles = hidden_size / 32;
+    TT_FATAL(
+        hidden_tiles % combine_data_parallel_cores == 0,
+        "hidden_tiles ({}) must be divisible by num_data_parallel_cores ({}) "
+        "so output width shards are tile-aligned",
+        hidden_tiles,
+        combine_data_parallel_cores);
 
     // dm1 auto-splits each ring A2A transfer into enough noc_async_write_one_packet calls
     // to fit within NOC_MAX_BURST_SIZE (arch-dependent). Validate tiles_per_step is even
@@ -194,9 +202,16 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         args.num_shared_experts_per_device,
         experts_per_device);
 
-    TT_FATAL(
-        args.bh_ring_size == 8 || args.bh_ring_size == 12 || args.bh_ring_size == 16,
-        "moe_compute: bh_ring_size={} is not supported (must be 8, 12, or 16)",
+    // Validate that dynamic core placement succeeds for this hidden size and combine grid.
+    // mux_core_range_set comes from combine_params when in Full mode; ComputeOnly uses an empty set.
+    const CoreRangeSet validate_mux_cores =
+        args.combine_params.has_value() ? args.combine_params->mux_core_range_set : CoreRangeSet{};
+    ttnn::operations::ccl::common::select_moe_compute_cores(
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        validate_mux_cores,
         args.bh_ring_size);
 }
 
@@ -421,9 +436,9 @@ std::vector<ttnn::Tensor> moe_compute(
 
     auto* mesh_device = tilize_input_tensor.device();
 
-    // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
+    // BH ring size: default 8; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
     // Validate before num_data_parallel_cores derivation so ring-aware width dim can use ring_n.
-    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(12u) : 12u;
+    const uint32_t ring_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size.value_or(8u) : 12u;
     // NOTE: there has been some experimentation with different ring sizes on Blackhole but there are known correctness
     // issues for some model configurations for values other than 8, which is why this is not exposed in the public API
 
@@ -440,13 +455,31 @@ std::vector<ttnn::Tensor> moe_compute(
         }
     }
 
-    const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
+    // In compute_only mode, the public-layer must not pass any CCL-related optionals.
+    if (compute_only) {
+        TT_FATAL(!cluster_axis.has_value(), "moe_compute(compute_only=true) requires cluster_axis to be std::nullopt");
+        TT_FATAL(!topology.has_value(), "moe_compute(compute_only=true) requires topology to be std::nullopt");
+        TT_FATAL(!num_links.has_value(), "moe_compute(compute_only=true) requires num_links to be std::nullopt");
+        TT_FATAL(
+            !mux_core_range_set.has_value(),
+            "moe_compute(compute_only=true) requires mux_core_range_set to be std::nullopt");
+        TT_FATAL(
+            !optional_cross_device_semaphore.has_value(),
+            "moe_compute(compute_only=true) requires optional_cross_device_semaphore to be std::nullopt");
+        TT_FATAL(
+            !optional_output_tensor.has_value(),
+            "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
+    } else {
+        TT_FATAL(cluster_axis.has_value(), "moe_compute(compute_only=false) requires cluster_axis to be provided");
+    }
 
-    TT_FATAL(
-        !(compute_only && cluster_axis.has_value()),
-        "moe_compute: compute_only=True is incompatible with cluster_axis (got cluster_axis={}). "
-        "compute_only skips the combine path, so cluster_axis has no meaning.",
-        cluster_axis.value_or(0));
+    const auto& combine_cores = get_moe_combine_cores(
+        mesh_device,
+        num_token_parallel_cores,
+        num_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set.value_or(CoreRangeSet{}),
+        ring_n);
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {

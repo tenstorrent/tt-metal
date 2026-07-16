@@ -36,10 +36,11 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// Canonical definition of DFBSpecName. It lives in this lower-level header
-// (rather than dataflow_buffer_spec.hpp) because AdvancedOptions members here
-// reference it, and dataflow_buffer_spec.hpp includes this header.
+// Name identifying a DataflowBufferSpec within a ProgramSpec.
 using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
+// NOTE: DFBSpecName is also declared at the top of dataflow_buffer_spec.hpp, but is
+//       re-declared here for use in AdvancedOptions to avoid circular dependency.
+//       This is legal so long as the declarations are identical, which is compiler-enforced.
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -99,37 +100,7 @@ struct KernelAdvancedOptions {
     //       existing uses are refactored to avoid it.
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
     Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
-
-    ////////////////////////////////////////////////////////////////////////////////
-    // Multi-threaded self-loop DFBs on compute kernels
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // Self-loop DFBs on compute kernels (niche multi-threaded use case).
-    // This applies only to compute kernels that bind BOTH the producer and consumer
-    // endpoints of the same DFB (self-loop).
-    //
-    // This is ONLY pertinent to multi-threaded compute kernels on Gen2 architectures.
-    // These settings have absolutely no effect on single-threaded kernels.
-    // (A Gen1 compute kernel is always single-threaded.)
-    //
-    // A compute kernel's threads can communicate via the DFB in two topologies:
-    //
-    //   INTRA (intra-thread): Each kernel thread uses the DFB in its own self-loop.
-    //         (no cross-thread communication). This is the common case.
-    //   INTER (inter-thread): Within the kernel, some threads produce data for other
-    //          threads to consume.
-    //
-    // Only the INTRA case is currently supported. INTER will trigger a validation error.
-    // There are currently no known use cases for an INTER-thread self-loop. This option
-    // is present in the API for completeness, to surface any use cases that may arise.
-    enum class DFBSelfLoopConnectivity { INTRA, INTER };
-
-    // Self-loop DFBs on compute kernels: maps each self-looped DFB to its scope.
-    Table<DFBSpecName, DFBSelfLoopConnectivity> dfb_self_loop_connectivities;
 };
-
-// (Convenience aliases for nested types)
-using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

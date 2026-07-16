@@ -10,7 +10,7 @@ Tests Ring Joint Attention accuracy and determinism using:
 - DeepSeek MLA (Multi-Latent Attention): causal attention with balanced zigzag work distribution
 
 Runs on BH multi-chip setups (single ring 1xN or Galaxy 4x8 mesh).
-Perf tests are included but skipped on CI.
+Perf table generation is included but skipped on CI.
 
 Model Configurations:
 - WAN: nhq == nhk == nhv, d_q == d_k == d_v == 128, bfloat16 for all tensors
@@ -33,7 +33,7 @@ from loguru import logger
 from ttnn.operations.ccl import Topology
 
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
+from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
@@ -42,6 +42,7 @@ from tests.nightly.sdpa_perf_utils import MeshConfig
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 MESH_CONFIG = MeshConfig.detect()
 
@@ -633,6 +634,21 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
 def create_global_semaphores(mesh_device, cores, initial_value):
     """Create global semaphore handles for CCL coordination."""
     return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+
+
+def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for SDPA perf checks")
+
+    _, records = profile_realtime_program(
+        mesh_device,
+        run_fn,
+        collect_all=True,
+    )
+    runtime_id = records[0]["runtime_id"]
+    first_program_records = [record for record in records if record["runtime_id"] == runtime_id]
+    duration_ns = max(record["duration_ns"] for record in first_program_records)
+    return int(duration_ns), first_program_records
 
 
 def to_balanced_growing_cache_layout(src_full, sp_size, chunk_size, last_uploaded_chunk):
@@ -1247,6 +1263,7 @@ def run_ring_mla_sdpa(
     num_iterations=1,
     kv_cache_batch_idx=None,
     cache_batch=2,
+    runtime: RingJointSDPARuntime = None,
 ):
     """Run ring_mla where V is the first d_v columns of the single KV tensor."""
     if mesh_config.sp_size < 2:
@@ -1256,7 +1273,9 @@ def run_ring_mla_sdpa(
 
     torch.manual_seed(1234)
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    owns_runtime = runtime is None
+    if runtime is None:
+        runtime = open_ring_joint_sdpa_runtime(mesh_config)
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -1391,7 +1410,8 @@ def run_ring_mla_sdpa(
         assert out_pass, f"ring_mla PCC {out_pcc} below threshold {pcc_threshold}"
 
     finally:
-        close_ring_joint_sdpa_runtime(runtime)
+        if owns_runtime:
+            close_ring_joint_sdpa_runtime(runtime)
 
 
 # ============================================================================
@@ -1446,6 +1466,7 @@ def run_ring_joint_sdpa_chunked(
     use_ring_mla: bool = False,
     do_check: bool = True,
     reuse_kv_buffer: bool = False,
+    runtime: RingJointSDPARuntime = None,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1526,7 +1547,9 @@ def run_ring_joint_sdpa_chunked(
 
     b = BATCH_SIZE
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    owns_runtime = runtime is None
+    if runtime is None:
+        runtime = open_ring_joint_sdpa_runtime(mesh_config)
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -2023,7 +2046,8 @@ def run_ring_joint_sdpa_chunked(
                 )
 
     finally:
-        close_ring_joint_sdpa_runtime(runtime)
+        if owns_runtime:
+            close_ring_joint_sdpa_runtime(runtime)
 
 
 def torch_chunked_causal_sdpa_reference(q, k, v, q_abs_offset, scale=None):
@@ -3448,7 +3472,7 @@ def test_ring_joint_attention_create_perf_table(model_name):
     print(f"{'='*150}\n")
 
 
-# === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
+# === TEST 5: PERFORMANCE CHECK ===
 # Symmetric +/- band — catches both regressions and unexpected speedups.
 RING_JOINT_PERF_MARGIN = 0.01
 
@@ -3473,22 +3497,17 @@ else:
     ]
 
 
-@pytest.mark.skipif(
-    os.environ.get("SDPA_PERF_CHECKS") != "1",
-    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
-)
 @pytest.mark.parametrize(
     "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin",
     RING_JOINT_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_JOINT_PERF_CHECK_CONFIGS],
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_joint_attention_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
 ):
-    """Measure ring joint SDPA math utilization via tracy and assert within the config's +/- margin."""
-    from tracy.process_model_log import run_device_profiler
-
+    """Measure ring joint SDPA math utilization via real-time device program records."""
     if MESH_CONFIG.sp_size != ring_size_expected:
         pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
 
@@ -3502,34 +3521,22 @@ def test_ring_joint_attention_perf_check(
     local_seq_len = model.seq_len
     local_nhq = model.nhq
 
-    subdir = "ttnn_ring_joint_sdpa_perf_check"
-    command = (
-        f"pytest tests/nightly/blackhole/sdpa/"
-        f"test_ring_joint_sdpa.py::test_ring_joint_attention_sdpa_sweep_perf_impl"
-        f"[{config_id}]"
-    )
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+            runtime.mesh_device,
+            lambda: run_ring_joint_sdpa_model_configs(
+                MESH_CONFIG,
+                model,
+                [(q_chunk_size, k_chunk_size)],
+                do_check=False,
+                runtime=runtime,
+            ),
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
-    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
-    cols = ["ATTRIBUTES"]
-
-    with mock.patch.dict(os.environ, {"CI": "false"}):
-        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        subdir, float_columns=float_cols, columns=cols, op_name="", sum_vals=False, has_signposts=False
-    )
-
-    assert (
-        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
-    ), "profiler returned no SDPA ops - inner test was skipped or did not produce a kernel run"
-
-    measured_core_count = int(r["CORE COUNT"][0])
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
-
-    # Match perf-table effective_cores rounding (ignore non-multiple-of-10 strays)
-    effective_cores = measured_core_count - measured_core_count % 10
-    assert (
-        effective_cores > 0
-    ), f"effective_cores=0 (measured_core_count={measured_core_count}) — profiler output incomplete"
+    effective_cores = MESH_CONFIG.sdpa_cores
 
     utilization = compute_ring_joint_utilization(
         local_seq_len, sq, model.d_q, model.d_v, local_nhq, duration_ns, effective_cores, model.is_causal
@@ -3541,7 +3548,8 @@ def test_ring_joint_attention_perf_check(
     logger.info(
         f"Ring joint SDPA perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
-        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+        f"profiler_records={len(perf_records)}"
     )
 
     assert lower <= utilization <= upper, (
@@ -3550,14 +3558,10 @@ def test_ring_joint_attention_perf_check(
     )
 
 
-@pytest.mark.skipif(
-    os.environ.get("SDPA_PERF_CHECKS") != "1",
-    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
-)
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_mla_perf_better_than_separate_v_ring_joint():
     """Profile ring_mla against the existing separate-V MLA ring joint path and require a speedup."""
-    from tracy.process_model_log import run_device_profiler
-
     model_name = "mla_100k"
     q_chunk_size = 160
     k_chunk_size = 320
@@ -3572,36 +3576,55 @@ def test_ring_mla_perf_better_than_separate_v_ring_joint():
     joint_config_id = get_test_case_id(model, q_chunk_size, k_chunk_size)
     mla_config_id = RING_MLA_TEST_CONFIG_IDS[0]
 
-    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
-    cols = ["ATTRIBUTES"]
+    def profile_with_runtime(run_fn):
+        runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+        try:
+            duration_ns, _ = profile_ring_joint_runtime_duration_ns(runtime.mesh_device, lambda: run_fn(runtime))
+            return duration_ns
+        finally:
+            close_ring_joint_sdpa_runtime(runtime)
 
-    def profile_duration(command, subdir):
-        with mock.patch.dict(os.environ, {"CI": "false"}):
-            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-        result = post_process_ops_log(
-            subdir,
-            float_columns=float_cols,
-            columns=cols,
-            op_name="RingJointSDPADeviceOperation",
-            sum_vals=False,
-            has_signposts=False,
+    (
+        b,
+        sq,
+        nhq,
+        nhk,
+        d_q,
+        d_k,
+        d_v,
+        mla_q_chunk_size,
+        mla_k_chunk_size,
+        is_balanced,
+        q_dtype,
+        kv_dtype,
+    ) = RING_MLA_TEST_CONFIGS[0]
+    ring_mla_duration_ns = profile_with_runtime(
+        lambda runtime: run_ring_mla_sdpa(
+            MESH_CONFIG,
+            b,
+            nhq,
+            nhk,
+            sq,
+            d_q,
+            d_k,
+            d_v,
+            mla_q_chunk_size,
+            mla_k_chunk_size,
+            q_dtype,
+            kv_dtype,
+            is_balanced=is_balanced,
+            do_check=False,
+            runtime=runtime,
         )
-        assert len(result["DEVICE KERNEL DURATION [ns]"]) > 0, f"profiler returned no SDPA ops for {command}"
-        return int(result["DEVICE KERNEL DURATION [ns]"].max())
-
-    ring_mla_duration_ns = profile_duration(
-        (
-            "pytest tests/nightly/blackhole/sdpa/"
-            f"test_ring_joint_sdpa.py::test_ring_mla_sweep_perf_impl[{mla_config_id}]"
-        ),
-        "ttnn_ring_mla_perf_check",
     )
-    separate_v_duration_ns = profile_duration(
-        (
-            "pytest tests/nightly/blackhole/sdpa/"
-            f"test_ring_joint_sdpa.py::test_ring_joint_attention_sdpa_sweep_perf_impl[{joint_config_id}]"
-        ),
-        "ttnn_ring_mla_baseline_perf_check",
+    separate_v_duration_ns = profile_with_runtime(
+        lambda runtime: run_ring_joint_sdpa_model_configs(
+            MESH_CONFIG,
+            model,
+            [(q_chunk_size, k_chunk_size)],
+            do_check=False,
+            runtime=runtime,
+        )
     )
 
     logger.info(
@@ -3870,6 +3893,31 @@ def test_ring_joint_attention_minimax3_gqa_chunked_accuracy():
     )
 
 
+def test_ring_joint_attention_minimax3_gqa_chunked_reuse_kv_hang_regression():
+    """Liveness gate for the RingJointSDPA cross-call chunked-prefill hang.
+
+    GQA chunked prefill reusing one oversized KV buffer: successive chunks share one cached program
+    while logical_n grows. Before the idle-core cache-hit patch, an idle core kept a stale
+    active_ring_iter_mask and skipped a ring iter the injector still multicast to, hanging forever.
+
+    Runs only on bh_quietbox_2_iommu (QuietBox 2, 4 chips, single ring sp_size=4). The hang needs an
+    idle core inside an active row-wide mcast row; on the fixed 10x10 grid that requires
+    all_heads_num_q_chunks = NH*ceil(640/q_chunk) to not be a multiple of the row width. Production
+    q=128 -> 80 = full rows (idle cores only in fully-idle rows, never hangs); q=320 -> 32 leaves a
+    partial active row of 8 idle cores that reproduces it. Verified: hangs without the patch, passes
+    with it. reuse_kv_buffer permutes the output, so this is liveness-only (do_check=False).
+    """
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"],
+        chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
+        qk_configs=[(320, 512)],
+        persistent_buffer_mode="reuse_max",
+        do_check=False,
+        reuse_kv_buffer=True,
+    )
+
+
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
@@ -3940,9 +3988,8 @@ def test_ring_mla_chunked_accuracy(model_name, qk_configs, chunk_size):
 
 
 # Perf-profiling twin of test_ring_mla_chunked_accuracy: identical device work, but do_check=False
-# skips the O(total_seq^2) CPU torch reference so the run fits the profiler timeout. Skipped on CI
-# directly; it is driven by test_ring_mla_chunked_perf_check via run_device_profiler (which sets
-# CI=false in the subprocess). Mirrors the test_ring_joint_attention_sdpa_sweep_perf_impl pattern.
+# skips the O(total_seq^2) CPU torch reference so the run fits the profiler timeout.
+# Kept for the Tracy perf table generator.
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
@@ -4278,7 +4325,7 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
     )
 
 
-# === TEST 9: CHUNKED-PREFILL ring_mla PERF CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
+# === TEST 9: CHUNKED-PREFILL ring_mla PERF CHECK ===
 # Profiles the kimi 50k+5k galaxy chunk (final, most compute-bound chunk of the kimi50k chunked
 # prefill): natively on Galaxy (sp=8, tp=4) and simulated on the 4-device QuietBox (sp=4, tp=1).
 # Symmetric +/- band, same as the ring joint perf check.
@@ -4306,14 +4353,10 @@ else:
     MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox): same per-device Q rows and 16Q/1KV local GQA shape.
-        ("minimax3_55k", 128, 512, 4, 47.64),
+        ("minimax3_55k", 128, 512, 4, 47.0),
     ]
 
 
-@pytest.mark.skipif(
-    os.environ.get("SDPA_PERF_CHECKS") != "1",
-    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
-)
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
@@ -4321,16 +4364,15 @@ else:
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_MLA_CHUNKED_PERF_CHECK_CONFIGS],
 )
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
-    chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via tracy and assert
+    chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via realtime profiler and assert
     within +/- RING_JOINT_PERF_MARGIN.
 
     RING_JOINT_CHUNKED_CHUNK_ID isolates the final chunk so only its iteration is profiled;
     each chunk rebuilds its K/V cache from scratch, so it reproduces the full-sequence kernel.
     """
-    from tracy.process_model_log import run_device_profiler
-
     if MESH_CONFIG.sp_size != ring_size_expected:
         pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
 
@@ -4340,34 +4382,28 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     perf_chunk = n_chunks - 1  # final chunk: largest K/V prefix + current chunk (simulates galaxy 50k+5k)
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-fresh_kv"
-    subdir = "ttnn_ring_mla_chunked_perf_check"
-    command = (
-        f"pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_impl[{config_id}]"
-    )
-
-    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
-    cols = ["ATTRIBUTES"]
-
-    with mock.patch.dict(os.environ, {"CI": "false", CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
-        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        subdir,
-        float_columns=float_cols,
-        columns=cols,
-        op_name="RingJointSDPADeviceOperation",
-        sum_vals=False,
-        has_signposts=False,
-    )
-
-    assert (
-        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
-    ), "profiler returned no SDPA ops - inner test was skipped or did not produce a kernel run"
-
-    measured_core_count = int(r["CORE COUNT"][0])
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    persistent_buffer_mode="reuse_max",
+                    use_ring_mla=True,
+                    do_check=False,
+                    reuse_kv_buffer=False,
+                    runtime=runtime,
+                ),
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
-        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, measured_core_count
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
 
     lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
@@ -4376,7 +4412,8 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     logger.info(
         f"ring_mla chunked 50k+5k perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
-        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+        f"profiler_records={len(perf_records)}"
     )
 
     assert lower <= utilization <= upper, (
@@ -4385,16 +4422,14 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     )
 
 
-@pytest.mark.skipif(
-    os.environ.get("SDPA_PERF_CHECKS") != "1",
-    reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
-)
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
     MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS],
 )
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util
 ):
@@ -4403,8 +4438,6 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     RING_JOINT_CHUNKED_CHUNK_ID isolates the final chunk so only its iteration is profiled; the
     inner perf_impl uses reuse_kv mode so kv_actual_isl models the long prefix with a stable cache shape.
     """
-    from tracy.process_model_log import run_device_profiler
-
     if MESH_CONFIG.sp_size != ring_size_expected:
         pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
 
@@ -4414,34 +4447,27 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     perf_chunk = n_chunks - 1
 
     config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-reuse_kv"
-    subdir = "ttnn_ring_joint_sdpa_minimax3_gqa_chunked_perf_check"
-    command = (
-        "pytest tests/nightly/blackhole/sdpa/"
-        f"test_ring_joint_sdpa.py::test_ring_joint_attention_minimax3_gqa_chunked_perf_impl[{config_id}]"
-    )
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
+            duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+                runtime.mesh_device,
+                lambda: run_ring_joint_sdpa_chunked(
+                    MESH_CONFIG,
+                    model,
+                    chunk_size=chunk_size,
+                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    persistent_buffer_mode="reuse_max",
+                    do_check=False,
+                    reuse_kv_buffer=True,
+                    runtime=runtime,
+                ),
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
-    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
-    cols = ["ATTRIBUTES"]
-
-    with mock.patch.dict(os.environ, {"CI": "false", CHUNKED_PREFILL_CHUNK_ID_ENV: str(perf_chunk)}):
-        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        subdir,
-        float_columns=float_cols,
-        columns=cols,
-        op_name="RingJointSDPADeviceOperation",
-        sum_vals=False,
-        has_signposts=False,
-    )
-
-    assert (
-        len(r["CORE COUNT"]) > 0 and len(r["DEVICE KERNEL DURATION [ns]"]) > 0
-    ), "profiler returned no SDPA ops - inner test was skipped or did not produce a kernel run"
-
-    measured_core_count = int(r["CORE COUNT"][0])
-    duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max())
     utilization, _ = compute_chunked_prefill_perf_check_utilization(
-        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, measured_core_count
+        MESH_CONFIG, model, chunk_size, perf_chunk, duration_ns, MESH_CONFIG.sdpa_cores
     )
 
     lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
@@ -4450,7 +4476,8 @@ def test_ring_joint_attention_minimax3_gqa_chunked_perf_check(
     logger.info(
         f"Minimax3 GQA chunked final-chunk perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
-        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+        f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+        f"profiler_records={len(perf_records)}"
     )
 
     assert lower <= utilization <= upper, (

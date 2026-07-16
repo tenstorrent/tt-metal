@@ -43,7 +43,7 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
         TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
     }
 
-    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
+    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
 
     auto res = HostTensor::from_buffer(std::move(host_buffer), buffer_spec, TensorTopology{});
     return to_dtype(res, spec.data_type());

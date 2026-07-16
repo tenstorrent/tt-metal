@@ -53,7 +53,9 @@ struct IndexerScoreDeviceOperation {
         const DeviceComputeKernelConfig& compute_kernel_config,
         std::optional<uint32_t> cache_batch_idx,
         std::optional<uint32_t> kv_len,
-        std::optional<uint32_t> cluster_axis);
+        std::optional<uint32_t> cluster_axis,
+        std::optional<uint32_t> seq_subshard_axis,
+        std::optional<BlockCyclicLayout> block_cyclic);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -63,6 +65,17 @@ namespace ttnn::experimental {
 // Two public frontends over one shared device op: the lightning indexer's two flavours differ only in
 // fixed knobs, so each gets its own callable. Both share the program factory + 3 kernels (flavour = compile-
 // time args) and produce a row-major bf16 score. Causality: key t visible to query s iff t <= chunk_start + s.
+//
+// BLOCK-CYCLIC K LAYOUT: the gathered K cache is a per-SP-shard slab (chunked prefill + SP all-gather), so the
+// reader reads it back in natural token order via an invP remap. The interface matches
+// ttnn.transformer.sparse_sdpa: the caller names the MESH AXIS the cache was striped over
+// (block_cyclic_sp_axis) and passes the per-shard chunk length (block_cyclic_chunk_local); `sp` is DERIVED
+// from the mesh shape on that axis, so a caller cannot pass an sp that disagrees with the device.
+// block_cyclic_chunk_local must be q_isl (seq sharded only on the SP axis) or tp*q_isl (tp = mesh/sp). Both
+// set together, or neither = contiguous K (no remap); sp==1 is the identity. Seq sharded across BOTH axes
+// (chunk_local == tp*q_isl, tp>1) is allowed ONLY with cluster_axis=None (flat row-major linearization over
+// all devices == a row-major nested 2D seq shard); with a NAMED cluster_axis it is rejected (chunk_start
+// would miss the second axis's seq offset).
 
 // DeepSeek-V3.2 DSA / GLM-5 (ttnn.experimental.indexer_score_dsa):
 //   score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
@@ -78,7 +91,10 @@ ttnn::Tensor indexer_score_dsa(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_len = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> seq_subshard_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale
@@ -86,7 +102,8 @@ ttnn::Tensor indexer_score_dsa(
 // tensor). q [B,Hi,Sq,D], k [B,1,T,D] -> score [B,num_groups,Sq,T_out].
 // num_groups: G output planes (no cross-group sum); G==1 = TP=4 group-aligned (Hi=1/device), G>1 needs all
 //   heads resident + k_chunk>=64. block_size: 0 = full [B,G,Sq,T]; >0 = block-max-pool -> [B,G,Sq,T/bs].
-// chunk_start_idx / cluster_axis: same SP-ring semantics as indexer_score_dsa.
+// chunk_start_idx / cluster_axis / cache_batch_idx / kv_len: same semantics as indexer_score_dsa (the last
+// two are runtime, hash-excluded pass-throughs -- no recompile when the slot or valid length changes).
 // num_groups is required (no default): per-GQA-group selection is MSA's purpose, so the caller must state
 // the group count explicitly. It is placed before the defaulted optionals so the signature stays well-formed.
 ttnn::Tensor indexer_score_msa(
@@ -98,6 +115,10 @@ ttnn::Tensor indexer_score_msa(
     uint32_t block_size = 0,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> kv_len = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 
 }  // namespace ttnn::experimental

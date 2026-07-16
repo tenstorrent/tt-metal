@@ -11,6 +11,7 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"  // generate_bcast_col_scalar
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
+#include "dataflow_common.hpp"         // fill_neginf_tile (persistent causal -inf mask tile)
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 
@@ -36,7 +37,9 @@ void kernel_main() {
     constexpr uint32_t cb_kack = get_compile_time_arg_val(15);
     constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(16);
     constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(17);
-    constexpr auto out_args = TensorAccessorArgs<18, 0>();
+    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(18) != 0;
+    constexpr uint32_t cb_neginf = get_compile_time_arg_val(19);
+    constexpr auto out_args = TensorAccessorArgs<20, 0>();
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
@@ -64,15 +67,19 @@ void kernel_main() {
     const auto v = TensorAccessor(v_args, v_addr);
 
     // Reduce identity scaler; softmax scale is applied in compute.
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_scale,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        /*reduce_factor=*/1,
-        /*compute_uses_reduce_tile=*/true>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_scale, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
 
     // Col-identity for final row-sum reduction.
     generate_bcast_col_scalar(experimental::CB(cb_col_identity), one_bf16_packed);
+
+    // Persistent all -inf tile for the causal mask
+    if constexpr (CAUSAL_MASK_ENABLED) {
+        constexpr uint32_t mask_tile_bytes = get_tile_size(cb_neginf);
+        experimental::CB(cb_neginf).reserve_back(1);
+        fill_neginf_tile<mask_tile_bytes>(cb_neginf, 0);
+        experimental::CB(cb_neginf).push_back(1);
+    }
 
     uint32_t tok = work_start;
     uint32_t kv_group = 0;

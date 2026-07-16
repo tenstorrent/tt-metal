@@ -11,7 +11,6 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <algorithm>
-#include <cstdlib>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -82,144 +81,6 @@ static inline CoreCoord clamped_prev(const std::vector<CoreCoord>& order, uint32
 static inline CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
     const uint32_t last = static_cast<uint32_t>(order.size() - 1);
     return order.at(index >= last ? last : index + 1);
-}
-
-// Which in1-axis (N) slices land on the two fabric-relay cores of every in0 chain.
-//
-// The relay is issued inline on the in0-feed RISC by the last two cores of the in0 mcast chain, and
-// that RISC is also the only refill path for its own core's in0 compute CB — so a relay core's
-// matmul stalls for as long as its relay blocks on wire backpressure, and the op's wall time (a max
-// over cores) carries compute + wire on those cores. Since the in0 chain runs ALONG the in1 axis, a
-// relay core's chain position IS its N slice, which is what makes the N share the lever on it.
-static inline std::vector<uint32_t> fabric_relay_in1_indices(
-    bool transpose_core_grid, tt::tt_metal::NOC in0_noc, uint32_t in1_parallel_axis_cores) {
-    const CoreCoord origin{0, 0};
-    const auto order = build_core_order_for_axis(
-                           origin,
-                           transpose_core_grid,
-                           in1_parallel_axis_cores,
-                           in0_noc,
-                           /*axis_is_x_when_not_transposed=*/true,
-                           /*initial_endpoint=*/origin)
-                           .first;
-
-    std::vector<uint32_t> relay_indices;
-    for (uint32_t i = (order.size() >= 2) ? (order.size() - 2) : 0; i < order.size(); ++i) {
-        relay_indices.push_back(static_cast<uint32_t>(transpose_core_grid ? order[i].y : order[i].x));
-    }
-    // The relay cores' kernel is placed by CoreRange (in0_receiver_cores_fabric), which hard-codes the
-    // last two in1 indices. If the chain order ever stopped agreeing with that range, the N split
-    // below would unburden cores that do not relay while starving cores that do.
-    for (uint32_t idx : relay_indices) {
-        TT_FATAL(
-            idx + 2 >= in1_parallel_axis_cores,
-            "in0 chain tail (in1 index {}) is not in the last two in1 indices of {} — the fabric-relay "
-            "CoreRange and the chain order disagree",
-            idx,
-            in1_parallel_axis_cores);
-    }
-    return relay_indices;
-}
-
-// Per-core [start, end) N-tile ranges along the in1-parallel axis.
-//
-// Default (and the fallback whenever the requested share does not fit) is the original uniform split.
-// When TT_AGMM_FABRIC_N_PCT is set, the two fabric-relay cores take that percentage of the uniform
-// share and the remaining cores absorb what they give up, buying the relay cores slack to hide the
-// wire behind a shorter matmul.
-//
-// HARD BOUND on the imbalance: the in0 mcast chain hands one block per (m, n, k) iteration with a
-// request/ack handshake, so a core that iterated a different number of N blocks would leave its
-// chain neighbour waiting on a request that never comes (deadlock). Only the tile count inside the
-// LAST N block may move, which pins every core to the same N_blocks_per_core and confines N_i to
-//     (N_blocks_per_core - 1) * N_block_tiles  <  N_i  <=  N_blocks_per_core * N_block_tiles.
-// Below that window `current_N_block_tiles = n_tile_end - n_tile` underflows in the kernels; above
-// it, a core would need an extra block. Shapes too narrow to admit any imbalance (N_block_tiles == 1)
-// simply fall back to uniform.
-static inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> build_n_ranges(
-    uint32_t N_tiles,
-    uint32_t N_tiles_per_core,
-    uint32_t N_blocks_per_core,
-    uint32_t N_block_tiles,
-    uint32_t in1_parallel_axis_cores,
-    const std::vector<uint32_t>& fabric_in1_indices) {
-    std::vector<uint32_t> starts(in1_parallel_axis_cores);
-    std::vector<uint32_t> ends(in1_parallel_axis_cores);
-
-    const auto uniform = [&]() {
-        for (uint32_t i = 0; i < in1_parallel_axis_cores; ++i) {
-            starts[i] = N_tiles_per_core * i;
-            ends[i] = N_tiles_per_core * (i + 1);
-        }
-        return std::make_pair(starts, ends);
-    };
-
-    // Percentage of the uniform N share to leave on each fabric-relay core. Default 1 = shed as much
-    // as the other cores can absorb (see fab_floor below); TT_AGMM_FABRIC_N_PCT=0 restores the plain
-    // uniform split. Re-read per program build rather than cached in a static, so the correctness
-    // gate can drive both paths.
-    const char* pct_env = std::getenv("TT_AGMM_FABRIC_N_PCT");
-    const int fabric_n_pct = pct_env ? std::atoi(pct_env) : 1;
-    const uint32_t num_fabric = static_cast<uint32_t>(fabric_in1_indices.size());
-    if (fabric_n_pct <= 0 || fabric_n_pct >= 100 || num_fabric == 0 || num_fabric >= in1_parallel_axis_cores) {
-        return uniform();
-    }
-
-    const uint32_t cap = N_blocks_per_core * N_block_tiles;                  // most tiles a core can hold
-    const uint32_t min_tiles = (N_blocks_per_core - 1) * N_block_tiles + 1;  // fewest, keeping the last block non-empty
-    const uint32_t num_other = in1_parallel_axis_cores - num_fabric;
-    const auto tiles_left_for = [&](uint32_t taken) { return (N_tiles > taken) ? (N_tiles - taken) : 0u; };
-
-    // The fabric cores can only shed what the others can pick up, and the others are capped at one
-    // full block each — so this is the smallest share the fabric cores can hold and still have every
-    // N tile covered. Requesting less than this is what the cap-check below would reject, so the
-    // aggressive end of the knob saturates here rather than silently falling back to uniform.
-    const uint32_t fab_floor = std::max(min_tiles, tt::div_up(tiles_left_for(num_other * cap), num_fabric));
-    const uint32_t fab_requested = (N_tiles_per_core * static_cast<uint32_t>(fabric_n_pct)) / 100;
-    const uint32_t fab_tiles = std::clamp(std::max(fab_requested, fab_floor), min_tiles, cap);
-    const uint32_t other_tiles = tt::div_up(tiles_left_for(num_fabric * fab_tiles), num_other);
-
-    const bool fits = fab_tiles < N_tiles_per_core && other_tiles >= min_tiles && other_tiles <= cap;
-    log_info(
-        tt::LogOp,
-        "AGMM N split: N_tiles={} axis={} N_blocks_per_core={} N_block_tiles={} uniform={} -> {} "
-        "(other={} fabric={} window=({},{}])",
-        N_tiles,
-        in1_parallel_axis_cores,
-        N_blocks_per_core,
-        N_block_tiles,
-        N_tiles_per_core,
-        fits ? "SPLIT" : "uniform (no headroom)",
-        other_tiles,
-        fab_tiles,
-        min_tiles - 1,
-        cap);
-    if (!fits) {
-        return uniform();
-    }
-
-    std::vector<bool> is_fabric(in1_parallel_axis_cores, false);
-    for (uint32_t idx : fabric_in1_indices) {
-        is_fabric[idx] = true;
-    }
-    // Gate hook: slide every range one tile up, so N column 0 is owned by nobody and is left at
-    // whatever the (uninitialized) output buffer held. Coverage still passes the check below, so this
-    // is exactly the class of split bug the correctness gate exists to catch — it is here so the gate
-    // can be shown to go red on demand rather than being trusted to.
-    const uint32_t mutant_shift = std::getenv("TT_AGMM_N_SPLIT_MUTANT") ? 1u : 0u;
-
-    uint32_t cursor = mutant_shift;
-    for (uint32_t i = 0; i < in1_parallel_axis_cores; ++i) {
-        starts[i] = cursor;
-        cursor += is_fabric[i] ? fab_tiles : other_tiles;
-        ends[i] = cursor;
-    }
-    TT_FATAL(
-        cursor >= N_tiles,
-        "Non-uniform N split covers only {} of {} N tiles — some output columns would never be written",
-        cursor,
-        N_tiles);
-    return {starts, ends};
 }
 
 void fabric_mux_connection_ct_args(
@@ -343,7 +204,8 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t fsdp_ring_size,
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
-    ttnn::ccl::Topology fsdp_topology) {
+    ttnn::ccl::Topology fsdp_topology,
+    bool fuse_swiglu = false) {
     auto* device = input_tensor.device();
 
     if (!config.has_value()) {
@@ -463,8 +325,17 @@ all_gather_minimal_matmul_async_factory_helper(
      * Most output blocks are the full block size, but the last block in M or N can be partial.
      */
     uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
-    uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
+
+    // SwiGLU partitions on gate/up PAIRS (= output tiles) so a pair never splits across cores.
+    uint32_t padded_N_tiles;
+    if (fuse_swiglu) {
+        uint32_t out_N_tiles = N_tiles / 2;
+        uint32_t padded_out_N_tiles = tt::round_up(out_N_tiles, in1_parallel_axis_cores);
+        padded_N_tiles = 2 * padded_out_N_tiles;
+    } else {
+        padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
+    }
 
     // K is sharded equally across devices (validated upstream: K_tiles % ring_size == 0).
     // Within a device, K_per_device tiles are processed in K_blocks_per_device blocks (div_up).
@@ -480,6 +351,16 @@ all_gather_minimal_matmul_async_factory_helper(
 
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
+
+    if (fuse_swiglu) {
+        TT_FATAL(
+            N_tiles % 2 == 0 && N_tiles_per_core % 2 == 0 && N_block_tiles % 2 == 0,
+            "all_gather_minimal_matmul_async fuse_swiglu requires N_tiles ({}), N_tiles_per_core ({}) and "
+            "N_block_tiles ({}) all even",
+            N_tiles,
+            N_tiles_per_core,
+            N_block_tiles);
+    }
 
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
@@ -505,7 +386,9 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    uint32_t out_cb_num_tiles = out_block_num_tiles;     // single-buffered
+    // SwiGLU writes half the N tiles per block (one per gate/up pair); the intermediate
+    // still holds the full (2N) block.
+    uint32_t out_cb_num_tiles = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;  // single-buffered
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -762,6 +645,11 @@ all_gather_minimal_matmul_async_factory_helper(
     std::map<std::string, std::string> in0_fabric_defines;
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
+    }
+    // Added to `defines` before the per-kernel copies below (in0/in1/compute) so every
+    // kernel containing output-writer or compute code sees FUSE_SWIGLU.
+    if (fuse_swiglu) {
+        defines["FUSE_SWIGLU"] = "1";
     }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
@@ -1187,21 +1075,10 @@ all_gather_minimal_matmul_async_factory_helper(
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
-    // NOTE: Uniform per-core M ranges are required for DM forward handshakes to match across links.
-    // If neighboring cores along a forwarding chain iterate different M counts, the sender can wait
+    // NOTE: Uniform per-core M/N ranges are required for DM forward handshakes to match across links.
+    // If neighboring cores along a forwarding chain iterate different (M,N) counts, the sender can wait
     // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
-    // div_up-based range for M.
-    //
-    // N is split per-core (see below), but only WITHIN the last block: the loop bound
-    // N_blocks_per_core stays uniform, so every core still iterates the same number of in0 blocks and
-    // the chain handshake stays matched.
-    auto [n_range_start, n_range_end] = build_n_ranges(
-        N_tiles,
-        N_tiles_per_core,
-        N_blocks_per_core,
-        N_block_tiles,
-        in1_parallel_axis_cores,
-        fabric_relay_in1_indices(transpose_core_grid, in0_noc, in1_parallel_axis_cores));
+    // div_up-based ranges for M and N.
 
     for (uint32_t mux_id = 0; mux_id < num_mux_cores; ++mux_id) {
         uint32_t dir = mux_id % 2;  // 2 being the number of directions
@@ -1356,8 +1233,8 @@ all_gather_minimal_matmul_async_factory_helper(
          */
         uint32_t M_start_tile = M_tiles_per_core * in0_idx;
         uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
-        uint32_t N_start_tile = n_range_start.at(in1_idx);
-        uint32_t N_end_tile = n_range_end.at(in1_idx);
+        uint32_t N_start_tile = N_tiles_per_core * in1_idx;
+        uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
@@ -1801,7 +1678,8 @@ all_gather_minimal_matmul_async_factory(
     uint32_t fsdp_ring_size,
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
-    ttnn::ccl::Topology fsdp_topology) {
+    ttnn::ccl::Topology fsdp_topology,
+    bool fuse_swiglu) {
     tt::tt_metal::Program program{};
 
     return {
@@ -1839,7 +1717,8 @@ all_gather_minimal_matmul_async_factory(
             fsdp_ring_size,
             fsdp_ring_index,
             fsdp_semaphore,
-            fsdp_topology)};
+            fsdp_topology,
+            fuse_swiglu)};
 }
 
 ttnn::device_operation::CachedProgram<AllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
@@ -1915,7 +1794,8 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.fsdp_ring_size,
         fsdp_ring_index,
         attributes.fsdp_semaphore,
-        attributes.fsdp_topology);
+        attributes.fsdp_topology,
+        attributes.fuse_swiglu);
 }
 
 }  // namespace ttnn::experimental::prim

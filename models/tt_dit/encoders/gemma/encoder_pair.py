@@ -224,6 +224,7 @@ class GemmaTokenizerEncoderPair:
             subfolder="text_encoder",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             sources=_gemma_shards(gemma_path),
             get_torch_state_dict=lambda: _gemma_state_dict(gemma_path),
         )
@@ -273,6 +274,7 @@ class GemmaTokenizerEncoderPair:
             subfolder="feature_extractor",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             sources=sources,
             get_torch_state_dict=lambda: _feature_extractor_state_dict(
                 ckpt(), mode=self.mode, gemma_hidden_size=gemma_hidden_size, gemma_num_layers=gemma_num_layers
@@ -306,6 +308,7 @@ class GemmaTokenizerEncoderPair:
             subfolder=f"{axis}_connector",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             dtype="float32",
             sources=sources,
             get_torch_state_dict=lambda: _connector_state_dict(ckpt(), axis, num_blocks),
