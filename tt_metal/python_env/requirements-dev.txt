@@ -33,6 +33,11 @@ protobuf==5.29.6
 transformers == 5.10.2
 huggingface-hub >= 0.30.0
 
+# For Qwen-VL / multimodal demo preprocessing: qwen-vl-utils (process_vision_info for image prompts)
+# and av/pyav (the transformers load_video backend used for video prompts, e.g. qwen36 vision_demo)
+qwen-vl-utils
+av
+
 # For Tracy WASM profiler web GUI server
 websockets==16.0
 
