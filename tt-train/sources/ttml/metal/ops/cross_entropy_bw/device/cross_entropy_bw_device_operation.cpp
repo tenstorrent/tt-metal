@@ -88,14 +88,6 @@ CrossEntropyBackwardDeviceOperation::tensor_return_value_t CrossEntropyBackwardD
     return output_tensor;
 }
 
-ttsl::hash::hash_t CrossEntropyBackwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    return tt::tt_metal::operation::hash_operation<CrossEntropyBackwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
-}
-
 }  // namespace ttml::metal::ops::cross_entropy_bw::device
 
 namespace ttnn::prim {
@@ -109,11 +101,7 @@ ttml_cross_entropy_bw(
     using OperationType = ttml::metal::ops::cross_entropy_bw::device::CrossEntropyBackwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{.scaler = scaler};
-    auto tensor_args = OperationType::tensor_args_t{
-        .input = input_tensor,
-        .target = target_tensor,
-        .preallocated_output = preallocated_output,
-    };
+    auto tensor_args = OperationType::tensor_args_t{input_tensor, target_tensor, preallocated_output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
