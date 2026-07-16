@@ -16,6 +16,7 @@
 #include "ttnn/operation.hpp"
 
 #include <optional>
+#include <tuple>
 #include <vector>
 #include <algorithm>
 
@@ -45,6 +46,18 @@ struct Matmul_RS {
         LlamaReduceScatterDeviceOperation::operation_attributes_t rs_op;
         ttnn::prim::MatmulDeviceOperation::operation_attributes_t matmul;
         using matmul_device_t = ttnn::prim::MatmulDeviceOperation;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("dim", "cluster_axis", "ring_devices", "num_links", "topology", "use_noc1_only");
+        auto attribute_values() const {
+            return std::make_tuple(
+                rs_op.dim,
+                rs_op.cluster_axis,
+                rs_op.ring_devices,
+                rs_op.num_links,
+                rs_op.topology,
+                rs_op.use_noc1_only);
+        }
     };
     struct Matmul_RS_PF {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -77,7 +90,6 @@ struct Matmul_RS {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::ccl
