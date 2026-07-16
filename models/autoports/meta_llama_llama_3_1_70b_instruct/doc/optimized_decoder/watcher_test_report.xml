@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="2" tests="8" time="62.940" timestamp="2026-07-16T21:32:37.151387+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_runtime_path_is_optimized_and_host_fallback_free" time="0.221"><properties><property name="start_timestamp" value="2026-07-16T21:32:37" /><property name="end_timestamp" value="2026-07-16T21:32:38" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_batch1_real_decode_contract[blackhole-1]" time="12.287"><properties><property name="start_timestamp" value="2026-07-16T21:32:38" /><property name="end_timestamp" value="2026-07-16T21:32:50" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_real_weight_prefill_decode_and_cache_contract[blackhole-1]" time="12.023"><properties><property name="start_timestamp" value="2026-07-16T21:32:50" /><property name="end_timestamp" value="2026-07-16T21:33:02" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_non_aligned_sequence_batch_and_repeated_run_determinism[blackhole-1]" time="12.368"><properties><property name="start_timestamp" value="2026-07-16T21:33:02" /><property name="end_timestamp" value="2026-07-16T21:33:14" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_bfp8_cache_candidate_real_pcc[blackhole-1]" time="11.733"><properties><property name="start_timestamp" value="2026-07-16T21:33:14" /><property name="end_timestamp" value="2026-07-16T21:33:26" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_candidate_executes_real_optimized_path[blackhole-1]" time="0.415"><properties><property name="start_timestamp" value="2026-07-16T21:33:26" /><property name="end_timestamp" value="2026-07-16T21:33:26" /></properties><skipped type="pytest.skip" message="Set RUN_OPTIMIZED_DECODER_CANDIDATES=1 for candidate coverage">/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_optimized_decoder.py:481: Set RUN_OPTIMIZED_DECODER_CANDIDATES=1 for candidate coverage</skipped><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_real_weight_traced_decode_replay_correctness_and_input_refresh[blackhole-1]" time="12.215"><properties><property name="start_timestamp" value="2026-07-16T21:33:26" /><property name="end_timestamp" value="2026-07-16T21:33:39" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_optimized_decoder_perf[blackhole-1]" time="1.005"><properties><property name="start_timestamp" value="2026-07-16T21:33:39" /><property name="end_timestamp" value="2026-07-16T21:33:40" /></properties><skipped type="pytest.skip" message="Set RUN_OPTIMIZED_DECODER_PERF=1 for warmed performance measurement">/home/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_optimized_decoder.py:663: Set RUN_OPTIMIZED_DECODER_PERF=1 for warmed performance measurement</skipped><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase></testsuite></testsuites>

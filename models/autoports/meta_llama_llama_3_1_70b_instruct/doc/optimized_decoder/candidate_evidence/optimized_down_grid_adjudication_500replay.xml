@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="11.214" timestamp="2026-07-16T21:27:32.961743+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_optimized_decoder" name="test_optimized_decoder_perf[blackhole-1]" time="10.560"><properties><property name="start_timestamp" value="2026-07-16T21:27:33" /><property name="variant" value="optimized" /><property name="cache_dtype" value="DataType.BFLOAT16" /><property name="batch" value="32" /><property name="seq_len" value="18" /><property name="prefill_ms" value="7.978771" /><property name="traced_decode_ms" value="2.120273" /><property name="prefill_repeats" value="5" /><property name="trace_replays" value="500" /><property name="end_timestamp" value="2026-07-16T21:27:44" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase></testsuite></testsuites>
