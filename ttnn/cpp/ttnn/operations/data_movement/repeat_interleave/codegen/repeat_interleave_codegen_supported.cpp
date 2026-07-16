@@ -82,27 +82,13 @@ bool supported_by_codegen(const Tensor& input_tensor, uint32_t repeats, int32_t 
     return false;
 }
 
-// Perf-demoted ledger (seeded by phase 7's device qualification, extended by the demote-escape
-// rebuild): generic beat the port on device for this exact point, and reroutes were exhausted, so
-// `auto` must fall back to native. `validate` and forced implementation="codegen" never consult
-// this -- the case is still correct, just not worth the codegen path under auto.
-bool is_demoted(const Tensor& input_tensor, uint32_t repeats, int32_t dim) {
-    const auto logical_shape = input_tensor.logical_shape();
-    if (logical_shape.rank() != 4) {
-        return false;
-    }
-    const int32_t ndim = static_cast<int32_t>(logical_shape.rank());
-    const int32_t nd = dim >= 0 ? dim : dim + ndim;
-
-    // [1, 4, 64, 64] | dim=1 | repeats=4 | int32 | row_major
-    // (generic/ported=0.903418, native/ported=3.659768, wall=2.942047)
-    if (logical_shape[0] == 1 && logical_shape[1] == 4 && logical_shape[2] == 64 && logical_shape[3] == 64 && nd == 1 &&
-        repeats == 4 && input_tensor.dtype() == tt::tt_metal::DataType::INT32 &&
-        input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        return true;
-    }
-
-    return false;
-}
+// Perf-demoted ledger: empty. The one point flagged by phase 7 ([1, 4, 64, 64] | dim=1 |
+// repeats=4 | int32 | row_major -- generic/ported=0.901408, native/ported=3.576852) was NOT
+// demoted: reroutes were exhausted, and the regression against generic (~10%) was accepted
+// because codegen still beats native by ~3.6x on this point. `auto` therefore keeps routing it to
+// codegen, same as forced implementation="codegen"/"validate". Still emitted (always returning
+// false) so the `auto` branch's `supported_by_codegen(attrs) && !is_demoted(attrs)` wiring holds
+// even with an empty ledger.
+bool is_demoted(const Tensor& /*input_tensor*/, uint32_t /*repeats*/, int32_t /*dim*/) { return false; }
 
 }  // namespace ttnn::operations::data_movement::repeat_interleave
