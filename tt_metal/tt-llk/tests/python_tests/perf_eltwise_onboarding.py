@@ -22,7 +22,7 @@ from helpers.test_variant_parameters import (
 )
 
 
-@pytest.mark.perf
+@pytest.mark.onboarding
 @parametrize(
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Float16_b]
@@ -34,7 +34,7 @@ from helpers.test_variant_parameters import (
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
 )
-def test_perf_eltwise_binary_fpu(
+def test_perf_eltwise_onboarding(
     perf_report,
     formats,
     mathop,

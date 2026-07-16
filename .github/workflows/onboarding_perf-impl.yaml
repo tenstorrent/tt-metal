@@ -1,0 +1,96 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: "LLK onboarding perf impl"
+# Reusable implementation for the onboarding perf test. Callable only via
+# workflow_call (from onboarding_perf.yaml). This file owns *what* runs:
+# build/resolve the LLK CI docker image, then compile and execute the single
+# onboarding test on a real Tenstorrent board.
+
+on:
+  workflow_call:
+    inputs:
+      chip_arch:
+        description: "wormhole | blackhole"
+        required: true
+        type: string
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  # Reuse the shared docker image build so our container matches the rest of LLK
+  # CI. This is the same reusable workflow llk-perf-impl.yaml calls, and it
+  # exposes the image tag as the `llk-ci-tag` output used below.
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  onboarding-exec:
+    needs: [build-images]
+    # Single SKU per architecture (no test matrix). Pick the runner label from
+    # the input: blackhole -> P150b board, otherwise wormhole -> N150 board.
+    # These labels come from .github/sku_config.yaml (bh_p150b_civ2 / wh_n150_civ2).
+    runs-on: ${{ inputs.chip_arch == 'blackhole' && 'tt-ubuntu-2204-P150b-stable' || 'tt-ubuntu-2204-N150-viommu-stable' }}
+    timeout-minutes: 30
+    container:
+      image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      # --device exposes the Tensix board to the container; without it the test
+      # cannot reach hardware.
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    env:
+      # The test harness reads CHIP_ARCH to select the target architecture.
+      CHIP_ARCH: ${{ inputs.chip_arch }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Install SFPI
+        # Installs the kernel (SFPI) toolchain the compile phase needs.
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: ./setup_testing_env.sh
+
+      - name: Run onboarding perf test
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        run: |
+          set -euo pipefail
+          mkdir -p perf_data
+          # Two-phase flow (see tt-llk CLAUDE.md): the producer compiles every
+          # variant in parallel, the consumer runs them on hardware. `-m onboarding`
+          # selects ONLY our test, so this workflow never pulls in the rest of
+          # the perf suite even though other perf_*.py files are collected.
+          pytest -q --override-ini=log_cli=false --speed-of-light \
+            --compile-producer -n 10 -m onboarding --timeout=60 \
+            --junitxml=pytest-report-onboarding-compile.xml .
+          pytest -q --override-ini=log_cli=false --speed-of-light \
+            --compile-consumer -n 15 -x -m onboarding --timeout=60 \
+            --junitxml=pytest-report-onboarding-run.xml .
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure()
+        with:
+          name: onboarding-logs-${{ inputs.chip_arch }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+
+      - name: Publish test results
+        uses: mikepenz/action-junit-report@v5
+        if: always()
+        with:
+          report_paths: |
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-onboarding-compile.xml
+            ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-onboarding-run.xml
+          include_passed: true
+          annotate_only: true
