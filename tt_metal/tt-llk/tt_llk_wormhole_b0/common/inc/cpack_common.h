@@ -376,10 +376,8 @@ inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_face
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces)
-                                                  << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces)
-                                                  << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     }
 
     regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
@@ -780,6 +778,14 @@ inline void configure_pack(
     const std::uint32_t alu_dst_format = pack_src_format;
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(alu_dst_format);
+
+    // Establish the no-override baseline for the Dstacc ALU format-select fields (ADDR32=0), consumed
+    // by the packer: clear Dstacc_val/override so the base REG2_Dstacc format programmed above is
+    // used. The SrcA/SrcB override fields in the same word are owned by the math thread
+    // (_llk_math_hw_configure_); the two writers touch disjoint bits and rely on per-byte RMWCIB
+    // atomicity, so this write does not depend on the surrounding REG_RMW mutex for cross-thread safety.
+    constexpr std::uint32_t dstacc_fmt_override_mask = ALU_FORMAT_SPEC_REG_Dstacc_val_MASK | ALU_FORMAT_SPEC_REG_Dstacc_override_MASK;
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_Dstacc_val_ADDR32, 0, dstacc_fmt_override_mask>(0);
 
     // Config RELU
     relu_config_u hw_relu_config;
