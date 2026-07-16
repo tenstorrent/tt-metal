@@ -27,6 +27,9 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.cpp
     nlp_create_qkv_heads/device/nlp_create_qkv_heads_program_factory.cpp
     nlp_create_qkv_heads/nlp_create_qkv_heads.cpp
+    nlp_create_qkv_heads_gdn/device/nlp_create_qkv_heads_gdn_device_operation.cpp
+    nlp_create_qkv_heads_gdn/device/nlp_create_qkv_heads_gdn_program_factory.cpp
+    nlp_create_qkv_heads_gdn/nlp_create_qkv_heads_gdn.cpp
     nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_device_operation.cpp
     nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_interleaved_program_factory.cpp
     nlp_create_qkv_heads_decode/device/nlp_create_qkv_heads_decode_sharded_program_factory.cpp
@@ -89,6 +92,8 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
     nlp_concat_heads/nlp_concat_heads.hpp
     nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.hpp
     nlp_create_qkv_heads/nlp_create_qkv_heads.hpp
+    nlp_create_qkv_heads_gdn/device/nlp_create_qkv_heads_gdn_device_operation.hpp
+    nlp_create_qkv_heads_gdn/nlp_create_qkv_heads_gdn.hpp
     nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
     rotary_embedding_llama/rotary_embedding_llama.hpp
 )
@@ -107,6 +112,7 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.cpp
     nlp_concat_heads_boltz/nlp_concat_heads_boltz_nanobind.cpp
     nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.cpp
+    nlp_create_qkv_heads_gdn/nlp_create_qkv_heads_gdn_nanobind.cpp
     nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_nanobind.cpp
     nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_nanobind.cpp
     nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_nanobind.cpp
