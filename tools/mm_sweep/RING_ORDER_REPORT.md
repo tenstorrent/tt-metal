@@ -144,4 +144,4 @@ six), and the shape's own correctness+perf validated directly.
 each reproduces a decision-relevant point (mm0 = pareto's reference / prior objective; maxedge = the
 Sm4-regressing objective; total = the Sm1-regressing alternative), plus `bank` (pre-ring baseline). The
 dominated `greedy` (non-exhaustive heuristic) and `maxring` (dominated by pareto/total, no distinct evidence)
-are **removed**; recover from the implementation commit for this task.
+are **removed**; recover their implementation from commit `7de40555d70` (which carried all six objectives).

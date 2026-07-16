@@ -109,8 +109,7 @@ TEST_F(RegimeADiagFixture, Run) {
     // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
     if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
-        mask == 2048 || mask == 4096 || mask == 8192 || mask == 16384 || mask == 32768 || mask == 65536 ||
-        mask == 131072 || mask == 262144) {
+        mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -386,16 +385,10 @@ TEST_F(RegimeADiagFixture, RingOrderCorrectness) {
         {"ktail_ntail_pk12", 256, 6080, 4640, 1, 12, 1, 2, 1},  // balanced K-tail (190) + N-tail (145)
     };
     // mask 0 = opt (production default); 1<<12 = DIAG_RING_BANK (old bank order); 1<<13 = DIAG_RING_GREEDY.
-    // mask 0 = pareto (default); 1<<12 bank; 1<<13 greedy; 1<<14 mm0; 1<<15 maxring; 1<<16 total; 1<<18
-    // maxedge. All must be bit-identical (only the ring order differs, never the math).
+    // mask 0 = pareto (default); 1<<12 bank; 1<<14 mm0; 1<<16 total; 1<<18 maxedge. All must be bit-identical
+    // (only the ring order differs, never the math). (greedy/maxring objectives were removed post-decision.)
     const std::vector<std::pair<uint32_t, const char*>> masks = {
-        {4096u, "bank"},
-        {8192u, "greedy"},
-        {16384u, "mm0"},
-        {0u, "pareto"},
-        {32768u, "maxring"},
-        {65536u, "total"},
-        {262144u, "maxedge"}};
+        {4096u, "bank"}, {16384u, "mm0"}, {0u, "pareto"}, {65536u, "total"}, {262144u, "maxedge"}};
     auto* device = device_;
 
     for (const auto& c : cases) {
