@@ -16,19 +16,21 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
-    const TilizeParams& /*operation_attributes*/, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
+    const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
     bool fp32_llk_acc = input.dtype() == DataType::FLOAT32 || input.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
     auto shard_spec = input.shard_spec().value();
-    uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
-    uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
+    uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / tile_hw;
+    uint32_t num_tiles_per_row = shard_spec.shape[1] / tile_width;
     const CoreRangeSet& all_cores = shard_spec.grid;
 
     const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
@@ -38,6 +40,8 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
+
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
 
     ProgramDescriptor desc;
 
@@ -50,6 +54,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = tile_descriptor,
         });
         cb_src0.buffer = src_buffer;
         desc.cbs.push_back(std::move(cb_src0));
@@ -68,6 +73,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = tile_descriptor,
         });
         if (!output_is_interleaved) {
             cb_output.buffer = dst_buffer;

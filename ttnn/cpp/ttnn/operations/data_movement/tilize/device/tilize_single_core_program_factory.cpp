@@ -20,6 +20,9 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
+    const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
 
     CoreRange default_core({0, 0}, {0, 0});
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
@@ -33,22 +36,22 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_cb_data_format);
 
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
-    uint32_t num_tiles = a.physical_volume() / TILE_HW;
+    uint32_t num_tiles = a.physical_volume() / tile_hw;
 
     auto width = a.padded_shape()[-1];
     uint32_t stick_s = width;
     uint32_t num_sticks = a.physical_volume() / width;
     uint32_t stick_size = stick_s * a.element_size();  // Assuming bfloat16 dataformat
 
-    uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
+    uint32_t num_tiles_in_row = stick_s / tile_width;
     uint32_t num_tiles_per_block = 1;
 
     if (!operation_attributes.use_low_perf) {
@@ -69,7 +72,7 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
         }
     }
 
-    uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * a.element_size();
+    uint32_t block_width_size = num_tiles_per_block * tile_width * a.element_size();
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
     uint32_t leftover_width_in_row = num_leftover_tiles * a.element_size();
@@ -81,6 +84,8 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
+
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * input_single_tile_size,
         .core_ranges = core_ranges,
@@ -88,6 +93,7 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
@@ -98,11 +104,12 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = tile_descriptor,
         }}},
     });
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {stick_size};
+    std::vector<uint32_t> reader_compile_time_args = {stick_size, tile_height};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
