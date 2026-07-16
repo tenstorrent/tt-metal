@@ -303,10 +303,19 @@ class Llama32_3BExecutorRuntimeConfig:
     # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
     # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
     # batches models whose prefill_forward threads ``batch_size``). ``max_prefill_batch_size`` caps the
-    # per-group batch (8 = partial batching, design rec); ``disable_batched_prefill`` is the escape
-    # hatch back to the sequential loop.
+    # per-group batch; ``disable_batched_prefill`` is the escape hatch back to the sequential loop.
+    #
+    # Set to 32 (== max_batch_size) so a 32-user batch folds in a SINGLE traced pass, matching TTTv1's
+    # full-batch fold (4 folded passes -> 1 on T3K). Together with the shared-engine batch-32 prefill
+    # fixes that arrived on the base (single-concat last-token assembly + power-of-2 fold clamp in
+    # executor.py), this closes the T3K batch-32-ci prefill TTFT gap vs TTTv1 (#49118). The clamp
+    # guarantees any partially-filled group still folds to a reshape-safe power-of-2, so raising the
+    # cap is safe. NB 3B is ~3x llama1b, so the single-pass 32-fold is DRAM-heavier than on 1B; this
+    # value was empirically confirmed to fit on every supported SKU (N150/N300/T3K) at the b32 and
+    # b32-ci working sets (see llama32_3b perf_tables), NOT assumed. If a future/larger variant OOMs
+    # the fold, back off ``max_prefill_batch_size`` per-SKU at the from_pretrained construction site.
     supports_batched_prefill: bool = True
-    max_prefill_batch_size: int = 8
+    max_prefill_batch_size: int = 32
     disable_batched_prefill: bool = False
     # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
     # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
@@ -1160,6 +1169,7 @@ class TracedLlama32_3BExecutor:
         mesh_device: ttnn.MeshDevice,
         model_args=None,
         ondevice_decode_loop: bool = False,
+        fast_prefill_last_token: bool = False,
     ):
         if model_args is not None:
             model.model_args = model_args
@@ -1168,6 +1178,7 @@ class TracedLlama32_3BExecutor:
             mesh_device,
             iter_named_modules=_iter_llama_executor_named_modules,
             ondevice_decode_loop=ondevice_decode_loop,
+            fast_prefill_last_token=fast_prefill_last_token,
         )
 
     @property
