@@ -371,9 +371,10 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Hardshrink: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
     ),
-    # softplus: smooth; span both signs, stay well below the linear threshold (20)
+    # softplus: smooth; span both signs and past the linear threshold (20) so the
+    # kernel's linear-passthrough branch (input > threshold -> softplus(x) ~= x) is covered.
     MathOperation.Softplus: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=30.0)
     ),
     # sigmoid_appx: LUT approximation of sigmoid; span both signs across the knee at 0
     MathOperation.SigmoidAppx: OperandSpecs(
@@ -387,11 +388,12 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Add1: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
-    # cast_fp32_to_fp16a: rounds to fp16; keep |x| well below the fp16 max
-    # (65504) so the cast does not overflow to inf.
+    # cast_fp32_to_fp16a: rounds to fp16. Span past the fp16 max (65504) so the
+    # overflow-to-inf path (and the format-aware NaN substitution for A-exponent dest)
+    # is exercised, not just the in-range rounding.
     MathOperation.CastFp32ToFp16a: OperandSpecs(
         spec_A=StimuliSpec(
-            distribution=DistributionKind.UNIFORM, low=-100.0, high=100.0
+            distribution=DistributionKind.UNIFORM, low=-100000.0, high=100000.0
         )
     ),
     # comparison-to-zero: span both signs so the </<=/>/>= branches are exercised

@@ -51,8 +51,11 @@ def _ema_golden(input_2d: torch.Tensor, alpha: float, beta: float) -> torch.Tens
     return out
 
 
+# dest_acc=Yes (32-bit DEST) is intentionally not swept: the EMA kernel is hardcoded for
+# 16-bit bf16 DEST (_ema_load/store_current_input_ use SFPLOADI_MOD0_FLOATB at fixed fp16
+# offsets with no is_fp32_dest_acc_en branch), so a 32-bit DEST is not supported.
 @parametrize(
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=[DestAccumulation.No],
     num_time_tiles=[1, 2, 4],
 )
 def test_sfpu_ema(dest_acc, num_time_tiles):

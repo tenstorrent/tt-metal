@@ -82,7 +82,6 @@
 #include "llk_sfpu/ckernel_sfpu_i0.h"
 #include "llk_sfpu/ckernel_sfpu_lerp.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
-#include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_mish.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
@@ -925,10 +924,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::logical_not_unary)
     {
-        // logical_not(x) = (x == 0) ? 1 : 0. Select the layout from the runtime
-        // input format: Int32 inputs use the INT32 path (matches production INT32
-        // mode), everything else uses the native float (DEFAULT) path.
-        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        // logical_not(x) = (x == 0) ? 1 : 0. Select the layout from the runtime input format,
+        if (math_format == ckernel::to_underlying(DataFormat::UInt16))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS), dst_index, vector_mode);
+        }
+        else if (math_format == ckernel::to_underlying(DataFormat::Int32) || math_format == ckernel::to_underlying(DataFormat::UInt32))
         {
             SFPU_UNARY_CALL(
                 DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::INT32, ITERATIONS), dst_index, vector_mode);
@@ -1113,11 +1115,29 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::fmod)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fmod, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        // calculate_fmod takes (value, recip); the bodies read vConstFloatPrgm0/1 set by init,
+        // so the runtime args are inert but the signature still requires them. Mirror init.
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_fmod,
+            (APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x40000000u /* value = 2.0f */,
+            0x3f000000u /* recip = 0.5f */);
     }
     else if constexpr (OPERATION == SfpuType::remainder)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_remainder,
+            (APPROX_MODE, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x40000000u /* value = 2.0f */,
+            0x3f000000u /* recip = 0.5f */);
     }
     else if constexpr (OPERATION == SfpuType::unary_gt)
     {
