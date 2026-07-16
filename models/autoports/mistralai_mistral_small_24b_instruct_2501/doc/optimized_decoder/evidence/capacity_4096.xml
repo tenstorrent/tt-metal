@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="23.676" timestamp="2026-07-16T12:55:59.708912+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_optimized_decoder" name="test_optimized_batch32_context_capacity_probe[blackhole-1]" time="23.020"><properties><property name="start_timestamp" value="2026-07-16T12:56:00" /><property name="end_timestamp" value="2026-07-16T12:56:23" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+optimized capacity probe PASS: batch=32, seq_len=4096, output_shape=(1, 32, 4096, 5120)
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 12:56:00.849 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 12:56:00.850 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 12:56:01.502 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase></testsuite></testsuites>

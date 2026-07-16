@@ -1,8 +1,8 @@
 {
   "hf_model": "mistralai/Mistral-Small-24B-Instruct-2501",
   "hf_advertised_context": 32768,
-  "current_supported_context": 3583,
-  "limiting_reason": "device_dram",
+  "current_supported_context": 4096,
+  "limiting_reason": "optimized_decoder_tested_capacity",
   "capacity_evidence": {
     "probe_command": "TT_LOGGER_LEVEL=fatal MISTRAL_SMALL_24B_CONTEXT_PROBE_LEN=<length> TT_VISIBLE_DEVICES=2,3 pytest -q -s models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_context_capacity.py (add MISTRAL_SMALL_24B_CONTEXT_EXPECT_OOM=1 for the first failing length)",
     "device": "Blackhole p300c UMD, one logical 1x1 mesh device",
@@ -46,6 +46,21 @@
     },
     "post_failure_health_check": "tt-smi -ls --local returned all four Blackhole chips after normal fixture teardown",
     "explanation": "At emitted batch 32, the current dense BF16 path completes at logical sequence length 3583 and the immediately adjacent length 3584 reproducibly fails a physical DRAM allocation, establishing the exact current boundary. HF context 32768 is also impossible for this path: one [32,32768,32768] BF16 MLP activation alone is 68,719,476,736 bytes, exceeding the measured 34,178,731,008 device bytes before weights, input, KV cache, or other live tensors."
+  },
+  "optimized_decoder_capacity_evidence": {
+    "probe_command": "TT_VISIBLE_DEVICES=2,3 MISTRAL_SMALL_24B_OPT_CONTEXT_PROBE_LEN=<length> pytest -q -s models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py::test_optimized_batch32_context_capacity_probe (add MISTRAL_SMALL_24B_OPT_CONTEXT_EXPECT_OOM=1 only for an expected OOM)",
+    "device": "Blackhole p300c UMD, one logical 1x1 mesh device",
+    "batch": 32,
+    "selected_policy": "BFP4 LoFi attention and MLP weights, BFP8 KV cache, BF16 activations, flattened token matrix, and 576-token internal MLP chunks",
+    "passing_lengths": [
+      3584,
+      4096
+    ],
+    "advertised_tested_length": 4096,
+    "hard_maximum_established": false,
+    "probe_process_policy": "one length per fresh process; full output copied to host to force device completion",
+    "adaptation_evidence": "The first 3584-token attempt failed an explicit QKV program config at 33,018,624 bytes of static circular buffers versus 1,572,864 bytes L1, not DRAM capacity. Restricting the measured large-prefill configs to at most 576 flattened tokens and using TTNN's general large-M config above that envelope made 3584 and 4096 pass. The public sequence length remains unrestricted; MLP internals chunk only above 576 flattened tokens.",
+    "claim": "4096 is a tested supported optimized-decoder length, not a measured hardware maximum. The earlier functional 3583/3584 boundary remains valid only for the BF16 functional implementation."
   },
   "paths": {
     "prefill": {
@@ -92,5 +107,5 @@
     "translation_mesh": "1x1",
     "collective_policy": "TP shards and all-reduces collapsed to equivalent dense single-device math over full unsharded Hugging Face weights"
   },
-  "notes": "This is the functional-decoder contract only. It does not claim optimized-decoder, multichip, full-model, or serving readiness."
+  "notes": "The functional BF16 evidence and its exact 3583-token boundary are retained for provenance. The optimized-decoder stage raises the tested contract to 4096 without claiming an unmeasured maximum. This file does not claim multichip, full-model, or serving readiness."
 }

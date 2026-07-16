@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="20.610" timestamp="2026-07-16T12:59:56.723277+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_optimized_decoder" name="test_real_weight_optimized_policy_pcc[blackhole-1]" time="19.957"><properties><property name="start_timestamp" value="2026-07-16T12:59:57" /><property name="end_timestamp" value="2026-07-16T13:00:17" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+advisor_1d real prefill: 0.999797170529265
+advisor_1d real decode: 0.9998337169736619
+advisor_1d real decode key append: 0.9930977187111705
+advisor_1d real decode value append: 0.9931840111615452
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 12:59:57.880 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 12:59:57.880 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 12:59:58.532 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase></testsuite></testsuites>

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="3" tests="5" time="23.984" timestamp="2026-07-16T13:01:08.960785+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_optimized_decoder" name="test_optimized_runtime_is_owned_and_has_no_host_fallback" time="0.211"><properties><property name="start_timestamp" value="2026-07-16T13:01:09" /><property name="end_timestamp" value="2026-07-16T13:01:09" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+
+</system-err></testcase><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_optimized_decoder" name="test_graph_rewrite_prefill_decode_pcc[blackhole-1]" time="21.912"><properties><property name="start_timestamp" value="2026-07-16T13:01:09" /><property name="end_timestamp" value="2026-07-16T13:01:31" /></properties><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+optimized prefill seq=1: 0.9939018663135539
+optimized prefill seq=1 key cache: 0.9936989702011673
+optimized prefill seq=1 value cache: 0.9937069989066315
+optimized prefill seq=17: 0.9953048321425153
+optimized prefill seq=17 key cache: 0.9937363572654052
+optimized prefill seq=17 value cache: 0.9937094921203579
+optimized prefill seq=33: 0.9955213163813511
+optimized prefill seq=33 key cache: 0.9936889705247314
+optimized prefill seq=33 value cache: 0.9936621585524105
+optimized prefill seq=18: 0.9953199212854444
+optimized prefill seq=18 key cache: 0.9937344174402717
+optimized prefill seq=18 value cache: 0.9937193038271818
+graph rewrite decode: 0.9953322735831243
+graph rewrite decode key append: 0.9936907887809521
+graph rewrite decode value append: 0.9937985118520455
+optimized repeated decode pos=19: 0.99521469196654
+optimized repeated decode pos=20: 0.9951613968778862
+optimized repeated decode pos=21: 0.9950255784724054
+optimized repeated decode pos=22: 0.9950058979019697
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 13:01:10.288 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:01:10.288 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:01:10.941 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_optimized_decoder" name="test_real_weight_optimized_policy_pcc[blackhole-1]" time="0.408"><properties><property name="start_timestamp" value="2026-07-16T13:01:31" /><property name="end_timestamp" value="2026-07-16T13:01:32" /></properties><skipped type="pytest.skip" message="Set MISTRAL_SMALL_24B_OPT_POLICY to run an explicit real-weight precision policy">/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py:314: Set MISTRAL_SMALL_24B_OPT_POLICY to run an explicit real-weight precision policy</skipped><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 13:01:31.961 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:01:31.962 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:01:32.026 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 13:01:31.961 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:01:31.962 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:01:32.026 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_optimized_decoder" name="test_optimized_batch32_context_capacity_probe[blackhole-1]" time="0.395"><properties><property name="start_timestamp" value="2026-07-16T13:01:32" /><property name="end_timestamp" value="2026-07-16T13:01:32" /></properties><skipped type="pytest.skip" message="Set MISTRAL_SMALL_24B_OPT_CONTEXT_PROBE_LEN to run an isolated optimized capacity measurement">/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py:372: Set MISTRAL_SMALL_24B_OPT_CONTEXT_PROBE_LEN to run an isolated optimized capacity measurement</skipped><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 13:01:32.358 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:01:32.358 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:01:32.421 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 13:01:32.358 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:01:32.358 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:01:32.421 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase><testcase classname="models.autoports.mistralai_mistral_small_24b_instruct_2501.tests.test_optimized_decoder" name="test_warmed_prefill_and_traced_decode_perf[blackhole-1]" time="0.398"><properties><property name="start_timestamp" value="2026-07-16T13:01:32" /><property name="end_timestamp" value="2026-07-16T13:01:32" /></properties><skipped type="pytest.skip" message="Set MISTRAL_SMALL_24B_PERF_IMPL=functional|optimized to run the performance probe">/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_optimized_decoder.py:412: Set MISTRAL_SMALL_24B_PERF_IMPL=functional|optimized to run the performance probe</skipped><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 13:01:32.755 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:01:32.755 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:01:32.819 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err><system-out>--------------------------------- Captured Log ---------------------------------
+
+--------------------------------- Captured Out ---------------------------------
+
+</system-out><system-err>--------------------------------- Captured Err ---------------------------------
+2026-07-16 13:01:32.755 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 13:01:32.755 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 13:01:32.819 | DEBUG    | conftest:mesh_device:599 - multidevice with 1 devices is created
+
+</system-err></testcase></testsuite></testsuites>
