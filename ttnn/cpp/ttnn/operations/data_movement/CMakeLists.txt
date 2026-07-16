@@ -15,37 +15,41 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    bcast/device/kernels/*
-    clone/device/kernels/*
-    concat/device/kernels/*
-    common/kernels/*
-    fill_pad/device/kernels/*
-    fill_rm/device/kernels/*
-    fold/device/kernels/*
-    gather/device/kernels/*
-    copy/device/kernels/*
-    indexed_fill/device/kernels/*
-    moe_expert_token_remap/device/kernels/*
-    moe_routing_remap/device/kernels/*
-    non_zero_indices/device/kernels/*
-    move/device/kernels/*
-    pad/device/kernels/*
-    permute/device/kernels/*
-    reshape_on_device/device/kernels/*
-    repeat/device/kernels/*
-    roll/device/kernels/*
-    reshape_view/device/device/*
-    scatter/device/kernels/*
-    sharded/device/kernels/*
-    sharded/reshard/device/kernels/*
-    sort/device/kernels/*
-    split/device/kernels/*
-    slice/device/kernels/*
-    tilize/device/kernels/*
-    tilize_with_val_padding/device/kernels/*
-    transpose/device/kernels/*
-    untilize/device/kernels/*
-    untilize_with_unpadding/device/kernels/*
+    bcast/device/kernels/*.cpp
+    clone/device/kernels/*.cpp
+    concat/device/kernels/*.cpp
+    common/kernels/*.hpp
+    fill_pad/device/kernels/*.cpp
+    fill_pad/device/kernels/*.hpp
+    fill_rm/device/kernels/*.cpp
+    fold/device/kernels/*.cpp
+    gather/device/kernels/*.cpp
+    gather/device/kernels/*.hpp
+    copy/device/kernels/*.cpp
+    indexed_fill/device/kernels/*.cpp
+    moe_expert_token_remap/device/kernels/*.cpp
+    moe_routing_remap/device/kernels/*.cpp
+    non_zero_indices/device/kernels/*.cpp
+    move/device/kernels/*.cpp
+    pad/device/kernels/*.cpp
+    pad/device/kernels/*.hpp
+    permute/device/kernels/*.cpp
+    reshape_on_device/device/kernels/*.cpp
+    repeat/device/kernels/*.cpp
+    roll/device/kernels/*.cpp
+    reshape_view/device/device/*.cpp
+    scatter/device/kernels/*.hpp
+    sharded/device/kernels/*.cpp
+    sharded/reshard/device/kernels/*.cpp
+    sort/device/kernels/*.cpp
+    sort/device/kernels/*.hpp
+    split/device/kernels/*.cpp
+    slice/device/kernels/*.cpp
+    tilize/device/kernels/*.cpp
+    tilize_with_val_padding/device/kernels/*.cpp
+    transpose/device/kernels/*.cpp
+    untilize/device/kernels/*.cpp
+    untilize_with_unpadding/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_data_movement
@@ -343,3 +347,19 @@ install(
 )
 
 install(TARGETS ttnn_op_data_movement LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS})
+endif()

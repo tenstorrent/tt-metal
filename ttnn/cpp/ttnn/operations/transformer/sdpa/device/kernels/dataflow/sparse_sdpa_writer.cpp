@@ -30,7 +30,12 @@ void kernel_main() {
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(5);
     constexpr uint32_t cb_neginf = get_compile_time_arg_val(6);
     constexpr uint32_t out_elem_bytes = get_compile_time_arg_val(7);  // bf16 (from the output tensor's dtype)
-    constexpr auto out_args = TensorAccessorArgs<8, 0>();
+    constexpr bool block_cyclic = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(9);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(10);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(11);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(12);
+    constexpr auto out_args = TensorAccessorArgs<13, 0>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
@@ -41,8 +46,6 @@ void kernel_main() {
     const uint32_t kv_addr = get_arg_val<uint32_t>(3);  // dual-NoC K-half gather
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(4);
-    // Block-cyclic remap (BC_ENABLE): all its constants are compile-time defines (the cache length T is hashed
-    // for this path) — no runtime arg here. See sparse_sdpa_gather.hpp for the remap.
 
     constexpr uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;  // V_DIM bytes per head-row
     constexpr uint32_t block_tiles = (H / tt::constants::TILE_HEIGHT) * vDHt;          // Sqt*vDHt: the [H,V_DIM] block
@@ -100,7 +103,8 @@ void kernel_main() {
             }
             kreq_cb.pop_front(1);
             // Writer gathers its half [0, half) on its NoC (depth-4 trid ring, shared helper).
-            sparse_sdpa::trid_ring_gather(noc, kv, k_cb, idx_ptr, base, 0, half, k_row_bytes, kv_batch_page_offset);
+            sparse_sdpa::trid_ring_gather<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(
+                noc, kv, k_cb, idx_ptr, base, 0, half, k_row_bytes, kv_batch_page_offset);
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);
         }

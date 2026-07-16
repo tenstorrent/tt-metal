@@ -16,6 +16,7 @@
 #include "llk_math_common.h"
 #include "lltt.h"
 #include "tensor_shape.h"
+#include "tensor_shape_coverage_math.h"
 
 using namespace ckernel;
 
@@ -155,38 +156,64 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 
     if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
     {
-        constexpr std::uint32_t fid_count  = (math_fidelity == MathFidelity::LoFi) ? 1 : to_underlying(math_fidelity);
-        const std::uint32_t replay_buf_len = tensor_shape.num_faces_c_dim * 2 * fid_count;
-
-        const std::uint32_t replay_start = ckernel::math::replay_buf_offset;
-
-        lltt::record<lltt::NoExec>(replay_start, replay_buf_len);
-        for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
+        if (tensor_shape.total_num_faces() == 4)
         {
-            for (std::uint32_t p = 0; p < fid_count - 1; p++)
-            {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
-            }
+            constexpr std::uint32_t replay_buf_len = 8;
+            constexpr std::uint32_t last_clr       = high_fidelity ? p_setrwc::CLR_NONE : p_setrwc::CLR_AB;
+            constexpr std::uint32_t inner_loops    = high_fidelity ? to_underlying(math_fidelity) : 1;
+            const std::uint32_t replay_start       = ckernel::math::replay_buf_offset;
+
+            lltt::record(replay_start, replay_buf_len);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+            TTI_MVMUL(last_clr, 0, ADDR_MOD_3, 0);
 
-            for (std::uint32_t p = 0; p < fid_count - 1; p++)
+            ckernel_template tmp(1, inner_loops, lltt::replay_insn(replay_start, replay_buf_len));
+            if constexpr (high_fidelity)
             {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 8);
+                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
             }
-            if (faces_remaining == 1)
-            {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 8);
-            }
-            else
-            {
-                TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 8);
-            }
+            tmp.program();
         }
+        else
+        {
+            constexpr std::uint32_t fid_count  = (math_fidelity == MathFidelity::LoFi) ? 1 : to_underlying(math_fidelity);
+            const std::uint32_t replay_buf_len = tensor_shape.num_faces_c_dim * 2 * fid_count;
+            const std::uint32_t replay_start   = ckernel::math::replay_buf_offset;
 
-        const std::uint32_t replay_op = lltt::replay_insn(replay_start, replay_buf_len);
-        ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);
-        tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B));
-        tmp.program();
+            lltt::record<lltt::NoExec>(replay_start, replay_buf_len);
+            for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
+            {
+                for (std::uint32_t p = 0; p < fid_count - 1; p++)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
+                }
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
+
+                for (std::uint32_t p = 0; p < fid_count - 1; p++)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 8);
+                }
+                if (faces_remaining == 1)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 8);
+                }
+                else
+                {
+                    TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 8);
+                }
+            }
+
+            const std::uint32_t replay_op = lltt::replay_insn(replay_start, replay_buf_len);
+            ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);
+            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B));
+            tmp.program();
+        }
     }
     else if constexpr (high_fidelity)
     {
@@ -221,7 +248,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
 {
-    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
 
     // Supported narrow tiles per BH Tiny Tile Summary: [16]x16 (num_faces=1) and [32]x16 (num_faces=2) only
     LLK_ASSERT(
@@ -251,7 +278,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         else
         {
             ckernel_template::run();
-            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
+            TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
@@ -334,43 +361,75 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 
     if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
     {
-        if constexpr (high_fidelity)
+        if (tensor_shape.total_num_faces() == 4)
         {
             addr_mod_t {
-                .fidelity = {.incr = 1},
+                .srcb = {.incr = 8},
+                .dest = {.incr = 8},
             }
                 .set(ADDR_MOD_0);
-        }
 
-        addr_mod_t {
-            .srcb     = {.incr = 8},
-            .fidelity = {.clr = 1},
-        }
-            .set(ADDR_MOD_1);
-
-        addr_mod_t {
-            .srcb     = {.cr = 1},
-            .fidelity = {.clr = 1},
-        }
-            .set(ADDR_MOD_2);
-
-        if (tensor_shape.num_faces_c_dim == 2)
-        {
             addr_mod_t {
-                .srcb     = {.cr = 1},
-                .dest     = {.incr = 32},
-                .fidelity = {.clr = 1},
+                .srcb = {.incr = 24},
+                .dest = {.incr = 24},
+            }
+                .set(ADDR_MOD_1);
+
+            addr_mod_t {
+                .srca = {.incr = 16},
+                .srcb = {.incr = 16, .cr = 1},
+                .dest = {.cr = 1},
+            }
+                .set(ADDR_MOD_2);
+
+            addr_mod_t {
+                .srca     = {.clr = 1, .cr = 1},
+                .srcb     = {.clr = 1, .cr = 1},
+                .dest     = {.clr = 1, .cr = 1},
+                .fidelity = {.incr = high_fidelity ? 1u : 0u},
             }
                 .set(ADDR_MOD_3);
         }
         else
         {
+            if constexpr (high_fidelity)
+            {
+                addr_mod_t {
+                    .fidelity = {.incr = 1},
+                }
+                    .set(ADDR_MOD_0);
+            }
+
             addr_mod_t {
-                .srcb     = {.cr = 1},
-                .dest     = {.incr = 16},
+                .srcb     = {.incr = 8},
                 .fidelity = {.clr = 1},
             }
-                .set(ADDR_MOD_3);
+                .set(ADDR_MOD_1);
+
+            addr_mod_t {
+                .srcb     = {.cr = 1},
+                .fidelity = {.clr = 1},
+            }
+                .set(ADDR_MOD_2);
+
+            if (tensor_shape.num_faces_c_dim == 2)
+            {
+                addr_mod_t {
+                    .srcb     = {.cr = 1},
+                    .dest     = {.incr = 32},
+                    .fidelity = {.clr = 1},
+                }
+                    .set(ADDR_MOD_3);
+            }
+            else
+            {
+                addr_mod_t {
+                    .srcb     = {.cr = 1},
+                    .dest     = {.incr = 16},
+                    .fidelity = {.clr = 1},
+                }
+                    .set(ADDR_MOD_3);
+            }
         }
     }
     else
