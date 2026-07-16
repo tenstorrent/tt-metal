@@ -595,20 +595,20 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
 
     // Minimax approximation for asin(reduced).
     sfpi::vFloat square = reduced * reduced;
-    sfpi::vFloat polynomial = 0x1.834000p-5f;
+    sfpi::vFloat polynomial = 0x1.830p-5f;
     sfpi::vFloat coefficient = 0x1.ca0000p-8f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    coefficient = 0x1.15a984p-5f;
+    coefficient = 0x1.158p-5f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    coefficient = 0x1.6a9354p-5f;
+    coefficient = 0x1.6acp-5f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    coefficient = 0x1.3345f4p-4f;
+    coefficient = 0x1.33411ep-4f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    coefficient = 0x1.555536p-3f;
+    coefficient = 0x1.555552p-3f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     sfpi::vUInt x_bits = sfpi::as<sfpi::vUInt>(x);
