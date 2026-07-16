@@ -243,6 +243,12 @@ inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim)
 {
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // Disable the ALU src zero-flag (denormal flush) so the fp32 hi16/lo16 MOVB2D packing works.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        math::_invalidate_src_zero_flag_state_();
+    }
     reduce_max_row_configure_addrmod_runtime();
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
@@ -321,6 +327,11 @@ inline void _llk_math_reduce_block_max_row_reinit_runtime_()
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t block_ct_dim)
 {
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // Disable the ALU src zero-flag (denormal flush) so the fp32 hi16/lo16 MOVB2D packing works.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
     reduce_max_row_configure_addrmod();
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -332,8 +343,14 @@ inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t b
  * Only reconfigures ADDR_MOD_1, ADDR_MOD_2, and ADDR_MOD_6 (preserves ADDR_MOD_3).
  * Used when only specific addrmods were clobbered by previous operations.
  */
+template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_reinit_minimal_runtime_()
 {
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // Disable the ALU src zero-flag (denormal flush) so the fp32 hi16/lo16 MOVB2D packing works.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
     reduce_max_row_configure_addrmod_reinit_minimal_runtime();
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);

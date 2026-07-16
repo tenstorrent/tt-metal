@@ -64,11 +64,6 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_()
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, bool respect_trigger = false>
 inline void _llk_unpack_AB_reduce_block_max_row_init_()
 {
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
     // REDUCE_ROW requires transpose itself; additionally, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
