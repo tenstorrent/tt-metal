@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -69,6 +69,15 @@ def _registered_paths() -> List[tuple]:
             p = _extract_path(getattr(bb, fld, None))
             if p:
                 out.append((f"building_blocks[{bb.name}].{fld}", p))
+    try:
+        from .reuse_registry import all_entries
+
+        for e in all_entries():
+            p = _extract_path(getattr(e, "tt_path", None))
+            if p:
+                out.append((f"reuse_registry[{e.concept}].tt_path", p))
+    except Exception:
+        pass
     return out
 
 
@@ -90,17 +99,26 @@ def check_registry_drift(repo_root, include_unmapped: bool = True) -> List[Drift
             issues.append(DriftIssue("missing_path", where, rel, "registered path does not exist in the checkout"))
 
     if include_unmapped:
-        ttt = root / "models" / "tt_transformers" / "tt"
-        if ttt.is_dir():
-            for f in sorted(ttt.glob("*.py")):
+        for base, recursive in (
+            ("models/tt_transformers/tt", False),
+            ("models/tt_dit", True),
+            ("models/tt_cnn", True),
+        ):
+            d = root / base
+            if not d.is_dir():
+                continue
+            files = d.rglob("*.py") if recursive else d.glob("*.py")
+            for f in sorted(files):
                 if f.name.startswith("_") or f.name == "__init__.py":
                     continue
                 rel = str(f.relative_to(root))
+                if "/tests/" in rel or "/test/" in rel:
+                    continue
                 if not any(rel == r or rel.startswith(r + "/") or r.startswith(rel) for r in referenced):
                     issues.append(
                         DriftIssue(
                             "unmapped",
-                            "tt_transformers/tt",
+                            base.split("/", 1)[-1],
                             rel,
                             "reusable module not referenced by any registry entry",
                         )
@@ -121,9 +139,18 @@ def format_drift(issues: List[DriftIssue]) -> str:
         for i in missing:
             lines.append(f"  [MISSING] {i.where}\n            -> {i.path}")
     if unmapped:
-        lines.append(f"Unmapped reusable modules ({len(unmapped)}) — present in the tree, no registry entry:")
+        by_base: Dict[str, List[DriftIssue]] = {}
         for i in unmapped:
-            lines.append(f"  [unmapped] {i.path}")
+            by_base.setdefault(i.where, []).append(i)
+        lines.append(f"Unmapped reusable modules ({len(unmapped)}) — present in the tree, no registry entry:")
+        for base, items in sorted(by_base.items()):
+            lines.append(f"  {base}: {len(items)} module(s) unmapped")
+            for i in items[:5]:
+                lines.append(f"    [unmapped] {i.path}")
+            if len(items) > 5:
+                lines.append(
+                    f"    … and {len(items) - 5} more (a whole base like tt_dit unmapped = add its modules to the reuse map)"
+                )
     return "\n".join(lines)
 
 
