@@ -336,6 +336,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     idst,
                     (uint)params[0])};
         case UnaryOpType::REMAINDER:
+            if (input_dtype == DataType::UINT32) {
+                TT_FATAL(static_cast<uint32_t>(param0_raw) != 0, "divisor must be non-zero");
+                return {
+                    "remainder_tile_uint32_init();",
+                    fmt::format("remainder_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
+            }
             return {
                 fmt::format(
                     "remainder_tile_init({:#x}u, {:#x}u);",

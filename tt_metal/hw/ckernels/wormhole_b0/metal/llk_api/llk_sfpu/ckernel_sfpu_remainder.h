@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_binary_remainder.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -18,6 +19,43 @@ inline void init_remainder(const uint value, const uint recip) {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = Converter::as_float(value);
     sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
+}
+
+// Unary uint32 remainder: computes a % scalar for every element of the tile, where scalar is the
+// (unsigned) divisor. This mirrors the tensor-tensor kernel in ckernel_sfpu_binary_remainder.h with
+// b fixed to a splat of the runtime scalar, so the same range-reduction argument applies verbatim:
+// compute_unsigned_remainder_int32() is exact only for operands in [0, 2^31), so we reduce a into
+// that regime via t = (uint32)a >> 1 (always < 2^31) and rebuild a % scalar from the helper result.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_remainder_uint32_scalar(uint scalar) {
+    sfpi::vInt b = static_cast<int>(scalar);
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vInt a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+
+        // Call the helper unconditionally with t < 2^31 (see binary kernel notes on the rvtt_live
+        // crash when nesting it inside predication). rt is only consumed on the b < 2^31 lanes.
+        sfpi::vInt t = sfpi::vInt(sfpi::vUInt(a) >> 1);
+        sfpi::vInt rt = compute_unsigned_remainder_int32(t, b);
+
+        // Reload a from DEST instead of keeping it live across the (heavy) helper.
+        a = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+
+        // b < 2^31 uses x = 2*rt + (a & 1); b >= 2^31 keeps x = a (already in [0, 2b) since a < 2b).
+        v_if(b >= 0) { a = rt + rt + (a & 1); }
+        v_endif;
+
+        // x % b = (x >=u b) ? x - b : x. The compare only tests sign(x - b), matching x >=u b except
+        // when b >= 2^31 and x < 2^31 (then x < b, remainder = x); the second predicate fixes those.
+        sfpi::vInt r = a;
+        v_if(sfpi::vUInt(a) >= sfpi::vUInt(b)) { r = a - b; }
+        v_endif;
+        v_if(b < 0 && a >= 0) { r = a; }
+        v_endif;
+
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = r;
+        sfpi::dst_reg++;
+    }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
