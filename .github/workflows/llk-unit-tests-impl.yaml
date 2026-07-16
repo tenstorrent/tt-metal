@@ -23,6 +23,22 @@ on:
         type: boolean
         default: true
         description: "Enable LLK asserts"
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
+      sku-allowlist:
+        required: false
+        type: string
+        default: "*"
+        description: >-
+          Optional logical SKU allowlist (comma-separated) for change gating.
+          Default "*" means no extra filter. Empty string skips all tests.
+          Any other value is forwarded as --sku-allowlist.
 
 jobs:
   load-test-matrix:
@@ -44,19 +60,33 @@ jobs:
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
+          set -euo pipefail
+          allowlist_args=()
+          allowlist='${{ inputs.sku-allowlist }}'
+          # "*" (default) = omit flag (no filter). Empty = skip all. Else CSV.
+          if [ "$allowlist" != '*' ]; then
+            allowlist_args+=(--sku-allowlist "$allowlist")
+          fi
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}" \
+            "${allowlist_args[@]}"
 
   llk-unit-tests:
     needs: load-test-matrix

@@ -2,6 +2,7 @@
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml (ttnn -> pr_gate).
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 - name: ttnn sdk examples
   cmd: ./tests/scripts/run_sdk_examples.sh
