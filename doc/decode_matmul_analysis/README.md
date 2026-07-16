@@ -101,18 +101,30 @@ the advisor residual/exact chain was handled, and whether Patterns A/B appear.
 | [Mistral-Small-24B](mistral-small-24b.md) | DRAM-sharded | 72× | applied (L1 chain, +helped) | present; no copy, ~119 µs reshape (~9%) | ✅ re-decided at final precision |
 | [GPT-OSS-20B](gpt-oss-20b.md) (MoE) | 1D-mcast attn + `sparse_matmul` experts | 6.6× | dense advisor chain rejected | present; **does not bite** (0 copies) | ✅ (attn 1D is correctness-bounded, not stale) |
 | [Qwen3-32B](qwen3-32b.md) | DRAM-sharded | 67× | rejected (PCC + slower) | present; no copy, ~118 µs reshape (~10%) | ✅ re-decided at final precision |
+| [Qwen2.5-Coder-32B](qwen2.5-coder-32b.md) | **1D-mcast** (BFP8, batch-aware) | 42× | rejected (block sweep) | present; avoided (~3.7% head permutes) | ✅ 1D correctly wins **at BFP8** |
 | [Falcon3-10B](falcon3-10b.md) | DRAM-sharded (precision-aware cores) | 5.3× | rejected (whole-layer) | present; **copy 25 µs + reshape 34 µs (~7%)** | ✅ re-decided (+low-util O row: mixed strat untried) |
 | [Falcon3-7B](falcon3-7b.md) | DRAM-sharded | 2.3× | rejected (at final precision) | present; **copy 24 µs + reshapes (~10%)** | ✅ re-decided at final precision |
 
 ## Cross-model synthesis
 
-1. **Pattern B was Llama-8B's mistake, not the fleet's.** Five of six re-measured
-   the DRAM-sharded-vs-1D-mcast choice **at the shipped BFP4 precision** and
-   shipped **DRAM-sharded**. Only **Llama-3.1-8B froze on advisor 1D-mcast** at an
-   earlier precision — where a DRAM-sharded path is measurably faster. GPT-OSS
-   ships 1D-mcast for attention but for a **documented correctness reason**
-   (sliding-window PCC), not a stale A/B. So the OPT-014/OPT-015 skill fix is
-   worth having, but most agents already avoid the trap.
+1. **Pattern B was Llama-8B's mistake, not the fleet's — and precision picks the
+   winner.** The DRAM-sharded-vs-1D choice is *precision-dependent*: BFP4 halves
+   weight DRAM traffic and favors DRAM-sharded; BFP8 (2× the bytes) keeps 1D-mcast
+   competitive. The fleet bears this out:
+   - The four BFP4 dense models (Mistral, Qwen3, Falcon3-10B/7B) re-measured at
+     final BFP4 and shipped **DRAM-sharded**.
+   - **Qwen2.5-Coder-32B** was PCC-forced to stay **BFP8**, re-measured at that
+     precision, and **1D-mcast correctly won** (1.94 vs 2.29 ms) — with a
+     batch-aware default (DRAM-sharded for batch-1). This is the clean validation
+     of the mechanism.
+   - **GPT-OSS** ships 1D attention for a documented **correctness** reason
+     (sliding-window PCC), not a stale A/B.
+   - Only **Llama-3.1-8B** shipped 1D-mcast without re-checking at its final BFP4
+     precision, where DRAM-sharded is ~2% faster. That is the single real miss.
+
+   So the choice itself (1D vs DRAM-sharded) is legitimately model/precision/batch
+   specific; the OPT-014/OPT-015 fix targets the *process* error — freezing the
+   strategy before the precision is final — which only Llama-8B committed.
 
 2. **Pattern A (the advisor's DRAM in/out segment boundary) is universal.** Every
    model's `final_ir.mlir` ends with an `(output revert)` shard→DRAM at
@@ -153,8 +165,8 @@ the advisor residual/exact chain was handled, and whether Patterns A/B appear.
 | qwen-qwen3-32b | ✅ done | ✅ |
 | tiiuae-falcon3-10b-base | ✅ done | ✅ |
 | tiiuae-falcon3-7b-base | ✅ done | ✅ |
-| meta-llama-llama-3.1-70b-instruct | ⏳ not yet pushed | pending |
-| qwen-qwen2.5-coder-32b-instruct | ⏳ not yet pushed | pending |
+| qwen-qwen2.5-coder-32b-instruct | ✅ done | ✅ |
+| meta-llama-llama-3.1-70b-instruct | ⏳ not yet pushed | pending (poller watching) |
 
 _Method note: Llama-3.1-8B is on-device-verified; the other models are analyzed
 read-only from each branch's committed artifacts (`README.md`, `work_log.md`,
