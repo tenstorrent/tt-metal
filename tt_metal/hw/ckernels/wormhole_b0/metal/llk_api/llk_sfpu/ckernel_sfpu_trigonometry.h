@@ -600,10 +600,11 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     polynomial *= square;
     reduced = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(reduced) ^ flip);
+    sfpi::vFloat x_lt_switchover = x - 0.5625f;
     result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // Map asin(reduced) back to acos(x).
-    v_if(x < 0.5625f) {
+    v_if(x_lt_switchover < 0.0f) {
         sfpi::vFloat pio2_fac1 = 0.93318945f;
         sfpi::vFloat pio2_fac2 = 1.68325555f;
         result = __builtin_rvtt_sfpmad(pio2_fac1.get(), pio2_fac2.get(), result.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
