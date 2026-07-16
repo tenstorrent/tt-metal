@@ -74,19 +74,6 @@ Tensor InterleavedToShardedPartialDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, input_tensor.device());
 }
 
-ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
-    return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(
-        operation_attributes.grid_size,
-        operation_attributes.shard_spec,
-        operation_attributes.num_slices,
-        operation_attributes.slice_index,
-        operation_attributes.output_mem_config,
-        operation_attributes.output_dtype,
-        input_tensor.dtype(),
-        input_tensor.layout());
-}
-
 Tensor interleaved_to_sharded_partial(
     const Tensor& input_tensor,
     const CoreCoord& grid_size,
