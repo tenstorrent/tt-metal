@@ -785,7 +785,7 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
-- name: SDXL demo tests base + lora
+- name: SDXL demo tests base + lora (WH)
   cmd: |
     export HF_HUB_OFFLINE=0
     exit_code=0
@@ -797,6 +797,15 @@
     wh_n150:
       timeout: 40
       tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: SDXL demo tests base (BH)
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+  model: sdxl-demo
+  skus:
     bh_p150b_civ2:
       timeout: 30
       tier: 2
