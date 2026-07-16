@@ -120,8 +120,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // line per group (bank/greedy/opt max+total edge cost) for the report. No effect on the public path.
     const bool ring_bank = (diag & RegimeADiag::DIAG_RING_BANK) != 0u;        // diagnostic: bank order [0..7]
     const bool ring_greedy = (diag & RegimeADiag::DIAG_RING_GREEDY) != 0u;    // diagnostic: greedy (mm==0)
-    const bool ring_opt_mm0 = (diag & RegimeADiag::DIAG_RING_OPT_MM0) != 0u;  // diagnostic: opt scored on mm==0 only
-    if (!ring_bank) {  // DEFAULT = opt scored across ALL Sm mm-rings; greedy / mm0-opt if selected
+    const bool ring_opt_mm0 = (diag & RegimeADiag::DIAG_RING_OPT_MM0) != 0u;  // diagnostic: mm==0-only objective
+    const bool ring_maxring = (diag & RegimeADiag::DIAG_RING_MAXRING) != 0u;  // diagnostic: maxring_total
+    const bool ring_total = (diag & RegimeADiag::DIAG_RING_TOTAL) != 0u;      // diagnostic: total_maxedge
+    const bool ring_maxedge = (diag & RegimeADiag::DIAG_RING_MAXEDGE) != 0u;  // diagnostic: maxedge_total
+    if (!ring_bank) {  // DEFAULT = PARETO across all Sm mm-rings; other objectives if selected
         namespace expdev = tt::tt_metal::experimental::Device;
         const uint32_t preaders = geo.num_cores / 8u;
         // directed route cost of one 8-core cycle over a single ring's hop matrix: (max edge, total hops).
@@ -158,17 +161,25 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                     }
                 }
             }
-            // aggregate route cost of a candidate across all Sm mm-rings: (worst edge over rings, summed hops).
-            auto agg_cost = [&](const std::array<uint32_t, 8>& ord) -> std::pair<uint32_t, uint32_t> {
-                uint32_t amax = 0, atot = 0;
-                for (uint32_t mm = 0; mm < Sm; ++mm) {
-                    const auto [m, t] = ring_cost(ord, dm[mm]);
-                    amax = std::max(amax, m);
-                    atot += t;
-                }
-                return {amax, atot};
+            // per-candidate metrics across all Sm mm-rings: ring0 (mm==0) max/total; aggmax = worst edge over
+            // rings; aggtot = summed hops over all rings; maxringtot = worst per-ring total.
+            struct Metrics {
+                uint32_t r0max, r0tot, aggmax, aggtot, maxringtot;
             };
-
+            auto metrics = [&](const std::array<uint32_t, 8>& ord) -> Metrics {
+                Metrics m{0, 0, 0, 0, 0};
+                for (uint32_t mm = 0; mm < Sm; ++mm) {
+                    const auto [rm, rt] = ring_cost(ord, dm[mm]);
+                    if (mm == 0) {
+                        m.r0max = rm;
+                        m.r0tot = rt;
+                    }
+                    m.aggmax = std::max(m.aggmax, rm);
+                    m.aggtot += rt;
+                    m.maxringtot = std::max(m.maxringtot, rt);
+                }
+                return m;
+            };
             const std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
             // greedy nearest-neighbour on the mm==0 ring (heuristic diagnostic), start at bank 0.
             std::array<uint32_t, 8> greedy{};
@@ -189,33 +200,71 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 }
             }
             // exhaustive: fix bank 0 at pos 0, permute the other 7 (5040 cycles; directed => both orientations).
-            // Track BOTH objectives in one pass: opt_mm0 = min(max,total) on the mm==0 ring; opt_agg =
-            // min(worst-edge-over-rings, summed-hops-over-rings).
-            std::array<uint32_t, 8> opt_mm0 = bank, opt_agg = bank;
+            // Pass 1 tracks the four lexicographic objectives (each first-strict-min wins). We also record the
+            // aggtot of the MM0-selected order as the PARETO budget.
+            std::array<uint32_t, 8> opt_mm0 = bank, opt_maxedge = bank, opt_maxring = bank, opt_total = bank,
+                                    opt_pareto = bank;
+            auto lt2 = [](uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) {
+                return a0 < b0 || (a0 == b0 && a1 < b1);
+            };
+            auto lt3 = [](uint32_t a0, uint32_t a1, uint32_t a2, uint32_t b0, uint32_t b1, uint32_t b2) {
+                return a0 < b0 || (a0 == b0 && (a1 < b1 || (a1 == b1 && a2 < b2)));
+            };
             {
                 std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
-                uint32_t bm0 = 0xffffffffu, bt0 = 0xffffffffu, bma = 0xffffffffu, bta = 0xffffffffu;
-                do {
-                    std::array<uint32_t, 8> cand{};
-                    cand[0] = 0;
-                    for (uint32_t t = 0; t < 7u; ++t) {
-                        cand[t + 1u] = tail[t];
+                Metrics b_mm0{~0u, ~0u, ~0u, ~0u, ~0u}, b_me{~0u, ~0u, ~0u, ~0u, ~0u};
+                Metrics b_mr{~0u, ~0u, ~0u, ~0u, ~0u}, b_to{~0u, ~0u, ~0u, ~0u, ~0u};
+                auto cand_of = [](const std::array<uint32_t, 7>& t) {
+                    std::array<uint32_t, 8> c{};
+                    c[0] = 0;
+                    for (uint32_t i = 0; i < 7u; ++i) {
+                        c[i + 1u] = t[i];
                     }
-                    const auto [m0, t0] = ring_cost(cand, dm[0]);
-                    if (m0 < bm0 || (m0 == bm0 && t0 < bt0)) {
-                        bm0 = m0;
-                        bt0 = t0;
+                    return c;
+                };
+                do {
+                    const std::array<uint32_t, 8> cand = cand_of(tail);
+                    const Metrics m = metrics(cand);
+                    if (lt2(m.r0max, m.r0tot, b_mm0.r0max, b_mm0.r0tot)) {
+                        b_mm0 = m;
                         opt_mm0 = cand;
                     }
-                    const auto [ma, ta] = agg_cost(cand);
-                    if (ma < bma || (ma == bma && ta < bta)) {
-                        bma = ma;
-                        bta = ta;
-                        opt_agg = cand;
+                    if (lt2(m.aggmax, m.aggtot, b_me.aggmax, b_me.aggtot)) {
+                        b_me = m;
+                        opt_maxedge = cand;
+                    }
+                    if (lt3(m.maxringtot, m.aggmax, m.aggtot, b_mr.maxringtot, b_mr.aggmax, b_mr.aggtot)) {
+                        b_mr = m;
+                        opt_maxring = cand;
+                    }
+                    if (lt2(m.aggtot, m.aggmax, b_to.aggtot, b_to.aggmax)) {
+                        b_to = m;
+                        opt_total = cand;
                     }
                 } while (std::next_permutation(tail.begin(), tail.end()));
+
+                // Pass 2 — PARETO: min aggmax (then aggtot) subject to aggtot <= MM0's aggtot (never worse
+                // total than MM0). Seeded with MM0 itself (satisfies the constraint by construction).
+                opt_pareto = opt_mm0;
+                Metrics b_pa = b_mm0;
+                const uint32_t budget = b_mm0.aggtot;
+                std::array<uint32_t, 7> tail2 = {1, 2, 3, 4, 5, 6, 7};
+                do {
+                    const std::array<uint32_t, 8> cand = cand_of(tail2);
+                    const Metrics m = metrics(cand);
+                    if (m.aggtot <= budget && lt2(m.aggmax, m.aggtot, b_pa.aggmax, b_pa.aggtot)) {
+                        b_pa = m;
+                        opt_pareto = cand;
+                    }
+                } while (std::next_permutation(tail2.begin(), tail2.end()));
             }
-            const std::array<uint32_t, 8>& sel = ring_greedy ? greedy : (ring_opt_mm0 ? opt_mm0 : opt_agg);
+            // DEFAULT = PARETO (chosen after the two-run objective A/B); diagnostics select the others.
+            const std::array<uint32_t, 8>& sel = ring_greedy    ? greedy
+                                                 : ring_opt_mm0 ? opt_mm0
+                                                 : ring_maxring ? opt_maxring
+                                                 : ring_total   ? opt_total
+                                                 : ring_maxedge ? opt_maxedge
+                                                                : opt_pareto;
             // apply the selected order to ALL Sm slices of this group (same permutation => reader/slave ring_pos
             // agree per bank, preserving in0/in1 pairing under M-split).
             for (uint32_t mm = 0; mm < Sm; ++mm) {
@@ -240,31 +289,46 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                     }
                     return s;
                 };
-                const auto ab = agg_cost(bank), ag = agg_cost(greedy), a0 = agg_cost(opt_mm0), aa = agg_cost(opt_agg);
+                // group-aggregate (aggmax:aggtot) of each candidate; also the selected order's per-ring maxes.
+                auto ac = [&](const std::array<uint32_t, 8>& o) {
+                    const Metrics m = metrics(o);
+                    return std::to_string(m.aggmax) + ":" + std::to_string(m.aggtot) + ":" +
+                           std::to_string(m.maxringtot);
+                };
+                const char* selname = ring_greedy    ? "greedy"
+                                      : ring_opt_mm0 ? "mm0"
+                                      : ring_maxring ? "maxring"
+                                      : ring_total   ? "total"
+                                      : ring_maxedge ? "maxedge"
+                                                     : "pareto";
                 std::string perring;
                 for (uint32_t mm = 0; mm < Sm; ++mm) {
                     const auto [m, t] = ring_cost(sel, dm[mm]);
                     perring += "(" + std::to_string(m) + ":" + std::to_string(t) + ")";
                 }
+                // fields are aggmax:aggtot:maxringtot per candidate (group-aggregate). op-level aggregation is
+                // done by the harness across (kk,nn) groups.
                 fmt::print(
-                    "RINGCOST group={} Sm={} wnoc={} sel={} bank[{}]aggmax={}aggtot={} greedy[{}]aggmax={}aggtot={} "
-                    "mm0[{}]aggmax={}aggtot={} agg[{}]aggmax={}aggtot={} sel_perring={}\n",
+                    "RINGCOST group={} Sm={} wnoc={} sel={} bank[{}]={} greedy[{}]={} mm0[{}]={} maxedge[{}]={} "
+                    "maxring[{}]={} total[{}]={} pareto[{}]={} sel_perring={}\n",
                     base,
                     Sm,
                     (wnoc == NOC::NOC_0 ? 0 : 1),
-                    (ring_greedy ? "greedy" : (ring_opt_mm0 ? "mm0" : "agg")),
+                    selname,
                     join(bank),
-                    ab.first,
-                    ab.second,
+                    ac(bank),
                     join(greedy),
-                    ag.first,
-                    ag.second,
+                    ac(greedy),
                     join(opt_mm0),
-                    a0.first,
-                    a0.second,
-                    join(opt_agg),
-                    aa.first,
-                    aa.second,
+                    ac(opt_mm0),
+                    join(opt_maxedge),
+                    ac(opt_maxedge),
+                    join(opt_maxring),
+                    ac(opt_maxring),
+                    join(opt_total),
+                    ac(opt_total),
+                    join(opt_pareto),
+                    ac(opt_pareto),
                     perring);
             }
         }
