@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Isolated AG + MM sweeps -> dedicated CSVs (keeps the AGMM dashboard data separate).
 set -uo pipefail
-W=/data/cglagovich/tt-metal/.claude/worktrees/drifting-seeking-lantern
+# Resolve the repo root from this script's location (agmm/ lives at the repo top),
+# so the driver runs from any checkout/worktree without editing.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+W="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$W"
 export PATH="$W/python_env/bin:$PATH" ARCH_NAME=blackhole TT_METAL_HOME="$W" PYTHONPATH="$W"
 

@@ -19,10 +19,16 @@ latest main* and how it moves as optimizations land.
 | `sweep_latest.csv` | **Output.** Regenerated each run: most-recent best per shape (at-a-glance). |
 | `agmm_db.html` | **Output.** Self-contained dashboard: sortable/filterable roofline table + per-shape drawer. Refreshed each run; open in a browser. |
 | `sweeps/<commit>_<ts>/` | **Output.** Full per-combo CSV per shape (drill-down; git-ignored). |
+| `gen_isolated_specs.py` | Regenerates `isolated_{ag,mm}_spec.json` from `sweep_shapes.json`. Run after editing the shape spec. |
+| `isolated_{ag,mm}_spec.json` | **Generated.** Per-op specs: AG (`op_type=ag`, deduped by device/M/K) and MM (`op_type=mm`, one per shape). |
+| `run_isolated.sh` | Driver: runs the AG sweep then the MM sweep into their own `isolated_*` CSVs. Path-relative (works from any checkout). |
+| `build_comparison.py` | Joins fused AGMM vs serial AG+MM → `comparison.csv` (fusion savings + overlap ratio). |
+| `isolated_{ag,mm}_{history,latest}.csv`, `comparison.csv` | **Output.** Isolated-sweep tracking records + the fused-vs-serial join. |
 
 The runner reuses the on-device sweep machinery in
 `models/tt_dit/utils/sweep_mm_block_sizes.py` — it does **not** reimplement the
-block search, profiler capture, or ops-log parsing.
+block search, profiler capture, or ops-log parsing. The isolated sweeps use the
+same machinery via `op_type` (`ag` = `all_gather_async`, `mm` = `minimal_matmul`).
 
 ## Quick start
 
@@ -53,6 +59,29 @@ python agmm/run_sweeps.py --seed-from-instances
 > (~2s each; 150–270 candidates/shape ⇒ ~5–8 min/shape; the full 7-shape list is
 > **>1 hr** of device time). On a shared device, prefer one shape at a time
 > (`--mode full --ids <one>`). `track` runs are seconds/shape.
+
+## Isolated AG / MM sweeps (fused-vs-serial)
+
+Break each fused AGMM shape into its two halves to see what fusion buys. Run on a
+**healthy 2-link galaxy** — a node with a degraded fabric link deadlocks the
+gather (see `GALAXY_FABRIC_FINDINGS.md`).
+
+```bash
+# 1. (re)generate the per-op specs from sweep_shapes.json (only after editing shapes)
+python agmm/gen_isolated_specs.py
+
+# 2. run both isolated sweeps -> isolated_{ag,mm}_{history,latest}.csv
+bash agmm/run_isolated.sh            # AG (op_type=ag) then MM (op_type=mm), ~2 h full
+
+# 3. join fused vs serial -> comparison.csv (+ printed table)
+python agmm/build_comparison.py
+```
+
+`build_dashboard.py` folds the isolated AG/MM times into every card automatically
+on its next run. The isolated all-gather is deduped by `(device_config, M, K)`
+(independent of N/fusion); the matmul keeps N + fusion so it matches AGMM's
+fused matmul. `overlap = AGMM ÷ (AG + MM)`: `<1` means fusion wins, `>1` means the
+fused op's fixed overhead beats the benefit (seen on small-M shapes).
 
 ## How it works
 
