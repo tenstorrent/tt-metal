@@ -391,7 +391,7 @@ jobs:
               "structured-output": true,
               "multimodal": true,
               "additional-server-args": "--async-scheduling",
-              "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions",
+              "additional-structured-output-args": "",
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
