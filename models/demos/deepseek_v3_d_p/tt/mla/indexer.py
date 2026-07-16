@@ -19,6 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_perm_matrix
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
@@ -635,9 +636,10 @@ class TtIndexer:
             qc = 64
         # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx), so no triu
         # mask here. All H_idx heads are resident on-chip (wq_b replicated), so head_group_size=0 reads the
-        # key cache ONCE — but that needs L1 headroom, so k_chunk shrinks to 64 (vs 256 for a head-sharded
-        # slice).
-        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=qc, k_chunk_size=min(64, end_pos), head_group_size=0)
+        # key cache ONCE — but that needs L1 headroom, so k_chunk is bounded by resident head count
+        # (DSA_INDEXER_CONFIG, measured per model: DeepSeek@64h=64, GLM@32h=224; larger OOMs).
+        k_chunk = get_indexer_key_chunk(a.index_n_heads)
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=qc, k_chunk_size=min(k_chunk, end_pos), head_group_size=0)
         # SP-sharded queries (rotation-safe): each chip scores its S/sp rows vs the full block-cyclic key
         # cache, with a per-device causal offset from cluster_axis=sp_axis (chip r: chunk_start = start_pos
         # + r*Sq, Sq=S/sp=seq_len). All H_idx heads on-chip -> the logit is COMPLETE (no partial-logit
