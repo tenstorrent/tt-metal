@@ -36,6 +36,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
+    std::size_t logical_l,
     const SDPAProgramConfig& program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -52,7 +53,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -67,6 +70,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         persistent_output_buffer_v,
         joint_strategy,
         logical_n,
+        logical_l,
         program_config,
         dim,
         multi_device_global_semaphore,
@@ -83,7 +87,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        persistent_output_buffer_joint_k,
+        persistent_output_buffer_joint_v);
     return outputs;
 }
 
@@ -578,6 +584,14 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            logical_l (int, optional): The full prompt (joint) sequence length L before sharding.
+                Pass the full L when joint_tensor_q/k/v are sharded L/P per device.
+                The op infers the sharded path when per-device joint seq == logical_l / ring_size.
+                If 0 (default) or omitted, behaves as the replicated path (backward-compatible).
+            persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
+                gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
+                gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -593,8 +607,8 @@ void bind_sdpa(nb::module_& mod) {
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
-              - The attention output for the joint Q/K/V shape    [b x nh x L x dv].
-              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
+              - The attention output for the joint Q/K/V shape [b x nh x L/num_devices x dv] (or [b x nh x L x dv] on the replicated path).
+              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L/num_devices) x 1]
         )doc";
 
     ttnn::bind_function<"ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
@@ -612,6 +626,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("persistent_output_buffer_v").noconvert(),
         nb::arg("joint_strategy"),
         nb::arg("logical_n"),
+        nb::arg("logical_l") = 0,
         nb::arg("program_config").noconvert(),
         nb::arg("scale") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
@@ -628,7 +643,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
+        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
