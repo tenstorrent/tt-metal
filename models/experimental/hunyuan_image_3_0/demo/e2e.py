@@ -27,6 +27,8 @@
 #     HY_TEXT_PRE / HY_TEXT_POST   text tokens around the image span (default 32).
 #     HY_NUM_LAYERS  backbone layers (default 2).
 #     HY_STEPS       diffusion steps (default 4).
+#     HY_WEIGHT_DTYPE  backbone weights: bf8 (default, production mirror) | bf16
+#                    (accuracy / e2e PCC vs fp32 host — set for 32L gates).
 #     HY_SEED        RNG seed for the random inputs (default 0).
 #     HY_OUT         output PNG path (default ./hy_e2e.png).
 #
@@ -114,6 +116,12 @@ GUIDANCE = float(os.environ.get("HY_GUIDANCE", "1.0"))
 BASE_GUIDANCE = float(os.environ.get("HY_BASE_GUIDANCE", "5.0"))
 SCALING = 0.562679178327931  # config.json vae.scaling_factor
 OUT_PNG = os.environ.get("HY_OUT", "hy_e2e.png")
+
+
+def _weight_dtype():
+    """Resident backbone dtype. Default bf8 mirrors demo.py; HY_WEIGHT_DTYPE=bf16 for PCC."""
+    return ttnn.bfloat8_b if os.environ.get("HY_WEIGHT_DTYPE", "bf8") == "bf8" else ttnn.bfloat16
+
 
 _WMAP = json.load(open(glob.glob(f"{WEIGHTS}/*.index.json")[0]))["weight_map"]
 _OPEN = {}
@@ -230,10 +238,14 @@ def run_denoise(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=
             hidden_channels=HID,
             out_channels=LATENT,
         )
+        weight_dtype = _weight_dtype()
+        dtype_tag = "bf8" if weight_dtype == ttnn.bfloat8_b else "bf16"
+        # Full bf16 resident 32L MoE OOMs on 2x2; stream experts when not on the bf8 path.
+        stream_experts = weight_dtype != ttnn.bfloat8_b
         bf16_layers = (
             {int(s) for s in os.environ["HY_BF16_LAYERS"].split(",") if s.strip() != ""}
             if os.environ.get("HY_BF16_LAYERS")
-            else default_bf16_layers(NUM_LAYERS)
+            else (set() if stream_experts else default_bf16_layers(NUM_LAYERS))
         )
         layer_loader = lambda i: {f"model.layers.{i}.{k}": v for k, v in _load_prefix(f"model.layers.{i}").items()}
         backbone = HunyuanTtModel(
@@ -249,10 +261,10 @@ def run_denoise(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=
             use_mixed_mlp_moe=c["MIXED"],
             norm_topk_prob=c["NORM"],
             rms_norm_eps=c["EPS"],
-            stream_experts=False,
+            stream_experts=stream_experts,
             layer_loader=layer_loader,
             apply_final_norm=False,
-            weight_dtype=ttnn.bfloat8_b,
+            weight_dtype=weight_dtype,
             ccl_manager=ccl,
             expert_mesh_axis=1,
             tp_axis=1,
@@ -304,7 +316,7 @@ def run_denoise(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=
             do_cfg = text_embeds_uncond is not None and cfg_guidance != 1.0
             uncond = _text_cond(text_embeds_uncond) if do_cfg else None
             print(
-                f"[e2e] denoising {STEPS} steps on resident bf8 backbone (seq_len={S}"
+                f"[e2e] denoising {STEPS} steps on resident {dtype_tag} backbone (seq_len={S}"
                 f"{f', CFG guidance={cfg_guidance}' if do_cfg else ''}) ...",
                 flush=True,
             )
@@ -351,7 +363,7 @@ def run_denoise(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=
             )
             mode = "distil" if cfg_distilled else "meanflow"
             print(
-                f"[e2e] denoising {STEPS} steps on resident bf8 backbone "
+                f"[e2e] denoising {STEPS} steps on resident {dtype_tag} backbone "
                 f"({mode}, guidance={GUIDANCE}, seq_len={S}) ...",
                 flush=True,
             )
