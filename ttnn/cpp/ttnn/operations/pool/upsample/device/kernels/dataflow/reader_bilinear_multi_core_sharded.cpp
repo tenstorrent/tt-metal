@@ -4,6 +4,7 @@
 
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
 #include "bilinear_weights_lut.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 //
@@ -242,9 +243,9 @@ struct BilinearIndexAdvancer {
 // each core runs two threads (reader/writer) that alternate producing pixels.
 //
 // Architecture:
-//   - Input: Halo-padded tensor in L1 circular buffer (halo_cb)
-//   - Output: Interpolation data written to tilize_reduce_cb (4 neighbors per pixel)
-//            + weights written to in_scalar_cb (4 BF16 weights per pixel)
+//   - Input: Halo-padded tensor in L1 circular buffer (halo_dfb)
+//   - Output: Interpolation data written to tilize_reduce_dfb (4 neighbors per pixel)
+//            + weights written to in_scalar_dfb (4 BF16 weights per pixel)
 //   - Downstream: Compute kernel performs weighted reduction
 //
 // Data Flow (per output pixel):
@@ -295,13 +296,13 @@ void kernel_main() {
     constexpr uint32_t blocks = get_compile_time_arg_val(14);
     constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(15);
 
-    experimental::CB halo_cb(halo_cb_id);
-    experimental::CB tilize_reduce_cb(tilize_reduce_cb_id);
-    experimental::CB scalar_cb(in_scalar_cb_id);
+    DataflowBuffer halo_dfb(halo_cb_id);
+    DataflowBuffer tilize_reduce_dfb(tilize_reduce_cb_id);
+    DataflowBuffer scalar_dfb(in_scalar_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
-    uint32_t l1_read_addr = halo_cb.get_read_ptr();
+    uint32_t l1_read_addr = halo_dfb.get_read_ptr();
 
     // Split work between reader and writer threads
     // Reader gets ceiling(N/2), writer gets floor(N/2)
@@ -357,7 +358,7 @@ void kernel_main() {
         // Process each channel block
         uint32_t block_offset = 0;
         for (uint32_t i = 0; i < blocks; i++) {
-            tilize_reduce_cb.reserve_back(4);
+            tilize_reduce_dfb.reserve_back(4);
 
             uint32_t current_block_size_bytes = (i == blocks - 1) ? last_block_size_bytes : input_block_size_bytes;
 
@@ -366,7 +367,7 @@ void kernel_main() {
             // Read 4 neighbor stick segments
             noc.async_read(
                 self_ep,
-                tilize_reduce_cb,
+                tilize_reduce_dfb,
                 current_block_size_bytes,
                 experimental::local_addr(y1x1_addr + block_offset),
                 {.offset_bytes = write_offset});
@@ -374,7 +375,7 @@ void kernel_main() {
 
             noc.async_read(
                 self_ep,
-                tilize_reduce_cb,
+                tilize_reduce_dfb,
                 current_block_size_bytes,
                 experimental::local_addr(y1x2_addr + block_offset),
                 {.offset_bytes = write_offset});
@@ -382,7 +383,7 @@ void kernel_main() {
 
             noc.async_read(
                 self_ep,
-                tilize_reduce_cb,
+                tilize_reduce_dfb,
                 current_block_size_bytes,
                 experimental::local_addr(y2x1_addr + block_offset),
                 {.offset_bytes = write_offset});
@@ -390,21 +391,21 @@ void kernel_main() {
 
             noc.async_read(
                 self_ep,
-                tilize_reduce_cb,
+                tilize_reduce_dfb,
                 current_block_size_bytes,
                 experimental::local_addr(y2x2_addr + block_offset),
                 {.offset_bytes = write_offset});
 
             // Write weights for compute kernel
             fill_four_val(
-                scalar_cb.get_write_ptr(),
+                scalar_dfb.get_write_ptr(),
                 weight_top_left_bf16,
                 weight_top_right_bf16,
                 weight_bottom_left_bf16,
                 weight_bottom_right_bf16);
-            scalar_cb.push_back(1);
+            scalar_dfb.push_back(1);
 
-            tilize_reduce_cb.push_back(4);
+            tilize_reduce_dfb.push_back(4);
             block_offset += current_block_size_bytes;
         }
 

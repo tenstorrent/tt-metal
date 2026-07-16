@@ -480,31 +480,23 @@ class TtPrefillBlock(LightweightModule):
         # enqueued on the same CQ right after the zero, so the record only reaches the host after the
         # zero has executed on device — the ack (driven by record arrival) implies zero-complete with no
         # host sync. cache_layer_idx is the LOCAL per-rank cache slot.
-        # Two mutually-exclusive layer-ack transports (at most one is set per run): the D2H-service path
-        # (d2h_service/record_dev) enqueues the ack via the outbound_socket_service_sync device op on the
-        # same CQ right after the zero — the record only reaches the host after the zero has executed, so
-        # the ack implies zero-complete with NO host sync. The callback path (on_layer_complete) instead
-        # flushes the (async) zero with synchronize_device before handing this layer's KV to the migration
-        # worker (which reads the cache over NoC out-of-band from the ttnn command queue). Either way the
-        # pad window past actual_end is zeroed once. cache_layer_idx is the LOCAL per-rank cache slot;
-        # on_layer_complete receives the GLOBAL layer_idx (the scheduler orders acks across pipeline ranks).
-        if on_layer_complete is not None or d2h_service is not None:
-            assert actual_end is not None, "actual_end required when a layer-ack signal is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.mla.layer_num,
-                actual_end,
-                seq_len_local * self.mla.sp_factor,
-                self.mla.sp_axis,
-            )
-            if d2h_service is not None:
-                assert record_dev is not None, "record_dev required when d2h_service is set"
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
-            if on_layer_complete is not None:
-                ttnn.synchronize_device(self.mesh_device)
-                on_layer_complete(self.mla.layer_idx)
+        if d2h_service is not None:
+            assert actual_end is not None, "actual_end required when d2h_service is set"
+            assert record_dev is not None, "record_dev required when d2h_service is set"
+            # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
+            # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
+            # sparse.
+            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    kvpe_cache,
+                    cache_user_id,
+                    cache_layer_idx,
+                    self.mla.layer_num,
+                    actual_end,
+                    seq_len_local * self.mla.sp_factor,
+                    self.mla.sp_axis,
+                )
+            ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block
