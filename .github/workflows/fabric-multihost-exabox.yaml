@@ -1,5 +1,5 @@
 # This workflow can be run between 3 and 7 AM UTC
-name: "Fabric Test on a BH Quad"
+name: "(SC4) Health check & Fabric Test on"
 
 on:
   schedule:
