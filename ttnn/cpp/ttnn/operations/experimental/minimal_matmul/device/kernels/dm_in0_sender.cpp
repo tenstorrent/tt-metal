@@ -264,7 +264,7 @@ void kernel_main() {
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                DeviceZoneScopedN("AVAILABLE");
+                // DeviceZoneScopedN("AVAILABLE");
 #if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1) && defined(AG_INTERLEAVE_BANDS)
                 if constexpr (is_injector_core) {
                     // Interleave a forward remote k-block with the following backward one: read/push/mcast
@@ -296,12 +296,12 @@ void kernel_main() {
                                 cb_in0.reserve_back(band_in0_tiles);
                                 uint32_t in0_start_address = get_write_ptr(cb_in0_id);
                                 {
-                                    DeviceZoneScopedN("DRAM-Latency");
+                                    // DeviceZoneScopedN("DRAM-Latency");
 #ifndef SKIP_IN0_DRAM_READ
                                     // band 0's signal was consumed by compute_actual_k_block_iter above; later
                                     // bands wait this member's own per-direction aggregator signal.
                                     if (band > 0) {
-                                        DeviceZoneScopedN("IN0-BAND-WAIT");
+                                        // DeviceZoneScopedN("IN0-BAND-WAIT");
                                         fused_op_receiver.wait_for_dir(dir_pair[member]);
                                     }
                                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
@@ -324,7 +324,7 @@ void kernel_main() {
                                 }
                                 cb_in0.push_back(band_in0_tiles);
                                 if (!is_sink_core) {
-                                    DeviceZoneScopedN("MCAST-SEND");
+                                    // DeviceZoneScopedN("MCAST-SEND");
                                     in0_sender_sem.wait(1);
                                     in0_sender_sem.set(0);
                                     uint64_t in0_unicast_data_addr =
@@ -356,7 +356,7 @@ void kernel_main() {
 #endif
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        DeviceZoneScopedN("DEFER-WRITE");
+                        // DeviceZoneScopedN("DEFER-WRITE");
 #ifdef FUSE_SWIGLU
                         cb_out.wait_front(out_block_num_tiles_swiglu);
                         uint32_t out_read_ptr_swiglu = get_read_ptr(cb_out_id);
@@ -448,7 +448,7 @@ void kernel_main() {
                     cb_in0.reserve_back(band_in0_tiles);
                     uint32_t in0_start_address = get_write_ptr(cb_in0_id);
                     if constexpr (is_injector_core) {
-                        DeviceZoneScopedN("DRAM-Latency");
+                        // DeviceZoneScopedN("DRAM-Latency");
 #ifndef SKIP_IN0_DRAM_READ
                         const uint32_t band_start = m_tile + band_lo;
                         const uint32_t band_end = band_start + band_h;
@@ -456,7 +456,7 @@ void kernel_main() {
                         // band 0's signal was already awaited by compute_actual_k_block_iter above; each
                         // later band waits its own aggregator signal.
                         if (nb > 1 && band > 0) {
-                            DeviceZoneScopedN("IN0-BAND-WAIT");
+                            // DeviceZoneScopedN("IN0-BAND-WAIT");
                             fused_op_receiver.wait_for_dir(k_dir);
                         }
 #endif
@@ -480,7 +480,7 @@ void kernel_main() {
                         (void)k_block;
 #endif
                     } else {
-                        DeviceZoneScopedN("RECV-WAIT");
+                        // DeviceZoneScopedN("RECV-WAIT");
                         in0_receiver_sem.set(INVALID);
                         noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                         in0_receiver_sem.wait(VALID);
@@ -489,7 +489,7 @@ void kernel_main() {
                     cb_in0.push_back(band_in0_tiles);
 
                     if (!is_sink_core) {
-                        DeviceZoneScopedN("MCAST-SEND");
+                        // DeviceZoneScopedN("MCAST-SEND");
                         in0_sender_sem.wait(1);
                         in0_sender_sem.set(0);
                         uint64_t in0_unicast_data_addr =
@@ -563,7 +563,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    DeviceZoneScopedN("OUT-WRITE");
+                    // DeviceZoneScopedN("OUT-WRITE");
 #ifdef FUSE_SWIGLU
                     if constexpr (N_chunks == 1) {
                         write_block_sync_granular<M_block_tiles, out_N_block_tiles>(

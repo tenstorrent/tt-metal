@@ -7,6 +7,9 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#if defined(USE_MUX_V2)
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_sender.hpp"
+#endif
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -110,6 +113,16 @@ void kernel_main() {
     }
 
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
+#if defined(USE_MUX_V2)
+    // V2 is fully runtime-arg driven; build_from_args consumes the 11 client-connection args the
+    // host appends via FabricMuxV2Config::append_client_connection_rt_args. No worker-side
+    // termination protocol: the mux self-drains once every client closes.
+    // build_from_args takes size_t&; bridge through a size_t since arg_idx is uint32_t here.
+#define EAGER_STAGING false
+    size_t mux_arg_idx = arg_idx;
+    auto mux_connection = tt::tt_fabric::FabricMuxV2Sender<EAGER_STAGING>::build_from_args(mux_arg_idx);
+    arg_idx = static_cast<uint32_t>(mux_arg_idx);
+#else
     uint32_t termination_sync_id = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_sync_address = get_semaphore(termination_sync_id);
     uint32_t local_fabric_mux_status_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -119,6 +132,7 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
+#endif
 
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
     const auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
@@ -140,6 +154,7 @@ void kernel_main() {
         agg_per_worker_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     }
 
+#if !defined(USE_MUX_V2)
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     if (mux_connection_valid) {
@@ -167,6 +182,7 @@ void kernel_main() {
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
             fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
     }
+#endif
 
     // pre-populate packet headers
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
@@ -174,7 +190,12 @@ void kernel_main() {
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
     if (mux_connection_valid) {
+#if defined(USE_MUX_V2)
+        // open() gates on the mux reporting READY_FOR_TRAFFIC internally, then opens the connection.
+        mux_connection.open();
+#else
         tt::tt_fabric::fabric_client_connect(*mux_connection_handle);
+#endif
     }
 
     auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(output_addrgen);
@@ -388,6 +409,11 @@ void kernel_main() {
     noc_obj.async_atomic_barrier();
 
     if (mux_connection_valid) {
+#if defined(USE_MUX_V2)
+        // close() requests teardown and blocks on the manager's ack. The mux self-terminates once
+        // all clients have closed, so there is no termination-master election on the worker side.
+        mux_connection.close();
+#else
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
 
         if constexpr (is_termination_master) {
@@ -400,6 +426,7 @@ void kernel_main() {
             noc_semaphore_inc(dest_addr, 1);
             noc_obj.async_atomic_barrier();
         }
+#endif
     }
     noc_obj.async_write_barrier();
 }

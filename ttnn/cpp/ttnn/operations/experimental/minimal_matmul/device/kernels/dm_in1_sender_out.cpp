@@ -237,7 +237,7 @@ void kernel_main() {
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
-                DeviceZoneScopedN("AVAILABLE");
+                // DeviceZoneScopedN("AVAILABLE");
 #if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1) && defined(AG_INTERLEAVE_BANDS)
                 if constexpr (is_injector_core) {
                     // Re-present a forward remote k-block and the following backward one interleaved per band
@@ -253,7 +253,7 @@ void kernel_main() {
                         const uint32_t scratch_addr = get_write_ptr(cb_in1_scratch_id);
                         const uint32_t scratch_pair[2] = {scratch_addr, scratch_addr + in1_block_bytes};
                         {
-                            DeviceZoneScopedN("DRAM-Latency");
+                            // DeviceZoneScopedN("DRAM-Latency");
                             for (uint32_t member = 0; member < 2; member++) {
                                 read_in1_block_sync<K_block_tiles, N_block_tiles>(
                                     in1_reader,
@@ -276,7 +276,7 @@ void kernel_main() {
                                 noc.async_read_barrier();
                                 cb_in1.push_back(in1_block_num_tiles);
                                 if (!is_sink_core) {
-                                    DeviceZoneScopedN("MCAST-SEND");
+                                    // DeviceZoneScopedN("MCAST-SEND");
                                     in1_sender_sem.wait(1);
                                     in1_sender_sem.set(0);
                                     uint32_t fwd_addr = in1_start_address;
@@ -311,7 +311,7 @@ void kernel_main() {
 #endif
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
-                        DeviceZoneScopedN("DEFER-WRITE");
+                        // DeviceZoneScopedN("DEFER-WRITE");
 #ifdef FUSE_SWIGLU
                         cb_out.wait_front(out_block_num_tiles_swiglu);
                         uint32_t out_read_ptr = get_read_ptr(cb_out_id);
@@ -390,7 +390,7 @@ void kernel_main() {
                     // we take its write pointer directly without reserve/push/pop.
                     uint32_t scratch_addr = get_write_ptr(cb_in1_scratch_id);
                     {
-                        DeviceZoneScopedN("DRAM-Latency");
+                        // DeviceZoneScopedN("DRAM-Latency");
                         read_in1_block_sync<K_block_tiles, N_block_tiles>(
                             in1_reader,
                             in1_shape,
@@ -411,7 +411,7 @@ void kernel_main() {
                         noc.async_read_barrier();
                         cb_in1.push_back(in1_block_num_tiles);
                         if (!is_sink_core) {
-                            DeviceZoneScopedN("MCAST-SEND");
+                            // DeviceZoneScopedN("MCAST-SEND");
                             in1_sender_sem.wait(1);
                             in1_sender_sem.set(0);
                             uint32_t fwd_addr = in1_start_address;
@@ -432,14 +432,14 @@ void kernel_main() {
                         cb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_start_address = get_write_ptr(cb_in1_id);
                         {
-                            DeviceZoneScopedN("RECV-WAIT");
+                            // DeviceZoneScopedN("RECV-WAIT");
                             in1_receiver_sem.set(INVALID);
                             noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
                             in1_receiver_sem.wait(VALID);
                         }
                         cb_in1.push_back(in1_block_num_tiles);
                         if (!is_sink_core) {
-                            DeviceZoneScopedN("MCAST-SEND");
+                            // DeviceZoneScopedN("MCAST-SEND");
                             in1_sender_sem.wait(1);
                             in1_sender_sem.set(0);
                             uint32_t fwd_addr = in1_start_address;
@@ -518,7 +518,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    DeviceZoneScopedN("OUT-WRITE");
+                    // DeviceZoneScopedN("OUT-WRITE");
 #ifdef FUSE_SWIGLU
                     if constexpr (N_chunks == 1) {
                         write_block_sync_granular<M_block_tiles, out_N_block_tiles>(

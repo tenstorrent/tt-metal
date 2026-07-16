@@ -210,7 +210,9 @@ FORCE_INLINE uint32_t read_chunk(
     return 0;  // return value is unused by callers
 }
 
-template <typename AddrGenType, uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
+// FabricSenderType is deduced from mux_connection so the same body serves any fabric sender that
+// satisfies the linear-API contract (WorkerToFabricMuxSender for Mux V1, FabricMuxV2Sender for V2).
+template <typename AddrGenType, typename FabricSenderType>
 FORCE_INLINE uint32_t write_chunk(
     uint32_t& chunk_start_tile,
     uint32_t worker_tile_offset,
@@ -228,7 +230,7 @@ FORCE_INLINE uint32_t write_chunk(
     uint32_t input_tensor_Ht,
     uint32_t output_tensor_Wt,
     uint32_t actual_sender_chip_id,
-    tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& mux_connection,
+    FabricSenderType& mux_connection,
     volatile PACKET_HEADER_TYPE* pkt_scatter_hdr,
     volatile PACKET_HEADER_TYPE* pkt_unicast_hdr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_sem_inc,
