@@ -25,14 +25,9 @@ import pytest
 import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
-
-from models.common.utility_functions import hf_cache_layer_kv, hf_cache_num_layers
-
-# transformers 5.x moved no_init_weights to transformers.initialization; fall back
-# to the old location for transformers < 5.x.
-try:
+try:  # transformers >= 5 moved no_init_weights to transformers.initialization
     from transformers.initialization import no_init_weights
-except ImportError:
+except ImportError:  # transformers < 5
     from transformers.modeling_utils import no_init_weights
 
 import ttnn
@@ -337,20 +332,20 @@ class HfAttentionWrapper:
     @property
     def cache_k(self) -> torch.Tensor:
         """Get key cache in shape [batch, seq_len, n_kv_heads, head_dim]."""
-        if hf_cache_num_layers(self.past_key_value) == 0:
+        if len(self.past_key_value.key_cache) == 0:
             return torch.zeros(0)
         # DynamicCache stores as [batch, n_heads, seq_len, head_dim]
         # Transpose to [batch, seq_len, n_heads, head_dim]
-        return hf_cache_layer_kv(self.past_key_value, 0)[0].transpose(1, 2)
+        return self.past_key_value.key_cache[0].transpose(1, 2)
 
     @property
     def cache_v(self) -> torch.Tensor:
         """Get value cache in shape [batch, seq_len, n_kv_heads, head_dim]."""
-        if hf_cache_num_layers(self.past_key_value) == 0:
+        if len(self.past_key_value.value_cache) == 0:
             return torch.zeros(0)
         # DynamicCache stores as [batch, n_heads, seq_len, head_dim]
         # Transpose to [batch, seq_len, n_heads, head_dim]
-        return hf_cache_layer_kv(self.past_key_value, 0)[1].transpose(1, 2)
+        return self.past_key_value.value_cache[0].transpose(1, 2)
 
 
 # =============================================================================
@@ -403,29 +398,11 @@ def get_attention_weights_from_ref_model(
     Returns:
         (wqkv, wo, q_norm, k_norm, wqkv_bias) tensors in TTNN layout
     """
-    # Phi-3 / Phi-4 ship a FUSED qkv_proj (single Linear) instead of separate q/k/v projections.
-    # Split it into Q/K/V rows here so the rest of the pipeline is architecture-agnostic.
-    fused_qkv = hasattr(reference_attn, "qkv_proj") and not hasattr(reference_attn, "q_proj")
-    if fused_qkv:
-        cfg = reference_attn.config
-        _n_heads = cfg.num_attention_heads
-        _n_kv = getattr(cfg, "num_key_value_heads", _n_heads)
-        _hd = (
-            getattr(reference_attn, "head_dim", None) or getattr(cfg, "head_dim", None) or (cfg.hidden_size // _n_heads)
-        )
-        _q = _n_heads * _hd
-        _kv = _n_kv * _hd
-        qkv_w = reference_attn.qkv_proj.weight  # (n_heads*hd + 2*n_kv*hd, dim), order Q|K|V
-        wq_raw = qkv_w[:_q]  # (n_heads * head_dim, dim)
-        wk_raw = qkv_w[_q : _q + _kv]  # (n_kv_heads * head_dim, dim)
-        wv_raw = qkv_w[_q + _kv : _q + 2 * _kv]  # (n_kv_heads * head_dim, dim)
-        wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
-    else:
-        # Get raw weights from HF module
-        wq_raw = reference_attn.q_proj.weight  # (n_heads * head_dim, dim)
-        wk_raw = reference_attn.k_proj.weight  # (n_kv_heads * head_dim, dim)
-        wv_raw = reference_attn.v_proj.weight  # (n_kv_heads * head_dim, dim)
-        wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
+    # Get raw weights from HF module
+    wq_raw = reference_attn.q_proj.weight  # (n_heads * head_dim, dim)
+    wk_raw = reference_attn.k_proj.weight  # (n_kv_heads * head_dim, dim)
+    wv_raw = reference_attn.v_proj.weight  # (n_kv_heads * head_dim, dim)
+    wo_raw = reference_attn.o_proj.weight  # (dim, n_heads * head_dim)
 
     # Compute head_dim from weight shapes
     dim = wq_raw.shape[1]
@@ -488,7 +465,7 @@ def get_attention_weights_from_ref_model(
     # QKV bias (optional, e.g., for Qwen2/Qwen2.5 models)
     # Bias also needs the same chunking/concat pattern as weights
     wqkv_bias = None
-    if not fused_qkv and hasattr(reference_attn.q_proj, "bias") and reference_attn.q_proj.bias is not None:
+    if hasattr(reference_attn.q_proj, "bias") and reference_attn.q_proj.bias is not None:
         bq_raw = reference_attn.q_proj.bias  # (n_heads * head_dim,)
         bk_raw = reference_attn.k_proj.bias  # (n_kv_heads * head_dim,)
         bv_raw = reference_attn.v_proj.bias  # (n_kv_heads * head_dim,)
@@ -693,7 +670,7 @@ def test_attention_1d_happy_path_signature():
         assert param.default is inspect.Parameter.empty, f"{param_name} should be required (no default)"
 
 
-def test_attention_1d_resolve_requires_n_heads(expect_error):
+def test_attention_1d_resolve_requires_n_heads():
     """Test that _resolve_attention1d_config raises ValueError when n_heads is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -710,11 +687,11 @@ def test_attention_1d_resolve_requires_n_heads(expect_error):
         head_dim=128,
     )
 
-    with expect_error(ValueError, "n_heads must be provided"):
+    with pytest.raises(ValueError, match="n_heads must be provided"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_requires_n_kv_heads(expect_error):
+def test_attention_1d_resolve_requires_n_kv_heads():
     """Test that _resolve_attention1d_config raises ValueError when n_kv_heads is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -731,11 +708,11 @@ def test_attention_1d_resolve_requires_n_kv_heads(expect_error):
         head_dim=128,
     )
 
-    with expect_error(ValueError, "n_kv_heads must be provided"):
+    with pytest.raises(ValueError, match="n_kv_heads must be provided"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_requires_head_dim(expect_error):
+def test_attention_1d_resolve_requires_head_dim():
     """Test that _resolve_attention1d_config raises ValueError when head_dim is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -752,11 +729,11 @@ def test_attention_1d_resolve_requires_head_dim(expect_error):
         head_dim=None,  # Missing!
     )
 
-    with expect_error(ValueError, "head_dim must be provided"):
+    with pytest.raises(ValueError, match="head_dim must be provided"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_validates_token_budget(expect_error):
+def test_attention_1d_resolve_validates_token_budget():
     """Test that _resolve_attention1d_config raises ValueError when token budget is exceeded."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -776,11 +753,11 @@ def test_attention_1d_resolve_validates_token_budget(expect_error):
         max_seq_len=8192,  # 32 × 8192 = 262K > 128K
     )
 
-    with expect_error(ValueError, "Total token budget exceeded"):
+    with pytest.raises(ValueError, match="Total token budget exceeded"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_validates_token_budget_edge_case(expect_error):
+def test_attention_1d_resolve_validates_token_budget_edge_case():
     """Test that exactly 128K tokens is allowed but 128K+1 is not."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -818,7 +795,7 @@ def test_attention_1d_resolve_validates_token_budget_edge_case(expect_error):
         max_seq_len=128 * 1024 + 1,  # 128K + 1 tokens
     )
 
-    with expect_error(ValueError, "Total token budget exceeded"):
+    with pytest.raises(ValueError, match="Total token budget exceeded"):
         _resolve_attention1d_config(config_fail)
 
 
@@ -860,7 +837,7 @@ def test_attention_1d_resolve_kv_cache_tensor_passthrough():
     assert resolved.kv_cache[1] is mock_cache_v
 
 
-def test_attention_1d_resolve_rejects_sliding_window_with_paged(expect_error):
+def test_attention_1d_resolve_rejects_sliding_window_with_paged():
     """Test that _resolve_attention1d_config rejects sliding_window + paged_attention_config."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -881,7 +858,7 @@ def test_attention_1d_resolve_rejects_sliding_window_with_paged(expect_error):
         paged_attention_config=PagedAttentionConfig(block_size=64, max_num_blocks=2048),
     )
 
-    with expect_error(ValueError, "sliding_window"):
+    with pytest.raises(ValueError, match="sliding_window"):
         _resolve_attention1d_config(config)
 
 
@@ -903,7 +880,6 @@ QWEN25_72B = "Qwen/Qwen2.5-72B-Instruct"
 QWEN25_CODER_32B = "Qwen/Qwen2.5-Coder-32B-Instruct"
 DEEPSEEK_R1_14B = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
 QWEN3_32B = "Qwen/Qwen3-32B"
-PHI4 = "microsoft/phi-4"  # Phi3 architecture: fused qkv_proj, no bias, no q/k norm, GQA 40/10
 
 _slow = pytest.mark.slow
 
@@ -934,7 +910,7 @@ def _list_test_cases() -> list[pytest.param]:
         pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-128-8B"),
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-decode-32-8B"),
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-decode-32-11B"),
-        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.95, id="1x2-decode-32-Qwen2.5-7B", marks=pytest.mark.skip(reason="Disabled: see #45980")),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.95, id="1x2-decode-32-Qwen2.5-7B"),
         # Multi-device (1x8)
         pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-128-8B"),
         pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-decode-32-8B"),
@@ -1015,13 +991,6 @@ def _list_test_cases() -> list[pytest.param]:
         pytest.param((1, 2), 2048, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-2048-Mistral-7B", marks=_slow),
         pytest.param((1, 2), 4096, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-prefill-4096-Mistral-7B", marks=_slow),
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, MISTRAL_7B, 0.99, id="1x2-decode-32-Mistral-7B", marks=_slow),
-
-        # --- Phi-4 on N300 (1x2) --- fused qkv_proj split, GQA 40/10, head_dim 128, no bias/qk-norm.
-        # decode-32 is validated on N300 for both standard and paged SDPA-decode (the earlier
-        # num_output_cores limit for Phi-4's 10 KV heads no longer trips); batch-1 decode is
-        # additionally covered end-to-end by the M5 token-accuracy demo (97-99% top-1).
-        pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-prefill-128-Phi-4", marks=_slow),
-        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, PHI4, 0.99, id="1x2-decode-32-Phi-4", marks=_slow),
 
         # --- Qwen2-7B on N300 (1x2) ---
         # NOTE: Qwen2-7B has Q/K biases causing numerical precision issues
@@ -1276,11 +1245,9 @@ def test_attention_1d_vs_reference(
         with no_init_weights():
             # MllamaForConditionalGeneration uses _from_config (internal method) instead of from_config
             hf_model = MllamaForConditionalGeneration._from_config(hf_config, torch_dtype=torch.bfloat16)
-        # Mllama has layers directly at language_model.layers (not language_model.model.layers).
-        # transformers 5.x nests the text model under hf_model.model.language_model.
-        text_model = hf_model.language_model if hasattr(hf_model, "language_model") else hf_model.model.language_model
-        first_layer = text_model.layers[0]
-        rotary_emb = getattr(text_model, "rotary_emb", None)
+        # Mllama has layers directly at language_model.layers (not language_model.model.layers)
+        first_layer = hf_model.language_model.layers[0]
+        rotary_emb = getattr(hf_model.language_model, "rotary_emb", None)
     else:
         with no_init_weights():
             hf_model = AutoModelForCausalLM.from_config(hf_config, torch_dtype=torch.bfloat16)
@@ -2310,13 +2277,13 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
         logger.info(f"test_attention_1d_vs_reference_from_model_args: PASSED for mode={mode}, seq_len={seq_len}")
 
 
-def test_attention_1d_rejects_galaxy(expect_error):
+def test_attention_1d_rejects_galaxy():
     """Test that Attention1D.from_model_args rejects Galaxy/TG devices."""
     # Mock args with is_galaxy = True
     mock_args = MagicMock()
     mock_args.is_galaxy = True
 
-    with expect_error(ValueError, "cannot be used for Galaxy"):
+    with pytest.raises(ValueError, match="cannot be used for Galaxy"):
         Attention1D.from_model_args(
             mesh_device=MagicMock(),
             tt_ccl=MagicMock(),
