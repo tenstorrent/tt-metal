@@ -27,6 +27,8 @@ import ttnn
 #     Requires VV_TRACE_SEGMENT=0 (eager). Use with ``python -m tracy …`` then
 #     ``tt-perf-report <csv> --start-signpost start --end-signpost stop``.
 #   VV_PROFILE_SPEECH_FRAME_EXIT=1 — stop generate() right after that profiled frame.
+#   VV_TRACE_BREAKDOWN=1 — per traced steady frame, log the wall split (dispatch / device-sync /
+#     audio-D2H / token-D2H). Adds a synchronize_device per frame, so timing only (not for perf runs).
 
 
 def _vv_profile_enabled() -> bool:
@@ -279,7 +281,12 @@ class TTVibeVoiceGenerator:
         self._sf_noise: Optional[ttnn.Tensor] = None
         self._sf_t_tensors: Optional[list] = None
         self._sf_audio_out: Optional[ttnn.Tensor] = None
-        self._sf_logits_out: Optional[ttnn.Tensor] = None
+        self._sf_tok_out: Optional[ttnn.Tensor] = None  # in-trace argmax LOCAL index (persistent)
+        # Constrained-decode lm_head subset: only the selectable tokens (sorted ascending so argmax
+        # tie-breaking matches full-vocab argmax).  Replaces the full lm_head + full-vocab
+        # add-mask + full-vocab argmax with a [hidden×N] matmul + N-wide argmax under trace.
+        self._sf_valid_ids_sorted: Optional[List[int]] = None
+        self._sf_lm_head_valid: Optional[ttnn.Tensor] = None
 
     _SF_WARMUP = 2
 
@@ -665,6 +672,9 @@ class TTVibeVoiceGenerator:
             # CFG-batched extra state: loop-carried neg hidden + 2-stream self-advancing position.
             self._sf_neg_hidden_buf = _z([1, 1, 1, H], ttnn.float32, ttnn.TILE_LAYOUT)
             self._sf_cur_pos2 = _z([2], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            # Constrained-decode lm_head subset (sorted valid ids → argmax tie-break parity).
+            self._sf_valid_ids_sorted = sorted(self.valid_token_ids)
+            self._sf_lm_head_valid = lm.build_lm_head_subset(self._sf_valid_ids_sorted)
             self._sf_noise = _z([1, 1, 1, 64], ttnn.bfloat16, ttnn.TILE_LAYOUT)
             self.scheduler.set_timesteps(self.num_diffusion_steps)
             self._sf_t_tensors = [
@@ -722,7 +732,9 @@ class TTVibeVoiceGenerator:
                 # ONE batch-2 forward: row0 = positive (fused), row1 = negative (speech_diffusion,
                 # pipelined for the NEXT frame).  RoPE + positions driven by the device cur_pos2.
                 e2 = ttnn.concat([fused, self._sf_neg_diff], dim=2)  # [1,1,2,H]
-                logits, hidden2 = lm.forward_decode_batched2_dev_rope(e2, self._sf_cur_pos2, kv_comb)
+                logits, hidden2 = lm.forward_decode_batched2_dev_rope(
+                    e2, self._sf_cur_pos2, kv_comb, lm_head_w=self._sf_lm_head_valid
+                )
                 ttnn.copy(
                     input_a=ttnn.slice(hidden2, [0, 0, 0, 0], [1, 1, 1, H], memory_config=ttnn.DRAM_MEMORY_CONFIG),
                     input_b=self._sf_hidden_buf,
@@ -732,14 +744,20 @@ class TTVibeVoiceGenerator:
                     input_b=self._sf_neg_hidden_buf,
                 )
                 ttnn.plus_one(self._sf_cur_pos2)  # advances both [pos, neg] by 1
-                return audio, logits
-            logits, new_hidden = lm.forward_decode_traced_embeds_dev_rope(
-                fused, self._sf_pos_pos, kv_pos, return_last_hidden=True
-            )
-            ttnn.copy(input_a=new_hidden, input_b=self._sf_hidden_buf)  # loop-carry on device
-            ttnn.plus_one(self._sf_pos_pos)
-            ttnn.plus_one(self._sf_neg_pos)
-            return audio, logits
+            else:
+                logits, new_hidden = lm.forward_decode_traced_embeds_dev_rope(
+                    fused, self._sf_pos_pos, kv_pos, return_last_hidden=True, lm_head_w=self._sf_lm_head_valid
+                )
+                ttnn.copy(input_a=new_hidden, input_b=self._sf_hidden_buf)  # loop-carry on device
+                ttnn.plus_one(self._sf_pos_pos)
+                ttnn.plus_one(self._sf_neg_pos)
+            # In-trace CONSTRAINED greedy argmax: logits already cover only the selectable tokens
+            # (lm_head subset), so no full-vocab mask/argmax — just argmax over the N columns. The
+            # result is a LOCAL index into _sf_valid_ids_sorted; the caller maps it to a token id.
+            # Deterministic → numerically identical to the eager full-vocab masked argmax, but
+            # removes the full lm_head + full-vocab add + full-vocab argmax (~6 ms/frame).
+            tok = ttnn.argmax(logits, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            return audio, tok
 
         if self._sf_tid is None:
             # First frame-0 after a (re)capture: warmup (eager, compiles + allocates conv caches),
@@ -748,7 +766,7 @@ class TTVibeVoiceGenerator:
             for _ in range(self._SF_WARMUP):
                 _frame()
             tid = ttnn.begin_trace_capture(dev, cq_id=0)
-            self._sf_audio_out, self._sf_logits_out = _frame()
+            self._sf_audio_out, self._sf_tok_out = _frame()
             ttnn.end_trace_capture(dev, tid, cq_id=0)
             self._sf_tid = tid
             # RESET: rewind positions, re-seed hidden + speech_start embed, and zero the (now
@@ -758,12 +776,12 @@ class TTVibeVoiceGenerator:
             self._sf_zero_conv()
             ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
             _vv_debug("segment_frame: captured + reset")
-            return self._sf_audio_out, self._sf_logits_out
+            return self._sf_audio_out, self._sf_tok_out
 
         if seg_frame_idx == 0:
             self._sf_zero_conv()  # subsequent-segment reset (positions/hidden already rewound above)
         ttnn.execute_trace(dev, self._sf_tid, cq_id=0, blocking=False)
-        return self._sf_audio_out, self._sf_logits_out
+        return self._sf_audio_out, self._sf_tok_out
 
     def _post_diffusion_embeds(self, speech_latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Diffusion latent → (fused next-step embed, current audio chunk)."""
@@ -1098,18 +1116,37 @@ class TTVibeVoiceGenerator:
                 diffusion_frames += 1
                 noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
                 start_pos = prefill_len + step
+                _bd = os.environ.get("VV_TRACE_BREAKDOWN", "0") == "1" and _sf_replay
+                _b0 = time.perf_counter() if _bd else None
                 with prof.section("segment_frame"):
-                    audio_chunk, logits = self._run_segment_frame_traced(
+                    # Constrained argmax is folded INTO the trace: the second return value is the
+                    # LOCAL token index (into _sf_valid_ids_sorted), not logits.  D2H just the scalar.
+                    audio_chunk, tok_tt = self._run_segment_frame_traced(
                         seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg, kv_comb=kv_comb
                     )
+                if _bd:
+                    _b_dispatch = time.perf_counter()
+                    ttnn.synchronize_device(device)
+                    _b_sync = time.perf_counter()
                 neg_prev_diffusion_token = current_token
                 _emit_audio(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))  # syncs frame
-                with prof.section("token_constraint"):
-                    logits = ttnn.add(
-                        logits, self._token_constraint_mask(logits.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
-                    )
+                if _bd:
+                    _b_audio = time.perf_counter()
                 with prof.section("argmax"):
-                    next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)  # syncs frame (D2H)
+                    _local_idx = int(ttnn.to_torch(tok_tt).reshape(-1)[-1].item())  # syncs frame (D2H)
+                    next_token = self._sf_valid_ids_sorted[_local_idx]
+                if _bd:
+                    _b_end = time.perf_counter()
+                    _vv_debug(
+                        "TRACE_BD ms: dispatch=%.2f dev_sync=%.2f audio_d2h=%.2f tok_d2h=%.2f total=%.2f"
+                        % (
+                            (_b_dispatch - _b0) * 1e3,
+                            (_b_sync - _b_dispatch) * 1e3,
+                            (_b_audio - _b_sync) * 1e3,
+                            (_b_end - _b_audio) * 1e3,
+                            (_b_end - _b0) * 1e3,
+                        )
+                    )
                 if _sf_replay:
                     _steady_decode_s += time.perf_counter() - _frame_t0
                     _steady_decode_frames += 1

@@ -209,6 +209,21 @@ gather bf16 device RoPE. Large-prefill (13249 tok / ~26k ctx) trace runs clean a
 baseline). Single-segment validated on-device; multi-segment path implemented correct-by-construction
 (reuses the existing release/recapture + the eager seed) — validate on a longer multi-speaker render.
 
+### STATUS: traced-frame constrained-decode lm_head (deployed path) + measured
+Per-frame breakdown (`VV_TRACE_BREAKDOWN=1`) showed the batched trace steady frame = **32.5 ms device
++ 5.2 ms eager token_constraint+argmax over the FULL 151936 vocab** (audio D2H negligible at 0.3 ms).
+The greedy decode is **constrained to ~5 selectable tokens** (`valid_token_ids`), so computing full-vocab
+logits + masking to −inf + arg-maxing 151936 to pick among 5 is pure waste. Fix: `build_lm_head_subset`
+slices the lm_head weight to just those columns (sorted asc → argmax tie-break parity), the batched
+forward projects `hidden @ [1536×N]` (auto config), and a **N-wide argmax folded INTO the trace** yields
+a LOCAL index the host maps back via `valid_ids_sorted`. Removes the full lm_head (~1.2 ms) + full-vocab
+mask-add + full-vocab argmax at once. **Steady trace 26.3 → 31.3 tok/s (38.0 → 32.0 ms/frame device≈wall,
+−16%); from the separate-cache baseline 21.1 → 31.3 tok/s (47.2 → 32.0 ms, −32%, +48% tok/s).**
+**Correctness: whole-clip audio BIT-IDENTICAL** (RMS 0.0, PCC 1.0) — audio derives from `hidden` (computed
+before lm_head); only the token-selection projection shrank, and the constrained argmax is exact.
+`VV_CFG_BATCHED=0` fallback also uses the subset (24.3 tok/s, bit-identical). Lesson: **a constrained/
+small-vocab greedy decode should project + argmax only the selectable columns — never the full vocab.**
+
 ### batched decode CORE (3de97d74f4f)
 `alloc_kv_cache_batched2`, `_rope_rows_from_pos_int2`, `_attention_decode_batched2`,
 `_transformer_layer_batched2`, `forward_decode_batched2` — all in ttnn_vibevoice_lm.py, inert

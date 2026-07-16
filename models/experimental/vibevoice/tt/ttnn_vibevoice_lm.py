@@ -1156,13 +1156,15 @@ class TTVibeVoiceLM:
         kv_cache: KVCache,
         return_last_hidden: bool = False,
         need_logits: bool = True,
+        lm_head_w: Optional[ttnn.Tensor] = None,  # subset weight [1,1,hidden,N] for a constrained decode
     ) -> Tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
         """Capturable single-token decode over an already-embedded input [1,1,1,hidden].
 
         ``need_logits=False`` skips the lm_head projection (1536x151936, ~1.85 ms) and
         returns logits=None — used by the negative-CFG forward, whose logits are discarded
         (only ``last_hidden`` feeds the diffusion condition; the reference likewise runs the
-        negative pass with logits_to_keep=0)."""
+        negative pass with logits_to_keep=0).  ``lm_head_w`` (a column-subset weight) projects only
+        the selectable tokens for a constrained decode (tiny N → auto config)."""
         cfg = self.cfg
         x = inputs_embeds
         if x.dtype == ttnn.float32:
@@ -1179,13 +1181,21 @@ class TTVibeVoiceLM:
         last_hidden = ttnn.typecast(x, ttnn.float32) if return_last_hidden else None
         logits = None
         if need_logits:
-            logits = ttnn.linear(
-                _matmul_in_l1(x, True),
-                self.w.lm_head_w,
-                compute_kernel_config=_HIFI4_MATMUL,
-                program_config=_LM_HEAD_DECODE_PROGCFG,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
+            if lm_head_w is not None:
+                logits = ttnn.linear(
+                    _matmul_in_l1(x, True),
+                    lm_head_w,
+                    compute_kernel_config=_HIFI4_MATMUL,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            else:
+                logits = ttnn.linear(
+                    _matmul_in_l1(x, True),
+                    self.w.lm_head_w,
+                    compute_kernel_config=_HIFI4_MATMUL,
+                    program_config=_LM_HEAD_DECODE_PROGCFG,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
         return logits, last_hidden
 
     def _rope_rows_from_pos(self, cur_pos: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -1244,13 +1254,14 @@ class TTVibeVoiceLM:
         kv_cache: KVCache,
         return_last_hidden: bool = False,
         need_logits: bool = True,
+        lm_head_w: Optional[ttnn.Tensor] = None,
     ) -> Tuple[Optional[ttnn.Tensor], Optional[ttnn.Tensor]]:
         """Like forward_decode_traced_embeds but the RoPE rows are gathered ON DEVICE from
         cur_pos (bf16) instead of supplied as host-written fp32 rows — so the whole step,
         including RoPE-row selection, is driven by the device position tensor (llama pattern)."""
         cos_row, sin_row = self._rope_rows_from_pos(cur_pos)
         return self.forward_decode_traced_embeds(
-            inputs_embeds, cos_row, sin_row, cur_pos, kv_cache, return_last_hidden, need_logits
+            inputs_embeds, cos_row, sin_row, cur_pos, kv_cache, return_last_hidden, need_logits, lm_head_w=lm_head_w
         )
 
     # ── CFG-batched decode (batch=2 streams, row-stacked M) ─────────────────────
@@ -1330,6 +1341,24 @@ class TTVibeVoiceLM:
         x2 = ttnn.add(x2, ffn_out, memory_config=res_mc)
         return x2
 
+    def build_lm_head_subset(self, token_ids) -> ttnn.Tensor:
+        """Return a [1,1,hidden,N] tiled lm_head weight holding ONLY the columns for ``token_ids``
+        (in the given order).  For a constrained greedy decode where only a handful of tokens are
+        selectable, projecting hidden by this subset and taking argmax over the N logits is
+        identical to argmax over the full vocab with all other tokens masked to −inf — but replaces
+        a [hidden×151936] matmul + full-vocab add + full-vocab argmax with a [hidden×N] matmul +
+        N-wide argmax. Pass token_ids sorted ascending so argmax tie-breaking matches the full-vocab
+        argmax exactly."""
+        full = ttnn.to_torch(self.w.lm_head_w).to(torch.float32)  # [1,1,hidden,vocab]
+        sub = full[:, :, :, list(token_ids)].contiguous()  # [1,1,hidden,N]
+        return ttnn.as_tensor(
+            sub,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def forward_decode_batched2(
         self,
         embeds2: ttnn.Tensor,  # [1, 1, 2, hidden]  (row0 pos, row1 neg)
@@ -1337,10 +1366,12 @@ class TTVibeVoiceLM:
         sin_rows: ttnn.Tensor,
         cur_pos: ttnn.Tensor,  # [2] int32
         kv_cache: KVCache,  # combined [2, n_kv, maxS, hd]
+        lm_head_w: Optional[ttnn.Tensor] = None,  # subset weight [1,1,hidden,N] for a constrained decode
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """One batched CFG decode step over both streams.
 
-        Returns (logits, hidden2): logits = lm_head on ROW 0 (positive) only [1,1,1,vocab];
+        Returns (logits, hidden2): logits = lm_head on ROW 0 (positive) only — [1,1,1,vocab] with the
+        full head, or [1,1,1,N] when ``lm_head_w`` is a column-subset weight (constrained decode);
         hidden2 = both streams' final hidden [1,1,2,hidden] fp32 (row0 pos, row1 neg).
         """
         cfg = self.cfg
@@ -1357,13 +1388,22 @@ class TTVibeVoiceLM:
         hidden2 = ttnn.typecast(x, ttnn.float32)
         # lm_head on the positive row only (row 1's logits are discarded, like the reference neg pass)
         x_pos = ttnn.slice(x, [0, 0, 0, 0], [1, 1, 1, cfg.hidden_size], memory_config=ttnn.L1_MEMORY_CONFIG)
-        logits = ttnn.linear(
-            _matmul_in_l1(x_pos, True),
-            self.w.lm_head_w,
-            compute_kernel_config=_HIFI4_MATMUL,
-            program_config=_LM_HEAD_DECODE_PROGCFG,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        if lm_head_w is not None:
+            # Constrained decode: project only the selectable-token columns (tiny N → auto config).
+            logits = ttnn.linear(
+                _matmul_in_l1(x_pos, True),
+                lm_head_w,
+                compute_kernel_config=_HIFI4_MATMUL,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        else:
+            logits = ttnn.linear(
+                _matmul_in_l1(x_pos, True),
+                self.w.lm_head_w,
+                compute_kernel_config=_HIFI4_MATMUL,
+                program_config=_LM_HEAD_DECODE_PROGCFG,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         return logits, hidden2
 
     def forward_decode_batched2_dev_rope(
@@ -1371,13 +1411,14 @@ class TTVibeVoiceLM:
         embeds2: ttnn.Tensor,  # [1, 1, 2, hidden]  (row0 pos, row1 neg)
         cur_pos: ttnn.Tensor,  # [2] int32 device tensor (self-advancing)
         kv_cache: KVCache,  # combined [2, n_kv, maxS, hd]
+        lm_head_w: Optional[ttnn.Tensor] = None,  # subset weight for a constrained decode
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Like ``forward_decode_batched2`` but RoPE rows are gathered ON DEVICE from ``cur_pos``
         (llama pattern) instead of supplied as host-written rows — so the whole batched CFG step,
         including RoPE-row selection, is driven by the device position tensor and is trace-safe
         (position advances via ``plus_one`` on ``cur_pos`` after the call)."""
         cos_rows, sin_rows = self._rope_rows_from_pos2(cur_pos)
-        return self.forward_decode_batched2(embeds2, cos_rows, sin_rows, cur_pos, kv_cache)
+        return self.forward_decode_batched2(embeds2, cos_rows, sin_rows, cur_pos, kv_cache, lm_head_w=lm_head_w)
 
     def prefill(
         self,
