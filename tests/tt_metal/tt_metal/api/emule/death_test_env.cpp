@@ -21,9 +21,9 @@
 // abort is detected. Slower per death test (a re-exec + device init), but correct.
 //
 // Registered as a global test environment (SetUp runs after InitGoogleTest, so it
-// can't be clobbered by flag parsing) and compiled ONLY into the emule build (see
-// the TT_METAL_USE_EMULE block in sources.cmake), so non-emule builds are
-// unaffected. See docs/ASAN.md "Death tests under the fiber engine".
+// can't be clobbered by flag parsing) and compiled ONLY into the emule build (wired
+// via emule/CMakeLists.txt's target_sources onto unit_tests_api_lib), so non-emule
+// builds are unaffected. See docs/ASAN.md "Death tests under the fiber engine".
 
 #include <gtest/gtest.h>
 

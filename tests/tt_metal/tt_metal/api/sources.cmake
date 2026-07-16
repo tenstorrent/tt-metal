@@ -86,10 +86,6 @@ if(TT_METAL_USE_EMULE)
     list(
         APPEND
         UNIT_TESTS_API_SOURCES
-        # Global gtest env: forces "threadsafe" death-test style so the EXPECT_DEATH
-        # tests below re-exec instead of fork()ing a live fiber-pool process (which
-        # hangs the forked child). See emule_death_test_env.cpp.
-        emule_death_test_env.cpp
         emule/test_alignment_writes.cpp
         emule/test_cb_leak.cpp
         emule/test_cb_pages.cpp
