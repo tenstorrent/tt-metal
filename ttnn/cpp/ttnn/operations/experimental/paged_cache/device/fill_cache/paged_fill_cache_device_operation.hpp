@@ -35,8 +35,6 @@ struct PagedFillCacheDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     // batch_idx_fallback and noop are excluded from the program hash (so calls differing only in
     // them cache-hit). Of these only batch_idx_fallback is genuinely dynamic: in the scalar-fallback
     // path (no batch_idx_tensor) it is baked into a writer runtime arg, so it must be re-applied to
