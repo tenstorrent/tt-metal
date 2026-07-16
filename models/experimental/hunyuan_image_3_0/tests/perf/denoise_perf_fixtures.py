@@ -308,14 +308,18 @@ def _run_backbone(rt: DenoisePerfRuntime, seq: ttnn.Tensor) -> ttnn.Tensor:
 
 
 def _run_final_layer(rt: DenoisePerfRuntime, hidden: ttnn.Tensor, th: int, tw: int) -> ttnn.Tensor:
-    img_out = ttnn.slice(
+    # Handoff lives on UNetUp so Tracy and pipeline share one slice→reshape path.
+    # Keep hidden alive across timed iters (fixtures own its lifetime).
+    pred, _, _ = rt.final_layer.forward_from_hidden(
         hidden,
-        [0, rt.img_slice.start, 0],
-        [rt.batch, rt.img_slice.stop, rt.hidden_size],
+        rt.t_emb2,
+        th,
+        tw,
+        img_slice=rt.img_slice,
+        batch=rt.batch,
+        n_img=rt.n_img,
+        deallocate_hidden=False,
     )
-    img_out = ttnn.reshape(img_out, [1, 1, rt.n_img, rt.hidden_size])
-    pred, _, _ = rt.final_layer(img_out, rt.t_emb2, th, tw, B=rt.batch)
-    ttnn.deallocate(img_out, force=False)
     return pred
 
 
