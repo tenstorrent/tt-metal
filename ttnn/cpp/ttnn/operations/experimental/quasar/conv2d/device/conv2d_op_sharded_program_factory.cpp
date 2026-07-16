@@ -1191,6 +1191,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             };
         } else {
             dfb = make_dfb(DFB_OUT, Conv2dCb::OUT);
+            // QSR OUT headroom: match the +1 tile-row of shard headroom compute_output_specs adds to the
+            // borrowed output on Quasar. OUT is a compute self-loop (degenerate consumer that never pops), so
+            // the Quasar DFB credit model blocks the producer at exact-fill; +1 entry gives the ring the free
+            // slot so the full output's last reserve/push completes. Fits within the padded shard (+1 tile-row);
+            // logical output unchanged. Gated to the Quasar unpack-to-dest path (WH/BH + non-flag unaffected).
+            if (arch_is_quasar && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) {
+                dfb.num_entries += 1;
+            }
         }
         dfb.borrowed_from = TP_OUTPUT;
         spec.dataflow_buffers.push_back(std::move(dfb));

@@ -94,8 +94,16 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
 
     auto output_layout = args.untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (args.memory_config.is_sharded()) {
+        // QSR OUT headroom: on Quasar the conv OUT is a compute self-loop DFB (producer + degenerate consumer
+        // that never pops), and the Quasar DFB credit model blocks the producer at exact-fill (the ring keeps
+        // ~1 slot free). Add 1 tile-row of shard headroom (matched by +1 to the OUT DFB num_entries in the
+        // factory) so the full per-core output fits below the fill threshold and the last reserve/push doesn't
+        // deadlock. The LOGICAL output_shape is unchanged — the extra row is padding (dropped by to_torch /
+        // downstream logical reads). Gated to the Quasar unpack-to-dest conv path; WH/BH + non-flag unaffected.
+        const uint32_t out_headroom_ntiles = (std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) ? 1u : 0u;
         std::array<uint32_t, 2> shard_shape = {
-            args.parallelization_config.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT,
+            (args.parallelization_config.per_core_out_matrix_height_ntile + out_headroom_ntiles) *
+                tt::constants::TILE_HEIGHT,
             args.parallelization_config.per_core_out_matrix_width_ntile * tt::constants::TILE_WIDTH};
         auto shard_grid = args.memory_config.shard_spec().value().grid;
         auto shard_spec =
