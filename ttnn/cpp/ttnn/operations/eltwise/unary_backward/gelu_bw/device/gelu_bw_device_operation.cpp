@@ -16,6 +16,41 @@ bool is_supported_dtype(DataType dtype) {
     return dtype == DataType::BFLOAT16 || dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT8_B ||
            dtype == DataType::BFLOAT4_B;
 }
+
+// The gelu_bw device operation expects interleaved, tile-layout, on-device tensors.
+void validate_tensor_contract(const Tensor& tensor, const std::string& name) {
+    TT_FATAL(
+        is_supported_dtype(tensor.dtype()),
+        "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). {} data "
+        "type: {}",
+        name,
+        static_cast<int>(tensor.dtype()));
+
+    TT_FATAL(
+        tensor.storage_type() == StorageType::DEVICE,
+        "GELU_BW operation requires {} to be on Device. Storage type: {}",
+        name,
+        static_cast<int>(tensor.storage_type()));
+
+    TT_FATAL(
+        tensor.buffer() != nullptr,
+        "GELU_BW operation requires {} to be allocated in a buffer on the device. Buffer is null.",
+        name);
+
+    TT_FATAL(!tensor.is_sharded(), "GELU_BW operation does not support sharded {}.", name);
+
+    TT_FATAL(
+        tensor.layout() == Layout::TILE,
+        "GELU_BW operation requires {} to be in Tile layout. Layout: {}",
+        name,
+        static_cast<int>(tensor.layout()));
+
+    TT_FATAL(
+        tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "GELU_BW operation requires {} to use Interleaved memory layout. Memory layout: {}",
+        name,
+        static_cast<int>(tensor.memory_config().memory_layout()));
+}
 }  // namespace
 
 void GeluBwDeviceOperation::validate_on_program_cache_miss(
@@ -35,11 +70,13 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         "type: {}",
         static_cast<int>(input_tensor.dtype()));
 
+    validate_tensor_contract(grad_output_tensor, "Grad output");
     TT_FATAL(
-        is_supported_dtype(grad_output_tensor.dtype()),
-        "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). Grad output "
-        "data type: {}",
-        static_cast<int>(grad_output_tensor.dtype()));
+        grad_output_tensor.logical_shape() == input_tensor.logical_shape(),
+        "GELU_BW operation requires grad_output and input to have the same shape. Grad output shape: {}, Input shape: "
+        "{}",
+        grad_output_tensor.logical_shape(),
+        input_tensor.logical_shape());
 
     if (preallocated_input_grad.has_value()) {
         out_memory_config = preallocated_input_grad->memory_config();
@@ -82,21 +119,15 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.memory_config().memory_layout()));
 
     if (preallocated_input_grad.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_input_grad.value().logical_shape();
-        TT_FATAL(
-            preallocated_output_shape == computed_output_shape,
-            "When preallocated output tensor is used, GELU_BW operation requires its shape to match the computed "
-            "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
-            computed_output_shape,
-            preallocated_output_shape);
+        const auto& preallocated = preallocated_input_grad.value();
+        validate_tensor_contract(preallocated, "Preallocated input grad");
 
         TT_FATAL(
-            is_supported_dtype(preallocated_input_grad.value().dtype()),
-            "GELU_BW operation only supports floating-point dtypes (bfloat16, float32, bfloat8_b, bfloat4_b). "
-            "Preallocated input grad "
-            "data type: {}",
-            static_cast<int>(preallocated_input_grad.value().dtype()));
+            preallocated.logical_shape() == input_tensor.logical_shape(),
+            "When a preallocated output tensor is used, GELU_BW operation requires its shape to match the input shape. "
+            "Input shape: {}, Preallocated output shape: {}",
+            input_tensor.logical_shape(),
+            preallocated.logical_shape());
     }
 }
 

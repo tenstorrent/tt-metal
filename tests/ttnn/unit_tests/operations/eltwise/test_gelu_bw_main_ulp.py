@@ -494,8 +494,8 @@ def test_gelu_bw_bf16_exhaustive(device):
 
     sign_z = (z_bits >> 15) & 1
     sign_tt = (tt_bits >> 15) & 1
-    z_ord = torch.where(sign_z == 0, z_bits + 0x8000, 0x8000 - z_bits)
-    tt_ord = torch.where(sign_tt == 0, tt_bits + 0x8000, 0x8000 - tt_bits)
+    z_ord = torch.clamp((z_bits & 0x7FFF) - 0x7F, min=0) * torch.where(sign_z == 0, 1, -1)
+    tt_ord = torch.clamp((tt_bits & 0x7FFF) - 0x7F, min=0) * torch.where(sign_tt == 0, 1, -1)
     ulp_dist = (z_ord - tt_ord).abs()
 
     max_ulp = ulp_dist.max().item()

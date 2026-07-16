@@ -59,7 +59,7 @@ def test_bw_gelu_opt_output(input_shapes, approximate, atol_value, device):
     tt_output_tensor_on_device = [input_grad]
 
     golden_function = ttnn.get_golden_function(ttnn.gelu_bw)
-    golden_tensor = golden_function(grad_data, in_data)
+    golden_tensor = golden_function(grad_data, in_data, approximate=approximate)
 
     assert torch.allclose(
         golden_tensor[0].to(torch.bfloat16), ttnn.to_torch(tt_output_tensor_on_device[0]), atol=atol_value
@@ -95,7 +95,7 @@ def test_bw_gelu_program_cache_regression(device):
 
         tt_out = ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)
 
-        golden_tensor = golden_function(grad_data, in_data)
+        golden_tensor = golden_function(grad_data, in_data, approximate=approximate)
         assert compare_pcc(
             tt_out, golden_tensor, pcc=0.999
         ), f"gelu_bw(approximate={approximate!r}) mismatch on cache-enabled run (seed={seed})"
