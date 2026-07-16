@@ -564,6 +564,9 @@ def profile_model() -> dict:
         "tokens_per_sec_per_user": prof.get("tokens_per_sec_per_user"),
         "tokens_per_sec": prof.get("tokens_per_sec"),
         "decode_status": prof.get("decode_status"),
+        # repeat_prefill (AR decode, no cached decode_step/KV-cache) -> propose the
+        # conditional structural-decode lever; null otherwise so it never fires elsewhere.
+        "suggested_lever": ("structural-decode" if prof.get("decode_status") == "repeat_prefill" else None),
         "roofline_target_ms": target,
         "at_floor": at_floor,
         "residual_gap_ms": residual_gap,
