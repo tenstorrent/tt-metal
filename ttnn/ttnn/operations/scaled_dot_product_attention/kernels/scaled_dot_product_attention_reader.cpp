@@ -104,10 +104,14 @@ void kernel_main() {
         const uint32_t mask_base = (b * mask_H + mask_head) * Sq_t;
 
         for (uint32_t j = 0; j < n_kv_chunks; ++j) {
-            // K chunk: (Skv_chunk_t x Dt) tiles, row-major (skv, d)
-            for (uint32_t skv = 0; skv < Skv_chunk_t; ++skv) {
-                const uint32_t skv_g = j * Skv_chunk_t + skv;
-                for (uint32_t d = 0; d < Dt; ++d) {
+            // K chunk for Q.K^T: the transposed matmul reads in1 in K-major block
+            // order (in1[k=d][n=skv] at d*Skv_chunk_t + skv), so lay K out D-major
+            // (outer d, inner skv). The transpose flag flips each 32x32 tile's
+            // contents; it does NOT reorder the block indices. DRAM page for K
+            // tile (skv, d) is still (kv_base + skv_g)*Dt + d.
+            for (uint32_t d = 0; d < Dt; ++d) {
+                for (uint32_t skv = 0; skv < Skv_chunk_t; ++skv) {
+                    const uint32_t skv_g = j * Skv_chunk_t + skv;
                     cb_reserve_back(cb_k_in, 1);
                     noc_async_read_tile((kv_base + skv_g) * Dt + d, k_acc, get_write_ptr(cb_k_in));
                     noc_async_read_barrier();

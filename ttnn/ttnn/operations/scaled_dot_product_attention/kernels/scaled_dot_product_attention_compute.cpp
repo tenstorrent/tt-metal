@@ -142,13 +142,20 @@ void kernel_main() {
                 ckl::copy<cb_corr, cb_row_max>(EltwiseShape::tiles(Sq_chunk_t));  // m = chunk_max
             } else {
                 // m_new = max(chunk_max, m_old) -> cb_m_new (m_old held for alpha).
+                // The held operand is walked with Block indexing (absolute base+i):
+                // Scalar+HeldStream never advances the front (no pop), so it would
+                // re-read tile 0 for every Sq_chunk_t>1 iteration.
                 ckl::binary_sfpu<
                     ckl::BinaryMax<>,
                     cb_corr,
                     cb_row_max,
                     cb_m_new,
                     InputLifecycle::Streaming,
-                    InputLifecycle::HeldStream>(EltwiseShape::tiles(Sq_chunk_t));
+                    InputLifecycle::HeldBulk,
+                    OutputLifecycle::Streaming,
+                    ckl::PackTileReconfig::Output,
+                    OperandKind::Scalar,
+                    OperandKind::Block>(EltwiseShape::tiles(Sq_chunk_t));
                 // alpha = exp(m_old - m_new) -> cb_corr (m_old popped, m_new held).
                 ckl::eltwise_chain(
                     EltwiseShape::tiles(Sq_chunk_t),
@@ -158,7 +165,11 @@ void kernel_main() {
                         ckl::BinaryFpuOp::Sub,
                         BroadcastDim::None,
                         InputLifecycle::Streaming,
-                        InputLifecycle::HeldStream>{},
+                        InputLifecycle::HeldBulk,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        Dst::D0,
+                        OperandKind::Scalar,
+                        OperandKind::Block>{},
                     ckl::Exp<>{},
                     ckl::PackTile<cb_corr, OutputLifecycle::Streaming>{});
                 // m = m_new.
@@ -193,14 +204,20 @@ void kernel_main() {
                     cb_row_sum,
                     ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, Skv_chunk_t, Sq_chunk_t));
             } else {
-                // l = alpha * l (alpha held for phase 8).
+                // l = alpha * l (alpha held for phase 8; Block indexing walks the
+                // held alpha tiles without popping — see phase-5 note).
                 ckl::mul<
                     cb_row_sum,
                     cb_corr,
                     cb_row_sum,
                     BroadcastDim::None,
                     InputLifecycle::Streaming,
-                    InputLifecycle::HeldStream>(EltwiseShape::tiles(Sq_chunk_t));
+                    InputLifecycle::HeldBulk,
+                    OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    OperandKind::Scalar,
+                    OperandKind::Block>(EltwiseShape::tiles(Sq_chunk_t));
                 // chunk_sum -> cb_sum_chunk (cb_exp held for PV).
                 ckl::reduce<
                     ckernel::PoolType::SUM,
