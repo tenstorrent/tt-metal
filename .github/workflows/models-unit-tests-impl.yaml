@@ -36,11 +36,11 @@ on:
         description: "Filtered matrix of exabox multihost legs that ran."
         value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
 
-# The multihost job provisions exabox allocations via the ttop composite actions, which
-# authenticate to the cluster over OIDC.
+# Default to read-only. Only the multihost job needs id-token (ttop OIDC), which it grants on the
+# job itself. Single-host legs pull the dev container image, so packages: read is the default.
 permissions:
-  id-token: write
   contents: read
+  packages: read
 
 jobs:
   load-test-matrix:
@@ -220,6 +220,10 @@ jobs:
   models-unit-tests-multihost:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}
+    # Only this job needs OIDC (ttop cluster auth); scoped here rather than workflow-wide.
+    permissions:
+      contents: read
+      id-token: write
     name: ${{ matrix.test-group.name }}
     env:
       OMPI_MCA_btl_tcp_if_include: ens5f0np0
@@ -361,7 +365,7 @@ jobs:
           fi
           # Include pytest (+ pytest-timeout, needed by the --timeout flag) so test entries can
           # run pytest in the worker venv, which is otherwise runtime-only.
-          mpirun --pernode uv pip install "${ttnn_wheels[@]}" pytest pytest-timeout
+          mpirun --pernode uv pip install "${ttnn_wheels[@]}" pytest==9.0.3 pytest-timeout==2.4.0
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
         working-directory: /tmp
@@ -480,7 +484,7 @@ jobs:
           allocationName:  ${{ steps.names.outputs.alloc }}
           namespace: ttop-ci
 
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+      - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}

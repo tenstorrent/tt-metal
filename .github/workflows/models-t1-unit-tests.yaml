@@ -82,7 +82,6 @@ on:
 permissions:
   packages: write
   contents: write
-  id-token: write # required by the multihost job's ttop cluster auth (models-unit-tests-impl)
 
 run-name: "(Tier 1) Models Unit${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
@@ -130,6 +129,12 @@ jobs:
   models-unit-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
+    # OIDC only on this caller (the reusable workflow's multihost job needs ttop auth), not
+    # workflow-wide. Job-level permissions replace inherited defaults, so restate what tests need.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

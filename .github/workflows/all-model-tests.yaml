@@ -90,7 +90,6 @@ on:
 permissions:
   packages: write
   contents: write
-  id-token: write # required by the multihost job's ttop cluster auth (models-unit-tests-impl)
 
 jobs:
   # ── Preflight: resolve SKUs and check which combos have tests ────
@@ -309,6 +308,11 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-1 && inputs.run-unit-tests && needs.preflight.outputs.has-t1-unit == 'true' }}
     secrets: inherit
+    # OIDC only on the unit-test callers (the reusable workflow's multihost job needs ttop auth).
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -352,6 +356,11 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-2 && inputs.run-unit-tests && needs.preflight.outputs.has-t2-unit == 'true' }}
     secrets: inherit
+    # OIDC only on the unit-test callers (the reusable workflow's multihost job needs ttop auth).
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -395,6 +404,11 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-3 && inputs.run-unit-tests && needs.preflight.outputs.has-t3-unit == 'true' }}
     secrets: inherit
+    # OIDC only on the unit-test callers (the reusable workflow's multihost job needs ttop auth).
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
