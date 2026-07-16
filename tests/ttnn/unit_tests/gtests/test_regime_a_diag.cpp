@@ -109,7 +109,7 @@ TEST_F(RegimeADiagFixture, Run) {
     // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
     if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
-        mask == 2048 || mask == 4096 || mask == 8192) {
+        mask == 2048 || mask == 4096 || mask == 8192 || mask == 18432 || mask == 20480 || mask == 24576) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -295,8 +295,20 @@ TEST_F(RegimeADiagFixture, GroupedKCorrectness) {
         {"ktail_Pk12_Nbpc18", 256, 6080, 4608, 1, 12, 1, 2, 1},  // Kt=190 K-tail (192 cap), small cb0 fits all Kg
         {"ntail_Pk12", 256, 6144, 4640, 1, 12, 1, 2, 1},         // Nt=145 N-tail (padded 152)
     };
-    // Kg -> mask. 0 = baseline (no KGROUP define).
-    const std::vector<std::pair<uint32_t, uint32_t>> kg_masks = {{1, 0u}, {2, 2048u}, {4, 4096u}, {8, 8192u}};
+    // (Kg, mask, tag). Streamed (default KGROUP) and prewait (|1<<14) share golden; both must hit PCC.
+    struct KgMask {
+        uint32_t kg;
+        uint32_t mask;
+        const char* tag;
+    };
+    const std::vector<KgMask> kg_masks = {
+        {1, 0u, "base"},
+        {2, 2048u, "strm"},
+        {4, 4096u, "strm"},
+        {8, 8192u, "strm"},
+        {2, 18432u, "prewait"},
+        {4, 20480u, "prewait"},
+        {8, 24576u, "prewait"}};  // 1<<14 | KGROUPn
     auto* device = device_;
 
     for (const auto& c : cases) {
@@ -334,22 +346,23 @@ TEST_F(RegimeADiagFixture, GroupedKCorrectness) {
         const ttnn::experimental::prim::RegimeAMatmulConfig cfg{
             .k_slices = c.Pk, .n_slices = c.Ns, .m_slices = c.Sm, .k_block_tiles = c.kb, .n_subblock_tiles = c.nsb};
 
-        for (const auto& [kg, mask] : kg_masks) {
+        for (const auto& km : kg_masks) {
             // Larger Kg enlarges CB1; on small-Pk configs (large resident cb0) that can exceed L1, and the
             // planner correctly REJECTS it. Treat an L1-over-budget rejection as an expected skip (documents
             // Kg feasibility) rather than a failure; any other exception is a real bug and is rethrown.
             for (int pass = 0; pass < 2; ++pass) {  // fresh then cached-program
                 try {
-                    Tensor out =
-                        ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
+                    Tensor out = ttnn::prim::regime_a_matmul_diag(
+                        in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, km.mask);
                     const std::vector<float> got = out.to_vector<float>();
                     const double p = pcc(got, golden);
-                    fmt::print("DIAGKG case={} Kg={} pass={} pcc={:.5f}\n", c.label, kg, pass, p);
-                    EXPECT_GT(p, 0.999) << "grouped-K case=" << c.label << " Kg=" << kg << " pass=" << pass
-                                        << " PCC too low (" << p << ")";
+                    fmt::print("DIAGKG case={} Kg={} {} pass={} pcc={:.5f}\n", c.label, km.kg, km.tag, pass, p);
+                    EXPECT_GT(p, 0.999) << "grouped-K case=" << c.label << " Kg=" << km.kg << " " << km.tag
+                                        << " pass=" << pass << " PCC too low (" << p << ")";
                 } catch (const std::exception& e) {
                     if (std::string(e.what()).find("L1 over budget") != std::string::npos) {
-                        fmt::print("DIAGKG case={} Kg={} pass={} SKIPPED (L1 over budget)\n", c.label, kg, pass);
+                        fmt::print(
+                            "DIAGKG case={} Kg={} {} pass={} SKIPPED (L1 over budget)\n", c.label, km.kg, km.tag, pass);
                         break;  // both passes skip identically
                     }
                     throw;

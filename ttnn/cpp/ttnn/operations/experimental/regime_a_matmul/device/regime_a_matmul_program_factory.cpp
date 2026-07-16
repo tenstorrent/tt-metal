@@ -122,6 +122,9 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     }
     if (Kg > 1u) {
         ddefs["KGROUP"] = std::to_string(Kg);  // grouped-K compute: hold DST across Kg blocks, pack once/group
+        if (diag & RegimeADiag::DIAG_KGROUP_PREWAIT) {
+            ddefs["KGROUP_PREWAIT"] = "1";  // A/B diagnostic: whole-group prewait (vs the default streamed waits)
+        }
     }
     const bool scatter = (diag & RegimeADiag::DIAG_IN0_SCATTER) != 0u;
     if (scatter) {
