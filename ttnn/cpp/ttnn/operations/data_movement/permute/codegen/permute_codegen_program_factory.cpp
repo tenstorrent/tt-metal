@@ -87,6 +87,17 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::RowInvariant::cre
         {"seq_id", kSeqIdentity},
         {"batch", kRmReadBatch},
         {"nabatch", 1},
+        // reader_stick_interleaved_unified.cpp's kernel_main() is not a template, so its
+        // MODE_TILEROW_PAD `else if constexpr` block is still fully name-resolved at compile time
+        // even though this op only ever selects MODE_SEQUENCED — get_named_compile_time_arg_val()
+        // aborts (via __builtin_unreachable in a constant expression) on any name missing from the
+        // map, regardless of which branch actually runs. Values below are never read at runtime.
+        {"tile_height", 32},
+        {"tile_row_shift_bits", 0},
+        {"num_pages_in_row", 1},
+        {"unpadded_X_bytes", 0},
+        {"valid_last_page_bytes", 0},
+        {"page_size", 0},
     };
     reader_desc.config = ReaderConfigDescriptor{};
 

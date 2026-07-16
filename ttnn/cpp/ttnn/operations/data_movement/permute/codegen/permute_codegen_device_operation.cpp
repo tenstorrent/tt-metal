@@ -74,6 +74,7 @@ ttsl::hash::hash_t PermuteCodegenDeviceOperation::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<PermuteCodegenDeviceOperation>(
         operation_attributes.rank,
         operation_attributes.dims,
+        operation_attributes.input_shape,
         operation_attributes.output_strides,
         operation_attributes.num_rows,
         operation_attributes.aligned_stick_bytes,

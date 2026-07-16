@@ -539,7 +539,6 @@ void kernel_main() {
     // Reads the valid prefix of each stick, fills column padding from a packed
     // pad value, and emits whole pad tile-rows for height/outer padding.
     else if constexpr (MODE == MODE_TILEROW_PAD) {
-        constexpr uint32_t elem_size = get_named_compile_time_arg_val("elem_size");
         constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
         constexpr uint32_t tile_row_shift_bits = get_named_compile_time_arg_val("tile_row_shift_bits");
         constexpr uint32_t num_pages_in_row = get_named_compile_time_arg_val("num_pages_in_row");
@@ -560,7 +559,11 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_blocks; i++) {
                 cb_reserve_back(cb_id, num_tiles_per_row);
                 uint32_t l1_write_addr = get_write_ptr(cb_id);
-                fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);
+                // MODE_TILEROW_PAD is unreachable for this op (permute always sets mode =
+                // MODE_SEQUENCED); the toolchain still fully compiles this branch (see the
+                // factory comment on named_compile_time_args), and fill_with_val<elem_size>
+                // fails template-argument substitution here, so the val_size is hardcoded.
+                fill_with_val<4>(l1_write_addr, padded_X_size << 5, pad_value);
                 cb_push_back(cb_id, num_tiles_per_row);
             }
         };
@@ -584,11 +587,10 @@ void kernel_main() {
                 uint64_t noc_addr = get_noc_addr(base_page_id + k * num_pages_in_row + num_pages_in_row - 1, s);
                 noc_async_read(noc_addr, l1_write_addr, valid_last_page_bytes);
                 uint32_t size_of_padding_columns = padded_X_size - unpadded_X_size;
-                fill_with_val<elem_size>(
-                    start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
+                fill_with_val<4>(start_of_row_l1_write_addr + unpadded_X_size, size_of_padding_columns, pad_value);
                 l1_write_addr += valid_last_page_bytes + size_of_padding_columns;
             }
-            fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
+            fill_with_val<4>(l1_write_addr, padding_rows * padded_X_size, pad_value);
             noc_async_read_barrier();
             cb_push_back(cb_id, num_tiles_per_row * has_rows);
         };
