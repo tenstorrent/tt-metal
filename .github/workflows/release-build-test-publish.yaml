@@ -157,14 +157,38 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
+      # Needed for create_jira_issue.py below.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+
       - name: Verify RTL Sim CI test check is green on stable HEAD
+        id: rtl-sim
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
 
           SHA=$(gh api repos/tenstorrent/tt-metal/branches/stable --jq .commit.sha)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "Checking 'RTL Sim CI test' check on stable HEAD $SHA"
+
+          # Record the failure for the downstream Jira step. Kept as step
+          # outputs so the poll step can exit 0 (continue-on-error already makes
+          # this job non-blocking) and let the Jira/re-assert steps run.
+          emit_failure() {  # $1=conclusion  $2=url  $3=detail
+            {
+              echo "sim-failed=true"
+              echo "conclusion=$1"
+              echo "url=$2"
+              echo "detail<<DETAIL_EOF"
+              printf '%s\n' "$3"
+              echo "DETAIL_EOF"
+            } >> "$GITHUB_OUTPUT"
+          }
 
           for i in $(seq 1 120); do  # 120 * 30s = 60 min
             read -r STATUS CONCLUSION URL < <(
@@ -172,14 +196,58 @@ jobs:
                 --jq '(.check_runs[0] // {}) | "\(.status // "missing") \(.conclusion // "-") \(.html_url // "-")"'
             )
             case "$STATUS:$CONCLUSION" in
-              completed:success) echo "::notice::Check passed on $SHA. $URL"; exit 0 ;;
-              completed:*)       echo "::error::Check on $SHA: conclusion=$CONCLUSION. $URL"; exit 1 ;;
+              completed:success)
+                echo "::notice::Check passed on $SHA. $URL"
+                echo "sim-failed=false" >> "$GITHUB_OUTPUT"
+                exit 0 ;;
+              completed:*)
+                echo "::error::Check on $SHA: conclusion=$CONCLUSION. $URL"
+                # Per-test detail the polling agent embeds in the check output
+                # (output.summary / output.text) from failed_tests.tsv. Empty
+                # until the sim pipeline forwards it; the ticket still records
+                # the failure and links to the sim results.
+                DETAIL=$(gh api "repos/tenstorrent/tt-metal/commits/$SHA/check-runs?check_name=RTL+Sim+CI+test&filter=latest" \
+                  --jq '[.check_runs[0].output.summary, .check_runs[0].output.text] | map(select(. != null and . != "")) | join("\n")' 2>/dev/null || true)
+                emit_failure "$CONCLUSION" "$URL" "$DETAIL"
+                exit 0 ;;
             esac
             echo "  [$i/120] status=$STATUS — re-polling in 30s ($URL)"
             sleep 30
           done
 
           echo "::error::Timed out after 60 min on $SHA (last status=$STATUS, last URL=$URL)."
+          emit_failure "timed_out (no result within 60 min)" "$URL" ""
+          exit 0
+
+      - name: File Jira issue for the RTL sim failure
+        if: ${{ steps.rtl-sim.outputs.sim-failed == 'true' }}
+        env:
+          JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
+          JIRA_PROJECT_KEY: "RELEASE"
+          JIRA_ISSUE_TYPE: "Bug"
+          JIRA_SUMMARY: "RTL sim regression failed during release (stable ${{ steps.rtl-sim.outputs.sha }})"
+          JIRA_DESCRIPTION: |
+            The "RTL Sim CI test" check failed on stable HEAD during Package and release.
+
+            Commit:      ${{ steps.rtl-sim.outputs.sha }}
+            Conclusion:  ${{ steps.rtl-sim.outputs.conclusion }}
+            Sim results: ${{ steps.rtl-sim.outputs.url }}
+            Release run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Failed tests (from the RTL Sim check output; empty if the sim
+            pipeline has not yet forwarded per-test detail):
+            ${{ steps.rtl-sim.outputs.detail }}
+          JIRA_LABELS: "rtl-sim,ci-failure,release"
+          # One open ticket per recurring sim failure; later releases comment.
+          JIRA_DEDUP_LABEL: "rtl-sim-release-failure"
+        run: python3 .github/actions/scripts/create_jira_issue.py
+
+      - name: Re-assert sim failure
+        if: ${{ steps.rtl-sim.outputs.sim-failed == 'true' }}
+        run: |
+          echo "RTL sim check failed on stable HEAD; a RELEASE Jira issue was filed/updated."
           exit 1
 
   # We need to tag the image used to reproduce the release later

@@ -1,0 +1,102 @@
+# Files a Jira record when the docs release workflow fails.
+#
+# Watches the docs release workflow; on a failed run it collects the failed jobs
+# and opens (or de-duplicates onto) a Jira issue via create_jira_issue.py.
+#
+# TODO (specifics to be provided):
+#   - JIRA_ISSUE_TYPE        : issue type (default below: Bug)
+#   - WATCH_JOBS             : comma-separated job-name substrings that count as
+#                             "the tests and pipelines" (empty = any failed job)
+#
+# Credentials (repo/org Actions secrets, scoped to this RELEASE-project automation
+# so other Jira projects can carry their own):
+#   - secrets JIRA_RELEASE_USER_EMAIL / JIRA_RELEASE_API_TOKEN : Jira account creds
+# The Jira project key ("RELEASE") is not secret and is inlined below.
+name: "[internal] File Jira issue on docs release failure"
+
+on:
+  workflow_run:
+    workflows:
+      - "[post-commit] Docs build and deploy (release and main branches) to GitHub pages on main"
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      run-id:
+        description: "Docs workflow run id to file a Jira issue for (manual testing)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  # Empty = file for any failed job. Narrow to the specific tests/pipelines later.
+  WATCH_JOBS: ""
+  JIRA_ISSUE_TYPE: "Bug"
+
+jobs:
+  file-jira:
+    # Only when the watched run failed (or a manual test dispatch).
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Collect failed jobs from the docs run
+        id: collect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # Failed job names (optionally filtered to the watched set).
+          mapfile -t failed < <(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion=="failure") | .name')
+          if [ -n "${WATCH_JOBS}" ]; then
+            filtered=()
+            IFS=',' read -ra pats <<< "$WATCH_JOBS"
+            for j in "${failed[@]}"; do
+              for p in "${pats[@]}"; do [[ "$j" == *"$(echo "$p" | xargs)"* ]] && filtered+=("$j") && break; done
+            done
+            failed=("${filtered[@]}")
+          fi
+          if [ "${#failed[@]}" -eq 0 ]; then
+            echo "No watched jobs failed; nothing to file."
+            echo "file=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "file=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "summary=Docs release failed on ${HEAD_BRANCH:-unknown} (${#failed[@]} job(s))"
+            echo "description<<EOF"
+            echo "The docs release workflow failed."
+            echo "Branch: ${HEAD_BRANCH:-unknown}"
+            echo "Commit: ${HEAD_SHA:-unknown}"
+            echo "Run: ${RUN_URL:-manual dispatch}"
+            echo "Failed jobs:"
+            for j in "${failed[@]}"; do echo "- $j"; done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: File Jira issue
+        if: ${{ steps.collect.outputs.file == 'true' }}
+        env:
+          JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
+          JIRA_PROJECT_KEY: "RELEASE"
+          JIRA_ISSUE_TYPE: ${{ env.JIRA_ISSUE_TYPE }}
+          JIRA_SUMMARY: ${{ steps.collect.outputs.summary }}
+          JIRA_DESCRIPTION: ${{ steps.collect.outputs.description }}
+          JIRA_LABELS: "ci-failure,docs-release"
+          # While one issue is open for this pipeline, later failures comment on it.
+          JIRA_DEDUP_LABEL: "docs-release-failure"
+        run: python3 .github/actions/scripts/create_jira_issue.py
