@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import math
+import os
+import time
 from typing import TYPE_CHECKING
 
 import torch
@@ -561,6 +563,7 @@ def fast_device_to_host(
         dtype: Output dtype.  When combined with ``permute``, the dtype
             conversion is fused into the scatter write (single-pass copy).
     """
+    _t_entry = time.perf_counter()
     mesh_shape = tuple(mesh_device.shape)
 
     if len(mesh_shape) != 2:
@@ -676,15 +679,23 @@ def fast_device_to_host(
 
     # Grab mesh coordinates from the device tensor before DMA.
     mesh_coords = list(tt_tensor.tensor_topology().mesh_coords())
+    _t_coords = time.perf_counter()
 
     if pre_transfer_fn is not None:
         tt_tensor = pre_transfer_fn(tt_tensor)
+
+    # Optional split (LTX_TIME_STAGES=1) of the two costs this call fuses: the DMA read off the
+    # mesh, and the host-side scatter that reassembles the shards. Only the DMA is command-queue
+    # work, so sizing them apart is what says whether a second CQ could hide any of this.
+    _time_d2h = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
+    _t0 = time.perf_counter()
 
     # Single .cpu() on the mesh tensor batches all DMA reads into one C++
     # dispatch — host buffers are allocated in parallel and the reader thread
     # pool processes all completion-queue reads concurrently.
     host_tensor = tt_tensor.cpu(blocking=False)
     ttnn.synchronize_device(mesh_device)
+    _t_dma = time.perf_counter()
 
     # Extract per-shard host tensors (single-host: just wraps each shard).
     host_shard_tensors = ttnn.get_device_tensors(host_tensor)
@@ -694,7 +705,16 @@ def fast_device_to_host(
     trim = tuple(slice(0, d) for d in logical_shape)
     shards = [_to_torch_zero_copy(s)[trim] for s in host_shard_tensors]
 
-    return _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
+    out = _reassemble_2d(mesh_coords, shards, logical_shape, mesh_shape, concat_dims, permute, dtype)
+    if _time_d2h:
+        _t_cat = time.perf_counter()
+        _nb = out.numel() * out.element_size()
+        logger.info(
+            f"D2H_SPLIT mesh_coords={(_t_coords - _t_entry) * 1000:.1f}ms pre_fn={(_t0 - _t_coords) * 1000:.1f}ms "
+            f"dma={(_t_dma - _t0) * 1000:.1f}ms host_concat={(_t_cat - _t_dma) * 1000:.1f}ms "
+            f"| {_nb / 1e9:.2f}GB dma@{_nb / 1e9 / max(_t_dma - _t0, 1e-9):.2f} GB/s"
+        )
+    return out
 
 
 def upsample(
