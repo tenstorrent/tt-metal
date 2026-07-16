@@ -210,7 +210,7 @@ jobs:
               "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "default-chat-template-kwargs": "{\"enable_thinking\": false}",
-              "multimodal": false,
+              "multimodal": true,
               "owner_id": "U08HL8X1ECD"
             },
             {
