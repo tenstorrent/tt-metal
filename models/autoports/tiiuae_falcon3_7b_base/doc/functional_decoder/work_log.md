@@ -144,3 +144,10 @@ The exact real-weight shard `model-00002-of-00004.safetensors` is cached locally
   by marking `AUTODEBUG.md` as historical, and the narrow rereview returned `clean-pass`.
 - Local stage checkpoint: `e0f096c91ee` (`Add IR-translated Falcon3 functional decoder`).
 - No push was performed.
+
+## Multichip provenance
+
+`multichip_provenance.json` records the complete layer-14 sharding prior from the selected prefill and
+decode IR. The source mesh is `data=1 × tensor=4` (TP degree 4); the collective set is ring
+`ttnn.all_reduce(sum, cluster_axis=1)` after `self_attn.o_proj` and `mlp.down_proj` in both paths, with
+no other collective op in the segmented layer.
