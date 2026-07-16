@@ -93,7 +93,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             "${{ env.TESTS_YAML_PATH }}" \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
   smoke:
     needs: load-test-matrix

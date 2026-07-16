@@ -74,7 +74,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.runs-on-sku }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
   fabric-cpu-unit-tests:
     needs: load-test-matrix

@@ -97,7 +97,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
       - name: Detect sim SKUs in matrix
         id: detect-sim
