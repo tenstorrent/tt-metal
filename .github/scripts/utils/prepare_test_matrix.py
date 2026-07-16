@@ -18,7 +18,8 @@ Usage:
         [--event EVENT] [--sku-allowlist LIST]
 
 enabled_skus is a comma-separated list, or the literal ALL_SKUS_IN_TESTS to enable every SKU
-key that appears under any test entry's skus mapping in the tests YAML.
+key that appears under any test entry's skus mapping in the tests YAML. An empty / placeholder
+tests YAML resolves ALL_SKUS_IN_TESTS to an empty matrix (matrix=[], exit 0) rather than failing.
 
 --event: when set to merge_group, logical SKUs with merge_queue_sku in sku_config are
 rewritten to that concrete prio SKU before runs_on lookup.
@@ -178,6 +179,11 @@ def load_tests(tests_yaml_path):
     with open(tests_yaml_path, "r") as f:
         tests = yaml.safe_load(f)
 
+    # An empty or comment-only YAML parses to None; treat it as a placeholder
+    # (no tests) rather than a malformed file.
+    if tests is None:
+        return []
+
     if not isinstance(tests, list):
         print(f"::error::Test matrix file must contain a list of tests: {tests_yaml_path}")
         sys.exit(1)
@@ -238,14 +244,10 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None):
 
         for logical_sku in matching_skus:
             sku_test_config = test_skus[logical_sku]
+            # logical_sku is guaranteed to be in sku_config (enabled_skus is validated
+            # above); resolve_sku_for_event returns either logical_sku or an alias it
+            # has already validated (else it exits), so concrete_sku is always valid.
             concrete_sku = resolve_sku_for_event(logical_sku, sku_config, event)
-
-            if concrete_sku not in sku_config:
-                print(
-                    f"::warning::SKU '{concrete_sku}' (from '{logical_sku}') for test "
-                    f"'{test_name}' not found in SKU config, skipping"
-                )
-                continue
 
             # Start from test copy so all keys (model, arch, etc.) are preserved
             entry = test.copy()
@@ -325,8 +327,11 @@ def main(argv=None):
         enabled_skus = collect_skus_from_tests(tests)
         print(f"Resolved {ALL_SKUS_IN_TESTS} to: {enabled_skus}")
         if not enabled_skus:
-            print("::error::No SKU keys found under skus in the tests YAML.")
-            sys.exit(1)
+            # Empty / placeholder test list (e.g. a team's not-yet-populated gate
+            # yaml). Emit an empty matrix and skip rather than failing the job.
+            print("No SKU keys found under skus in the tests YAML; skipping all tests (matrix=[]).")
+            write_matrix_output([])
+            return 0
     else:
         enabled_skus = parse_enabled_skus(args.enabled_skus)
         print(f"Parsed enabled SKUs: {enabled_skus}")

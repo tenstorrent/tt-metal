@@ -56,9 +56,8 @@ jobs:
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           set -euo pipefail
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           extra=()
           if [ -n "${{ inputs.per-test-timeout }}" ]; then
             extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")

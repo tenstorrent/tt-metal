@@ -268,7 +268,6 @@ llk:
     bh_p150b_civ2: 1200
   merge_gate:
     wh_n150_civ2: 300
-    bh_p150b_civ2: 160
     bh_p150b_civ2_viommu: 70
 
 models:

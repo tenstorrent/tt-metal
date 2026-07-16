@@ -289,6 +289,33 @@ def test_backcompat_explicit_csv_enabled_skus_filters(tests_yaml: Path):
     assert concrete_skus(matrix) == {"wh_n150_civ2", "bh_p150b_civ2_viommu"}
 
 
+def test_all_skus_on_empty_list_yaml_yields_empty_matrix(tmp_path: Path):
+    """Placeholder gate list ('[]') + ALL_SKUS_IN_TESTS skips, does not fail."""
+    path = tmp_path / "empty.yaml"
+    path.write_text("[]\n")
+    matrix = run_matrix(path, "ALL_SKUS_IN_TESTS", "--event", "merge_group")
+    assert matrix == []
+
+
+def test_all_skus_on_comment_only_yaml_yields_empty_matrix(tmp_path: Path):
+    """Commented-out entries (yaml parses to None) also skip rather than fail."""
+    path = tmp_path / "comments.yaml"
+    path.write_text("# just a header\n# - name: not yet\n")
+    matrix = run_matrix(path, "ALL_SKUS_IN_TESTS")
+    assert matrix == []
+
+
+def test_models_merge_gate_placeholder_skips(tmp_path: Path):
+    """The real (currently empty) models gate list must not fail on merge_group."""
+    matrix = run_matrix(
+        PIPELINE / "models_merge_gate_tests.yaml",
+        "ALL_SKUS_IN_TESTS",
+        "--event",
+        "merge_group",
+    )
+    assert matrix == []
+
+
 def test_broken_merge_queue_alias_fails(tmp_path: Path):
     tests = tmp_path / "tests.yaml"
     tests.write_text(
