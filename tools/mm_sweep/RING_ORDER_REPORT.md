@@ -1,146 +1,147 @@
 # Physical-topology-aware in0 ring ordering — report
 
-Change: the in0 all-gather ring no longer visits the 8 bank-cores in bank-index order `0→1→…→7`. The factory
-picks, **per ring group**, a cyclic visiting order that minimizes the physical NoC route cost of the forward
-edges, using the group's **writer NoC** and the authoritative directed-torus hop distance
+The in0 all-gather ring no longer visits the 8 bank-cores in bank-index order `0→1→…→7`. The factory picks,
+**per ring group**, a cyclic visiting order that minimizes the physical NoC route cost of the forward edges,
+using the group's **writer NoC** and the authoritative directed-torus hop distance
 (`tt::tt_metal::experimental::Device::get_worker_noc_hop_distance` — logical→physical + NOC0 `+x→+y` / NOC1
 `−x→−y` routing with wraparound, harvesting-aware). Placement, work partitioning, compute, and reduction are
-unchanged; only `ring_pos`/`ring_next_idx`/`ring_prev_idx` (which core seeds which in0 shard, the forward
-route, and the in1 rotated read) change — the output is bit-identical for any permutation.
+unchanged; only `ring_pos`/`ring_next_idx`/`ring_prev_idx` change (which core seeds which in0 shard, the
+forward route, the in1 rotated read) — the output is **bit-identical for any permutation**, so ring order is
+purely a performance lever. No kernel change (host-side factory override).
 
-**Verdict:** exhaustive optimized ordering is the production default. For `Sm=1` it beats bank order by
-−4 to −10% on Mt=8 shapes (neutral on small-M). Under M-split (`Sm>1`) the default objective scores each
-permutation **across all `Sm` mm-rings** ("agg"), which beats the earlier `mm=0`-only scoring by a further
-−3.6 to −5.3% (two runs) on the real 256×2048×1024 Sm=2 primary. Diagnostics: `DIAG_RING_BANK` (`1<<12`, old bank order),
-`DIAG_RING_GREEDY` (`1<<13`), `DIAG_RING_OPT_MM0` (`1<<14`, mm=0-only scoring).
+**Production default = PARETO objective** (see §C). Selected by a two-run objective A/B against the
+acceptance gate — **not** by user approval. It is a **single global objective** (same for all `Sm`), not an
+`Sm`-conditional policy.
 
 ## Correction to prior documentation
-Earlier notes described the production ring as nearest-neighbour. That was inaccurate: production hardcoded
-`in.nn_chain = false` → **bank-index order**, and the planner's `nn_chain` path used *logical* Manhattan
-distance (a proxy), not physical routing. This change replaces both with physical-NoC-aware ordering.
+- Production originally hardcoded `in.nn_chain = false` → **bank-index order** (not nearest-neighbour as
+  earlier notes claimed); the planner's `nn_chain` used *logical* Manhattan distance (a proxy), not physical
+  routing. This work replaced both with physical-NoC-aware ordering.
+- An earlier draft said the `Sm>1` aggregate objective was "user-approved" and shipped. That is superseded:
+  that objective (now called **maxedge**) is **rejected** here (it stably regressed the synthetic Sm=4 case),
+  and **pareto** is shipped instead, chosen by the gate below.
 
 ## Cost model and its limits
 Per forward edge `posₚ→posₚ₊₁` the cost is the directed writer-NoC hop distance `d[a][b]`. For one 8-core
-ring the cost is `(max_edge, total_hops)` = (worst single edge, sum of the 8 edges). **Two levels of
-aggregation, kept distinct:**
+ring the cost is `(max_edge, total_hops)`. **Aggregation levels, kept distinct:**
 - **per-ring** — one mm-ring's `(max_edge, total_hops)`.
-- **group-aggregate** (Sm>1) — across the `Sm` mm-rings of one `(kk,nn)` group: `aggmax` = max over rings of
-  each ring's max_edge; `aggtot` = sum over rings of each ring's total_hops.
-- **op-aggregate** — across all `(kk,nn)` groups of the op: max of the group `aggmax`, sum of the group
-  `aggtot`. This is what the "route cost" tables below report.
+- **group-aggregate** (Sm>1, one `(kk,nn)` group's Sm mm-rings): `aggmax` = max over rings of each ring's
+  max_edge; `aggtot` = sum over rings of total_hops; `maxringtot` = max over rings of total_hops.
+- **op-aggregate** — across all `(kk,nn)` groups: max of group `aggmax`, sum of group `aggtot`.
 
 **Caveat (no congestion model):** `get_worker_noc_hop_distance` returns a scalar *distance*, not the link
 path an edge traverses, so **shared-link congestion is not modeled**. `total_hops` is only a proxy for
-aggregate link pressure; `max_edge` is the primary objective (the longest single forward). A permutation with
-lower `max_edge` but higher `total_hops` can therefore be slower in practice — observed on the synthetic
-Sm=4 case below.
+aggregate link pressure; `max_edge` is one objective term. A permutation with lower `max_edge` but higher
+`total_hops` can be slower in practice — exactly what sank the **maxedge** objective on Sm=4 (§C).
 
-## Ordering modes (constructed per ring group; a ring is homogeneous in NoC)
-Each ring = the 8 bank-cores of one `(kk, n-slice, m-block)` slice; all 8 share the slice's NoC, so the group
-has a single writer NoC = opposite the reader's (`noc==0`→writer NOC1, `noc==1`→writer NOC0).
-- **bank** (`DIAG_RING_BANK`): `[0..7]` — previous production baseline.
-- **greedy** (`DIAG_RING_GREEDY`): greedy nearest-neighbour over the writer-NoC hop distance from bank 0.
-- **opt-mm0** (`DIAG_RING_OPT_MM0`): exhaustive, scoring only the `mm==0` ring, applied to the whole group.
-- **opt-agg** (DEFAULT): exhaustive, scoring the **group-aggregate** `(aggmax, aggtot)` across all `Sm`
-  mm-rings — accounts for the slaves' routes, not just the reader's. Identical to opt-mm0 for `Sm=1`.
+## M-split correctness constraint (Sm>1)
+The in1 *slaves* consume in1 in the `mm==0` *reader's* shard order while their in0 rings are separate
+physical cores, so all `Sm` slices of a `(kk,nn)` group MUST use the SAME permutation (reader/slave
+`ring_pos` must agree per bank) or the in0/in1 pairing corrupts (caught as PCC 0.65 during development). The
+chosen order is applied to every slice in the group; the objective therefore scores across all `Sm` rings.
 
-Exhaustive = the 7! cycles through bank 0 (rotation-invariant); directed edge costs ⇒ a permutation and its
-reverse are both evaluated (both orientations). ~5040 cycles/group scored off a precomputed per-mm-ring 8×8
-hop matrix — one-time host cost at program compile (<10 ms), negligible vs kernel build.
+## A. Sm=1: optimized vs bank order (the original ring-order win)
+Median device-profiler kernel µs, 3 interleaved relaunches, Δ vs bank. For `Sm=1` all exhaustive objectives
+that are max-first (mm0/maxedge/pareto) pick the **same** order, so this is the shared Sm=1 result. Raw:
+`regime_a_ringorder_bench_bankopt.json` — **one** preserved raw run (recovered from the prior ring-order
+commit). A second confirming run was measured but **not preserved** (prose only in the prior report); the
+numbers below are the one committed raw run.
+| shape | cfg (Ns,Pk,Sm,kb,nsb) | bank µs | opt Δ |
+|---|---|---|---|
+| 256×6144×768 | 1,12,1,2,1 | 51.6 | **−8.4%** |
+| 256×6144×2304 | 1,12,1,2,1 | 90.5 | −4.8% |
+| 256×6144×4608 | 1,12,1,2,1 | 151.2 | −3.4% |
+| 128×6144×4608 (Mt4) | 1,12,1,2,1 | 128.5 | −2.5% |
+| 64×6144×4608 (Mt2) | 1,6,1,4,2 | 118.6 | −0.1% |
+| 32×6144×4608 (Mt1) | 1,12,1,2,1 | 116.8 | −0.0% |
 
-**M-split correctness constraint:** the in1 *slaves* consume in1 in the `mm==0` *reader's* shard order while
-their in0 rings are separate physical cores, so all `Sm` slices of a group MUST use the SAME permutation
-(reader/slave `ring_pos` must agree per bank) or the in0/in1 pairing corrupts. The chosen order is applied to
-every slice in the group. (Getting this wrong was caught as PCC 0.65 on Sm=2 during development.)
+Op-aggregate route cost: opt roughly **halves** max_edge (e.g. 768: 25→14) and total_hops (1159→683). Win
+scales with M (largest on deep-Pk Mt=8; neutral at Mt≤2 where the ring is hidden behind compute). Per-RISC:
+all three RISC spans drop ~4–5µs in lockstep on the winners (shorter forward routes cut the ring-gather
+latency gating reader/writer/compute alike).
 
-## A. Sm=1: optimized vs bank (the original ring-order win)
-Median device-profiler kernel µs, 3 interleaved relaunches, Δ vs bank. Raw:
-`regime_a_ringorder_bench_bankopt.json` (two independent runs; per-relaunch + per-RISC + per-group RINGCOST).
-For `Sm=1` opt-agg ≡ opt-mm0 (single ring, identical objective and permutation).
-| shape | cfg (Ns,Pk,Sm,kb,nsb) | bank µs | greedy Δ | **opt Δ** |
+## B. Sm>1 shared-permutation objective — the problem
+The permutation is shared across a group's `Sm` rings. Scoring only the `mm==0` reader ring (**mm0**) ignores
+the slaves' routes; the first aggregate fix (**maxedge** = min aggmax then aggtot) reduced the worst edge but
+could *raise* total_hops, which regressed the synthetic Sm=4 case. §C evaluates better objectives.
+
+## C. Objective A/B (this follow-up) — pareto selected
+Six shared-permutation objectives computed in one exhaustive 7! pass (all internal cache-hashed diagnostics,
+none in the public API); lexicographic minimize:
+`mm0`=(ring0.max, ring0.total); `maxedge`=(aggmax, aggtot); `maxring`=(maxringtot, aggmax, aggtot);
+`total`=(aggtot, aggmax); **`pareto`**=min aggmax s.t. `aggtot ≤ mm0's aggtot`, then aggtot. (`greedy` =
+non-exhaustive nearest-neighbour, reference only.)
+
+Two independent runs, 3 interleaved relaunches each. Raw: `regime_a_ringobj_run1.json`,
+`regime_a_ringobj_run2.json` (every relaunch, per-RISC, selected perms, per-ring/group/op route costs). Δ vs
+**mm0** (the shared baseline), both runs shown:
+
+| shape | Sm | maxedge | total | **pareto** |
 |---|---|---|---|---|
-| 256×2048×1024 | 1,4,2,2,2 (Sm2 — see B) | 28.3 | −0.5% | −4.4% |
-| 256×6144×768 | 1,12,1,2,1 | 51.6 | −2.3% | **−8.4%** |
-| 256×6144×2304 | 1,12,1,2,1 | 90.5 | −2.9% | −4.8% |
-| 256×6144×4608 | 1,12,1,2,1 | 151.2 | −1.8% | −3.4% |
-| 32×6144×4608 (Mt1) | 1,12,1,2,1 | 116.8 | +0.1% | −0.0% |
-| 64×6144×4608 (Mt2) | 1,6,1,4,2 | 118.6 | −0.0% | −0.1% |
-| 128×6144×4608 (Mt4) | 1,12,1,2,1 | 128.5 | −1.5% | −2.5% |
+| 256×2048×1024 (production) | 2 | −4.2 / −3.9 | −4.2 / −3.7 | **−5.2 / −4.6** |
+| 128×6144×4608 | 2 | −0.6 / −0.2 | −0.6 / −0.5 | −1.0 / −0.5 |
+| 256×2048×1024 (synthetic) | 4 | **+2.7 / +2.9** ✗ | −1.8 / −0.3 | +1.0 / −0.2 |
+| 256×6144×4608 | 4 | +0.7 / +0.8 | −0.4 / −0.1 | −0.3 / −0.5 |
+| 256×2048×1024 | 3 | −3.2 / −4.8 | −3.5 / −4.4 | −3.9 / −4.0 |
+| 256×6144×768 | 1 | +1.2 / +0.1 | +1.6 / +0.4 | +0.5 / +0.7 |
+| 256×6144×4608 | 1 | +0.3 / −0.0 | +1.0 / +0.7 | +0.1 / −0.2 |
+| 256×6144×2304 | 1 | −0.3 / +0.1 | +1.1 / +1.1 | −0.0 / +0.1 |
 
-Op-aggregate route cost (across ring groups): opt roughly **halves** both metrics vs bank on deep-Pk shapes,
-e.g. 256×6144×768 max_edge 25→14, total_hops 1159→683. Opt beats greedy on every shape (greedy is a
-heuristic — it can lose to bank on individual groups). Largest win on the shallow-N deep-K primary
-256×6144×768 (−8.4%); neutral on small-M (Mt≤2, ring hidden behind compute). Per-RISC: on the winners all
-three RISC spans drop ~4–5µs **in lockstep** (768: 43.4→38.7) — shorter forward routes cut the in0
-ring-gather latency that gates the reader/writer/compute alike.
+Reading (noise floor ≈ 1.4%: for `Sm=1` mm0/maxedge/pareto pick byte-identical orders, so their `Sm=1`
+deltas are pure inter-subprocess variance):
+- **maxedge** (the prior aggregate default): stably **regresses the synthetic Sm=4** case (+2.7/+2.9%) — it
+  chose lower `aggmax` but higher `aggtot`; the missing congestion term. **Rejected.**
+- **total** (total-first): fixes Sm=4 but **regresses the common Sm=1 case** (+0.4…+1.6%, consistent across
+  runs) — it picks higher-max-edge orders for Sm=1. **Rejected.**
+- **pareto** (min max-edge subject to `aggtot ≤ mm0`): keeps the best Sm=2 win (**−4.6…−5.2%**) and Sm=3
+  win (−3.9/−4.0%); on Sm=4 its route **strictly dominates mm0** (18:253:70 vs 22:273:109 on the synthetic
+  case — lower on all of aggmax/aggtot/maxringtot), so it **cannot stably regress vs mm0** (its ±1% wall is
+  noise); and it stays within noise of mm0 on Sm=1 (max-first family). **Selected — single global objective.**
 
-## B. Sm>1: aggregate-Sm vs mm=0-only scoring (this follow-up)
-Median µs, 3 interleaved relaunches. `agg vs mm0` is the decision (both improve on bank). Raw:
-`regime_a_ringorder_bench.json` + `regime_a_ringorder_bench_run1.json` (two independent runs).
-| shape | Sm | cfg | bank µs | mm0 µs (Δbank) | agg µs (Δbank) | **agg vs mm0** | route aggmax bank/mm0/agg |
-|---|---|---|---|---|---|---|---|
-| 256×2048×1024 (primary) | 2 | 1,4,2,2,2 | 28.4 | 27.4 (−3.7%) | **25.9 (−8.8%)** | **−5.3%** | 23 / 26 / 16 |
-| 128×6144×4608 | 2 | 1,6,2,2,1 | 217.1 | 214.8 (−1.0%) | 213.5 (−1.6%) | −0.6% | 25 / 22 / 16 |
-| 256×2048×1024 (synthetic) | 4 | 1,1,4,2,2 | 73.0 | 71.1 (−2.5%) | 73.3 (+0.3%) | **+3.0%** | 22 / 22 / 16 |
-| 256×6144×768 | 1 | 1,12,1,2,1 | 51.2 | 46.9 | 47.5 | +1.4% (noise) | 14 / 14 |
-| 256×6144×4608 | 1 | 1,12,1,2,1 | 150.9 | 146.1 | 146.2 | +0.1% (noise) | 14 / 14 |
-| 256×6144×2304 | 1 | 1,12,1,2,1 | 91.0 | 85.5 | 85.5 | 0.0% (noise) | 14 / 14 |
-
-- **Noise floor:** for `Sm=1` opt-agg and opt-mm0 produce **byte-identical orders** (route identical), so the
-  `Sm=1` `agg vs mm0` deltas (0 to +1.4%) are pure inter-subprocess measurement variance — establishing a
-  ~1.4% noise floor for this harness.
-- **Win:** agg beats mm0 by a clear, stable **−3.6 to −5.3%** (two runs) on the real 256×2048×1024 Sm=2
-  primary (run-1 bands separated: agg [25.7,25.9,26.0] vs mm0 [27.3,27.4,27.4]); mm0 had left the *slave*
-  ring's worst edge at 26 hops (agg cuts the group `aggmax` to 16). Marginal (−0.6%, both runs) on wide Sm=2.
-- **Regression (accepted):** agg is **+2.7 to +3.0% slower** than mm0 on the synthetic Sm=4 config — a stable
-  result (both runs) where agg's lower `aggmax` (16 vs 22) came with a *higher* `aggtot` (280 vs 273), total-hops mattered
-  more there (the no-congestion-model caveat in action). This config is never selected by the picker (Sm=2 is
-  2.8× faster on that shape: 26µs vs 73µs), so it is out of production scope.
-
-**Decision (user-approved):** ship opt-agg as the production default — it wins −5.3% on the real primary and
-is neutral on Sm=1 — and accept the +3% on the never-selected synthetic Sm=4 config as a documented caveat.
-opt-mm0 is retained as `DIAG_RING_OPT_MM0` for A/B. (A total-hops-first objective might avoid the Sm=4
-regression while keeping the Sm=2 win; left as a possible future refinement.)
+**Gate check (pareto):** preserves the Sm=2 improvement; no stable regression on any tested Sm=1/2/3/4 case
+(Sm=4 route-dominated ⇒ noise; Sm=1 byte-identical-family ⇒ noise); correctness + cache-replay preserved.
 
 ## Correctness (gtest `RegimeADiagFixture.RingOrderCorrectness`)
-bank / greedy / opt-mm0 / opt-agg, random BF16 vs a CPU f32 golden, PCC ≥ 0.999, fresh AND cached-program,
-**all BIT-IDENTICAL** across orders, covering: Pk=1 + split-K (Pk=2/4/12 give both reader-NoC orientations),
-Ns>1, **Sm=1/2/4**, W=1/W>1, balanced K/N tails. Public 20/20 suite passes on the agg default. Watcher clean
-on the agg default (Pk=12). (A pre-existing, unrelated `in1_reader` Sm>1 atomic-flush watcher warning fires
-identically at bank baseline — orthogonal to ring ordering.)
+bank / greedy / mm0 / maxedge / maxring / total / pareto — random BF16 vs a CPU f32 golden, PCC ≥ 0.999,
+fresh AND cached-program, **all BIT-IDENTICAL** across objectives, covering Pk=1 + split-K (both reader NoC
+orientations), Ns>1, **Sm=1/2/3/4**, W=1/W>1, balanced K/N tails. Public 20/20 + cache-replay pass on the
+pareto default. Watcher clean on the pareto default (Pk=12). (A pre-existing, unrelated `in1_reader` Sm>1
+atomic-flush watcher warning fires identically at bank baseline — orthogonal to ring ordering.)
 
-## Picker re-sweep (agg default)
-Ring ordering is independent of picker config *selection*, and for `Sm=1` the op is byte-identical to the
-prior ring commit, so only `Sm>1`-selecting shapes could shift. Re-ranked the top-10 candidates of the two
-Mt=8 primaries under the agg default:
-- **256×2048×1024:** winner `(1,4,2,2,2)` 26.21µs; best candidate `(1,4,2,2,4)` 26.11µs — **+0.4%, inside the
-  ~1.4% noise floor** → no change. (Note: the progressive-era re-sweep had shown `nsb=4` +3.8%; that edge has
-  since evaporated under the full pipelined-drain + ring-order stack — evidence that config optima drift and
-  that leaving the picker unchanged then was correct.)
-- **256×6144×768:** winner `(1,12,1,2,1)` unchanged.
+## D. Picker-sensitive corpus sweep (under the pareto default)
+The full planner-feasible space is **~13,694 configs** across the requested shapes — intractable to
+device-run exhaustively. Used a **principled bounded search** (`ring_corpus_sweep.py`): per shape the
+candidate set = {prior broad-sweep configs within 1.5× of that shape's best old time, capped 25} ∪ {current
+picker config} ∪ {±1-step neighbours of the picker config, planner-feasible}. This re-evaluates the prior
+sweep's broad space (ranks 11–25, beyond the top-10) **and** configs the prior sweep never measured (the
+neighbourhood). Each candidate run once under the pareto default; any that beat the picker were re-run 3×.
+Raw: `regime_a_ring_corpus_sweep.json`. Shapes: both Mt=8 primaries + all Mt≥4 FLUX/LTX + the Pk>1/Sm>1
+six-shape-parity cases (12 shapes).
 
-No stable, noise-clearing improvement → **no picker entries changed**, so no six-shape-parity / FLUX/LTX
-re-validation was triggered.
+Result: **11 of 12 unchanged.** One stable, confirmed change:
+- **128×15360×768** (Mt=4): picker `(Ns1,Pk12,Sm1,kb1,nsb3)` 71.0µs → **`(Ns1,Pk6,Sm1,kb2,nsb3)` 66.4µs,
+  +6.5%** (3-relaunch confirmed, PCC 0.99999 fresh+cached). **Picker updated** (C++ `auto_select_config`
+  table + `picker_table.py`). This shape is `Sm=1`, so the gain is orthogonal to the objective work — a
+  config the picker had suboptimal, surfaced by the mandated sweep under the current pipelined-drain +
+  pareto-ring stack. 128×6144×2304 showed a single-pass candidate but within noise (unconfirmed) → no change.
 
-**Caveat:** an unchanged picker output does **not** prove the selected `(Ns,Pk,Sm,kb,nsb)` is still optimal —
-this re-sweep only re-ranked the pre-change top-10 candidates per primary, not the full feasible space, and
-did not re-sweep the whole Mt≥4 FLUX/LTX corpus. A full corpus re-sweep is deferred; the risk is bounded
-because ring ordering does not alter the compute/reduction tradeoffs that dominate config selection.
+**Caveat:** an unchanged picker output does **not** prove the selected config is optimal — this is a bounded
+search, not the full feasible space. The 128×15360×768 change triggered re-validation: public 20/20 pass,
+six-shape parity unchanged (that shape is not a parity case; op stays faster than the frozen oracle on all
+six), and the shape's own correctness+perf validated directly.
 
-## Why the effect appears (qualified)
-The optimized ring order helps most on deep-Pk Mt=8 shapes and is neutral on small-M. On these shapes bank
-order scattered the ring cores up to 25 directed NoC hops apart on a single forward, which opt cuts to ~14,
-and all three RISC spans drop in lockstep — consistent with the in0 forward **route** being on the critical
-path. This route-cost lever is distinct from forwarding *depth/bytes* (which earlier scatter/exchange/
-replication experiments showed were already hidden behind compute). It is *plausible* that the recently
-landed pipelined phase-2 drain, by tightening the reduction chain, increased the fraction of runtime where
-the in0 route is exposed — but this ordering experiment did not run an A/B against the pre-drain baseline, so
-that causal attribution is **not established**; the measured, attributable fact is simply that shorter
-physical forward routes reduce wall time on these shapes.
+## Evidence & retention
+- **Objective A/B:** both raw runs committed (`regime_a_ringobj_run1.json`, `regime_a_ringobj_run2.json`) —
+  every relaunch, per-RISC, per-group RINGCOST.
+- **Sm=1 bank/opt:** one raw run committed (`regime_a_ringorder_bench_bankopt.json`); the second confirming
+  run is measured-but-unpreserved (prose only) — stated as such, not claimed as committed raw evidence.
+- **Corpus sweep:** `regime_a_ring_corpus_sweep.json`.
+- The RINGCOST diagnostic is gated behind `TT_MM_RINGCOST`; production compiles are silent. The exhaustive
+  7!-per-group search is a one-time host cost at program compile (<10 ms).
 
-## Notes
-- The exhaustive 7!-per-group search runs host-side once per program compile; the RINGCOST diagnostic line is
-  gated behind `TT_MM_RINGCOST` so the production path is silent on compile.
-- Raw data: `regime_a_ringorder_bench.json` (agg run 2) + `regime_a_ringorder_bench_run1.json` (agg run 1) —
-  every relaunch, per-RISC spans, and per-group RINGCOST. The Sm=1 bank/greedy/opt data is
-  `regime_a_ringorder_bench_bankopt.json` (recovered from the prior ring-order commit).
+## Objective code retained vs removed
+`pareto` (default), `mm0`, `maxedge`, and `total` are retained as internal cache-hashed A/B diagnostics —
+each reproduces a decision-relevant point (mm0 = pareto's reference / prior objective; maxedge = the
+Sm4-regressing objective; total = the Sm1-regressing alternative), plus `bank` (pre-ring baseline). The
+dominated `greedy` (non-exhaustive heuristic) and `maxring` (dominated by pareto/total, no distinct evidence)
+are **removed**; recover from the implementation commit for this task.

@@ -113,16 +113,19 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
                 if tok.startswith(("group=", "wnoc=", "sel=", "Sm=", "sel_perring=")):
                     k, v = tok.split("=", 1)
                     g[k] = v
-                for od in ("bank", "greedy", "mm0", "agg"):
-                    # token form: <od>[perm]aggmax=<M>aggtot=<T>
-                    if tok.startswith(od + "[") and "aggmax=" in tok and "aggtot=" in tok:
-                        g[od + "_aggmax"] = int(tok.split("aggmax=")[1].split("aggtot=")[0])
-                        g[od + "_aggtot"] = int(tok.split("aggtot=")[1])
+                for od in ("bank", "greedy", "mm0", "maxedge", "maxring", "total", "pareto"):
+                    # token form: <od>[perm]=aggmax:aggtot:maxringtot
+                    if tok.startswith(od + "[") and "]=" in tok:
+                        vals = tok.split("]=", 1)[1].split(":")
+                        if len(vals) == 3:
+                            g[od + "_aggmax"] = int(vals[0])
+                            g[od + "_aggtot"] = int(vals[1])
+                            g[od + "_maxringtot"] = int(vals[2])
             if "group" in g:
                 ringcost.append(g)
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -573,33 +576,49 @@ def pipelined(relaunches=3):
     print("PIPELINED DONE", flush=True)
 
 
-# Sm>1 shapes (explicit cfg) exercise the aggregate-vs-mm0 objective difference; Sm=1 controls confirm parity.
+# Sm>1 shapes (explicit cfg) exercise the objective differences; Sm=1 controls confirm parity + noise floor.
 RING_SHAPES = [
-    ("target", "256x2048x1024_sm2", 256, 2048, 1024, None),  # auto -> (1,4,2,2,2), Sm=2
-    ("sm", "128x6144x4608_sm2", 128, 6144, 4608, (1, 6, 2, 2, 1)),  # Sm=2 wide
-    ("sm", "256x2048x1024_sm4", 256, 2048, 1024, (1, 1, 4, 2, 2)),  # Sm=4 (4 mm-rings)
+    ("target", "256x2048x1024_sm2", 256, 2048, 1024, None),  # auto -> (1,4,2,2,2), Sm=2 (production)
+    ("sm2", "128x6144x4608_sm2", 128, 6144, 4608, (1, 6, 2, 2, 1)),  # Sm=2 wide
+    ("sm4", "256x2048x1024_sm4", 256, 2048, 1024, (1, 1, 4, 2, 2)),  # Sm=4 synthetic (4 mm-rings)
+    ("sm4", "256x6144x4608_sm4", 256, 6144, 4608, (1, 3, 4, 2, 1)),  # 2nd feasible Sm=4 (wide, Pk3)
+    ("sm3", "256x2048x1024_sm3", 256, 2048, 1024, (1, 1, 3, 2, 2)),  # Sm=3 (balanced M-split)
     ("control", "256x6144x768", 256, 6144, 768, None),  # Sm=1 primary
     ("control", "256x6144x4608", 256, 6144, 4608, None),  # Sm=1 wide-N
     ("control", "256x6144x2304", 256, 6144, 2304, None),  # Sm=1 wide-N
 ]
 
+RING_OBJ = [
+    ("bank", 4096),
+    ("mm0", 16384),
+    ("maxedge", 0),  # current default
+    ("maxring", 32768),
+    ("total", 65536),
+    ("pareto", 131072),
+]
+
 
 def _ring_agg(ringcost):
-    # op-level route cost per order, aggregated ACROSS the (kk,nn) ring groups: worst group-aggregate max-edge
-    # (max over groups of the group's worst-over-mm-rings edge) + sum of group-aggregate total hops.
+    # op-level route cost per objective, aggregated ACROSS the (kk,nn) ring groups: worst group-aggregate
+    # max-edge (max over groups) + sum of group-aggregate total hops + worst group maxringtot.
     agg = {}
-    for od in ("bank", "greedy", "mm0", "agg"):
+    for od in ("bank", "greedy", "mm0", "maxedge", "maxring", "total", "pareto"):
         mx = [g[od + "_aggmax"] for g in ringcost if (od + "_aggmax") in g]
         tt = [g[od + "_aggtot"] for g in ringcost if (od + "_aggtot") in g]
-        agg[od] = {"max_edge": (max(mx) if mx else None), "total_hops": (sum(tt) if tt else None)}
+        mr = [g[od + "_maxringtot"] for g in ringcost if (od + "_maxringtot") in g]
+        agg[od] = {
+            "max_edge": (max(mx) if mx else None),
+            "total_hops": (sum(tt) if tt else None),
+            "max_ring_total": (max(mr) if mr else None),
+        }
     return agg
 
 
 def ringorder(relaunches=3):
-    # A/B: bank (1<<12) vs mm0-opt (1<<14) vs agg-opt (default, mask 0) in0 ring ordering, INTERLEAVED
-    # relaunches. Route cost (per-order group-aggregate max-edge/total-hops, aggregated across ring groups,
-    # from the factory RINGCOST) + wall/%change/util/per-RISC/PCC. Raw: regime_a_ringorder_bench.json.
-    VARIANTS = [("bank", 4096), ("mm0", 16384), ("agg", 0)]  # agg = mask 0 (default); bank/mm0 = diagnostics
+    # A/B over ring-order objectives (bank / mm0 / maxedge=default / maxring / total / pareto), INTERLEAVED
+    # relaunches. Route cost (op-aggregate, from the factory RINGCOST) + wall/%change vs bank AND vs mm0 /
+    # util / per-RISC / PCC / selected perms. Raw: regime_a_ringorder_bench.json.
+    VARIANTS = RING_OBJ
     out = []
     for grp, label, M, K, N, explicit in RING_SHAPES:
         cfg = _cfg_for(M, K, N, explicit)
@@ -623,45 +642,39 @@ def ringorder(relaunches=3):
                 "risc": (oks[0]["risc"] if oks else None),
             }
         bm = per["bank"]["med_us"]
+        m0 = per["mm0"]["med_us"]
         for v, _ in VARIANTS:
             m = per[v]["med_us"]
             per[v]["vs_bank_pct"] = ((m / bm - 1) * 100) if (bm and m) else None
-        # also mm0-relative for agg (the actual decision: agg vs the current production mm0)
-        m0 = per["mm0"]["med_us"]
-        ag = per["agg"]["med_us"]
-        per["agg"]["vs_mm0_pct"] = ((ag / m0 - 1) * 100) if (m0 and ag) else None
-        # route cost from the agg run's RINGCOST (prints bank/greedy/mm0/agg); fall back to the mm0 run.
-        rc = next((x["ringcost"] for x in runs["agg"] if x.get("ringcost")), None) or next(
-            (x["ringcost"] for x in runs["mm0"] if x.get("ringcost")), []
+            per[v]["vs_mm0_pct"] = ((m / m0 - 1) * 100) if (m0 and m) else None
+        # route cost from any run that emitted RINGCOST (maxedge=default prints all candidates).
+        rc = None
+        for v, _ in VARIANTS:
+            rc = next((x["ringcost"] for x in runs[v] if x.get("ringcost")), None)
+            if rc:
+                break
+        route = _ring_agg(rc or [])
+        rec = {
+            "group": grp,
+            "label": label,
+            "M": M,
+            "K": K,
+            "N": N,
+            "cfg": list(cfg),
+            "ideal_us": ideal,
+            "route_cost": route,
+            "ringcost_groups": rc,
+        }
+        for v, _ in VARIANTS:
+            rec[v] = per[v]
+        out.append(rec)
+        summ = " ".join(
+            f"{v}={per[v]['med_us'] and round(per[v]['med_us'],1)}"
+            f"(b{per[v]['vs_bank_pct'] and round(per[v]['vs_bank_pct'],1)}"
+            f"/m{per[v]['vs_mm0_pct'] and round(per[v]['vs_mm0_pct'],1)})"
+            for v, _ in VARIANTS
         )
-        route = _ring_agg(rc)
-        out.append(
-            {
-                "group": grp,
-                "label": label,
-                "M": M,
-                "K": K,
-                "N": N,
-                "cfg": list(cfg),
-                "ideal_us": ideal,
-                "route_cost": route,
-                "ringcost_groups": rc,
-                "bank": per["bank"],
-                "mm0": per["mm0"],
-                "agg": per["agg"],
-            }
-        )
-        print(
-            f"[ring/{grp}] {label:20} cfg={cfg} ideal={ideal:.1f}  "
-            f"bank={bm if bm is None else round(bm,1)} "
-            f"mm0={m0 and round(m0,1)}({per['mm0']['vs_bank_pct'] and round(per['mm0']['vs_bank_pct'],1)}%) "
-            f"agg={ag and round(ag,1)}({per['agg']['vs_bank_pct'] and round(per['agg']['vs_bank_pct'],1)}%) "
-            f"agg_vs_mm0={per['agg']['vs_mm0_pct'] and round(per['agg']['vs_mm0_pct'],1)}%  "
-            f"route[aggmax bank={route['bank']['max_edge']} mm0={route['mm0']['max_edge']} "
-            f"agg={route['agg']['max_edge']} | aggtot bank={route['bank']['total_hops']} "
-            f"mm0={route['mm0']['total_hops']} agg={route['agg']['total_hops']}]",
-            flush=True,
-        )
+        print(f"[ring/{grp}] {label:20} cfg={cfg} ideal={ideal:.1f} (pct = %vs_bank / %vs_mm0)\n    {summ}", flush=True)
         json.dump(out, open(f"{HERE}/regime_a_ringorder_bench.json", "w"), indent=2)
     print("RINGORDER DONE", flush=True)
 
