@@ -1,0 +1,55 @@
+{
+  "batch": 32,
+  "results": {
+    "functional_bf16": {
+      "decode_ms": 4.201479479670525,
+      "decode_pcc": 0.9999929726493032,
+      "prefill_ms": 4.19252272695303,
+      "prefill_pcc": 0.999996709626048
+    },
+    "optimized_advisor_all_bfp4": {
+      "decode_ms": 0.804015570320189,
+      "decode_pcc": 0.9999967207675681,
+      "prefill_ms": 3.272250760346651,
+      "prefill_pcc": 0.9999822874806308
+    },
+    "optimized_advisor_bfp8": {
+      "decode_ms": 1.0081375110894442,
+      "decode_pcc": 0.9999945725977344,
+      "prefill_ms": 4.606521222740412,
+      "prefill_pcc": 0.9999968443057312
+    },
+    "optimized_dram_all_bfp4_16c_control": {
+      "decode_ms": 0.8095888001844287,
+      "decode_pcc": 0.9999965919240054,
+      "prefill_ms": 3.299051895737648,
+      "prefill_pcc": 0.9999822874806308
+    },
+    "optimized_dram_all_bfp4_48c_control": {
+      "decode_ms": 0.7991017214953899,
+      "decode_pcc": 0.9999967039121638,
+      "prefill_ms": 3.331253305077553,
+      "prefill_pcc": 0.9999822874806308
+    },
+    "optimized_dram_all_bfp4_attention_hifi2": {
+      "decode_ms": 0.8306510094553232,
+      "decode_pcc": 0.9999966603412445,
+      "prefill_ms": 3.2893437892198563,
+      "prefill_pcc": 0.999982538808874
+    },
+    "optimized_dram_all_bfp4_mlp_hifi2": {
+      "decode_ms": 1.1162118008360267,
+      "decode_pcc": 0.9999966700149545,
+      "prefill_ms": 3.995517734438181,
+      "prefill_pcc": 0.9999822874806308
+    },
+    "optimized_selected_dram_all_bfp4_auto": {
+      "decode_ms": 0.7934960117563605,
+      "decode_pcc": 0.9999966700149545,
+      "prefill_ms": 3.2780207693576813,
+      "prefill_pcc": 0.9999822874806308
+    }
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_20"
+}

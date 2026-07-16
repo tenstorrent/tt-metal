@@ -1,0 +1,11 @@
+{
+  "batch": 32,
+  "decode_iterations": 3,
+  "decode_wall_ms": 0.8261750141779581,
+  "decode_wall_total_ms": 2.4785250425338745,
+  "prefill_iterations": 2,
+  "prefill_wall_ms": 4.02398593723774,
+  "prefill_wall_total_ms": 8.04797187447548,
+  "sequence_length": 17,
+  "weights": "real_layer_20"
+}

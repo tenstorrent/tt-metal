@@ -1,0 +1,51 @@
+{
+  "architecture": "blackhole",
+  "batch": 32,
+  "decode": {
+    "device_gap_ms_per_iteration": 0.032743333,
+    "device_kernel_ms_per_iteration": 0.781833333,
+    "device_modeled_total_ms_per_iteration": 0.814576667,
+    "dominant_matmuls": {
+      "down_us": 122.5,
+      "gate_us": 132.0,
+      "output_projection_us": 27.0,
+      "qkv_us": 38.0,
+      "up_us": 133.0
+    },
+    "iterations": 3,
+    "modeled_dram_bandwidth_gb_s": 152,
+    "modeled_dram_roofline_percent": 29.7,
+    "ops_per_iteration": 42,
+    "theoretical_roofline": {
+      "aggregate_dram_bandwidth_gb_s": 512,
+      "bfp4_tile_bytes_per_element": 0.5625,
+      "bfp8_tile_bytes_per_element": 1.0625,
+      "kv_cache_read_bytes_at_32_tile_padded_positions": 2228224,
+      "mandatory_bytes": 135823360,
+      "projection_weight_bytes": 133595136,
+      "projection_weight_elements": 237502464,
+      "roofline_fraction_of_wall_percent": 32.1094,
+      "roofline_ms_per_layer_decode": 0.26528
+    },
+    "wall_ms_per_iteration": 0.8261750141779581
+  },
+  "prefill": {
+    "device_gap_ms_per_iteration": 1.1974355,
+    "device_kernel_ms_per_iteration": 2.6860885,
+    "device_modeled_total_ms_per_iteration": 3.883524,
+    "dominant_matmuls": {
+      "down_us": 321.0,
+      "gate_us": 335.0,
+      "output_projection_us": 54.0,
+      "qkv_us": 84.0,
+      "up_us": 335.0
+    },
+    "iterations": 2,
+    "modeled_dram_bandwidth_gb_s": 82,
+    "modeled_dram_roofline_percent": 16.0,
+    "ops_per_iteration": 215,
+    "wall_ms_per_iteration": 4.02398593723774
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_20"
+}

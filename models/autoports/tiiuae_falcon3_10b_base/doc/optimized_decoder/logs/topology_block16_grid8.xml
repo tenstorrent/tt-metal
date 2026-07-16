@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="8.876" timestamp="2026-07-16T10:21:03.063352+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.tiiuae_falcon3_10b_base.tests.test_optimized_decoder" name="test_decode_candidate_sweep[device_params0]" time="7.673"><properties><property name="start_timestamp" value="2026-07-16T10:21:03" /><property name="end_timestamp" value="2026-07-16T10:21:11" /></properties><failure message="RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception&#10;info:&#10;Statically allocated circular buffers on core range [0-0 - 7-8] grow to 2269952 B which is beyond max L1 size of 1572864 B&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x7067f2e4e4ca]&#10; --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)&#10; --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)&#10; --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&amp;, tt::tt_metal::distributed::MeshWorkload&amp;, bool)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7067f2ff823e]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1804698) [0x7067f3004698]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7067f2ff79e6]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7067f2ff647e]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7067f2ff537a]&#10; --- ttnn::prim::matmul(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, ttnn::prim::MatmulParams const&amp;)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7067f2f8a65a]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7067f2f89a43]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e433f) [0x7067f3ae433f]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3a6b) [0x7067f3ae3a6b]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7067f3915575]&#10; --- python() [0x1ac8a22]&#10; --- python() [0x18c68da]&#10; --- python(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- python() [0x1ac8a22]&#10; --- python() [0x18c68da]&#10; --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- python() [0x1ac8a22]&#10; --- python() [0x18c68da]&#10; --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- python() [0x1ac8a22]&#10; --- python() [0x18c68da]&#10; --- python(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- python() [0x1ac8a22]&#10; --- python() [0x18c68da]&#10; --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- python() [0x1ac8a22]&#10; --- python() [0x18c68da]&#10; --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- python() [0x1ac8a22]&#10; --- python() [0x18c68da]&#10; --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- python(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- python() [0x1894a8c]&#10; --- python() [0x1824b7f]&#10; --- python(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]&#10; --- python() [0x198cd22]&#10; --- python(Py_RunMain+0x345) [0x198c605]&#10; --- python() [0x198c298]&#10; --- python() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x706839fb81ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x706839fb828b]&#10; --- python(_start+0x29) [0x19a4a69]">device = MeshDevice(1x1 grid, 1 devices)
+
+    @pytest.mark.skipif(os.getenv("FALCON3_RUN_CANDIDATE_SWEEP") != "1", reason="manual optimization sweep")
+    @pytest.mark.parametrize("device_params", [{"trace_region_size": 64_000_000}], indirect=True)
+    @pytest.mark.timeout(1800)
+    def test_decode_candidate_sweep(device):
+        config = _config()
+        batch = 32
+        seq_len = EMITTED_PREFILL_SEQUENCE
+        use_real_weights = os.getenv("FALCON3_REAL_WEIGHTS") == "1"
+        state_dict = (
+            _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
+            if use_real_weights
+            else _synthetic_state_dict(config, IR_REPRESENTATIVE_LAYER)
+        )
+        hf_layer = _hf_layer(config, state_dict, IR_REPRESENTATIVE_LAYER)
+        input_source = os.getenv("FALCON3_INPUT_SOURCE", "recorded")
+        if input_source == "recorded":
+            hidden, decode_hidden = _recorded_layer20_inputs(batch)
+        elif input_source == "random_sensitivity":
+            generator = torch.Generator().manual_seed(314)
+            hidden = torch.randn((batch, seq_len, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+            decode_hidden = torch.randn((batch, 1, config.hidden_size), generator=generator, dtype=torch.bfloat16)
+        else:
+            raise ValueError(f"Unsupported FALCON3_INPUT_SOURCE={input_source!r}")
+        hf_cache = DynamicCache(config=config)
+        expected_prefill = _hf_prefill(hf_layer, config, hidden, cache=hf_cache)
+        hf_layer_cache = hf_cache.layers[IR_REPRESENTATIVE_LAYER]
+        expected_key_cache = hf_layer_cache.keys[:, :, :seq_len, :].clone()
+        expected_value_cache = hf_layer_cache.values[:, :, :seq_len, :].clone()
+        expected_decode_query = _hf_decode_query(hf_layer, config, decode_hidden, seq_len)
+        expected_decode = _hf_decode(hf_layer, config, decode_hidden, hf_cache, seq_len)
+
+        candidates = {
+            "advisor_bfp8": {},
+            "advisor_bfp8_lofi": {"precision_policy": "bfp8_lofi"},
+            "advisor_attention_bfp8_lofi": {"precision_policy": "attention_bfp8_lofi"},
+            "advisor_mlp_bfp8_lofi": {"precision_policy": "mlp_bfp8_lofi"},
+            "advisor_attention_bfp4": {"precision_policy": "attention_bfp4_lofi"},
+            "advisor_mlp_bfp4": {"precision_policy": "mlp_bfp4_lofi"},
+            "selected_attention_lofi": {"precision_policy": "mlp_bfp4_attention_lofi"},
+            "selected_mlp_hifi2": {"precision_policy": "mlp_bfp4_hifi2"},
+            "advisor_all_bfp4": {"precision_policy": "all_bfp4_lofi"},
+            "advisor_all_bfp4_grid8": {
+                "precision_policy": "all_bfp4_lofi",
+                "prefill_grid_x": 8,
+                "prefill_in0_block_w": 8,
+            },
+            "advisor_explicit_mask": {"use_explicit_decode_mask": True},
+            "advisor_wide_blocks": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_mlp_geometry": "wide_blocks",
+            },
+            "advisor_wider_blocks": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_mlp_geometry": "wider_blocks",
+            },
+            "advisor_packed_mlp": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "use_packed_mlp": True,
+                "prefill_in0_block_w": 1,
+            },
+            "advisor_residual_legacy": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_residual_mode": "legacy_32core",
+            },
+            "advisor_residual_report": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_residual_mode": "report",
+            },
+            "advisor_report_sharded_inputs": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "advisor_residual_mode": "report",
+                "advisor_matmul_input_mode": "report_sharded",
+            },
+            "advisor_large_prefill_grid": {"precision_policy": "mlp_bfp4_lofi", "prefill_grid_x": 11},
+            "prefill_grid8": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "prefill_grid_x": 8,
+                "prefill_in0_block_w": 8,
+            },
+            "prefill_block1": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 1},
+            "prefill_block2": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 2},
+            "prefill_block4": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 4},
+            "prefill_block8": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 8},
+            "prefill_block16": {"precision_policy": "mlp_bfp4_lofi", "prefill_in0_block_w": 16},
+            "prefill_block16_grid8": {
+                "precision_policy": "mlp_bfp4_lofi",
+                "prefill_grid_x": 8,
+                "prefill_in0_block_w": 16,
+            },
+            "dram_packed_bfp8": {"decode_matmul_mode": "dram_sharded", "use_packed_mlp": True},
+            "dram_mlp_bfp4_24c": {
+                "decode_matmul_mode": "dram_sharded",
+                "precision_policy": "mlp_bfp4_lofi",
+                "dram_mlp_target_cores": 24,
+            },
+            "dram_mlp_bfp4_48c": {
+                "decode_matmul_mode": "dram_sharded",
+                "precision_policy": "mlp_bfp4_lofi",
+                "dram_mlp_target_cores": 48,
+            },
+            "dram_all_bfp4_24c": {
+                "decode_matmul_mode": "dram_sharded",
+                "precision_policy": "all_bfp4_lofi",
+                "dram_mlp_target_cores": 24,
+            },
+            "dram_all_bfp4_48c": {
+                "decode_matmul_mode": "dram_sharded",
+                "precision_policy": "all_bfp4_lofi",
+                "dram_mlp_target_cores": 48,
+            },
+            "dram_all_bfp4_48c_unaligned_down": {
+                "decode_matmul_mode": "dram_sharded",
+                "precision_policy": "all_bfp4_lofi",
+                "dram_mlp_target_cores": 48,
+                "align_dram_mlp_down_input": False,
+            },
+            "dram_all_bfp4_48c_packed": {
+                "decode_matmul_mode": "dram_sharded",
+                "precision_policy": "all_bfp4_lofi",
+                "dram_mlp_target_cores": 48,
+                "use_packed_mlp": True,
+                "prefill_in0_block_w": 1,
+            },
+        }
+        selected_candidates = os.getenv("FALCON3_CANDIDATES")
+        if selected_candidates:
+            selected_candidates = {name.strip() for name in selected_candidates.split(",") if name.strip()}
+            candidates = {name: value for name, value in candidates.items() if name in selected_candidates}
+            assert candidates, f"FALCON3_CANDIDATES selected no known candidate: {selected_candidates}"
+        results = {}
+        for name, overrides in candidates.items():
+            options = dict(overrides)
+            precision_policy = options.pop("precision_policy", "bfp8_hifi2")
+            options.setdefault("decode_matmul_mode", "shard_advisor")
+            bfp4_mlp_policy = precision_policy in (
+                "mlp_bfp4_lofi",
+                "mlp_bfp4_attention_lofi",
+                "mlp_bfp4_hifi2",
+                "all_bfp4_lofi",
+            )
+            options.setdefault("prefill_in0_block_w", 8 if bfp4_mlp_policy else 1)
+            options.setdefault("prefill_grid_x", 11 if bfp4_mlp_policy else 8)
+            model = OptimizedDecoder.from_state_dict(
+                state_dict,
+                hf_config=config,
+                layer_idx=IR_REPRESENTATIVE_LAYER,
+                mesh_device=device,
+                batch=batch,
+                precision_policy=precision_policy,
+                **options,
+            )
+&gt;           actual_prefill, key_cache, value_cache = _run_prefill(model, device, hidden)
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/autoports/tiiuae_falcon3_10b_base/tests/test_optimized_decoder.py:977:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/tiiuae_falcon3_10b_base/tests/test_optimized_decoder.py:197: in _run_prefill
+    tt_output = model.prefill_forward(tt_hidden, key_cache=key_cache, value_cache=value_cache)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/tiiuae_falcon3_10b_base/tt/optimized_decoder.py:1215: in prefill_forward
+    residual = self._prefill_mlp(residual)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/tiiuae_falcon3_10b_base/tt/optimized_decoder.py:1115: in _prefill_mlp
+    return self._prefill_mlp_chunk(residual)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/tiiuae_falcon3_10b_base/tt/optimized_decoder.py:1063: in _prefill_mlp_chunk
+    gate = ttnn.matmul(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.matmul', function=&lt;ttnn._ttnn.operations.matmul.matmul_t object at 0x7...&lt;function default_postprocess_golden_function_outputs at 0x7067a61e3420&gt;, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor([[[[-5.2490e-02, -1.4709e-02,  ...,  2.9785e-02,  2.9663e-02],
+               [ 2.7148e-01, -1.6309e-01, ...0.0078,  0.0000,  ...,  0.1094, -0.0312]], shape=Shape([3072, 23040]), dtype=DataType::BFLOAT4_B, layout=Layout::TILE))
+function_kwargs = {'compute_kernel_config': &lt;ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7067a1024f60&gt;, 'dtype': ...core_M=2,per_core_N=90,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=0,allowed_worker_cores=std::nullopt)}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+E               info:
+E               Statically allocated circular buffers on core range [0-0 - 7-8] grow to 2269952 B which is beyond max L1 size of 1572864 B
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x164e4ca) [0x7067f2e4e4ca]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+E                --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&amp;, tt::tt_metal::distributed::MeshWorkload&amp;, bool)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7067f2ff823e]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1804698) [0x7067f3004698]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7067f2ff79e6]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7067f2ff647e]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7067f2ff537a]
+E                --- ttnn::prim::matmul(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor&gt; const&amp;, ttnn::prim::MatmulParams const&amp;)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x178a65a) [0x7067f2f8a65a]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6matmulERKN2tt8tt_metal6TensorES6_bbRKSt8optionalIKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSG_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x373) [0x7067f2f89a43]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e433f) [0x7067f3ae433f]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4e3a6b) [0x7067f3ae3a6b]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7067f3915575]
+E                --- python() [0x1ac8a22]
+E                --- python() [0x18c68da]
+E                --- python(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- python() [0x1ac8a22]
+E                --- python() [0x18c68da]
+E                --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- python() [0x1ac8a22]
+E                --- python() [0x18c68da]
+E                --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- python() [0x1ac8a22]
+E                --- python() [0x18c68da]
+E                --- python(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- python() [0x1ac8a22]
+E                --- python() [0x18c68da]
+E                --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- python() [0x1ac8a22]
+E                --- python() [0x18c68da]
+E                --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- python() [0x1ac8a22]
+E                --- python() [0x18c68da]
+E                --- python(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- python(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- python() [0x1894a8c]
+E                --- python() [0x1824b7f]
+E                --- python(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+E                --- python() [0x198cd22]
+E                --- python(Py_RunMain+0x345) [0x198c605]
+E                --- python() [0x198c298]
+E                --- python() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x706839fb81ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x706839fb828b]
+E                --- python(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError</failure></testcase></testsuite></testsuites>

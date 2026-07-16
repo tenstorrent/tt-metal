@@ -1,0 +1,105 @@
+{
+  "activation_fixture": "/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_10b_base/doc/optimized_decoder/activations/layer20_inputs.safetensors",
+  "batch": 32,
+  "inputs": "HF embedding plus layers 0..19 for a genuine 31-token prompt and two following tokens",
+  "layer": 20,
+  "results": {
+    "all_bfp4_attention_hifi2": {
+      "decode_31_pcc": 0.9993401413978418,
+      "decode_31_query_pcc": 0.9969312780488495,
+      "decode_32_pcc": 0.999242062541218,
+      "decode_32_query_pcc": 0.9971095208329831,
+      "decode_ms": 0.8050259901210666,
+      "final_key_cache_pcc": 0.9965665819995204,
+      "final_value_cache_pcc": 0.9949900468246384,
+      "identity": {
+        "decode_matmul_mode": "shard_advisor",
+        "precision_policy": "all_bfp4_attention_hifi2",
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "prefill_key_cache_pcc": 0.9965540375336145,
+      "prefill_ms": 4.288855008780956,
+      "prefill_pcc": 0.9999479270397907,
+      "prefill_value_cache_pcc": 0.9949677735018795
+    },
+    "all_projections_bfp4_lofi": {
+      "decode_31_pcc": 0.9993275830161013,
+      "decode_31_query_pcc": 0.9969312780488495,
+      "decode_32_pcc": 0.9992474076528703,
+      "decode_32_query_pcc": 0.9971095208329831,
+      "decode_ms": 0.8043747628107667,
+      "final_key_cache_pcc": 0.9965665819995204,
+      "final_value_cache_pcc": 0.9949900468246384,
+      "identity": {
+        "decode_matmul_mode": "shard_advisor",
+        "precision_policy": "all_bfp4_lofi",
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "prefill_key_cache_pcc": 0.9965540375336145,
+      "prefill_ms": 4.156833980232477,
+      "prefill_pcc": 0.9999482737843247,
+      "prefill_value_cache_pcc": 0.9949677735018795
+    },
+    "attention_bfp4_mlp_bfp8": {
+      "decode_31_pcc": 0.9998081034636465,
+      "decode_31_query_pcc": 0.9969312780488495,
+      "decode_32_pcc": 0.9998473329892237,
+      "decode_32_query_pcc": 0.9971095208329831,
+      "decode_ms": 0.9991234866902232,
+      "final_key_cache_pcc": 0.9965590194522799,
+      "final_value_cache_pcc": 0.9949739216244494,
+      "identity": {
+        "decode_matmul_mode": "shard_advisor",
+        "precision_policy": "attention_bfp4_lofi",
+        "prefill_grid_x": 8,
+        "prefill_in0_block_w": 1
+      },
+      "prefill_key_cache_pcc": 0.9965467114600396,
+      "prefill_ms": 6.915682926774025,
+      "prefill_pcc": 0.9999838916233702,
+      "prefill_value_cache_pcc": 0.9949484864739846
+    },
+    "mlp_bfp4_attention_hifi2": {
+      "decode_31_pcc": 0.9994646165565341,
+      "decode_31_query_pcc": 0.999948985930213,
+      "decode_32_pcc": 0.99935830931069,
+      "decode_32_query_pcc": 0.9999469021646573,
+      "decode_ms": 0.8142425445839763,
+      "final_key_cache_pcc": 0.9998848650614991,
+      "final_value_cache_pcc": 0.9998705443040876,
+      "identity": {
+        "decode_matmul_mode": "shard_advisor",
+        "precision_policy": "mlp_bfp4_lofi",
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "prefill_key_cache_pcc": 0.9998840287791374,
+      "prefill_ms": 4.262034315615892,
+      "prefill_pcc": 0.9999580444760172,
+      "prefill_value_cache_pcc": 0.9998695822005547
+    },
+    "mlp_bfp4_attention_lofi": {
+      "decode_31_pcc": 0.9994674420407135,
+      "decode_31_query_pcc": 0.9999082768607706,
+      "decode_32_pcc": 0.9993474654898666,
+      "decode_32_query_pcc": 0.9999045483782942,
+      "decode_ms": 0.812732707709074,
+      "final_key_cache_pcc": 0.9998545208569787,
+      "final_value_cache_pcc": 0.9998320369525953,
+      "identity": {
+        "decode_matmul_mode": "shard_advisor",
+        "precision_policy": "mlp_bfp4_attention_lofi",
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "prefill_key_cache_pcc": 0.9998545768957922,
+      "prefill_ms": 4.138178192079067,
+      "prefill_pcc": 0.9999579778400203,
+      "prefill_value_cache_pcc": 0.9998316705402904
+    }
+  },
+  "sequence_length": 31,
+  "weights": "real_layer_20"
+}

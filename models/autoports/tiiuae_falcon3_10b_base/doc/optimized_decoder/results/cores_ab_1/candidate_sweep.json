@@ -1,0 +1,40 @@
+{
+  "batch": 32,
+  "inputs": "recorded",
+  "results": {
+    "dram_all_bfp4_24c": {
+      "decode_ms": 0.7930964417755604,
+      "decode_pcc": 0.9999966700149545,
+      "decode_query_pcc": 0.9922204307861329,
+      "key_cache_pcc": 0.9963860806469352,
+      "options": {
+        "decode_matmul_mode": "dram_sharded",
+        "dram_mlp_target_cores": 24,
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "all_bfp4_lofi",
+      "prefill_ms": 3.3082468435168266,
+      "prefill_pcc": 0.9999822874806308,
+      "value_cache_pcc": 0.994553536710655
+    },
+    "dram_all_bfp4_48c": {
+      "decode_ms": 0.7991023897193372,
+      "decode_pcc": 0.9999967039121638,
+      "decode_query_pcc": 0.9922204307861329,
+      "key_cache_pcc": 0.9963860806469352,
+      "options": {
+        "decode_matmul_mode": "dram_sharded",
+        "dram_mlp_target_cores": 48,
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "all_bfp4_lofi",
+      "prefill_ms": 3.2782088965177536,
+      "prefill_pcc": 0.9999822874806308,
+      "value_cache_pcc": 0.994553536710655
+    }
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_20"
+}
