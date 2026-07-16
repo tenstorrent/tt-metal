@@ -21,6 +21,9 @@ namespace tt::tt_metal {
 
 TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // Exercise the check itself regardless of any Blaze-safe sweep exporting the
+    // per-check opt-out (TT_METAL_EMULE_ASAN_SKIP_NOC_RACE) process-wide.
+    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_NOC_RACE");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
@@ -66,6 +69,9 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
 // resets the counter). The CB is cycled in balance so nothing else fires.
 TEST_F(MeshDeviceFixture, NoC_Barrier_Present_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+    // Exercise the check itself regardless of any Blaze-safe sweep exporting the
+    // per-check opt-out (TT_METAL_EMULE_ASAN_SKIP_NOC_RACE) process-wide.
+    ::unsetenv("TT_METAL_EMULE_ASAN_SKIP_NOC_RACE");
 
     auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
