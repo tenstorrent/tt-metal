@@ -401,6 +401,80 @@ void matmul_group(
     }
 }
 
+// Streamed grouped-K (DEFAULT for KGROUP): same one-pack-per-group accumulation as matmul_group, but the
+// input waits are STREAMED inside the FIRST output subblock's g-loop instead of prewaiting the whole group.
+// So the first matmul begins after block 0 (preserving the progressive startup overlap) while ring
+// forwarding + in1 reading continue. Later output subblocks of the group find all inputs resident (the first
+// subblock's cumulative waits reached group_size) and run with NO waits; in1 is popped by the caller only
+// after every subblock has consumed the group. in0 waits (first resident traversal only) are cumulative over
+// the whole resident slice ((group_start+g+1) blocks, CB0 never popped mid-slice); in1 waits are cumulative
+// relative to the current CB1 group front ((g+1) blocks). Math K order is identical to matmul_group.
+void matmul_group_streamed(
+    const uint32_t in0_cb,
+    const uint32_t in1_cb,
+    const uint32_t out_cb,
+    const uint32_t M_block_tiles,
+    const uint32_t N_block_tiles,
+    const uint32_t full_N_block_tiles,
+    const uint32_t K_block_tiles,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w,
+    const uint32_t group_start,
+    const uint32_t group_size,
+    const uint32_t in0_block_num_tiles,
+    const uint32_t in1_block_num_tiles,
+    const bool progressive_in0) {
+    bool first_subblock = true;
+    for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+        for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
+            tile_regs_acquire();
+            for (uint32_t g = 0; g < group_size; g++) {
+                if (first_subblock) {
+                    // Progressive per-block waits (first output subblock only; later subblocks are resident).
+#ifndef DIAG_FULL_IN0_WAIT
+                    if (progressive_in0) {
+                        cb_wait_front(in0_cb, (group_start + g + 1) * in0_block_num_tiles);
+                    }
+#endif
+                    cb_wait_front(in1_cb, (g + 1) * in1_block_num_tiles);
+                }
+                uint32_t in0_index =
+                    (group_start + g) * in0_block_num_tiles + M_start * K_block_tiles;  // resident block-major
+                uint32_t in1_index = g * in1_block_num_tiles + N_start;                 // CB1 group front
+                for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
+                    matmul_block(
+                        in0_cb,
+                        in1_cb,
+                        in0_index,
+                        in1_index,
+                        0 /*dst*/,
+                        false /*transpose*/,
+                        subblock_w,
+                        subblock_h,
+                        K_block_tiles);
+                    in0_index++;
+                    in1_index += full_N_block_tiles;
+                }
+            }
+            tile_regs_commit();
+
+            tile_regs_wait();
+            uint32_t write_dst_index = 0;
+            for (uint32_t h = 0; h < subblock_h; h++) {
+                uint32_t h_tile_id = M_start + h;
+                for (uint32_t w = 0; w < subblock_w; w++) {
+                    uint32_t w_tile_id = N_start + w;
+                    uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
+                    pack_tile<true>(write_dst_index, out_cb, out_tile_id);
+                    write_dst_index++;
+                }
+            }
+            tile_regs_release();
+            first_subblock = false;
+        }
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t K_num_blocks = get_compile_time_arg_val(0);
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
@@ -506,22 +580,23 @@ void kernel_main() {
 #ifdef KGROUP
             // ---- Grouped-K compute: consume Kg consecutive delivered blocks per group; pack the FP32 partial
             // ONCE per group (K_num_blocks/Kg materializations instead of K_num_blocks). Delivery/kb/ring are
-            // unchanged. Deliberate startup/compute tradeoff: a group waits for Kg in0/in1 blocks before it
-            // starts, but does fewer FP32 pack/L1-accumulate passes. Handles a partial final group. Only the
-            // IN0_KSLICE_RESIDENT path compiles KGROUP.
+            // unchanged. Handles a partial final group. Only the IN0_KSLICE_RESIDENT path compiles KGROUP.
+            // DEFAULT = STREAMED: the first output subblock consumes the group's blocks with per-block
+            // progressive waits (math after block 0). DIAG_KGROUP_PREWAIT = the old whole-group prewait
+            // (reintroduces per-group startup latency) — kept only for A/B comparison.
             constexpr uint32_t Kg = KGROUP;
+            const bool first_traversal = (m_block_iter == 0 && n_block_iter == 0);
             for (uint32_t group_start = 0; group_start < K_num_blocks; group_start += Kg) {
                 const uint32_t group_size = (group_start + Kg <= K_num_blocks) ? Kg : (K_num_blocks - group_start);
+#ifdef KGROUP_PREWAIT
                 const uint32_t group_end = group_start + group_size;
 #ifndef DIAG_FULL_IN0_WAIT
-                // Progressive resident-in0 fill preserved at GROUP granularity (first N-sub-block only):
-                // cumulative wait to group_end blocks; CB0 stays resident (no pop), later N-sub-blocks reuse it.
-                if (m_block_iter == 0 && n_block_iter == 0) {
+                // Prewait (diagnostic): whole-group cumulative in0 wait to group_end (first N-sub-block only).
+                if (first_traversal) {
                     cb_wait_front(in0_cb, group_end * in0_block_num_tiles);
                 }
 #endif
                 cb_wait_front(in1_cb, group_size * in1_block_num_tiles);
-
                 matmul_group(
                     in0_cb,
                     in1_cb,
@@ -536,6 +611,24 @@ void kernel_main() {
                     group_start * in0_block_num_tiles,  // resident block-major base of this group
                     in0_block_num_tiles,                // capacity stride between delivered blocks (in0)
                     in1_block_num_tiles);               // capacity stride between group blocks (in1, CB1 front)
+#else
+                // Streamed (default): waits are inside matmul_group_streamed's first output subblock.
+                matmul_group_streamed(
+                    in0_cb,
+                    in1_cb,
+                    intermediate_cb,
+                    current_M_block_tiles,
+                    current_N_block_tiles,
+                    N_block_tiles,
+                    K_block_tiles,
+                    current_subblock_h,
+                    current_subblock_w,
+                    group_start,
+                    group_size,
+                    in0_block_num_tiles,
+                    in1_block_num_tiles,
+                    first_traversal);
+#endif  // KGROUP_PREWAIT
 
                 cb_pop_front(in1_cb, group_size * in1_block_num_tiles);
                 if (group_start == 0) {

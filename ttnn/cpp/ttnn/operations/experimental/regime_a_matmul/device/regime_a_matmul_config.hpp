@@ -67,6 +67,12 @@ enum RegimeADiag : uint32_t {
     DIAG_KGROUP2 = 1u << 11,
     DIAG_KGROUP4 = 1u << 12,
     DIAG_KGROUP8 = 1u << 13,
+    // Grouped-K wait discipline. DEFAULT (this bit CLEAR, with a KGROUP bit) = STREAMED: acquire DST once per
+    // output subblock, then consume the group's blocks with per-block progressive cumulative waits INSIDE the
+    // first subblock (math begins after block 0, preserving the progressive startup overlap) and pack once.
+    // This bit selects the older PREWAIT discipline: wait the whole Kg-block group up front, then matmul —
+    // kept only as an A/B diagnostic (it reintroduces the per-group startup latency). No effect without KGROUP.
+    DIAG_KGROUP_PREWAIT = 1u << 14,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
