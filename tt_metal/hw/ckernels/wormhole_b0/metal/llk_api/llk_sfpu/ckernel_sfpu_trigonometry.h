@@ -444,10 +444,8 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c3.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c2 = -0x1.24p-3f;
         q = __builtin_rvtt_sfpmad(q.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-        sfpi::vFloat c1 = 0x1.99938ap-3f;
-        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-        sfpi::vFloat c0 = -0x1.555558p-2f;
-        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        q = q * s + sfpi::vConstFloatPrgm1;
+        q = q * s + sfpi::vConstFloatPrgm2;
     }
     sfpi::vFloat half_pi = 0x1.921fb6p+0f;
     sfpi::vFloat t = q * s;
@@ -886,6 +884,8 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
     if constexpr (is_fp32_dest_acc_en) {
         sfpi::vConstIntPrgm0 = RECIPROCAL_GT0_MAGIC_SEED;
+        sfpi::vConstFloatPrgm1 = 0x1.99938ap-3f;
+        sfpi::vConstFloatPrgm2 = -0x1.555558p-2f;
     } else {
         // Initialisation for use of sfpu_reciprocal<false> by sfpu_atan_bf16.
         sfpu_reciprocal_init<false>();
