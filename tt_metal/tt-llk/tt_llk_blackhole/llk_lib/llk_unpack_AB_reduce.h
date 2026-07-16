@@ -37,44 +37,46 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
     // Validate tensor shape for tile-dependent operations
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    constexpr bool is_max                  = pool_type == PoolType::MAX;
-    constexpr bool swap_operands           = (reduce_dim == ReduceDim::REDUCE_ROW) && !is_max;
-    constexpr bool is_scalar               = reduce_dim == ReduceDim::REDUCE_SCALAR;
-    constexpr std::uint32_t REPLAY_BUF_LEN = 2;
-    constexpr std::uint32_t clear_src      = swap_operands ? Srcs::SrcB : Srcs::SrcA;
+    constexpr bool is_max             = pool_type == PoolType::MAX;
+    constexpr bool swap_operands      = (reduce_dim == ReduceDim::REDUCE_ROW) && !is_max;
+    constexpr std::uint32_t clear_src = swap_operands ? Srcs::SrcB : Srcs::SrcA;
 
-    const bool full_tile          = swap_operands && (tensor_shape.total_num_faces() == 4);
     const bool is_tiny            = tensor_shape.face_r_dim < FACE_R_DIM;
-    const std::uint32_t innerloop = full_tile ? 1 : tensor_shape.total_num_faces();
     const std::uint32_t clear_val = is_max ? 1 : p_unpacr_nop::CLR_SRC_0;
 
-    load_replay_buf(
-        0,
-        REPLAY_BUF_LEN,
-        [full_tile]
-        {
-            if (full_tile)
-            {
-                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            }
-            else
-            {
-                TTI_UNPACR(Srcs::SrcA, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-                TTI_UNPACR(Srcs::SrcB, 0b01, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-            }
-        });
-
-    const std::uint32_t replay = lltt::replay_insn(0, REPLAY_BUF_LEN);
-
-    if (is_tiny || is_scalar)
+    if (is_tiny)
     {
-        ckernel_template tmp(1, innerloop, TT_OP_UNPACR_NOP(clear_src, 0, 0, 0, 0, 0, 0, clear_val, p_unpacr_nop::CLR_SRC), replay);
+        constexpr std::uint32_t REPLAY_BUF_LEN = 4;
+        load_replay_buf(
+            0,
+            REPLAY_BUF_LEN,
+            []
+            {
+                TTI_UNPACR(Srcs::SrcA, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcA, 0b00010001, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcB, 0b00010001, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcB, 0b00010001, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            });
+
+        const std::uint32_t replay = lltt::replay_insn(0, REPLAY_BUF_LEN);
+        ckernel_template tmp(1, 1, TT_OP_UNPACR_NOP(clear_src, 0, 0, 0, 0, 0, 0, clear_val, p_unpacr_nop::CLR_SRC), replay);
         tmp.program();
     }
     else
     {
-        ckernel_template tmp(1, innerloop, replay);
+        constexpr std::uint32_t REPLAY_BUF_LEN = 2;
+        load_replay_buf(
+            0,
+            REPLAY_BUF_LEN,
+            []
+            {
+                TTI_UNPACR(Srcs::SrcA, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+                TTI_UNPACR(Srcs::SrcB, 0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+            });
+
+        const std::uint32_t replay = lltt::replay_insn(0, REPLAY_BUF_LEN);
+
+        ckernel_template tmp(1, 1, replay);
         tmp.program();
     }
 }
@@ -105,24 +107,14 @@ inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape
     // Validate tensor shape for tile-dependent operations
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    constexpr bool is_max        = pool_type == PoolType::MAX;
-    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && !is_max;
-
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>((reduce_dim == ReduceDim::REDUCE_ROW));
 
-    const bool full_tile = swap_operands && (tensor_shape.total_num_faces() == 4);
+    const bool is_tiny = tensor_shape.face_r_dim < FACE_R_DIM;
 
-    if (full_tile)
-    {
-        const std::uint32_t x_end = tensor_shape.total_num_faces() * FACE_R_DIM * FACE_C_DIM - 1;
-        TT_SETADCXX(p_setadc::UNP_A, x_end, 0x0);
-        TT_SETADCXX(p_setadc::UNP_B, x_end, 0x0);
-    }
-    else
-    {
-        config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape.face_r_dim);
-        config_unpacker_x_end<p_setadc::UNP_B>(swap_operands ? tensor_shape.face_r_dim : 1);
-    }
+    const std::uint32_t x_end =
+        is_tiny ? (tensor_shape.face_r_dim * FACE_C_DIM - 1) : (tensor_shape.total_num_faces() * tensor_shape.face_r_dim * FACE_C_DIM - 1);
+    TT_SETADCXX(p_setadc::UNP_A, x_end, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, x_end, 0x0);
 
     // Configure unpack MOP
     _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape);
