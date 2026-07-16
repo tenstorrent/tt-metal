@@ -581,16 +581,83 @@ def _git(repo_root: Path, *args: str) -> str:
         return ""
 
 
+# chip-index -> its board's PCI-resettable local chip, snapshotted while healthy. RESET PATH ONLY --
+# nothing about mesh-open / parallelism / scorecard reads any of this; it exists solely to pick
+# `tt-smi -r` targets so a whole n300 board resets (never half a board, never a non-PCIe remote chip).
+_BOARD_MAP_FILE = Path(tempfile.gettempdir()) / "perf_mcp_board_topology.json"
+
+
+def _read_board_topology() -> dict | None:
+    """Live-read chip-index -> board-local-chip from tt-smi -s. Two ASICs of an n300 share a board_id;
+    only the one with a real PCI bus_id is resettable, and resetting it resets its remote partner too.
+    Returns {str(chip): local_chip_index} or None. Static per host (board_ids / BDFs don't change)."""
+    try:
+        tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+        r = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=120)
+        di = (json.loads(r.stdout) or {}).get("device_info") or []
+    except Exception:  # noqa: BLE001
+        return None
+    board_of: dict[int, str] = {}
+    local_of_board: dict[str, int] = {}
+    for i, dev in enumerate(di):
+        bi = dev.get("board_info") or {}
+        bid = bi.get("board_id")
+        board_of[i] = bid
+        bus = bi.get("bus_id")
+        if bid is not None and bus and bus != "N/A":
+            local_of_board.setdefault(bid, i)
+    m = {str(i): local_of_board.get(board_of.get(i)) for i in board_of}
+    m = {k: v for k, v in m.items() if v is not None}
+    return m or None
+
+
+def _capture_board_topology() -> None:
+    """Persist the reset map while the board is HEALTHY (startup) so the reset path has a trustworthy
+    map even if the board later wedges. Best-effort; reset falls back to a live read if the file's gone.
+    RESET PATH ONLY -- captured here, consumed only by _board_reset_targets."""
+    m = _read_board_topology()
+    if m:
+        try:
+            _BOARD_MAP_FILE.write_text(json.dumps(m))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _board_reset_targets(chip_ids: list[int]) -> str | None:
+    """Map logical chip ids -> the PCI-resettable LOCAL chip of each board they live on, using the map
+    captured at healthy startup (live-read fallback). Ensures a reset hits whole n300 boards -- never
+    half a board, never a non-PCIe remote chip (the half-reset fabric that caused the ETH wedge).
+    Returns a sorted comma list, or None if no topology is available. RESET PATH ONLY."""
+    m = None
+    try:
+        m = json.loads(_BOARD_MAP_FILE.read_text())
+    except Exception:  # noqa: BLE001
+        m = None
+    if not m:
+        m = _read_board_topology()
+    if not m:
+        return None
+    targets = {m[str(c)] for c in chip_ids if str(c) in m and m[str(c)] is not None}
+    return ",".join(str(x) for x in sorted(targets)) if targets else None
+
+
 def _reset_chip_list(devices: str) -> str:
-    """Hardware-agnostic reset target derived purely from --devices: explicit ids pass through, 'single'
-    -> '0', 'all'/'' -> the enumerated chip ids. No board-specific quirks."""
+    """BOARD-AWARE reset target derived from --devices. Explicit ids / 'single' are translated to the
+    PCI-resettable LOCAL chip of each board they live on (so a whole n300 board resets, never half of
+    one). 'all'/'' returns '' so the caller uses a bare `tt-smi -r` (resets every board)."""
     d = (devices or "").strip().lower()
-    if d and d not in ("all", "single"):
-        return d
+    if d in ("all", ""):
+        return ""
     if d == "single":
-        return "0"
-    n = _chip_count(devices)
-    return ",".join(str(i) for i in range(n)) if n else ""
+        req = [0]
+    else:
+        req = [int(x) for x in d.split(",") if x.strip().isdigit()]
+    if not req:
+        return ""
+    board = _board_reset_targets(req)
+    if board is not None:
+        return board
+    return ",".join(str(x) for x in req)  # fallback: raw ids if topology probe failed
 
 
 def _reset_devices(devices: str) -> str:
@@ -985,6 +1052,7 @@ def optimize_pipeline(
         os.path.exists(kernel_log) and os.remove(kernel_log)  # fresh ladder state per pipeline
     except OSError:
         pass
+    _capture_board_topology()  # snapshot chip->board reset map while the device is healthy (reset-only)
     cfg = _mcp_config(repo_root, manifest_path, pipe, devices, kernel_log)
     _cov_env = cfg["mcpServers"]["perf-mcp"]["env"]
     _cov, _cov_facts = _coverage_layers(
@@ -1237,18 +1305,6 @@ def _chip_count(devices) -> int:
         return max(1, len([x for x in d.split(",") if x.strip()]))
     if d == "single":
         return 1
-    # 'all'/'' -> count the REAL chips. ttnn.GetNumAvailableDevices() returns 1 until the fabric is
-    # initialized, which silently collapsed multi-chip runs to a single chip (wrong reset target, wrong
-    # TP/DP sizing, wrong scorecard). Prefer `tt-smi -s` (authoritative device_info enumeration); fall
-    # back to ttnn, then 1.
-    try:
-        tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
-        r = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=120)
-        n = len((json.loads(r.stdout) or {}).get("device_info") or [])
-        if n > 0:
-            return n
-    except Exception:
-        pass
     try:
         import ttnn
 
