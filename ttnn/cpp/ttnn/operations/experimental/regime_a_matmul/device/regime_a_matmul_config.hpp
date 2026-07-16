@@ -78,11 +78,24 @@ enum RegimeADiag : uint32_t {
     // (bit 1<<14 is free — was grouped-K; see GROUPED_K_REPORT.md.)
     DIAG_RING_BANK = 1u << 12,
     DIAG_RING_GREEDY = 1u << 13,
-    // A/B diagnostic for the ring OPT objective under M-split (Sm>1). DEFAULT opt scores each candidate
-    // permutation ACROSS ALL Sm physical mm-rings of the (kk,nn) group (worst directed edge over all rings,
-    // then summed hops over all rings). This bit reverts to the OLD objective: score only the mm==0 ring and
-    // apply that permutation to the group (slaves' routes ignored). Identical for Sm==1. No effect with BANK.
+    // A/B diagnostics selecting the shared-permutation OBJECTIVE for the ring OPT (all score exhaustively over
+    // the 7! cycles, aggregating across the Sm physical mm-rings of a (kk,nn) group). The DEFAULT (no ring
+    // bit) is PARETO. Lexicographic tuples to MINIMIZE (aggmax = worst edge over rings; aggtot = summed hops
+    // over all rings; maxringtot = worst per-ring total):
+    //   OPT_MM0      : (ring0.max, ring0.total)                 — score mm==0 only (old objective)
+    //   RING_MAXEDGE : (aggmax, aggtot)                         — regressed the synthetic Sm=4 case
+    //   RING_MAXRING : (maxringtot, aggmax, aggtot)
+    //   RING_TOTAL   : (aggtot, aggmax)                         — regressed the common Sm=1 case
+    //   [default]    : PARETO = min aggmax s.t. aggtot <= MM0's aggtot, then aggtot. Route-dominates MM0 by
+    //                  construction (never worse total), so it cannot stably regress vs MM0; keeps the Sm=2
+    //                  win and stays within noise of MM0 on Sm=1. Chosen after the two-run objective A/B.
+    // Total-first objectives (MAXRING/TOTAL) can differ from MM0/MAXEDGE/PARETO even at Sm==1. All
+    // cache-hashed; none exposed via the public API.
     DIAG_RING_OPT_MM0 = 1u << 14,
+    DIAG_RING_MAXRING = 1u << 15,
+    DIAG_RING_TOTAL = 1u << 16,
+    DIAG_RING_PARETO = 1u << 17,  // (redundant with the default; kept so the prior mask still selects pareto)
+    DIAG_RING_MAXEDGE = 1u << 18,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
