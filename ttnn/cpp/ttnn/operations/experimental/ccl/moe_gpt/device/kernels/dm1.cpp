@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "moe_gpt_ring_common.h"
 
@@ -59,10 +59,10 @@ void kernel_main() {
     // CB Aliases
     constexpr auto cb_r2c_w2_id = tt::CBIndex::c_0;
 
-    CircularBuffer cb_c2w_rdy(cb_c2w_rdy_id);
-    CircularBuffer cb_w2c_rdy(cb_w2c_rdy_id);
-    CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
-    CircularBuffer cb_w2c_md(cb_w2c_md_id);
+    DataflowBuffer cb_c2w_rdy(cb_c2w_rdy_id);
+    DataflowBuffer cb_w2c_rdy(cb_w2c_rdy_id);
+    DataflowBuffer cb_s2c_in2(cb_s2c_in2_id);
+    DataflowBuffer cb_w2c_md(cb_w2c_md_id);
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
@@ -101,7 +101,7 @@ void kernel_main() {
 
     // CB Aliases
     constexpr auto cb_c2s_out_id = tt::CBIndex::c_14;  // untilized ROW_MAJOR output
-    CircularBuffer cb_c2s_out(cb_c2s_out_id);
+    DataflowBuffer cb_c2s_out(cb_c2s_out_id);
 
     // Additional runtime args for fused combine mode
     const auto combine_semaphore_id = get_arg_val<uint32_t>(10);

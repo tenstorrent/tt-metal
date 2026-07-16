@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -139,7 +139,7 @@ FORCE_INLINE uint32_t read_chunk(
     }
     uint32_t chunk_end_col = chunk_start_col + chunk_width - 1;
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_output(cb_output_id);
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
         uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
@@ -240,7 +240,7 @@ FORCE_INLINE uint32_t write_chunk(
     uint32_t chunk_end_col = chunk_start_col + chunk_width - 1;
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_output(cb_output_id);
     for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
         uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
         uint32_t tiles_to_write_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);

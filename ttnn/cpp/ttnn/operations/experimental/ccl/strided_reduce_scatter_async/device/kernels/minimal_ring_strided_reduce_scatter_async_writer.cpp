@@ -23,7 +23,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -101,8 +101,8 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     Noc noc_obj;
-    CircularBuffer cb_compute_output(cb_compute_output_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_compute_output(cb_compute_output_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t arg_idx = 0;
     const address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
@@ -288,7 +288,7 @@ void kernel_main() {
                     // i=R-1: consume output_cb, write final reduced tiles to local output.
                     for (uint32_t i = 0; i < ring_size; i++) {
                         const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
-                        CircularBuffer& cb_output = i > 0 ? cb_compute_output : cb_reader_output;
+                        DataflowBuffer& cb_output = i > 0 ? cb_compute_output : cb_reader_output;
 
                         const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
                             get_slice_N_block_info(actual_slice_idx, slice_Wt, N_full_block_wt);

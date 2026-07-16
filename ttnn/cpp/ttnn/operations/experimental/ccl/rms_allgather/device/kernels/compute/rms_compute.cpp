@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
@@ -67,19 +67,19 @@ void kernel_main() {
 
     constexpr uint32_t cb_x2 = cb_x;  // x^2
 
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_x2_obj(cb_x2);
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
-    CircularBuffer cb_signaling(signaling_cb);
-    CircularBuffer cb_stats_obj(cb_stats);
-    CircularBuffer cb_var_obj(cb_var);
-    CircularBuffer cb_eps_obj(cb_eps);
-    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
-    CircularBuffer cb_im_obj(cb_im);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
-    CircularBuffer cb_xmm_obj(cb_xmm);
-    CircularBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_x2_obj(cb_x2);
+    DataflowBuffer cb_scaler_obj(cb_scaler);
+    DataflowBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    DataflowBuffer cb_signaling(signaling_cb);
+    DataflowBuffer cb_stats_obj(cb_stats);
+    DataflowBuffer cb_var_obj(cb_var);
+    DataflowBuffer cb_eps_obj(cb_eps);
+    DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    DataflowBuffer cb_im_obj(cb_im);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_xmm_obj(cb_xmm);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
 
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
@@ -209,7 +209,7 @@ void kernel_main() {
     index = 0;
 
     constexpr uint32_t cb_outgamma = cb_out;
-    CircularBuffer cb_outgamma_obj(cb_outgamma);
+    DataflowBuffer cb_outgamma_obj(cb_outgamma);
     if constexpr (is_allgather_worker) {
         const bool enable_sqrt = get_arg_val<uint32_t>(4) == 1;
         if (enable_sqrt) {

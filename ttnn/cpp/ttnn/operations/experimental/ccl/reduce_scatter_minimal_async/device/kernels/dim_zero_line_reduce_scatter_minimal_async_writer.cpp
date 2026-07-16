@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -119,8 +119,8 @@ void kernel_main() {
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
     Noc noc_obj;
-    CircularBuffer cb_compute_output(cb_compute_output_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_compute_output(cb_compute_output_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
 
     const auto& unicast_route_info = (is_forward) ? forward_unicast_route_info : backward_unicast_route_info;
     const auto& multicast_route_info = (is_forward) ? forward_multicast_route_info : backward_multicast_route_info;
@@ -281,7 +281,7 @@ void kernel_main() {
     int slice_idx = is_forward ? ring_size - 1 : 0;
 
     for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
-        CircularBuffer& cb_output = is_first_device_in_direction ? cb_reader_output : cb_compute_output;
+        DataflowBuffer& cb_output = is_first_device_in_direction ? cb_reader_output : cb_compute_output;
         chunk_count = 0;
 
         uint32_t intermediate_tile_id_start = slice_idx * output_num_pages + intermediate_full_offset;

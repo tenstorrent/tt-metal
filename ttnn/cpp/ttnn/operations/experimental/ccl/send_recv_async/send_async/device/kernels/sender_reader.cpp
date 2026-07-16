@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
@@ -37,7 +37,7 @@ void kernel_main() {
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr);
 
     Noc noc_obj;
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb0(cb0_id);
 
     // TODO #24995: Instead of page by page transfers, we can transfer bank by bank
 

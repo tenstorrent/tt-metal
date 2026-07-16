@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -55,16 +55,16 @@ void kernel_main() {
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 
     Noc noc_obj;
-    CircularBuffer cb_input(cb_input_id);
-    CircularBuffer cb_intermediate(cb_intermediate_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_input(cb_input_id);
+    DataflowBuffer cb_intermediate(cb_intermediate_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t sem_target = 0;
 
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
         const bool do_reduce = i != 0;
-        CircularBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
+        DataflowBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
 
         uint32_t actual_slice_idx;
         if (direction) {

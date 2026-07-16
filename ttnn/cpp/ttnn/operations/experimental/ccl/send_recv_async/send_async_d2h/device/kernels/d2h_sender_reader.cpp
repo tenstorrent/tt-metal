@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -65,7 +65,7 @@ void kernel_main() {
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr);
 
     Noc noc_obj;
-    CircularBuffer cb_scratch(scratch_cb_id);
+    DataflowBuffer cb_scratch(scratch_cb_id);
 
     // The scratch CB is reserved once at kernel startup; nothing else produces/consumes
     // it so we treat it as a single-page L1 staging region.

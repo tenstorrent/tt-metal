@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "api/tensor/noc_traits.h"
@@ -61,7 +61,7 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
 //
 // Caller must call noc.async_read_barrier() before using the buffer.
 template <uint32_t selected_experts_k, uint32_t tokens, uint32_t experts_per_device, uint32_t l1_alignment>
-FORCE_INLINE void init_expert_activation_buffer_async(Noc& noc, CircularBuffer& cb) {
+FORCE_INLINE void init_expert_activation_buffer_async(Noc& noc, DataflowBuffer& cb) {
     constexpr uint32_t row_elements = 2 * experts_per_device + 1;
     constexpr uint32_t row_size_bytes_unaligned = row_elements * sizeof(uint32_t);
     // Align row size to l1_alignment for NOC transfer efficiency
@@ -300,19 +300,19 @@ void kernel_main() {
     const auto e_t_output_tensor_addr_gen = TensorAccessor(e_t_output_args, e_t_output_address);
 
     // CB typed wrappers
-    CircularBuffer cb_indices_tensor(indices_tensor_cb_id);
-    CircularBuffer cb_mapping_tensor(mapping_tensor_cb_id);
-    CircularBuffer cb_scores_tensor(scores_tensor_cb_id);
-    CircularBuffer cb_tilize_input(tilize_input_cb_id);
-    CircularBuffer cb_e_t(e_t_cb_id);
-    CircularBuffer cb_expert_activation(expert_activation_cb_id);
-    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
-    CircularBuffer cb_total_chunks(total_chunks_cb_id);
-    CircularBuffer cb_brisc_e_t(brisc_e_t_cb_id);
-    CircularBuffer cb_brisc_expert_counts(brisc_expert_counts_cb_id);
-    CircularBuffer cb_brisc_expert_activation(brisc_expert_activation_cb_id);
-    CircularBuffer cb_brisc_activated_count(brisc_activated_count_cb_id);
-    CircularBuffer cb_remote_counts(remote_counts_cb_id);
+    DataflowBuffer cb_indices_tensor(indices_tensor_cb_id);
+    DataflowBuffer cb_mapping_tensor(mapping_tensor_cb_id);
+    DataflowBuffer cb_scores_tensor(scores_tensor_cb_id);
+    DataflowBuffer cb_tilize_input(tilize_input_cb_id);
+    DataflowBuffer cb_e_t(e_t_cb_id);
+    DataflowBuffer cb_expert_activation(expert_activation_cb_id);
+    DataflowBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+    DataflowBuffer cb_total_chunks(total_chunks_cb_id);
+    DataflowBuffer cb_brisc_e_t(brisc_e_t_cb_id);
+    DataflowBuffer cb_brisc_expert_counts(brisc_expert_counts_cb_id);
+    DataflowBuffer cb_brisc_expert_activation(brisc_expert_activation_cb_id);
+    DataflowBuffer cb_brisc_activated_count(brisc_activated_count_cb_id);
+    DataflowBuffer cb_remote_counts(remote_counts_cb_id);
 
     // Constants
     constexpr uint32_t one_page = 1;

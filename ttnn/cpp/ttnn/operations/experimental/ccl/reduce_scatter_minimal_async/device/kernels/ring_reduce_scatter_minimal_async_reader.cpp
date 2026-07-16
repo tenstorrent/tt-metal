@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -79,10 +79,10 @@ void kernel_main() {
     }
 
     Noc noc_obj;
-    CircularBuffer cb_input(cb_input_id);
-    CircularBuffer cb_interm(cb_interm_id);
-    CircularBuffer cb_interm2(cb_interm2_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_input(cb_input_id);
+    DataflowBuffer cb_interm(cb_interm_id);
+    DataflowBuffer cb_interm2(cb_interm2_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t sem_target = 0;
     uint32_t sem2_target = 0;
@@ -213,7 +213,7 @@ void kernel_main() {
                     } else {
                         const bool reduce_interm =
                             (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
-                        CircularBuffer& cb_in = reduce_interm ? cb_input : cb_reader_output;  // to compute or writer
+                        DataflowBuffer& cb_in = reduce_interm ? cb_input : cb_reader_output;  // to compute or writer
 
                         // Wait for intermediate_tensor data to be available
                         if (reduce_interm) {

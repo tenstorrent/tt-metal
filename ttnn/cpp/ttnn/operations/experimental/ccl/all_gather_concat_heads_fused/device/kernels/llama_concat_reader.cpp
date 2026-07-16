@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -67,7 +67,7 @@ void batch_loop(
 
 void nlp_concat(
     const Noc& noc_obj,
-    CircularBuffer& cb_q_out,
+    DataflowBuffer& cb_q_out,
     uint32_t q_start_addr,
     uint32_t tensor_address0,
     bool nlp_local,
@@ -143,7 +143,7 @@ void kernel_main() {
     std::array<uint32_t, 8> core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
 
     Noc noc_obj;
-    CircularBuffer cb_q_out(cb_id_q_out);
+    DataflowBuffer cb_q_out(cb_id_q_out);
 
     nlp_concat(
         noc_obj,

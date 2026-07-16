@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
@@ -38,7 +38,7 @@ void kernel_main() {
     arg_idx += num_cores;
 
     Noc noc_obj;
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb0(cb0_id);
     UnicastEndpoint src_ep;
 
     // interleaved addrgen

@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
@@ -106,7 +106,7 @@ void kernel_main() {
 #endif
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_output(cb_output_id);
 
     OpSignaler op_signaler;
     uint32_t self_write_done_sem_id = 0;

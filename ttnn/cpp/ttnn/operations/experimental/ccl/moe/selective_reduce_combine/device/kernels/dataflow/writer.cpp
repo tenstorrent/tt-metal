@@ -5,7 +5,7 @@
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -194,11 +194,11 @@ void kernel_main() {
     const bool is_init_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
 
     Noc noc1_obj(1);
-    CircularBuffer cb_packet_header(packet_header_cb_id);
-    CircularBuffer cb_token_counts(token_counts_cb_id);
-    CircularBuffer cb_data(data_cb_id);
-    CircularBuffer cb_dense_token_maps(dense_token_maps_cb_id);
-    CircularBuffer cb_token_activations(token_activations_cb_id);
+    DataflowBuffer cb_packet_header(packet_header_cb_id);
+    DataflowBuffer cb_token_counts(token_counts_cb_id);
+    DataflowBuffer cb_data(data_cb_id);
+    DataflowBuffer cb_dense_token_maps(dense_token_maps_cb_id);
+    DataflowBuffer cb_token_activations(token_activations_cb_id);
     Semaphore<> compute_sync_sem(compute_sync_semaphore_id);
 
     const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);

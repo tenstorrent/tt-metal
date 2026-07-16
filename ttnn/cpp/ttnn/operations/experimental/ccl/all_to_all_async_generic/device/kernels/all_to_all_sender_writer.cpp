@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -141,8 +141,8 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
     Noc noc_obj;
-    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb_packet_header(reserved_packet_header_cb_id);
+    DataflowBuffer cb0(cb0_id);
 
     // packet header cb
     cb_packet_header.reserve_back(1);

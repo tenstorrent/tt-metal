@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -18,8 +18,8 @@ void kernel_main() {
     constexpr uint32_t total_pages = num_devices * num_pages_per_packet;
     constexpr uint32_t num_device_pairs = num_devices / 2;  // num_devices is always even
 
-    CircularBuffer cb_fabric_receiver(fabric_receiver_cb_id);
-    CircularBuffer cb_accumulator(accumulator_cb_id);
+    DataflowBuffer cb_fabric_receiver(fabric_receiver_cb_id);
+    DataflowBuffer cb_accumulator(accumulator_cb_id);
 
     // Initialize binary operations - use the same constants consistently
     binary_op_init_common(fabric_receiver_cb_id, fabric_receiver_cb_id, accumulator_cb_id);

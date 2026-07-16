@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/debug/dprint.h"
@@ -58,7 +58,7 @@ void kernel_main() {
     constexpr uint32_t multicast_chunk_size_in_tiles = multicast_chunk_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t multicast_chunk_size_bytes = multicast_chunk_size_in_tiles * in0_single_tile_size_bytes;
 
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(cb_id_in0);
 
     cb_in0.reserve_back(multicast_chunk_size_in_tiles * num_multicast_steps);
     for (uint32_t istep = 0; istep < num_multicast_steps; istep++) {

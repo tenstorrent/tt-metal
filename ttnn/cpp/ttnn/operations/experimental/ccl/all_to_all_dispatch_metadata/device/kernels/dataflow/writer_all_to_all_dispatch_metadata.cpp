@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -42,7 +42,7 @@ inline void dispatch_metadata_local_device(
 
 void zero_buffer_async(uint32_t cb_id, uint32_t bytes) {
     Noc noc;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     noc.async_write_zeros(cb, bytes);
 }
 
@@ -906,13 +906,13 @@ void kernel_main() {
     }
 
     Noc noc_obj;
-    CircularBuffer cb_input(input_tensor_cb_id);
-    CircularBuffer cb_indices(indices_tensor_cb_id);
-    CircularBuffer cb_scores(scores_tensor_cb_id);
-    CircularBuffer cb_mapping(mapping_tensor_cb_id);
-    CircularBuffer cb_packet_header(packet_header_cb_id);
-    CircularBuffer cb_send_preparation_buffer(send_preparation_buffer_cb_id);
-    CircularBuffer cb_metadata(metadata_buffer_id);
+    DataflowBuffer cb_input(input_tensor_cb_id);
+    DataflowBuffer cb_indices(indices_tensor_cb_id);
+    DataflowBuffer cb_scores(scores_tensor_cb_id);
+    DataflowBuffer cb_mapping(mapping_tensor_cb_id);
+    DataflowBuffer cb_packet_header(packet_header_cb_id);
+    DataflowBuffer cb_send_preparation_buffer(send_preparation_buffer_cb_id);
+    DataflowBuffer cb_metadata(metadata_buffer_id);
 
 #ifdef USE_MUX
     // ========================================================================

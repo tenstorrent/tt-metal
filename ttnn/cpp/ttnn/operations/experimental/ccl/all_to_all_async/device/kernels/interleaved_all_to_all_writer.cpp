@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -66,8 +66,8 @@ void kernel_main() {
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(arg_idx);
 
     Noc noc_obj;
-    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb_packet_header(reserved_packet_header_cb_id);
+    DataflowBuffer cb0(cb0_id);
 
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;

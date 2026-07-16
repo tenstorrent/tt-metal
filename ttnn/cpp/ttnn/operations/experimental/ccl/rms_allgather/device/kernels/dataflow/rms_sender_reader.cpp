@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -36,11 +36,11 @@ void kernel_main() {
     constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(16);
 
     Noc noc_obj;
-    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
-    CircularBuffer cb_ex2_obj(cb_ex2);
-    CircularBuffer cb_ex_external2_obj(cb_ex_external2);
-    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    DataflowBuffer cb_ex2_obj(cb_ex2);
+    DataflowBuffer cb_ex_external2_obj(cb_ex_external2);
+    DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
 
     Semaphore<> post_reduce_sender_sem(post_reduce_sender_semaphore_id);
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
@@ -74,9 +74,9 @@ void kernel_main() {
         }
     }
 
-    const auto& global_reduce_sender = [&](CircularBuffer& cb_partial,
-                                           CircularBuffer& cb_external,
-                                           CircularBuffer& cb_reduce_first_stage) __attribute__((always_inline)) {
+    const auto& global_reduce_sender = [&](DataflowBuffer& cb_partial,
+                                           DataflowBuffer& cb_external,
+                                           DataflowBuffer& cb_reduce_first_stage) __attribute__((always_inline)) {
         // global reduce
         // wait for local data ready
         cb_partial.wait_front(1);  // TODO test for layernorm
@@ -150,7 +150,7 @@ void kernel_main() {
         noc_obj.async_write_barrier();
     };
 
-    const auto& post_global_reduce_sender = [&](CircularBuffer& cb_ex, CircularBuffer& cb_ex_global_arg)
+    const auto& post_global_reduce_sender = [&](DataflowBuffer& cb_ex, DataflowBuffer& cb_ex_global_arg)
                                                 __attribute__((always_inline)) {
                                                     uint32_t l1_read_addr_ex = cb_ex.get_read_ptr();
                                                     uint32_t l1_read_addr_ex_global = cb_ex_global_arg.get_read_ptr();

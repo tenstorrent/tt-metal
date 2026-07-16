@@ -27,7 +27,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include <tt-metalium/buffer_types.hpp>
@@ -78,9 +78,9 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     Noc noc_obj;
-    CircularBuffer cb_input(cb_input_id);
-    CircularBuffer cb_intermediate(cb_intermediate_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_input(cb_input_id);
+    DataflowBuffer cb_intermediate(cb_intermediate_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t arg_idx = 0;
     // Load the input tensor spec
@@ -160,8 +160,8 @@ void kernel_main() {
     constexpr auto addcmul_b_tensor_args = TensorAccessorArgs<ct_idx_addcmul_base + 2 + ct_offset_a>();
     auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address);
     auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address);
-    CircularBuffer cb_addcmul_a(addcmul_a_cb);
-    CircularBuffer cb_addcmul_b(addcmul_b_cb);
+    DataflowBuffer cb_addcmul_a(addcmul_a_cb);
+    DataflowBuffer cb_addcmul_b(addcmul_b_cb);
     // a tile index: batch * (mm_cores_y * slice_Ht_per_core * slice_Wt) + slice_row * slice_Wt + col_in_slice
     // b tile index (broadcast):     batch * slice_Wt + col_in_slice  (b has 1 row per batch)
     // b tile index (non-broadcast): same as a  (b has full N rows per batch)
@@ -211,7 +211,7 @@ void kernel_main() {
                 // i>0: read input -> input_cb, read intermediate -> intermediate_cb (compute reduces).
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
-                    CircularBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
+                    DataflowBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
 #ifdef FUSE_RS_ADDCMUL
                     // At the final ring step the local chip's slice is written to DRAM by the writer.

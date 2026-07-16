@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_out(cb_id_out);
     cb_out.wait_front(2);
 }

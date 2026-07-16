@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -83,10 +83,10 @@ void kernel_main() {
     const auto data_addrgen = TensorAccessor(data_args, data_tensor_addr);
 
     Noc noc;
-    CircularBuffer mapping_cb(mapping_cb_id);
-    CircularBuffer local_experts_cb(local_experts_cb_id);
-    CircularBuffer metadata_cb(metadata_cb_id);
-    CircularBuffer data_cb(data_cb_id);
+    DataflowBuffer mapping_cb(mapping_cb_id);
+    DataflowBuffer local_experts_cb(local_experts_cb_id);
+    DataflowBuffer metadata_cb(metadata_cb_id);
+    DataflowBuffer data_cb(data_cb_id);
 
     // this gets sent to writer
     local_experts_cb.reserve_back(1);

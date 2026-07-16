@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -96,8 +96,8 @@ void kernel_main() {
     }
 
     Noc noc_obj;
-    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_packet_header(reserved_packet_header_cb_id);
+    DataflowBuffer cb_output(cb_output_id);
 
     // packet header cb
     cb_packet_header.reserve_back(1);

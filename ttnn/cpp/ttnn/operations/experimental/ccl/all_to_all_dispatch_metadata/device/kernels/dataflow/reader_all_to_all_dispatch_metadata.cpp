@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -102,11 +102,11 @@ void kernel_main() {
         TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
 
     Noc noc_obj;
-    CircularBuffer cb_input(input_tensor_cb_id);
-    CircularBuffer cb_indices(indices_tensor_cb_id);
-    CircularBuffer cb_scores(scores_tensor_cb_id);
-    CircularBuffer cb_mapping(mapping_tensor_cb_id);
-    CircularBuffer cb_metadata(metadata_buffer_id);
+    DataflowBuffer cb_input(input_tensor_cb_id);
+    DataflowBuffer cb_indices(indices_tensor_cb_id);
+    DataflowBuffer cb_scores(scores_tensor_cb_id);
+    DataflowBuffer cb_mapping(mapping_tensor_cb_id);
+    DataflowBuffer cb_metadata(metadata_buffer_id);
 
     if (token_start_idx == token_end_idx) {
         return;

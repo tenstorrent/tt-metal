@@ -8,7 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -26,10 +26,10 @@ void kernel_main() {
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
-    CircularBuffer cb_input(cb_input_id);
-    CircularBuffer cb_interm(cb_interm_id);
-    CircularBuffer cb_interm2(cb_interm2_id);
-    CircularBuffer cb_compute_output(cb_compute_output_id);
+    DataflowBuffer cb_input(cb_input_id);
+    DataflowBuffer cb_interm(cb_interm_id);
+    DataflowBuffer cb_interm2(cb_interm2_id);
+    DataflowBuffer cb_compute_output(cb_compute_output_id);
 
     compute_kernel_hw_startup(cb_interm_id, cb_input_id, cb_compute_output_id);
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 namespace ttnn {
@@ -18,12 +19,12 @@ static FORCE_INLINE coord_t coord_from_args(std::size_t& arg_idx) {
 }  // namespace ttnn
 
 FORCE_INLINE void push_filler_pages_to_cb(const uint32_t& cb_id, uint32_t num_pages) {
-    ASSERT(num_pages < get_local_cb_interface(cb_id).fifo_num_pages);
+    ASSERT(num_pages < DataflowBuffer(cb_id).get_total_num_entries());
     cb_reserve_back(cb_id, num_pages);
     cb_push_back(cb_id, num_pages);
 }
 FORCE_INLINE void pop_filler_pages_from_cb(const uint32_t& cb_id, uint32_t num_pages) {
-    ASSERT(num_pages < get_local_cb_interface(cb_id).fifo_num_pages);
+    ASSERT(num_pages < DataflowBuffer(cb_id).get_total_num_entries());
     cb_wait_front(cb_id, num_pages);
     cb_pop_front(cb_id, num_pages);
 }

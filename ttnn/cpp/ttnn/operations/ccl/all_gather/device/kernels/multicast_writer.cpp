@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -68,7 +68,7 @@ void kernel_main() {
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
     Noc noc;
-    CircularBuffer cb(cb0_id);
+    DataflowBuffer cb(cb0_id);
 
     ///////////////////////////////////////////////////
     // FABRIC INIT

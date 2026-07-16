@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include <cstdint>
@@ -36,7 +36,7 @@ void kernel_main() {
     auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
     Noc noc_obj;
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb0(cb0_id);
 
     for (uint32_t page_id = input_page_id_start; page_id < input_page_id_end;) {
         cb0.reserve_back(1);

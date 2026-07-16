@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -33,7 +33,7 @@ inline void dispatch_metadata_local_device(
 
 void zero_buffer_async(uint32_t cb_id, uint32_t bytes) {
     Noc noc;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
     noc.async_write_zeros(cb, bytes);
 }
 

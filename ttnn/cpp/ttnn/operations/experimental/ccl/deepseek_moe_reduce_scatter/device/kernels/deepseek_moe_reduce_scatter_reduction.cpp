@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_binary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
@@ -78,9 +78,9 @@ void kernel_main() {
 
         uint32_t input_slice_cb_id = input_slice_cb_ids[actual_slice_idx];
         uint32_t intermediate_slice_cb_id = intermediate_slice_cb_ids[actual_slice_idx];
-        CircularBuffer cb_input_slice(input_slice_cb_id);
-        CircularBuffer cb_intermediate_slice(intermediate_slice_cb_id);
-        CircularBuffer cb_compute(compute_cb_id);
+        DataflowBuffer cb_input_slice(input_slice_cb_id);
+        DataflowBuffer cb_intermediate_slice(intermediate_slice_cb_id);
+        DataflowBuffer cb_compute(compute_cb_id);
 
         binary_op_init_common(input_slice_cb_id, intermediate_slice_cb_id, compute_cb_id);
         add_tiles_init(input_slice_cb_id, intermediate_slice_cb_id, false);

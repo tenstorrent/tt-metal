@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include <tt-metalium/buffer_types.hpp>
@@ -118,8 +118,8 @@ void kernel_main() {
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address);
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
-    CircularBuffer cb_recv(recv_cb_id);
+    DataflowBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_recv(recv_cb_id);
 
     // L1 intermediate: discover the recv CB base address (same on neighbor device due to identical program)
     uint32_t recv_buf_base = 0;

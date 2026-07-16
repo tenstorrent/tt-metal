@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
@@ -69,8 +69,8 @@ void kernel_main() {
         bool do_reduce = i != 0;
         uint32_t input_slice_cb_id = input_slice_cb_ids[actual_slice_idx];
         uint32_t intermediate_slice_cb_id = intermediate_slice_cb_ids[actual_slice_idx];
-        CircularBuffer cb_input_slice(input_slice_cb_id);
-        CircularBuffer cb_intermediate_slice(intermediate_slice_cb_id);
+        DataflowBuffer cb_input_slice(input_slice_cb_id);
+        DataflowBuffer cb_intermediate_slice(intermediate_slice_cb_id);
 
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;

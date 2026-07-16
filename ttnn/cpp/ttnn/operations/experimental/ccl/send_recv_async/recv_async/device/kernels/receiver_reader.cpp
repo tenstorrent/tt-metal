@@ -7,7 +7,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 ///////////////////////////////////////////////////
@@ -22,7 +22,7 @@ constexpr bool is_dram = get_compile_time_arg_val(4);
 template <uint32_t page_size, bool is_dram>
 FORCE_INLINE void read_data_from_remote_core(
     Noc& noc_obj,
-    CircularBuffer& cb,
+    DataflowBuffer& cb,
     SocketReceiverInterface& receiver_socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     uint32_t bank_id,
@@ -57,8 +57,8 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     Noc noc_obj;
-    CircularBuffer cb_fabric_packet_header(fabric_packet_header_cb_id);
-    CircularBuffer cb_scratch_buffer(scratch_buffer_cb_id);
+    DataflowBuffer cb_fabric_packet_header(fabric_packet_header_cb_id);
+    DataflowBuffer cb_scratch_buffer(scratch_buffer_cb_id);
 
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing reads from upstream data cores

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
@@ -212,10 +212,10 @@ void kernel_main() {
 #endif
 
     Noc noc_obj;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_out(cb_id_out);
 #ifdef FUSE_BIAS
-    CircularBuffer cb_in2(cb_id_in2);
+    DataflowBuffer cb_in2(cb_id_in2);
 #endif
 
 #ifdef READ_FROM_LOCAL_INPUT
@@ -245,8 +245,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_ternary_a = tt::CBIndex::c_5;
     constexpr uint32_t cb_id_ternary_b = tt::CBIndex::c_6;
-    CircularBuffer cb_ternary_a(cb_id_ternary_a);
-    CircularBuffer cb_ternary_b(cb_id_ternary_b);
+    DataflowBuffer cb_ternary_a(cb_id_ternary_a);
+    DataflowBuffer cb_ternary_b(cb_id_ternary_b);
 
     constexpr uint32_t ternary_a_tile_size = get_tile_size(cb_id_ternary_a);
     constexpr uint32_t ternary_b_tile_size = get_tile_size(cb_id_ternary_b);

@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include <cstdint>
 #include <utility>
 #include "api/tensor/noc_traits.h"
@@ -43,7 +43,7 @@ void kernel_main() {
     auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
     Noc noc_obj;
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb0(cb0_id);
 
     bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
     uint32_t forward_hops = 1;

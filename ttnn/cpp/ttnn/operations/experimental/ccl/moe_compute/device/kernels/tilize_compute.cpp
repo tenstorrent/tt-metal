@@ -6,7 +6,7 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/tilize.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 // Print a subset of a row-major bfloat16 buffer.
 // BufferWidth: total number of columns (elements) per row
@@ -86,10 +86,10 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_page = 1;
 
-    // CircularBuffer typed wrappers
-    CircularBuffer cb_tilize_input(tilize_input_cb_id);
-    CircularBuffer cb_tilize_output(tilize_output_cb_id);
-    CircularBuffer cb_total_chunks(total_chunks_cb_id);
+    // DataflowBuffer typed wrappers
+    DataflowBuffer cb_tilize_input(tilize_input_cb_id);
+    DataflowBuffer cb_tilize_output(tilize_output_cb_id);
+    DataflowBuffer cb_total_chunks(total_chunks_cb_id);
 
     // Setup
     compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);

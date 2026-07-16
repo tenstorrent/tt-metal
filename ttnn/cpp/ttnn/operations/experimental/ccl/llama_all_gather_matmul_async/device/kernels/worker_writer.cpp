@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -100,8 +100,8 @@ void kernel_main() {
             arg_idx);
 
     Noc noc_obj;
-    CircularBuffer cb_pkt_hdr(reserved_packet_header_cb_id);
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb_pkt_hdr(reserved_packet_header_cb_id);
+    DataflowBuffer cb0(cb0_id);
 
     // packet header cb
     cb_pkt_hdr.reserve_back(1);

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -92,14 +92,14 @@ void kernel_main() {
     constexpr auto cb_c2s_out_id = tt::CBIndex::c_1;  // matmul_writer_cb_id
     constexpr auto cb_r2c_w2_id = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
-    // CircularBuffer typed wrappers
-    CircularBuffer cb_s2c_in(cb_s2c_in_id);
-    CircularBuffer cb_c2w_rdy(cb_c2w_rdy_id);
-    CircularBuffer cb_w2c_rdy(cb_w2c_rdy_id);
-    CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
-    CircularBuffer cb_w2c_md(cb_w2c_md_id);
-    CircularBuffer cb_c2s_out(cb_c2s_out_id);
-    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+    // DataflowBuffer typed wrappers
+    DataflowBuffer cb_s2c_in(cb_s2c_in_id);
+    DataflowBuffer cb_c2w_rdy(cb_c2w_rdy_id);
+    DataflowBuffer cb_w2c_rdy(cb_w2c_rdy_id);
+    DataflowBuffer cb_s2c_in2(cb_s2c_in2_id);
+    DataflowBuffer cb_w2c_md(cb_w2c_md_id);
+    DataflowBuffer cb_c2s_out(cb_c2s_out_id);
+    DataflowBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);

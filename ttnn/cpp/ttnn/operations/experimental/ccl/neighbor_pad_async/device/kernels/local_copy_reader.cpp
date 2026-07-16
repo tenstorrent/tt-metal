@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include "api/tensor/noc_traits.h"
@@ -33,7 +33,7 @@ void kernel_main() {
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_output(cb_output_id);
 
     for (uint32_t s = 0; s < rows_count; s++) {
         const uint32_t linear_row = total_rows_start + s;  // [0 .. outer_dim_size*input_halo_dim_size)

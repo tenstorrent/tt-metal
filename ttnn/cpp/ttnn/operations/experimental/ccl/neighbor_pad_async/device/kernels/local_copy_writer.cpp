@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
@@ -55,7 +55,7 @@ void kernel_main() {
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address);
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_output(cb_output_id);
 
     // Phase A: zero-fill this core's slice of the T-front output region.
     // Covers all H positions (interior + H-halo) at T < t_front_pad.

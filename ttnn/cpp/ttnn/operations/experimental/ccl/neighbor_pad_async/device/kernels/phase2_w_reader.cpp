@@ -17,7 +17,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
@@ -36,7 +36,7 @@ constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
 constexpr auto src_args = TensorAccessorArgs<ct_after_dst>();
 
 template <uint32_t stick_size_bytes>
-inline void zeroPad(Noc& noc, CircularBuffer& cb) {
+inline void zeroPad(Noc& noc, DataflowBuffer& cb) {
     noc.async_write_zeros(cb, stick_size_bytes);
     noc.write_zeros_l1_barrier();
 }
@@ -74,7 +74,7 @@ void kernel_main() {
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_output(cb_output_id);
 
     // =========================================================================
     // Phase 1: interior rows from INPUT DRAM (no barrier wait)

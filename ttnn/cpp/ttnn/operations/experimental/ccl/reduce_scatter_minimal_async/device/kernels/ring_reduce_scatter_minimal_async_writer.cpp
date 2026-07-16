@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -178,8 +178,8 @@ void kernel_main() {
 #endif
 
     Noc noc_obj;
-    CircularBuffer cb_compute_output(cb_compute_output_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_compute_output(cb_compute_output_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
     fabric_multicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_mcastseminc,
@@ -428,7 +428,7 @@ void kernel_main() {
                     } else {
                         const bool reduce_interm =
                             (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
-                        CircularBuffer& cb_out =
+                        DataflowBuffer& cb_out =
                             reduce_interm ? cb_compute_output : cb_reader_output;  // from compute or reader
 
                         if (write_to_remote) {

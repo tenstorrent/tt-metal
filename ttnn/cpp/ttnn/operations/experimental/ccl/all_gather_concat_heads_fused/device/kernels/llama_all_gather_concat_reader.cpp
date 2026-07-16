@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -46,7 +46,7 @@ void kernel_main() {
     arg_idx += num_cores;
 
     Noc noc_obj;
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb0(cb0_id);
     UnicastEndpoint src_ep;
 
     uint32_t tiles_read = 0;

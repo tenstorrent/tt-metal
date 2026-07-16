@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "ckernel.h"
@@ -48,7 +48,7 @@ void kernel_main() {
     const uint32_t next_core_id_to_right = get_arg_val<uint32_t>(arg_idx++);
 
     Noc noc_obj;
-    CircularBuffer cb_inter(inter_cb_index);
+    DataflowBuffer cb_inter(inter_cb_index);
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);

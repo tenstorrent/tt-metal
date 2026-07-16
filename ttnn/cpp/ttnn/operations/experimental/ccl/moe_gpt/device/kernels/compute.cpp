@@ -13,7 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -74,18 +74,18 @@ void kernel_main() {
     constexpr auto cb_c2s_out_id = tt::CBIndex::c_1;
 #endif
 
-    // CircularBuffer typed wrappers
-    CircularBuffer cb_r2c_w0_w1(cb_r2c_w0_w1_id);
-    CircularBuffer cb_s2c_in(cb_s2c_in_id);
+    // DataflowBuffer typed wrappers
+    DataflowBuffer cb_r2c_w0_w1(cb_r2c_w0_w1_id);
+    DataflowBuffer cb_s2c_in(cb_s2c_in_id);
 #ifdef TILIZE_FUSED
-    CircularBuffer cb_w2c_md(cb_w2c_md_id);
+    DataflowBuffer cb_w2c_md(cb_w2c_md_id);
 #endif
-    CircularBuffer cb_c2w_rdy(cb_c2w_rdy_id);
-    CircularBuffer cb_w2c_rdy(cb_w2c_rdy_id);
-    CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
-    CircularBuffer cb_c2c_ones_tile(cb_c2c_ones_tile_id);
-    CircularBuffer cb_r2c_w2(cb_r2c_w2_id);
-    CircularBuffer cb_c2s_out(cb_c2s_out_id);
+    DataflowBuffer cb_c2w_rdy(cb_c2w_rdy_id);
+    DataflowBuffer cb_w2c_rdy(cb_w2c_rdy_id);
+    DataflowBuffer cb_s2c_in2(cb_s2c_in2_id);
+    DataflowBuffer cb_c2c_ones_tile(cb_c2c_ones_tile_id);
+    DataflowBuffer cb_r2c_w2(cb_r2c_w2_id);
+    DataflowBuffer cb_c2s_out(cb_c2s_out_id);
 
     // Constants for MoEGPT
     // GPT-OSS: K=2880 -> 90 tiles height, N=2880 -> 90 tiles

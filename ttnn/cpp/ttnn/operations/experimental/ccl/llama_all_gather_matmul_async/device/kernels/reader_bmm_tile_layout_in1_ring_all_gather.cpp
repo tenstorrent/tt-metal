@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "hostdevcommon/common_values.hpp"
@@ -20,7 +20,7 @@ enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 template <typename TensorAccessorType>
 void read_block_from_dram(
     Noc& noc,
-    CircularBuffer& cb,
+    DataflowBuffer& cb,
     const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,
@@ -116,9 +116,9 @@ void kernel_main() {
     constexpr uint32_t sync_cb2 = get_compile_time_arg_val(13);
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(14);
 
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_sync(sync_cb);
-    CircularBuffer cb_sync2(sync_cb2);
+    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_sync(sync_cb);
+    DataflowBuffer cb_sync2(sync_cb2);
 
     constexpr auto src_args = TensorAccessorArgs<16>();
 

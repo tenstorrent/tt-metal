@@ -21,7 +21,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
 
@@ -63,13 +63,13 @@ void kernel_main() {
     const uint32_t effective_worker_id = worker_id + (direction ? num_workers : 0);
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
-    CircularBuffer cb_in(input_cb);
-    CircularBuffer cb_intermediate(intermediate_cb);
-    CircularBuffer cb_out(output_cb);
+    DataflowBuffer cb_in(input_cb);
+    DataflowBuffer cb_intermediate(intermediate_cb);
+    DataflowBuffer cb_out(output_cb);
 #ifdef FUSE_RS_ADDCMUL
-    CircularBuffer cb_addcmul_temp(addcmul_temp_cb);
-    CircularBuffer cb_addcmul_a(addcmul_a_cb);
-    CircularBuffer cb_addcmul_b(addcmul_b_cb);
+    DataflowBuffer cb_addcmul_temp(addcmul_temp_cb);
+    DataflowBuffer cb_addcmul_a(addcmul_a_cb);
+    DataflowBuffer cb_addcmul_b(addcmul_b_cb);
 #endif
 
     binary_op_init_common(input_cb, intermediate_cb, output_cb);

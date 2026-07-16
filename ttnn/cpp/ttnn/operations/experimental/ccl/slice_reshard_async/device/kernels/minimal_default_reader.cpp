@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -29,7 +29,7 @@ template <uint32_t stick_size_bytes>
 inline void zeroPad(const Noc& noc, uint32_t cb_output_id) {
     // Zero-fill the CB's current write entry via the device-side zero API. Self-contained:
     // it waits for the zero (write_zeros_l1_barrier), so the caller needs no separate barrier.
-    CircularBuffer cb(cb_output_id);
+    DataflowBuffer cb(cb_output_id);
     noc.async_write_zeros(cb, stick_size_bytes);
     noc.write_zeros_l1_barrier();
 }
@@ -56,7 +56,7 @@ void kernel_main() {
     const auto src_accessor = TensorAccessor(src_args, input_tensor_address);
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_output(cb_output_id);
 
     if (!is_last_chip) {
         // Read the "end" of each slice into the CB to write to the neighbor

@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
@@ -168,7 +168,7 @@ void kernel_main() {
         }
 
         uint32_t reduced_cb_id = i == 0 ? input_slice_cb_ids[actual_slice_idx] : compute_cb_id;
-        CircularBuffer cb_reduced(reduced_cb_id);
+        DataflowBuffer cb_reduced(reduced_cb_id);
 
         uint32_t tiles_read = start_tiles_read;
         uint32_t tiles_to_read = start_tiles_to_read;

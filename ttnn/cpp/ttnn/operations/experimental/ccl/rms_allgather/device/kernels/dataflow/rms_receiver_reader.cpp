@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "hostdevcommon/common_values.hpp"
 
@@ -29,10 +29,10 @@ void kernel_main() {
     constexpr uint32_t cb_ex_global = get_compile_time_arg_val(15);  // [E[x], E[X^2]] global to all cores
 
     Noc noc_obj;
-    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
-    CircularBuffer cb_ex2_obj(cb_ex2);
-    CircularBuffer cb_ex_external2_obj(cb_ex_external2);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    DataflowBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    DataflowBuffer cb_ex2_obj(cb_ex2);
+    DataflowBuffer cb_ex_external2_obj(cb_ex_external2);
+    DataflowBuffer cb_ex_global_obj(cb_ex_global);
 
     Semaphore<> post_reduce_sender_sem(post_semaphore_id);
     Semaphore<> reduce_second_stage_sem(reduce_second_stage_semaphore_id);

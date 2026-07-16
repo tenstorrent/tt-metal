@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "hostdevcommon/common_values.hpp"
@@ -60,10 +61,10 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<25>();
 
     Noc noc_obj;
-    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
-    CircularBuffer cb_to_allgather_writer_obj(cb_to_allgather_writer);
-    CircularBuffer cb_signaling(signaling_cb);
-    CircularBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_packet_header(reserved_packet_header_cb_id);
+    DataflowBuffer cb_to_allgather_writer_obj(cb_to_allgather_writer);
+    DataflowBuffer cb_signaling(signaling_cb);
+    DataflowBuffer cb_gamma_obj(cb_gamma);
 
     Semaphore<> stats_set_sem(stats_set_semaphore_id);
 

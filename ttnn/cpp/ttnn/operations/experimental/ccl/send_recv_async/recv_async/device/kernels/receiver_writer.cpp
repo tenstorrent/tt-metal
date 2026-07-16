@@ -7,7 +7,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
 ///////////////////////////////////////////////////
@@ -33,7 +33,7 @@ void kernel_main() {
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr);
 
     Noc noc_obj;
-    CircularBuffer cb_scratch_buffer(scratch_buffer_cb_id);
+    DataflowBuffer cb_scratch_buffer(scratch_buffer_cb_id);
 
     for (uint32_t page_index = start_page_index; page_index < start_page_index + num_pages; ++page_index) {
         cb_scratch_buffer.wait_front(1);

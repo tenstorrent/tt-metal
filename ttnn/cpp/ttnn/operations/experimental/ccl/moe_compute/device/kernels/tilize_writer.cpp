@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -201,17 +201,17 @@ void kernel_main() {
     Noc noc_obj(noc_index);
     Noc noc_alt_obj(1 - noc_index);
 
-    // CircularBuffer typed wrappers
-    CircularBuffer cb_tilize_output(tilize_output_cb_id);
-    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
-    CircularBuffer cb_total_chunks(total_chunks_cb_id);
-    CircularBuffer cb_indices_tensor(indices_tensor_cb_id);
-    CircularBuffer cb_scores_tensor(scores_tensor_cb_id);
-    CircularBuffer cb_mapping_tensor(mapping_tensor_cb_id);
-    CircularBuffer cb_brisc_e_t(brisc_e_t_cb_id);
-    CircularBuffer cb_brisc_expert_counts(brisc_expert_counts_cb_id);
-    CircularBuffer cb_brisc_expert_activation(brisc_expert_activation_cb_id);
-    CircularBuffer cb_brisc_activated_count(brisc_activated_count_cb_id);
+    // DataflowBuffer typed wrappers
+    DataflowBuffer cb_tilize_output(tilize_output_cb_id);
+    DataflowBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+    DataflowBuffer cb_total_chunks(total_chunks_cb_id);
+    DataflowBuffer cb_indices_tensor(indices_tensor_cb_id);
+    DataflowBuffer cb_scores_tensor(scores_tensor_cb_id);
+    DataflowBuffer cb_mapping_tensor(mapping_tensor_cb_id);
+    DataflowBuffer cb_brisc_e_t(brisc_e_t_cb_id);
+    DataflowBuffer cb_brisc_expert_counts(brisc_expert_counts_cb_id);
+    DataflowBuffer cb_brisc_expert_activation(brisc_expert_activation_cb_id);
+    DataflowBuffer cb_brisc_activated_count(brisc_activated_count_cb_id);
 
     // Runtime arguments
     uint32_t rt_args_idx = 0;

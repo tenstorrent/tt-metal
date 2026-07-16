@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -20,9 +20,9 @@ void kernel_main() {
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
-    CircularBuffer cb_input(input_cb_id);
-    CircularBuffer cb_intermediate(intermediate_cb);
-    CircularBuffer cb_output(output_cb);
+    DataflowBuffer cb_input(input_cb_id);
+    DataflowBuffer cb_intermediate(intermediate_cb);
+    DataflowBuffer cb_output(output_cb);
 
     // Initialize binary operations - use the same constants consistently
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);

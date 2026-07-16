@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include <tt-metalium/buffer_types.hpp>
@@ -58,8 +58,8 @@ void kernel_main() {
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
     Noc noc_obj;
-    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb_packet_header(reserved_packet_header_cb_id);
+    DataflowBuffer cb0(cb0_id);
 
     // Set up for mcasting to reduction workers
     Semaphore<> reduction_semaphore_send(reduction_semaphore_send_id);

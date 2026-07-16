@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -66,7 +66,7 @@ void kernel_main() {
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_output(cb_output_id);
 
     // pre-populate packet headers
     auto pkt_hdr = PacketHeaderPool::allocate_header();

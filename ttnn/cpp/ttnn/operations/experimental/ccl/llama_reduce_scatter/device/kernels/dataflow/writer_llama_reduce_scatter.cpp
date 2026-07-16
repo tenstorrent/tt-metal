@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -92,10 +92,10 @@ void kernel_main() {
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
 
     Noc noc_obj;
-    CircularBuffer cb_fabric_sender(fabric_sender_cb_id);
-    CircularBuffer cb_packet_header(packet_header_cb_id);
-    CircularBuffer cb_accumulator(accumulator_cb_id);
-    CircularBuffer cb_output_tensor(output_tensor_cb_id);
+    DataflowBuffer cb_fabric_sender(fabric_sender_cb_id);
+    DataflowBuffer cb_packet_header(packet_header_cb_id);
+    DataflowBuffer cb_accumulator(accumulator_cb_id);
+    DataflowBuffer cb_output_tensor(output_tensor_cb_id);
 
     if (sender_core) {
         auto fabric_connection =
@@ -114,7 +114,7 @@ void kernel_main() {
         sem_inc_packet_header->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, static_cast<uint32_t>(1)});  // increment 1
 
-        CircularBuffer cb_fabric_receiver(fabric_receiver_cb_id);
+        DataflowBuffer cb_fabric_receiver(fabric_receiver_cb_id);
         const uint32_t base_receiver_l1_addr = cb_fabric_receiver.get_read_ptr();
 
         // Precompute the packet offset once

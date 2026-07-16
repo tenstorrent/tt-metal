@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -211,8 +211,8 @@ void kernel_main() {
     }
 
     Noc noc_obj;
-    CircularBuffer cb_compute_output(cb_compute_output_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_compute_output(cb_compute_output_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
 
     auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
@@ -288,7 +288,7 @@ void kernel_main() {
 
         uint32_t batch_offset = input_batch_num_pages * b;
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
-            CircularBuffer& cb_output = is_first_device_in_direction ? cb_reader_output : cb_compute_output;
+            DataflowBuffer& cb_output = is_first_device_in_direction ? cb_reader_output : cb_compute_output;
             chunk_count = 0;
 
             uint32_t intermediate_tile_id_start;

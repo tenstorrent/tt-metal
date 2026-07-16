@@ -8,7 +8,7 @@
 #include <utility>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 
@@ -371,7 +371,7 @@ bool is_backward_k_block_iter(uint32_t k_block_iter, uint32_t k_blocks_per_devic
     return (device_iter % 2);
 }
 
-inline void fill_zeros_async(Noc noc, CircularBuffer cb, uint32_t bytes, uint32_t offset_bytes = 0) {
+inline void fill_zeros_async(Noc noc, DataflowBuffer cb, uint32_t bytes, uint32_t offset_bytes = 0) {
     noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
 }
 
@@ -408,7 +408,7 @@ void read_in0_block_sync(
     Noc noc,
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    CircularBuffer cb,
+    DataflowBuffer cb,
     uint32_t tile_size_bytes,
 #ifdef READ_FROM_LOCAL_INPUT
     const LocalTensorAccessorType& in3_accessor,
@@ -498,7 +498,7 @@ void read_in1_block_sync(
     Noc noc,
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    CircularBuffer cb,
+    DataflowBuffer cb,
     uint32_t tile_size_bytes,
     uint32_t d0_start_left,
     uint32_t d0_end_left,
@@ -609,8 +609,8 @@ void read_ternary_blocks_sync(
     const TensorAccessorType& ternary_a_accessor,
     const TensorAccessorType& ternary_b_accessor,
     const TensorShape2D& shape,
-    CircularBuffer ternary_a_cb,
-    CircularBuffer ternary_b_cb,
+    DataflowBuffer ternary_a_cb,
+    DataflowBuffer ternary_b_cb,
     uint32_t a_tile_size_bytes,
     uint32_t b_tile_size_bytes,
     uint32_t broadcast_ternary_b,
@@ -714,7 +714,7 @@ void write_block_sync_granular(
     Noc noc,
     const TensorAccessorType& tensor_accessor,
     const TensorShape2D& shape,
-    CircularBuffer cb_out,
+    DataflowBuffer cb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,
@@ -846,7 +846,7 @@ void write_block_sync_granular_split(
     Noc noc,
     const std::tuple<Accessors...>& accessors,
     const TensorShape2D& chunk_shape,
-    CircularBuffer cb_out,
+    DataflowBuffer cb_out,
     uint32_t tile_size_bytes,
     uint32_t d0_start,
     uint32_t d0_end,

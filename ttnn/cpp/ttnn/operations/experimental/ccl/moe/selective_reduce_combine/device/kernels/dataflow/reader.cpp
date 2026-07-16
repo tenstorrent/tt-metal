@@ -5,7 +5,7 @@
 #include "api/compile_time_args.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 
 namespace detail {
@@ -102,9 +102,9 @@ void kernel_main() {
 
     Noc noc1_obj(1);
     Semaphore<> sync_sem(sync_semaphore_id);
-    CircularBuffer cb_token_counts(token_counts_cb_id);
-    CircularBuffer cb_token_activations(token_activations_cb_id);
-    CircularBuffer cb_dense_token_maps(dense_token_maps_cb_id);
+    DataflowBuffer cb_token_counts(token_counts_cb_id);
+    DataflowBuffer cb_token_activations(token_activations_cb_id);
+    DataflowBuffer cb_dense_token_maps(dense_token_maps_cb_id);
 
     const auto dense_token_maps_addrgen = TensorAccessor(dense_token_maps_ta_args, dense_token_maps_addr);
     const auto token_counts_addrgen = TensorAccessor(dense_token_counts_ta_args, dense_token_counts_addr);

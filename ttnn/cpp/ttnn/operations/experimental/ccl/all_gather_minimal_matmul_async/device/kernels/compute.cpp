@@ -13,7 +13,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
@@ -70,23 +70,23 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
 }
 #endif  // FUSE_SWIGLU
 
-void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    copy_tile_to_dst_init_short(in_cb.get_cb_id());
-    reconfig_data_format_srca(in_cb.get_cb_id());
-    pack_reconfig_data_format(out_cb.get_cb_id());
+void copy_block(DataflowBuffer& in_cb, DataflowBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    copy_tile_to_dst_init_short(in_cb.get_id());
+    reconfig_data_format_srca(in_cb.get_id());
+    pack_reconfig_data_format(out_cb.get_id());
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
-            copy_tile(in_cb.get_cb_id(), tile_id, fused_act_dst_id /*dst*/);
+            copy_tile(in_cb.get_id(), tile_id, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(fused_act_dst_id, out_cb.get_cb_id());
+            pack_tile(fused_act_dst_id, out_cb.get_id());
             tile_regs_release();
             tile_id++;
         }
@@ -104,28 +104,27 @@ void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_
  *   - false: Pushes all tiles at end (for final output)
  */
 void add_bias_block(
-    CircularBuffer& in_cb,
-    CircularBuffer& bias_cb,
-    CircularBuffer& out_cb,
+    DataflowBuffer& in_cb,
+    DataflowBuffer& bias_cb,
+    DataflowBuffer& out_cb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
-    add_bcast_rows_init_short(in_cb.get_cb_id(), bias_cb.get_cb_id());
-    reconfig_data_format(in_cb.get_cb_id(), bias_cb.get_cb_id());
-    pack_reconfig_data_format(out_cb.get_cb_id());
+    add_bcast_rows_init_short(in_cb.get_id(), bias_cb.get_id());
+    reconfig_data_format(in_cb.get_id(), bias_cb.get_id());
+    pack_reconfig_data_format(out_cb.get_id());
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
-            add_tiles_bcast<BroadcastType::ROW>(
-                in_cb.get_cb_id(), bias_cb.get_cb_id(), tile_id, n, fused_act_dst_id /*dst*/);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb.get_id(), bias_cb.get_id(), tile_id, n, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(fused_act_dst_id, out_cb.get_cb_id());
+            pack_tile(fused_act_dst_id, out_cb.get_id());
             tile_regs_release();
             tile_id++;
         }
@@ -134,12 +133,12 @@ void add_bias_block(
 }
 
 void add_bias_and_addcmul_block(
-    CircularBuffer& intermediate_cb,
-    CircularBuffer& bias_cb,
-    CircularBuffer& ternary_a_cb,
-    CircularBuffer& ternary_b_cb,
+    DataflowBuffer& intermediate_cb,
+    DataflowBuffer& bias_cb,
+    DataflowBuffer& ternary_a_cb,
+    DataflowBuffer& ternary_b_cb,
     uint32_t scalar_value,
-    CircularBuffer& out_cb,
+    DataflowBuffer& out_cb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles,
     uint32_t broadcast_ternary_b) {
@@ -155,9 +154,9 @@ void add_bias_and_addcmul_block(
     // Read from intermediate_cb and write back to intermediate_cb
     // ============================================
 
-    add_bcast_rows_init_short(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
-    reconfig_data_format(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
-    pack_reconfig_data_format(intermediate_cb.get_cb_id());
+    add_bcast_rows_init_short(intermediate_cb.get_id(), bias_cb.get_id());
+    reconfig_data_format(intermediate_cb.get_id(), bias_cb.get_id());
+    pack_reconfig_data_format(intermediate_cb.get_id());
 
     // Wait for ALL input data ONCE at the beginning
     bias_cb.wait_front(N_block_tiles);
@@ -170,11 +169,11 @@ void add_bias_and_addcmul_block(
             uint32_t tile_id = m * N_block_tiles + n;
 
             tile_regs_acquire();
-            add_tiles_bcast<BroadcastType::ROW>(intermediate_cb.get_cb_id(), bias_cb.get_cb_id(), tile_id, n, DST_ID);
+            add_tiles_bcast<BroadcastType::ROW>(intermediate_cb.get_id(), bias_cb.get_id(), tile_id, n, DST_ID);
 
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(DST_ID, intermediate_cb.get_cb_id());
+            pack_tile(DST_ID, intermediate_cb.get_id());
             tile_regs_release();
         }
     }
@@ -206,14 +205,14 @@ void add_bias_and_addcmul_block(
         ternary_b_cb.wait_front(N_block_tiles);
 
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_bcast_rows_init_short(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        mul_bcast_rows_init_short(intermediate_cb.get_id(), ternary_b_cb.get_id());
 #else
-        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
+        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_id(), intermediate_cb.get_id());
 #endif  // TERNARY_B_IS_FLOAT32
 
         binop_with_scalar_tile_init();
-        reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
-        pack_reconfig_data_format(intermediate_cb.get_cb_id());
+        reconfig_data_format(intermediate_cb.get_id(), ternary_b_cb.get_id());
+        pack_reconfig_data_format(intermediate_cb.get_id());
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -229,14 +228,14 @@ void add_bias_and_addcmul_block(
 
                 // ternary_b_cb is [1, N], broadcast across M rows
                 mul_tiles_bcast<BroadcastType::ROW>(
-                    intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
+                    intermediate_cb.get_id(), ternary_b_cb.get_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
-                unary_bcast<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
+                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_id(), intermediate_cb.get_id());
+                unary_bcast<BroadcastType::ROW>(ternary_b_cb.get_id(), n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb.get_cb_id());
-                copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
+                copy_tile_to_dst_init_short(intermediate_cb.get_id());
+                copy_tile(intermediate_cb.get_id(), tile_id, DST_ID);
 
                 mul_binary_tile_init();
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
@@ -246,7 +245,7 @@ void add_bias_and_addcmul_block(
 
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(DST_ID, intermediate_cb.get_cb_id());
+                pack_tile(DST_ID, intermediate_cb.get_id());
                 tile_regs_release();
                 tile_id++;
             }
@@ -256,11 +255,11 @@ void add_bias_and_addcmul_block(
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_tiles_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        mul_tiles_init(intermediate_cb.get_id(), ternary_b_cb.get_id());
 #endif
         binop_with_scalar_tile_init();
-        reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
-        pack_reconfig_data_format(intermediate_cb.get_cb_id());
+        reconfig_data_format(intermediate_cb.get_id(), ternary_b_cb.get_id());
+        pack_reconfig_data_format(intermediate_cb.get_id());
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -269,14 +268,14 @@ void add_bias_and_addcmul_block(
                 tile_regs_acquire();
 
 #ifndef TERNARY_B_IS_FLOAT32
-                mul_tiles(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
+                mul_tiles(intermediate_cb.get_id(), ternary_b_cb.get_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                copy_tile_to_dst_init_short(ternary_b_cb.get_cb_id());
-                copy_tile(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
+                copy_tile_to_dst_init_short(ternary_b_cb.get_id());
+                copy_tile(ternary_b_cb.get_id(), n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb.get_cb_id());
-                copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
+                copy_tile_to_dst_init_short(intermediate_cb.get_id());
+                copy_tile(intermediate_cb.get_id(), tile_id, DST_ID);
 
                 mul_binary_tile_init();
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
@@ -286,7 +285,7 @@ void add_bias_and_addcmul_block(
 
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(DST_ID, intermediate_cb.get_cb_id());
+                pack_tile(DST_ID, intermediate_cb.get_id());
                 tile_regs_release();
                 tile_id++;
             }
@@ -302,9 +301,9 @@ void add_bias_and_addcmul_block(
 
     intermediate_cb.wait_front(out_block_num_tiles);
 
-    add_tiles_init(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
-    reconfig_data_format(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
-    pack_reconfig_data_format(out_cb.get_cb_id());
+    add_tiles_init(intermediate_cb.get_id(), ternary_a_cb.get_id());
+    reconfig_data_format(intermediate_cb.get_id(), ternary_a_cb.get_id());
+    pack_reconfig_data_format(out_cb.get_id());
 
     tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -315,11 +314,11 @@ void add_bias_and_addcmul_block(
             tile_regs_acquire();
 
             // ternary_a_cb is pushed one row at a time, so use column index n
-            add_tiles(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id(), tile_id, n, DST_ID);
+            add_tiles(intermediate_cb.get_id(), ternary_a_cb.get_id(), tile_id, n, DST_ID);
 
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(DST_ID, out_cb.get_cb_id());
+            pack_tile(DST_ID, out_cb.get_id());
             tile_regs_release();
             tile_id++;
         }
@@ -333,9 +332,9 @@ void add_bias_and_addcmul_block(
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
-    CircularBuffer& in0_cb,
-    CircularBuffer& in1_cb,
-    CircularBuffer& out_cb,
+    DataflowBuffer& in0_cb,
+    DataflowBuffer& in1_cb,
+    DataflowBuffer& out_cb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
     const uint32_t full_N_block_tiles,
@@ -355,8 +354,8 @@ void matmul_blocks(
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
                 matmul_block(
-                    in0_cb.get_cb_id(),
-                    in1_cb.get_cb_id(),
+                    in0_cb.get_id(),
+                    in1_cb.get_id(),
                     in0_index,
                     in1_index,
                     dst_index,
@@ -375,7 +374,7 @@ void matmul_blocks(
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     uint32_t w_tile_id = N_start + w;
                     uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
-                    pack_tile<true>(write_dst_index, out_cb.get_cb_id(), out_tile_id);
+                    pack_tile<true>(write_dst_index, out_cb.get_id(), out_tile_id);
                     write_dst_index++;
                     dst_index++;
                 }
@@ -421,13 +420,13 @@ void kernel_main() {
     constexpr uint32_t ternary_a_cb_id = tt::CBIndex::c_5;
     constexpr uint32_t ternary_b_cb_id = tt::CBIndex::c_6;
 
-    CircularBuffer in0_cb(in0_cb_id);
-    CircularBuffer in1_cb(in1_cb_id);
-    CircularBuffer out_cb(out_cb_id);
-    CircularBuffer intermediate_cb(intermediate_cb_id);
-    CircularBuffer in2_cb(in2_cb_id);
-    CircularBuffer ternary_a_cb(ternary_a_cb_id);
-    CircularBuffer ternary_b_cb(ternary_b_cb_id);
+    DataflowBuffer in0_cb(in0_cb_id);
+    DataflowBuffer in1_cb(in1_cb_id);
+    DataflowBuffer out_cb(out_cb_id);
+    DataflowBuffer intermediate_cb(intermediate_cb_id);
+    DataflowBuffer in2_cb(in2_cb_id);
+    DataflowBuffer ternary_a_cb(ternary_a_cb_id);
+    DataflowBuffer ternary_b_cb(ternary_b_cb_id);
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
@@ -523,8 +522,7 @@ void kernel_main() {
 #ifdef FUSE_BIAS
             in2_cb.wait_front(N_block_tiles);
 #endif
-            swiglu_block(
-                intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
+            swiglu_block(intermediate_cb.get_id(), in2_cb.get_id(), out_cb.get_id(), M_block_tiles, N_block_tiles);
 #ifdef FUSE_BIAS
             in2_cb.pop_front(N_block_tiles);
 #endif

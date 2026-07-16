@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "moe_ring_common.h"
 
@@ -97,10 +97,10 @@ void kernel_main() {
     constexpr auto cb_c2s_out_id = tt::CBIndex::c_1;  // matmul_writer_cb_id
     constexpr auto cb_r2c_w2_id = tt::CBIndex::c_3;   // reuse cb_r2c_w0_w1
 
-    // CircularBuffer typed wrappers
-    CircularBuffer cb_r2c_w0_w1(cb_r2c_w0_w1_id);
-    CircularBuffer cb_r2c_w2(cb_r2c_w2_id);
-    CircularBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
+    // DataflowBuffer typed wrappers
+    DataflowBuffer cb_r2c_w0_w1(cb_r2c_w0_w1_id);
+    DataflowBuffer cb_r2c_w2(cb_r2c_w2_id);
+    DataflowBuffer cb_per_expert_total_tokens(per_expert_total_tokens_cb_id);
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);

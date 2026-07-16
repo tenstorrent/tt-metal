@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
@@ -140,9 +140,9 @@ void kernel_main() {
 #endif
 
     Noc noc_obj;
-    CircularBuffer cb_input(cb_input_id);
-    CircularBuffer cb_intermediate(cb_intermediate_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_input(cb_input_id);
+    DataflowBuffer cb_intermediate(cb_intermediate_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
 
     /**
      * Intermediate buffer is double-sized (shape [2, *input_shape]) to accommodate forward and backward.
@@ -171,7 +171,7 @@ void kernel_main() {
 
         if (is_first_device_in_direction) {
             // We have no incoming slices, so forward directly to writer
-            CircularBuffer& cb_in0 = cb_reader_output;
+            DataflowBuffer& cb_in0 = cb_reader_output;
 
             for (uint32_t b = 0; b < slice_B; ++b) {
                 uint32_t tiles_read = start_tiles_read;
@@ -198,7 +198,7 @@ void kernel_main() {
             }
         } else {
             // I have incoming slices, so write my output to compute kernel and read intermediate input
-            CircularBuffer& cb_in0 = cb_input;
+            DataflowBuffer& cb_in0 = cb_input;
 
             for (uint32_t b = 0; b < slice_B; ++b) {
                 uint32_t tiles_read = start_tiles_read;
@@ -266,7 +266,7 @@ void kernel_main() {
          */
         uint32_t tile_id_start = detail::do_accumulate_output(is_forward) ? output_tile_id_start : input_tile_id_start;
 
-        CircularBuffer& cb_in0 = cb_input;
+        DataflowBuffer& cb_in0 = cb_input;
         for (uint32_t b = 0; b < slice_B; ++b) {
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;

@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
@@ -54,7 +54,7 @@ void kernel_main() {
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr);
 
     Noc noc_obj;
-    CircularBuffer cb(cb_id);
+    DataflowBuffer cb(cb_id);
 
     if (my_ring_id == remote_device_ring_id) {
         // Follows same logic as sender reader for local copy.

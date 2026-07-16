@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -82,10 +82,10 @@ void kernel_main() {
     uint32_t v_base_addr = get_arg_val<uint32_t>(rt_arg_idx++);
 
     Noc noc_obj;
-    CircularBuffer cb_input_tensor(input_tensor_cb_id);
-    CircularBuffer cb_fabric_sender(fabric_sender_cb_id);
-    CircularBuffer cb_fabric_receiver(fabric_receiver_cb_id);
-    CircularBuffer cb_accumulator(accumulator_cb_id);
+    DataflowBuffer cb_input_tensor(input_tensor_cb_id);
+    DataflowBuffer cb_fabric_sender(fabric_sender_cb_id);
+    DataflowBuffer cb_fabric_receiver(fabric_receiver_cb_id);
+    DataflowBuffer cb_accumulator(accumulator_cb_id);
 
     // Bank base addresses (compute once)
     const uint32_t bank_base_address = cb_input_tensor.get_write_ptr();

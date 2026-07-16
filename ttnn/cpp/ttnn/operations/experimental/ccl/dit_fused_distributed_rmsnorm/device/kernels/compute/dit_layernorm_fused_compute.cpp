@@ -45,7 +45,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "api/compute/welford.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 
 void kernel_main() {

@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ckernel.h"
@@ -105,7 +105,7 @@ void kernel_main() {
     constexpr bool has_post_half_tile = has_writer_tail && current_device_id % 2 == 0;
 
     Noc noc_obj;
-    CircularBuffer cb0(cb0_id);
+    DataflowBuffer cb0(cb0_id);
 
     for (uint32_t did = 0; did < local_num_devices; ++did) {
         int32_t device_offset = get_arg_val<int32_t>(arg_idx++);

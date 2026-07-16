@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 
@@ -21,8 +21,8 @@ inline void write_minimal_resharded_data(
     uint32_t num_segments_to_write_back,
     uint32_t storage_core_start_offset,
     tt_l1_ptr uint32_t* segment_args) {
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_out_resharded_obj(cb_out_resharded);
+    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer cb_out_resharded_obj(cb_out_resharded);
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;

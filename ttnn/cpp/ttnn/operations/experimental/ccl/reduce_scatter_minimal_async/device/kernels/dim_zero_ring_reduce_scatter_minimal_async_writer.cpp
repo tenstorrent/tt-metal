@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -118,8 +118,8 @@ void kernel_main() {
     auto output_addrgen = TensorAccessor(output_tensor_args, output_address);
 
     Noc noc_obj;
-    CircularBuffer cb_compute_output(cb_compute_output_id);
-    CircularBuffer cb_reader_output(cb_reader_output_id);
+    DataflowBuffer cb_compute_output(cb_compute_output_id);
+    DataflowBuffer cb_reader_output(cb_reader_output_id);
 
 #ifdef USE_WORKER_MUX
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -208,7 +208,7 @@ void kernel_main() {
     int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
     for (uint32_t i = 0; i < ring_size; ++i) {
         // If not the last slice, write what's on cb_output forward
-        CircularBuffer& cb_output = i > 0 ? cb_compute_output : cb_reader_output;
+        DataflowBuffer& cb_output = i > 0 ? cb_compute_output : cb_reader_output;
 
         uint32_t actual_slice_idx;
         if (direction) {

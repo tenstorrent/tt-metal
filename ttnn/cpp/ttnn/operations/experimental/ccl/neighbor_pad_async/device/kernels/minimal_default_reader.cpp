@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include <cstdint>
 #include "api/tensor/noc_traits.h"
@@ -23,7 +23,7 @@ constexpr bool use_l1_intermediate = get_compile_time_arg_val(ct_after_src);
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_src + 1);
 
 template <uint32_t stick_size_bytes>
-inline void zeroPad(Noc& noc, CircularBuffer& cb_output) {
+inline void zeroPad(Noc& noc, DataflowBuffer& cb_output) {
     noc.async_write_zeros(cb_output, stick_size_bytes);
     noc.write_zeros_l1_barrier();
 }
@@ -57,8 +57,8 @@ void kernel_main() {
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address);
 
     Noc noc_obj;
-    CircularBuffer cb_output(cb_output_id);
-    CircularBuffer cb_recv(recv_cb_id);
+    DataflowBuffer cb_output(cb_output_id);
+    DataflowBuffer cb_recv(recv_cb_id);
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
     for (uint32_t outer_dim = 0; outer_dim < outer_dim_size; outer_dim++) {

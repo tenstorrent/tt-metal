@@ -7,7 +7,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -41,7 +41,7 @@ void kernel_main() {
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     Noc noc_obj;
-    CircularBuffer cb_fabric_packet_header(fabric_packet_header_cb_id);
+    DataflowBuffer cb_fabric_packet_header(fabric_packet_header_cb_id);
 
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing reads from upstream data cores

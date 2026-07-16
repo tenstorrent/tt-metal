@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
 
@@ -59,7 +59,7 @@ void kernel_main() {
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
     Noc noc;
-    CircularBuffer cb(cb0_id);
+    DataflowBuffer cb(cb0_id);
     auto* data_valid_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_valid_sem);
 
     OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
