@@ -1663,7 +1663,24 @@ def generate_reports(
                         "OP TO OP LATENCY BR/NRISC START [ns]",
                     }
                     if kernel_timing_invalid:
-                        skip_headers.add("DEVICE KERNEL DURATION [ns]")
+                        # Every kernel-duration column is derived from the same per-RISC *-KERNEL zone
+                        # timestamps that produced the invalid aggregate start/end, so blank the whole
+                        # family rather than leaving stale per-RISC values next to a blanked aggregate.
+                        skip_headers.update(
+                            {
+                                "DEVICE KERNEL DURATION [ns]",
+                                "DEVICE KERNEL DURATION DM START [ns]",
+                                "DEVICE KERNEL DURATION PER CORE MIN [ns]",
+                                "DEVICE KERNEL DURATION PER CORE MAX [ns]",
+                                "DEVICE KERNEL DURATION PER CORE AVG [ns]",
+                                "DEVICE BRISC KERNEL DURATION [ns]",
+                                "DEVICE NCRISC KERNEL DURATION [ns]",
+                                "DEVICE TRISC0 KERNEL DURATION [ns]",
+                                "DEVICE TRISC1 KERNEL DURATION [ns]",
+                                "DEVICE TRISC2 KERNEL DURATION [ns]",
+                                "DEVICE ERISC KERNEL DURATION [ns]",
+                            }
+                        )
                     for header, value in device_perf_row.items():
                         if header in skip_headers:
                             continue
