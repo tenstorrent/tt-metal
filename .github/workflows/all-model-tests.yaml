@@ -120,6 +120,17 @@ jobs:
           WH_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
           BH_SKUS="bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
           ALL_SKUS="$WH_SKUS,$BH_SKUS"
+          # NOTE: exabox multihost SKUs (bh_spsg/bh_sp1/bh_sp1-blitz/bh_sp4) are intentionally NOT
+          # dispatchable from all-model-tests yet — exabox model-unit tests are dispatched via the
+          # standalone models-t1/t2/t3-unit-tests workflows (which grant ttop OIDC on their caller
+          # jobs). TODO: to dispatch exabox jobs here alongside everything else, we must:
+          #   1. add the exabox SKUs to VALID_SKUS below (keep them out of ALL_SKUS/bh_all so `all`
+          #      never auto-allocates scarce exabox hardware);
+          #   2. grant `id-token: write` on the t1/t2/t3-unit-tests caller jobs (ttop OIDC);
+          #   3. fix run reconciliation — models-unit-tests-impl exposes multihost legs in a separate
+          #      `matrix_multihost` output that the "Aggregate child matrices" step here does not
+          #      union, and the multihost job emits no per-leg summary artifact; without both,
+          #      dispatched multihost legs would be misreported as INFRA_FAILURE.
           VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p300 bh_quietbox_2 bh_galaxy wh_all bh_all"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
@@ -308,11 +319,6 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-1 && inputs.run-unit-tests && needs.preflight.outputs.has-t1-unit == 'true' }}
     secrets: inherit
-    # OIDC only on the unit-test callers (the reusable workflow's multihost job needs ttop auth).
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -356,11 +362,6 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-2 && inputs.run-unit-tests && needs.preflight.outputs.has-t2-unit == 'true' }}
     secrets: inherit
-    # OIDC only on the unit-test callers (the reusable workflow's multihost job needs ttop auth).
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -404,11 +405,6 @@ jobs:
     needs: [build-artifact, preflight]
     if: ${{ inputs.tier-3 && inputs.run-unit-tests && needs.preflight.outputs.has-t3-unit == 'true' }}
     secrets: inherit
-    # OIDC only on the unit-test callers (the reusable workflow's multihost job needs ttop auth).
-    permissions:
-      contents: read
-      packages: read
-      id-token: write
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
