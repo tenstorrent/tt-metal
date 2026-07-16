@@ -54,6 +54,11 @@ enum RegimeADiag : uint32_t {
     DIAG_IN0_XCHGRR = 1u << 9,  // round-robin direct exchange: round d, write to the d-ahead peer + signal,
                                 // wait own slot d, push it, advance. 1 transfer/core/round (less burst
                                 // congestion than eager's G-1 at once) while keeping incremental push.
+    // A/B baseline for the progressive-cumulative-wait schedule. The default (this bit CLEAR) resident-in0
+    // compute path begins matmul as each ring shard arrives (cumulative cb_wait_front during the first N
+    // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only
+    // define; identical config/tensors/transport/reduction, only the CB0 wait placement differs.
+    DIAG_FULL_IN0_WAIT = 1u << 10,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;

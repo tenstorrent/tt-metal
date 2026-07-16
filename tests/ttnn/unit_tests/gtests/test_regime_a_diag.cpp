@@ -108,7 +108,7 @@ TEST_F(RegimeADiagFixture, Run) {
     // Constant-input sanity for the public path (mask 0) + the correct in0-delivery variants (32=scatter,
     // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
-    if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512) {
+    if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -176,8 +176,9 @@ TEST_F(RegimeADiagFixture, Correctness) {
     (void)Kt;
     (void)Nt;
 
-    // ring(0) + the correct in0-delivery variants; each fresh then cached (2nd invocation = cached program).
-    for (uint32_t mask : {0u, 32u, 64u, 128u, 256u, 512u}) {
+    // ring(0) + the correct in0-delivery variants + the full-wait A/B baseline (1024); each fresh then cached
+    // (2nd invocation = cached program). All run the DEFAULT progressive-cumulative-wait compute except 1024.
+    for (uint32_t mask : {0u, 32u, 64u, 128u, 256u, 512u, 1024u}) {
         for (int pass = 0; pass < 2; ++pass) {  // pass 0 = fresh/compile, pass 1 = cached-program replay
             Tensor out =
                 ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
@@ -186,6 +187,93 @@ TEST_F(RegimeADiagFixture, Correctness) {
             fmt::print("DIAGCORR mask={} pass={} pcc={:.5f}\n", mask, pass, p);
             EXPECT_GT(p, 0.99) << "variant mask=" << mask << " pass=" << pass << " PCC too low (" << p << ")";
         }
+    }
+}
+
+// Progressive-cumulative-wait (default, mask 0) vs old full-slice startup barrier (DIAG_FULL_IN0_WAIT,
+// mask 1024) A/B. Both paths use IDENTICAL config/tensors/ring-transport/reduction — only the CB0 wait
+// placement differs, and the matmul accumulation ORDER is unchanged — so the two outputs must be BIT-
+// IDENTICAL. Each variant is also checked against a CPU f32 golden (PCC). The config table deliberately
+// spans W=1 (both Mt=8 primary targets), W>1 (Pk=1 => 4 blocks/shard), and N_bpc = 1 and >1, plus split-K
+// reduce and Pk=1 no-reduce, so the progressive schedule + resident CB0 reuse is exercised across shapes.
+TEST_F(RegimeADiagFixture, ProgressiveVsFullWait) {
+    struct Case {
+        const char* label;
+        uint32_t M, K, N, Ns, Pk, Sm, kb, nsb;
+        uint32_t W, N_bpc;  // expected, for the log
+    };
+    // (label, M,K,N, Ns,Pk,Sm,kb,nsb, W, N_bpc)
+    const std::vector<Case> cases = {
+        {"primary1_2048x1024_W1_Nbpc2", 256, 2048, 1024, 1, 4, 2, 2, 2, 1, 2},  // target1 factorization
+        {"primary2_6144x768_W1_Nbpc3", 256, 6144, 768, 1, 12, 1, 2, 1, 1, 3},   // target2 factorization
+        {"wgt1_2048x1024_W4_Nbpc2", 256, 2048, 1024, 1, 1, 1, 2, 2, 4, 2},      // Pk=1 => W=4 (>1), no-reduce
+        {"nbpc1_2048x1024_W4_Nbpc1", 256, 2048, 1024, 1, 1, 1, 2, 4, 4, 1},     // N_bpc=1 (single N-subblock)
+    };
+    auto* device = device_;
+
+    for (const auto& c : cases) {
+        const uint32_t M = c.M, K = c.K, N = c.N;
+        std::mt19937 rng(777);
+        std::normal_distribution<float> dist(0.0f, 1.0f);
+        std::vector<bfloat16> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
+        std::vector<float> af(a.size()), bf(b.size());
+        for (size_t i = 0; i < a.size(); ++i) {
+            a[i] = bfloat16(dist(rng));
+            af[i] = static_cast<float>(a[i]);
+        }
+        for (size_t i = 0; i < b.size(); ++i) {
+            b[i] = bfloat16(dist(rng));
+            bf[i] = static_cast<float>(b[i]);
+        }
+        std::vector<float> golden(static_cast<size_t>(M) * N, 0.0f);
+        for (uint32_t i = 0; i < M; ++i) {
+            for (uint32_t kk = 0; kk < K; ++kk) {
+                const float aik = af[static_cast<size_t>(i) * K + kk];
+                const float* brow = &bf[static_cast<size_t>(kk) * N];
+                float* crow = &golden[static_cast<size_t>(i) * N];
+                for (uint32_t j = 0; j < N; ++j) {
+                    crow[j] += aik * brow[j];
+                }
+            }
+        }
+
+        const MemoryConfig il{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        const TensorLayout lay(DataType::BFLOAT16, PageConfig(Layout::TILE), il);
+        Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
+        const MemoryConfig wcfg = ttnn::experimental::prim::create_regime_a_weight_memory_config(
+            ttnn::Shape({K, N}), DataType::BFLOAT16, device);
+        Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
+        const ttnn::experimental::prim::RegimeAMatmulConfig cfg{
+            .k_slices = c.Pk, .n_slices = c.Ns, .m_slices = c.Sm, .k_block_tiles = c.kb, .n_subblock_tiles = c.nsb};
+
+        auto run = [&](uint32_t mask) {
+            Tensor out =
+                ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
+            return out.to_vector<float>();
+        };
+
+        // mask 0 = progressive (default), mask 1024 = old full-slice startup wait.
+        const std::vector<float> prog = run(0u);
+        const std::vector<float> full = run(1024u);
+        const double p_prog = pcc(prog, golden);
+        const double p_full = pcc(full, golden);
+        double ab_maxdiff = 0.0;
+        ASSERT_EQ(prog.size(), full.size());
+        for (size_t i = 0; i < prog.size(); ++i) {
+            ab_maxdiff = std::max(ab_maxdiff, std::abs(static_cast<double>(prog[i]) - full[i]));
+        }
+        fmt::print(
+            "DIAGAB case={} W={} N_bpc={} pcc_prog={:.5f} pcc_full={:.5f} ab_maxdiff={:.6f}\n",
+            c.label,
+            c.W,
+            c.N_bpc,
+            p_prog,
+            p_full,
+            ab_maxdiff);
+        EXPECT_GT(p_prog, 0.999) << "progressive PCC too low: " << c.label;
+        EXPECT_GT(p_full, 0.999) << "full-wait PCC too low: " << c.label;
+        // Only the wait placement differs; matmul order identical => bit-identical output.
+        EXPECT_EQ(ab_maxdiff, 0.0) << "progressive vs full-wait differ (should be bit-identical): " << c.label;
     }
 }
 

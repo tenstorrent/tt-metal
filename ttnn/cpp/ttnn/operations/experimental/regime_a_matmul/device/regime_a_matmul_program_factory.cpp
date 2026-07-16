@@ -108,6 +108,9 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["DIAG_LOCAL_FEED"] = "1";
         ddefs["DIAG_LOCAL_FEED"] = "1";
     }
+    if (diag & RegimeADiag::DIAG_FULL_IN0_WAIT) {
+        ddefs["DIAG_FULL_IN0_WAIT"] = "1";  // A/B baseline: old full-slice startup barrier (compute-only)
+    }
     const bool scatter = (diag & RegimeADiag::DIAG_IN0_SCATTER) != 0u;
     if (scatter) {
         wdefs["DIAG_IN0_SCATTER"] = "1";  // writer phase-1 uses direct scatter; needs the G-1 ahead peers (below)

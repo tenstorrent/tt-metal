@@ -398,9 +398,18 @@ void kernel_main() {
 
 #ifdef IN0_KSLICE_RESIDENT
     // Large-Mt ring: cb0 holds the full k-slice (all K_num_blocks in0 blocks, block-major). It is filled
-    // ONCE and kept resident so it can be reused across the N_blocks_per_core N-sub-blocks; the k-loop
-    // addresses block k_block via the in0_base tile offset instead of popping. Popped once at the end.
+    // ONCE (the writer pushes it incrementally, W compute blocks per ring step) and kept resident so it can
+    // be reused across the N_blocks_per_core N-sub-blocks; the k-loop addresses block k_block via the in0_base
+    // tile offset instead of popping. Popped once at the end.
+    //
+    // DEFAULT (progressive): NO startup barrier. The first N-sub-block's k-loop instead waits cumulatively
+    // per K block (below), so the first matmul begins as soon as the first ring shard arrives while ring
+    // forwarding + in1 reading continue concurrently. Later N-sub-blocks reuse the now-complete resident slice.
+#ifdef DIAG_FULL_IN0_WAIT
+    // A/B baseline (test-only): the OLD single full-slice startup barrier before any matmul. Exactly the
+    // previous production behavior; the per-K cumulative waits below are compiled out.
     cb_wait_front(in0_cb, K_num_blocks * in0_block_num_tiles);
+#endif
 #endif
 #ifdef IN1_RESIDENT
     // Overlapped deep-K (M-shard): in0 arrives per M-block (shard) incrementally (overlapping the ring), while
@@ -435,6 +444,20 @@ void kernel_main() {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
 #ifndef IN0_KSLICE_RESIDENT
                 cb_wait_front(in0_cb, in0_block_num_tiles);
+#else
+#ifndef DIAG_FULL_IN0_WAIT
+                // Progressive cumulative wait (default resident path): begin matmul k_block as soon as the
+                // writer's incremental per-step ring pushes make CUMULATIVE (k_block+1) in0 blocks available.
+                // Only the FIRST resident traversal waits (M_blocks_per_core==1, first N-sub-block); once the
+                // slice is complete it stays resident and later N-sub-blocks reuse it with no further waits.
+                // Repeated cb_wait_front WITHOUT an intervening pop requires cumulative counts (CB API
+                // contract) — satisfied since (k_block+1)*in0_block_num_tiles is strictly increasing and CB0
+                // is popped only once, after all reuse (below). The writer pushes W blocks at a time, so a
+                // wait for a mid-batch boundary is simply satisfied when that W-batch lands.
+                if (m_block_iter == 0 && n_block_iter == 0) {
+                    cb_wait_front(in0_cb, (k_block + 1) * in0_block_num_tiles);
+                }
+#endif
 #endif
 #ifndef IN1_RESIDENT
                 cb_wait_front(in1_cb, in1_block_num_tiles);
