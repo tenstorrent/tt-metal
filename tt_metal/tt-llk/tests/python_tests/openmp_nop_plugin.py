@@ -2,7 +2,8 @@
 #
 # OPENMP_NOP=1 and OPENMP_NOP_PHASE=
 #   prepare  — compile-only (PRODUCE): snapshot base ELFs → work/<key>/bk + meta.json
-#   consume  — device runs only: one xdist item per NOP count; delete-on-pass / keep-on-fail
+#   consume  — device runs: expand via OPENMP_NOP_CHUNK_MANIFEST into one item per NOP
+#              count; delete-on-pass / keep-on-fail
 #
 # ttnop batch (OpenMP) is invoked by the shell between prepare and consume.
 
@@ -40,7 +41,7 @@ def _item_key(item) -> str:
 
 
 def _out_base() -> Path:
-    return Path(os.environ.get("OPENMP_NOP_OUT", "/tmp/tt-llk-build/nop_injector"))
+    return Path(os.environ.get("OPENMP_NOP_OUT", "/tmp/tt-llk-nop/injector"))
 
 
 def _phase() -> str:
@@ -172,19 +173,11 @@ def _prepare_snapshot(item, cfg) -> None:
     )
 
 
-def _name_for_count(item, n: int) -> str:
-    """Derive a unique Function name so xdist/pytest do not share teardown state."""
-    name = item.name
-    if name.endswith("]"):
-        return f"{name[:-1]}-n{n}]"
-    return f"{name}[n{n}]"
-
-
-def _nodeid_for_count(item, n: int) -> str:
-    nid = item.nodeid
-    if nid.endswith("]"):
-        return f"{nid[:-1]}-n{n}]"
-    return f"{nid}[n{n}]"
+def _suffix_for_count(s: str, n: int) -> str:
+    """Unique name/nodeid for one NOP count (avoids xdist teardown collisions)."""
+    if s.endswith("]"):
+        return f"{s[:-1]}-n{n}]"
+    return f"{s}[n{n}]"
 
 
 def _clone_item_for_count(item, n: int, work: Path, meta: dict):
@@ -194,10 +187,8 @@ def _clone_item_for_count(item, n: int, work: Path, meta: dict):
     Do NOT use copy.copy(item): shallow copies share Session/fixture finalizer
     state and blow up under xdist (AssertionError in runner teardown).
     """
-    parent = item.parent
-    new_name = _name_for_count(item, n)
     kwargs = {
-        "name": new_name,
+        "name": _suffix_for_count(item.name, n),
         "callobj": item.obj,
         "fixtureinfo": item._fixtureinfo,
         "originalname": getattr(item, "originalname", None) or item.name,
@@ -205,7 +196,6 @@ def _clone_item_for_count(item, n: int, work: Path, meta: dict):
     callspec = getattr(item, "callspec", None)
     if callspec is not None:
         kwargs["callspec"] = callspec
-    # keywords can be a Marker or dict depending on pytest version
     keywords = getattr(item, "keywords", None)
     if keywords is not None:
         try:
@@ -213,50 +203,38 @@ def _clone_item_for_count(item, n: int, work: Path, meta: dict):
         except Exception:  # noqa: BLE001
             pass
 
-    ni = Function.from_parent(parent, **kwargs)
+    ni = Function.from_parent(item.parent, **kwargs)
     ni.own_markers = list(getattr(item, "own_markers", []) or [])
     ni._omp_nop_count = n
     ni._omp_work = work
     ni._omp_meta = meta
     ni._omp_base_nodeid = item.nodeid
-    # Keep nodeid stable/unique for xdist scheduling + reporting.
-    object.__setattr__(ni, "_nodeid", _nodeid_for_count(item, n))
+    object.__setattr__(ni, "_nodeid", _suffix_for_count(item.nodeid, n))
     return ni
 
 
 def pytest_collection_modifyitems(session, config, items):
     """Consume: expand selected nodeid(s) into one fresh item per NOP count.
 
-    Single-case: OPENMP_NOP_WORK + OPENMP_NOP_BASE_NODEID (legacy).
-    Chunked: OPENMP_NOP_CHUNK_MANIFEST = JSON list of
+    Requires OPENMP_NOP_CHUNK_MANIFEST = JSON list of
       {"nodeid": "...", "key": "...", "work": "/path/to/work/<key>"}
     """
     if os.environ.get("OPENMP_NOP") != "1" or _phase() != "consume":
         return
 
     manifest_path = os.environ.get("OPENMP_NOP_CHUNK_MANIFEST", "").strip()
-    if manifest_path:
-        mp = Path(manifest_path)
-        if not mp.is_file():
-            raise RuntimeError(f"consume: missing chunk manifest {mp}")
-        entries = json.loads(mp.read_text())
-        if not isinstance(entries, list) or not entries:
-            raise RuntimeError(f"consume: chunk manifest empty/invalid: {mp}")
-        by_nodeid = {e["nodeid"]: e for e in entries}
-    else:
-        work = Path(os.environ.get("OPENMP_NOP_WORK", ""))
-        if not work.is_dir():
-            raise RuntimeError(
-                "consume: set OPENMP_NOP_CHUNK_MANIFEST or OPENMP_NOP_WORK"
-            )
-        meta_path = work / "meta.json"
-        if not meta_path.is_file():
-            raise RuntimeError(f"consume: missing {meta_path}")
-        meta = json.loads(meta_path.read_text())
-        base = os.environ.get("OPENMP_NOP_BASE_NODEID", meta["nodeid"])
-        by_nodeid = {base: {"nodeid": base, "key": meta["key"], "work": str(work)}}
+    if not manifest_path:
+        raise RuntimeError("consume: set OPENMP_NOP_CHUNK_MANIFEST")
+    mp = Path(manifest_path)
+    if not mp.is_file():
+        raise RuntimeError(f"consume: missing chunk manifest {mp}")
+    entries = json.loads(mp.read_text())
+    if not isinstance(entries, list) or not entries:
+        raise RuntimeError(f"consume: chunk manifest empty/invalid: {mp}")
+    by_nodeid = {e["nodeid"]: e for e in entries}
 
     selected = [i for i in items if i.nodeid in by_nodeid]
+    # Fallback when pytest rewrites a lone nodeid slightly vs the manifest.
     if not selected and len(items) == 1 and len(by_nodeid) == 1:
         selected = list(items)
     if not selected:
@@ -292,7 +270,6 @@ def pytest_runtest_call(item):
 
     phase = _phase()
     if phase not in ("prepare", "consume"):
-        # Old nested OpenMP sweep removed; require an explicit phase.
         yield
         return
 
@@ -362,8 +339,7 @@ def pytest_runtest_call(item):
         if not done["ok"]:
             self.prepare()
             # Prefer meta.variant_id so we do not depend on re-hash matching prepare.
-            base_vid = variant_id if variant_id else self.variant_id
-            per_id = f"{base_vid}{per_suffix}"
+            per_id = f"{variant_id}{per_suffix}"
             dest = TestConfig.ARTEFACTS_DIR / self.test_name / per_id / "elf"
             _copy_elf_set(src, dest, have)
             self.variant_id = per_id
@@ -389,16 +365,11 @@ def pytest_runtest_call(item):
 
     err = _exc_value(outcome.excinfo)
     s = str(err) if err is not None else ""
-    if "Timeout" in s or "TIMED OUT" in s:
-        tag = "FAIL-TIMEOUT"
-    else:
-        tag = "FAIL-MISMATCH"
+    tag = "FAIL-TIMEOUT" if ("Timeout" in s or "TIMED OUT" in s) else "FAIL-MISMATCH"
     print(f"[openmp_nop] n={n} {tag}  {elf_fp}  {s[:120]}", flush=True)
-    if keep:
-        _record_fail(report_id, f"n{n}\t{tag}\t{s[:120]}\n")
-    else:
+    if not keep:
         try:
             _move_dir(src, fail_root / f"n{n}")
         except FileNotFoundError as move_ex:
             _record_fail(report_id, f"n{n}\tFAIL-ERR\tkeep-fail move: {move_ex}\n")
-        _record_fail(report_id, f"n{n}\t{tag}\t{s[:120]}\n")
+    _record_fail(report_id, f"n{n}\t{tag}\t{s[:120]}\n")
