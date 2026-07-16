@@ -780,10 +780,19 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
                 cpu = 0
         return (amt, cpu)
 
+    # Two independent kill bounds so a round can NEVER run unbounded:
+    #   stall_sec        - FROZEN: no sign of life at all (fast kill of a true device wedge).
+    #   max_no_progress  - HARD CAP: alive but produced NO real progress (commit/kernel attempt) for
+    #                      this long -> kill anyway (default 4x stall / >=40min, comfortably above one
+    #                      legit slow measure cycle, so a productive round always records well within it).
+    max_no_progress = int(os.environ.get("PERF_MCP_ROUND_MAX_SEC", str(max(stall_sec * 4, 2400))) or 2400)
     last_tok = _progress_token(repo_root, kernel_log)
     last_live = _liveness()
-    last_active = time.monotonic()
-    _t0 = last_active
+    _now0 = time.monotonic()
+    last_active = _now0  # last sign of life (CPU / transcript / real progress)
+    last_real = _now0  # last REAL progress (commit / recorded kernel attempt)
+    _t0 = _now0
+    wedge_reason = ""
     try:
         while True:
             try:
@@ -794,11 +803,18 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
                 print(f"  · optimizing… {int(_now - _t0)}s (agent transcript → {agent_log})", flush=True)
                 tok = _progress_token(repo_root, kernel_log)
                 live = _liveness()
-                # reset the stall clock on REAL progress (commit / kernel attempt) OR any sign of life:
-                # transcript grew, or >~2s (200 jiffies) of group CPU burned since the last reset.
-                if tok != last_tok or live[0] != last_live[0] or (live[1] - last_live[1]) > 200:
-                    last_tok, last_live, last_active = tok, live, _now
-                elif _now - last_active > stall_sec:
+                if tok != last_tok:  # real progress resets BOTH clocks
+                    last_tok, last_live, last_active, last_real = tok, live, _now, _now
+                elif live[0] != last_live[0] or (live[1] - last_live[1]) > 200:  # alive: transcript/CPU
+                    last_live, last_active = live, _now
+                if _now - last_active > stall_sec:
+                    wedge_reason = "FROZEN %ds — no commit, no device CPU, no agent activity (real wedge)" % stall_sec
+                    break
+                if _now - last_real > max_no_progress:
+                    wedge_reason = (
+                        "UNPRODUCTIVE %ds — alive but no commit/kernel attempt in that time (hard cap)"
+                        % max_no_progress
+                    )
                     break
     finally:
         try:
@@ -816,9 +832,8 @@ def _run_round_with_watchdog(cmd: list, repo_root: Path, devices: str, kernel_lo
         pass
     rst = _reclaim_device(devices)
     print(
-        "  [optimize/cc] WATCHDOG: round FROZEN %ds — no commit, no kernel attempt, no device CPU, and no "
-        "agent activity (real wedge, not a slow profile) — killed the round + %s; next round starts a "
-        "FRESH mcp server on the reset mesh." % (stall_sec, rst)
+        "  [optimize/cc] WATCHDOG: round %s — killed the round + %s; next round starts a FRESH mcp "
+        "server on the reset mesh." % (wedge_reason, rst)
     )
     return True
 
