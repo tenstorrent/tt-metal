@@ -101,30 +101,6 @@ GatedDeltaAttnSeqDeviceOperation::tensor_return_value_t GatedDeltaAttnSeqDeviceO
     };
 }
 
-ttsl::hash::hash_t GatedDeltaAttnSeqDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& in) {
-    return operation::hash_operation<GatedDeltaAttnSeqDeviceOperation>(
-        attrs.num_heads,
-        attrs.num_chunks,
-        attrs.chunk_size,
-        attrs.key_dim,
-        attrs.val_dim,
-        attrs.output_mem_config,
-        attrs.compute_kernel_config,
-        in.L_unit,
-        in.v_beta_sc,
-        in.k_bd_sc,
-        in.intra_attn,
-        in.q_decay,
-        in.k_decay_t,
-        in.dl_exp,
-        // L_inv and initial_state bake TensorAccessorArgs into the reader, so they must be hashed:
-        // otherwise a cache hit can reuse a reader compiled for a different L_inv layout or for absent
-        // initial_state. Hashing the optional also distinguishes state present vs. absent.
-        in.L_inv,
-        in.initial_state);
-}
-
 std::vector<Tensor> gated_delta_attn_seq(
     const Tensor& L_unit,
     const Tensor& v_beta_sc,
