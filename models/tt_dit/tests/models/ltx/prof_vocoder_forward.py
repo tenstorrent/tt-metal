@@ -612,8 +612,8 @@ def test_eager_wall_singleaxis(mesh_device, device_params):
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 def test_forward_traced_multishape(mesh_device, device_params):
-    # Two distinct input shapes both resident in the LRU trace cache; each replays bit-exact
-    # vs eager. Then max_traces=1 evicts the LRU shape.
+    # Two distinct input shapes both resident in the per-shape trace store; each replays bit-exact
+    # vs eager.
     parent = mesh_device
     mesh = parent.create_submesh(ttnn.MeshShape(2, 4))
     pc = AudioTCParallelConfig(
@@ -639,20 +639,14 @@ def test_forward_traced_multishape(mesh_device, device_params):
     mel_b = torch.randn(1, 2, 200, 64, dtype=torch.float32) * 0.5  # T-pad -> 256 (distinct shape)
     ref_a, ref_b = tt_voc(mel_a), tt_voc(mel_b)
 
+    resident = lambda: len(type(tt_voc)._forward_device._tracers_keyed.get(tt_voc, {}))
     _ = tt_voc.forward_traced(mel_a)  # capture A
     _ = tt_voc.forward_traced(mel_b)  # capture B (A stays resident)
-    assert len(tt_voc._traces) == 2, f"expected 2 resident traces, got {len(tt_voc._traces)}"
+    assert resident() == 2, f"expected 2 resident traces, got {resident()}"
     da = (ref_a - tt_voc.forward_traced(mel_a)).abs().max().item()  # replay A
     db = (ref_b - tt_voc.forward_traced(mel_b)).abs().max().item()  # replay B
-    print(f"\nMULTITRACE replay max|Δ| A={da:.3e} B={db:.3e} resident={len(tt_voc._traces)}", flush=True)
+    print(f"\nMULTITRACE replay max|Δ| A={da:.3e} B={db:.3e} resident={resident()}", flush=True)
     assert da < 5e-3 and db < 5e-3
-
-    tt_voc.release_trace()
-    tt_voc._max_traces = 1
-    _ = tt_voc.forward_traced(mel_a)
-    _ = tt_voc.forward_traced(mel_b)  # evicts A
-    assert len(tt_voc._traces) == 1, f"max_traces=1 should evict; got {len(tt_voc._traces)}"
-    print(f"MULTITRACE max_traces=1 -> resident={len(tt_voc._traces)} (A evicted)", flush=True)
     tt_voc.release_trace()
 
 

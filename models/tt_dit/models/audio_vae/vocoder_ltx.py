@@ -12,7 +12,6 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from typing import List, Sequence
 
 import torch
@@ -33,7 +32,7 @@ from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
-from ...utils.tracing import Tracer
+from ...utils.tracing import traced_function
 
 
 class DilatedConv1d(_AlignedOutConv1d):
@@ -224,7 +223,6 @@ class Vocoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        max_traces: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -253,11 +251,11 @@ class Vocoder(Module):
         self.ccl_manager = ccl_manager
         self._tpad_mask_cache: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device; read by _forward_device/_device_to_host
-        # forward_traced cache: input-shape -> Tracer, LRU-ordered; max_traces caps device trace
-        # memory (LRU-evict beyond it; None = unbounded).
-        self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
-        self._warmed_shapes: set = set()
-        self._max_traces = max_traces
+        # Traced decode: _forward_device is @traced_function, keyed per input shape via
+        # tracer_trace_key. prep_run=False means capture allocates nothing, so the lazy device state
+        # (snake α/β, CCL buffers, tpad-mask, zeros) must already be live and the free-list stable —
+        # the pipeline warms the decode eagerly at warmup, so capture (first real decode) and every
+        # replay share one free-list.
 
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
@@ -352,52 +350,25 @@ class Vocoder(Module):
 
     def forward_traced(self, mel_spec: torch.Tensor) -> torch.Tensor:
         """Same result as ``forward`` but captures the device graph and replays it, removing
-        per-op host dispatch (the vocoder is ~70% host-bound). One trace is captured per
-        distinct input shape and kept resident in an LRU cache, so a server with a bounded
-        set of shape buckets (pad each request up to a bucket) replays rather than
-        re-captures. The first call at a new shape compiles + captures (~2x an eager forward);
-        every later call at that shape copies the new mel into the persistent input buffer and
-        replays. ``max_traces`` (ctor) caps device trace memory by LRU-evicting old shapes.
+        per-op host dispatch (the vocoder is ~70% host-bound). One trace per input shape. The first
+        call captures on already-warm state (the pipeline warms the decode eagerly at warmup), so
+        capture and every replay share one allocator free-list; later calls copy the new mel into
+        the persistent input buffer and replay.
 
         Requires the mesh to be opened with a ``trace_region_size`` large enough for the
         resident traces.
         """
-        shape_key = tuple(mel_spec.shape)
-        tracer = self._traces.get(shape_key)
-        if tracer is None:
-            # First call at this shape: run EAGER (no capture) to warm the lazy device-graph state
-            # (snake α/β, CCL buffers, tpad-mask, zeros) — these persist on the module. The next call
-            # captures with prep_run=False. Why not capture now: a ttnn trace bakes absolute buffer
-            # addresses, so capture and replay must start from the same allocator free-list. The
-            # mel-VAE runs eager before EVERY decode and frees back to a deterministic post-mel-VAE
-            # state; capturing here would either need cold-cache host writes (forbidden in capture)
-            # or a warming pass whose alloc/free perturbs the free-list vs the clean post-mel-VAE
-            # state replay sees → garbage. Warming on a prior decode + prep_run=False (no extra
-            # alloc before capture) makes capture and every replay share the identical free-list.
-            if shape_key not in self._warmed_shapes:
-                self._warmed_shapes.add(shape_key)
-                return self._device_to_host(self._forward_device(self._host_to_device(mel_spec)))
-            tracer = Tracer(self._forward_device, device=self.mesh_device, prep_run=False, clone_prep_inputs=False)
-            self._traces[shape_key] = tracer
-            if self._max_traces is not None:
-                while len(self._traces) > self._max_traces:
-                    _, evicted = self._traces.popitem(last=False)  # LRU
-                    evicted.release_trace()
-        self._traces.move_to_end(shape_key)  # LRU touch
         # _host_to_device sets self._t_pad for this shape (read by the captured graph and the
         # _device_to_host crop).
-        y_dev = tracer(self._host_to_device(mel_spec), tracer_blocking_execution=False, tracer_execute_on_capture=False)
+        y_dev = self._forward_device(
+            self._host_to_device(mel_spec), traced=True, tracer_trace_key=tuple(mel_spec.shape)
+        )
         return self._device_to_host(y_dev)
 
     def release_trace(self) -> None:
-        """Free all captured traces (call on shutdown, or before re-warming a new bucket set)."""
-        for tracer in self._traces.values():
+        """Free all captured decode traces (call on shutdown, or before re-warming a new bucket set)."""
+        for tracer in type(self)._forward_device._tracers_keyed.get(self, {}).values():
             tracer.release_trace()
-        self._traces.clear()
-        # _warmed_shapes gates the eager first-decode that warms the lazy device-graph state
-        # (snake α/β, CCL buffers). Clearing traces without clearing it would skip that warm on the
-        # next decode and capture unwarmed state — so reset it too, so re-warming actually re-warms.
-        self._warmed_shapes.clear()
         # Per-shape tpad-mask device tensors also persist; a dispatch-skipped (capture-only) warm leaves
         # them as garbage the next decode would reuse. Drop them so re-warming recomputes them.
         self._tpad_mask_cache.clear()
@@ -432,6 +403,7 @@ class Vocoder(Module):
 
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
+    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
         """Pure-device graph: partition → conv_pre → ups/AMP stack → act_post → conv_post →
         T-gather. Input/output are device tensors with fixed shapes for a given config and

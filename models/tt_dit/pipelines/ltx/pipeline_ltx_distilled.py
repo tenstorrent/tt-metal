@@ -337,12 +337,12 @@ class LTXDistilledPipeline(LTXPipeline):
             if not iter_fast and not denoise_only:
                 self._warmup_decode(num_frames, height, width)
 
-            # Build + JIT-compile the on-device audio decode on the exact latent
-            # shape generate() produces, so the first real audio decode loads
-            # from cache instead of building from the checkpoint (cold ~64s).
-            # The single-generate eager decode is bit-identical to the replay, so the AV mp4 is
-            # unchanged; multi-gen runs keep the warmup capture so every real decode replays (else
-            # gen#1 would decode into the garbage-emitting capture pass).
+            # Build + JIT-compile the on-device audio decode on the exact latent shape generate()
+            # produces, so the first real audio decode loads from cache instead of building from the
+            # checkpoint (cold ~64s). Decoding EAGERLY here is what makes the traced decode correct:
+            # it warms the lazy device state and frees back to a deterministic free-list, so the
+            # first real decode captures against the free-list every later replay sees. Capturing at
+            # warmup instead would bake a free-list that gen#0's denoise-trace buffers then shift.
             if denoise_only:
                 logger.info("LTX_PROFILE_DENOISE_ONLY=1: skipping VAE + audio decode warmup")
             elif in_capture_pass:
@@ -350,13 +350,8 @@ class LTXDistilledPipeline(LTXPipeline):
             elif iter_fast:
                 logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
             else:
-                logger.info("warmup audio decode (on-device)")
-                self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
-                # The vocoder trace captures on the first POST-cold decode (not the cold one above),
-                # and that capturing pass emits clipped audio. A second warmup decode absorbs the
-                # capture so the first real generate is a clean replay.
-                if self._traced:
-                    self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
+                logger.info("warmup audio decode (on-device, eager)")
+                self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
 
         # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
         # DiT), so they never disturb the denoise/decode kernels compiled above.

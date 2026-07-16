@@ -1290,6 +1290,21 @@ class LTXPipeline:
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
+    def _warmup_audio_decode(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> None:
+        """Eager (untraced) audio decode at the real latent shape: compiles kernels, warms the lazy
+        device state the captured graph reads (snake α/β, CCL buffers, tpad-mask), and frees back to
+        a deterministic allocator free-list. The first real decode then captures on that warm state,
+        so capture and every replay share one free-list. No-op without an audio decoder."""
+        if self.tt_audio_decoder is None or self.tt_vocoder_with_bwe is None:
+            return
+        dec, voc = self.tt_audio_decoder, self.tt_vocoder_with_bwe
+        saved = (dec.use_trace, voc.use_trace, voc.use_trace_bwe)
+        dec.use_trace = voc.use_trace = voc.use_trace_bwe = False
+        try:
+            self.decode_audio(audio_latent, num_frames, fps=fps)
+        finally:
+            dec.use_trace, voc.use_trace, voc.use_trace_bwe = saved
+
     def _prepare_trans_mat(self) -> ttnn.Tensor:
         """Cached per-tile rotation matrix for rotary_embedding_llama (shared builder)."""
         if getattr(self, "_cached_trans_mat", None) is None:
@@ -1815,22 +1830,15 @@ class LTXPipeline:
             dtype=ttnn.float32,
         )
         # Capture-once/replay the audio decode device graphs (mel-VAE, main vocoder, BWE) when
-        # traced. A ttnn trace bakes absolute buffer addresses (prep_run=False), so replay must start
-        # from the same allocator free-list as capture. That holds in the audio-only path, but an E2E
-        # gen captures the video denoise trace and allocates its persistent buffers after the warmup
-        # audio capture, shifting the free-list so the audio replay reads garbage (flat, clipped, zero
-        # voiceband energy). The trace is also net-negative on large meshes (galaxy 4x8: 1.37s traced
-        # vs 1.07s eager) and audio is off the critical path either way, so default it OFF for E2E and
-        # keep it ON only for the isolated audio path (its conv1d-vs-torch oracle gates the traced
-        # decode). LTX_{VOC,BWE,VAE}_TRACE still override the default.
-        _audio_trace_default = "1" if self.audio_only else "0"
-        self.tt_vocoder_with_bwe.use_trace = (
-            self._traced and os.environ.get("LTX_VOC_TRACE", _audio_trace_default) != "0"
-        )
-        self.tt_vocoder_with_bwe.use_trace_bwe = (
-            self._traced and os.environ.get("LTX_BWE_TRACE", _audio_trace_default) != "0"
-        )
-        self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", _audio_trace_default) != "0"
+        # traced. A ttnn trace bakes absolute buffer addresses, so replay must start from the same
+        # allocator free-list as capture — which is why the pipeline warms the audio decode EAGERLY
+        # (_warmup_audio_decode) and lets the first real decode capture: capturing at warmup instead
+        # would bake a free-list that the video denoise trace's persistent buffers, allocated in the
+        # first gen, then shift out from under the replay (flat, clipped, zero-voiceband audio).
+        # LTX_{VOC,BWE,VAE}_TRACE=0 force eager.
+        self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
+        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "1") != "0"
+        self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "1") != "0"
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
