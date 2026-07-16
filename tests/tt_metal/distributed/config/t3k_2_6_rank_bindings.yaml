@@ -1,0 +1,15 @@
+# Multihost mesh rank binding configuration for testing the WH loudbox 2+6 split.
+# Rank 0: PCIe device {0} -> UMD expands to the N300 board pair {chip0, chip4} (mesh M0, 1x2)
+# Rank 1: PCIe devices {1,2,3} -> UMD expands to board pairs {1,5},{2,6},{3,7} (mesh M1, 1x6)
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0"
+
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "1,2,3"
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2_6_mesh_graph_descriptor.textproto"

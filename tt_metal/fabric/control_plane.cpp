@@ -2934,14 +2934,59 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         FabricNodeId dst_fn = this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
         cables_per_src_chip_per_dst_chip[*exit_node.src_exit_node][dst_fn.chip_id]++;
     }
+
+    // A source chip can have real cables to more than one distinct chip on the neighbor mesh (e.g. an
+    // inner-ring chip on a T3K board also links to two different neighbor-mesh chips). The port/direction
+    // assignment below models one destination per source, so when this happens we keep only the
+    // preferred destination (most cables, ties broken by lowest chip id) and drop the rest.
+    //
+    // Only do this for RELAXED-policy connections (strict_binding == false), which only require a minimum
+    // channel count and don't care which specific chip pairing provides it. For STRICT/pinned bindings the
+    // caller has asked for specific ports, so an unresolved multi-destination fan-out is still a hard error
+    // rather than something we should silently prune.
+    std::unordered_map<uint64_t, ChipId> preferred_dst_chip_for_src;
     for (const auto& [src_asic, dst_chip_counts] : cables_per_src_chip_per_dst_chip) {
+        if (dst_chip_counts.size() <= 1) {
+            continue;
+        }
         FabricNodeId src_fn = this->get_fabric_node_id_from_asic_id(src_asic);
         TT_FATAL(
-            dst_chip_counts.size() <= 1,
-            "Inter-mesh: one src to multiple dst chips on the same neighbor mesh is not supported yet (src {}, "
-            "neighbor M{}).",
+            !strict_binding,
+            "Inter-mesh: one src to multiple dst chips on the same neighbor mesh is not supported for strict/pinned "
+            "bindings (src {}, neighbor M{}).",
             src_fn,
             *neighbor_mesh_id);
+        ChipId best_dst = dst_chip_counts.begin()->first;
+        std::size_t best_count = 0;
+        for (const auto& [dst_chip, count] : dst_chip_counts) {
+            if (count > best_count || (count == best_count && dst_chip < best_dst)) {
+                best_dst = dst_chip;
+                best_count = count;
+            }
+        }
+        preferred_dst_chip_for_src[src_asic] = best_dst;
+        log_warning(
+            tt::LogFabric,
+            "Inter-mesh: src {} has cables to {} distinct dst chips on neighbor mesh M{}; keeping only dst chip {} "
+            "({} cable(s)) and dropping the rest.",
+            src_fn,
+            dst_chip_counts.size(),
+            *neighbor_mesh_id,
+            best_dst,
+            best_count);
+    }
+
+    std::vector<tt::tt_metal::ExitNodeConnection> filtered_exit_nodes;
+    filtered_exit_nodes.reserve(exit_nodes.size());
+    for (const auto& exit_node : exit_nodes) {
+        auto pref_it = preferred_dst_chip_for_src.find(*exit_node.src_exit_node);
+        if (pref_it != preferred_dst_chip_for_src.end()) {
+            FabricNodeId dst_fn = this->topology_mapper_->get_fabric_node_id_from_asic_id(exit_node.dst_exit_node);
+            if (dst_fn.chip_id != pref_it->second) {
+                continue;
+            }
+        }
+        filtered_exit_nodes.push_back(exit_node);
     }
 
     // Build once outside the per-exit-node loop: mesh_edge_ports_to_chip_id[my_mesh_id] is
@@ -2956,7 +3001,7 @@ std::vector<PortDescriptor> ControlPlane::propose_port_descriptors_for_exit_node
         return a.first.second < b.first.second;
     });
 
-    for (const auto& exit_node : exit_nodes) {
+    for (const auto& exit_node : filtered_exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
         TT_FATAL(exit_node_fabric_node_id.mesh_id == my_mesh_id, "Exit node is not on my mesh");
