@@ -107,3 +107,34 @@ Random-BF16 vs CPU golden PCC ≥ 0.999 fresh+cached across Sm=1/2/3/4, Pk=1/spl
 W=1/W>1, K/N tails, PARETO ring (PlacementCorrectness + the existing ring/pipelined/progressive gtests);
 public 20/20 pass on the in1_near default. Watcher clean on every accepted Sm>1 path (Sm=2 production, Sm=4):
 payload visibility precedes validity (unchanged), and the semaphore atomics are now drained before exit.
+
+## Part 5 — picker re-sweep (does cheaper M-split flip any best-Sm?)
+
+Because in1_near makes Sm>1 ~6–14% cheaper, every Mt≥4 production shape was re-swept: the picker's current
+config vs core-budget-matched Sm variants (Pk·Sm held ~constant, same Ns/kb/nsb), **all at the in1_near
+default** so the placement benefit is already baked into the Sm>1 candidates. Median kernel µs, 3 interleaved
+relaunches. Raw: `regime_a_picker_resweep.json` (`regime_a_diag_suite.py pickerresweep`).
+
+| shape (M×K×N) | Mt | picker | Δ sm2 | Δ sm4 | Δ sm1 |
+|---|---|---|---|---|---|
+| 128×2304×6144 | 4 | sm1 | +107.9% | +177.1% | — |
+| 128×6144×768 | 4 | sm1 | +43.6% | +179.3% | — |
+| 128×6144×2304 | 4 | sm1 | +58.6% | +253.1% | — |
+| 128×6144×4608 | 4 | sm1 | +64.6% | +275.8% | — |
+| 128×15360×768 | 4 | sm1 | +54.0% | +328.0% | — |
+| **256×2048×1024 (production)** | 8 | **sm2** | — | +64.3% | +179.4% |
+| 512×6144×1536 | 16 | sm1 | +5.3% | +80.3% | — |
+
+**No picker change.** For the Mt=4 deep-K shapes (Kt=192/480) M-split trades away the K-parallelism they need
+(Pk=12→6→3) and collapses. The production Sm=2 shape (256×2048×1024, shallow Kt=64) is confirmed best at Sm=2
+by a wide margin (Sm=1 +179%, Sm=4 +64%). The nearest contender (512×6144×1536, Sm=2 +5.3%) is still slower —
+and that already includes in1_near. **The cheaper M-split improves the existing Sm=2 shape but flips no
+best-Sm decision**, so the picker table is unchanged.
+
+## Summary of what landed
+- **Placement:** in1_near is the single default for Sm>1 (host-side coord override; logical indices/ownership
+  unchanged) — **−6.3/−7.2%** on the production Sm=2 shape, wins every Sm>1 shape, no-op at Sm=1.
+- **Forwarding:** current unicast retained; only the atomic-drain safety fix landed (all Sm>1 paths now
+  watcher-clean, Sm=1 public path byte-identical). No forwarding-perf candidate helps the sole production
+  Sm=2 shape.
+- **Picker:** unchanged (re-sweep confirms cheaper M-split flips no best-Sm).
