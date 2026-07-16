@@ -13,7 +13,7 @@
 # latent H x W. This port implements only that path.
 #
 # conv2d uses per-layer Conv2dConfig (sweep winners). GroupNorm uses the
-# interleaved TILE manual path (fused HEIGHT GN removed — slower on grid-8).
+# interleaved TILE manual path (fused GN variants slower on grid-8).
 # Residual add keeps the out_conv shard layout by aligning skip onto it.
 #
 # Timestep conditioning is adaptive group-norm: the (already-embedded) timestep
@@ -99,7 +99,6 @@ def _match_shard_to(x: ttnn.Tensor, ref: ttnn.Tensor) -> ttnn.Tensor:
 
 # ---------------------------------------------------------------------------
 # GroupNorm(32, C) on flat NHWC [1,1,B*H*W,C] — interleaved TILE manual path only.
-# (Fused HEIGHT_SHARDED ttnn.group_norm removed: slower than manual on grid-8.)
 # ---------------------------------------------------------------------------
 class _TtGroupNorm:
     def __init__(self, device, num_channels, weight, bias, *, num_groups=32, eps=1e-5, dtype=ttnn.bfloat16):
@@ -282,8 +281,12 @@ class HunyuanTtResBlock(LightweightModule):
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # AdaGN uses h * (1 + scale) + shift; bake +1 into the scale bias slot so
+        # runtime modulation is one ttnn.addcmul(shift, hn, scale_p1) (LTX pattern).
+        emb_b = b.reshape(1, 1, 1, -1).clone().float()
+        emb_b[..., : self.out_channels] += 1.0
         self.emb_b = ttnn.from_torch(
-            b.reshape(1, 1, 1, -1).contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+            emb_b.to(torch.bfloat16).contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
 
         self.out_norm = _TtGroupNorm(
@@ -332,20 +335,18 @@ class HunyuanTtResBlock(LightweightModule):
             device=self.device,
             grid_size=emb_grid,
         )
-        scale = ttnn.slice(e, [0, 0, 0, 0], [1, 1, B, self.out_channels])
+        scale_p1 = ttnn.slice(e, [0, 0, 0, 0], [1, 1, B, self.out_channels])
         shift = ttnn.slice(e, [0, 0, 0, self.out_channels], [1, 1, B, 2 * self.out_channels])
         ttnn.deallocate(e)
 
         hn = self.out_norm(h, n_rows)
         ttnn.deallocate(h)
-        scale = ttnn.reshape(scale, [1, 1, B, self.out_channels])
+        scale_p1 = ttnn.reshape(scale_p1, [1, 1, B, self.out_channels])
         shift = ttnn.reshape(shift, [1, 1, B, self.out_channels])
-        scale_p1 = ttnn.add(scale, 1.0)
-        ttnn.deallocate(scale)
-        hn = ttnn.multiply(hn, scale_p1)
-        ttnn.deallocate(scale_p1)
-        hn = ttnn.add(hn, shift)
+        # shift + hn * scale_p1  (scale_p1 already includes +1 via emb bias)
+        hn = ttnn.addcmul(shift, hn, scale_p1)
         ttnn.deallocate(shift)
+        ttnn.deallocate(scale_p1)
 
         hn = ttnn.silu(hn)
         hn, H, W = self.out_conv(hn, B, H, W)
