@@ -114,3 +114,7 @@ First independent review (`/root/stage_review_qwen32`) returned `more-work-neede
 Fresh rereview (`/root/stage_rereview_qwen32`) returned `Verdict: clean-pass`. It directly verified both corrected source paths and their emit line counts, confirmed the layer-32 BF8/BF16 source policy from both emits, rechecked the implementation, raw logs, scope, and context evidence, and reported no required work or blocking hard-check gap.
 
 Stage checkpoint: `cbf05453488c69df82e2efbb5e4109fcd002654e` (`Add Qwen3 32B IR functional decoder`). The three raw `.log` artifacts were intentionally force-added because the repository's broad `*.log` ignore rule would otherwise omit required evidence. No push was performed.
+
+## Multichip provenance
+
+The structured layer-32 sharding prior is in `multichip_provenance.json`. It records the source 1x4 mesh (TP degree 4), column-sharded Q/K/V and gate/up projections, row-sharded O/down projections, KV-head ownership, replicated layer boundaries, and the two `all_reduce(sum)` sites on mesh axis 1 in each of the prefill and decode graphs. No other collective occurs inside the segmented layer.
