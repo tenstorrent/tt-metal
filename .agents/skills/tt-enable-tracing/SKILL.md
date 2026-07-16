@@ -17,6 +17,7 @@ Read only what helps the current task:
 - `models/tt_transformers/tt/generator.py`: canonical decode trace patterns, including host input preparation, persistent device inputs, replay refresh, and split sampling.
 - `models/common/sampling/generator.py` and `models/common/modules/sampling/sampling_1d.py`: common on-device sampling implementations to compare before choosing a token-out sampling path.
 - `models/tt_transformers/tt/model.py`: model-side `prepare_decode_inputs_host` and device-only `ttnn_decode_forward` split.
+- `tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrestness.md`: trace correctness requirements and the trace allocation checker. Read this before accepting a new capture/replay path or diagnosing unsafe allocations around multiple traces.
 - `advanced_perf_optimizations.md`: deeper examples for TTNN trace capture/replay, multiple command queues, trace plus multi-CQ, and production benchmarking patterns. Search this file for the API or failure mode you are working on before loading it wholesale.
 
 ## Mental Model
@@ -172,6 +173,8 @@ ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 If the fatal is a write, first check for host input creation, lazy weights, cache loads, page table refresh, sampling-state updates, semaphore resets, first-use persistent CCL buffers, or `copy_host_to_device_tensor` hidden in helper APIs. Also suspect a program-cache miss: an op compiling a new variant mid-capture issues that write. Confirm by setting `device.set_program_cache_misses_allowed(False)` around capture (a miss then fails as `"<Op>: program cache miss occurred, but cache misses are forbidden"`, naming the offending op), then fix it via warm-up (see Program-Cache Warmup).
 
 If replay uses stale inputs, compare the tensors captured by the model to the tensors refreshed before `execute_trace`. `tt_transformers` solves this by binding model-side trace inputs before capture and only refreshing those exact buffers before replay.
+
+Run representative repeated replay with `TT_METAL_TRACE_ALLOC_TRACKING=1` before accepting a new traced path. Follow `tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrestness.md` to diagnose allocations made after capture, late program-cache allocations, and intentionally shared trace inputs/outputs. Do not silence the checker with `ttnn.mark_corruptible` or `ttnn.corruptible_allocation_scope` unless the code overwrites the acknowledged input before use and preserves the acknowledged output before another trace can overwrite it.
 
 Before accepting any reduced input-refresh scheme, add a focused replay test that runs two decode steps with different token and current-position values, inspects the exact persistent trace input tensors, and asserts the output/logits changed. If page-table refresh is skipped, cover both unchanged and changed page tables.
 

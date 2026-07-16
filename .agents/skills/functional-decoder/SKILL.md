@@ -135,7 +135,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 - `tt-perf-report --csv` may expose filtered kernel time as `Device Time` in microseconds rather than raw nanoseconds; convert accordingly and note the column used.
 - Profiling should capture warmed prefill and warmed decode separately.
 - Decode PCC should be measured from replay output, not only from an uncaptured forward pass.
-- Tensor allocation after trace capture is a red flag. Trace capture should bake stable buffer addresses and replay should only update allowed input tensor contents before `execute_trace`.
+- Tensor allocation after trace capture is a red flag. Trace capture should bake stable buffer addresses and replay should only update allowed input tensor contents before `execute_trace`. Run the trace allocation checker described in `tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrestness.md` over representative repeated replay before accepting the traced decoder.
 
 ## `tt-perf-report`
 

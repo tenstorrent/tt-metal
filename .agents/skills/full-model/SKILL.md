@@ -42,7 +42,7 @@ Keep setup-time work outside the hot runtime path: weight conversion, dtype choi
 
 Do not use repeated full-stack model runs as the normal debugging loop. After one or two expensive full-model failures, build a reduced reproducer before continuing: for example, load the same full-model wrapper with one real layer of each kind, real tensor shapes, real cache/page-table shapes, real terminal norm/LM head/sampling, and a short prompt/generation length. Use that reduced full-model path to localize wrapper, trace, cache, page-table, LM-head, or sampling bugs, then return to the all-layer model for final evidence. If the reduced reproducer cannot expose the failure, record why before spending more full-stack runs.
 
-Avoid hidden host fallback in a single prefill or decode pass. The final decode path uses traced TTNN execution. Teacher-forcing readiness runs through traced decode. Eager decode is useful only while debugging and is not completion evidence. When adding trace capture/replay or debugging trace execution failures, use `$tt-enable-tracing`.
+Avoid hidden host fallback in a single prefill or decode pass. The final decode path uses traced TTNN execution. Teacher-forcing readiness runs through traced decode. Eager decode is useful only while debugging and is not completion evidence. When adding trace capture/replay or debugging trace execution failures, use `$tt-enable-tracing`. Before accepting the full-model trace, run representative repeated replay with the trace allocation checker from `tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrestness.md`.
 
 The full-model stage owns sampling. A full model is complete only when token-out decode uses the canonical split-sampling contract:
 
