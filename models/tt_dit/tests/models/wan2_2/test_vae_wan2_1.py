@@ -291,8 +291,8 @@ def convert_to_torch_channels_first(tt_tensor, concat_dims, mesh_device, is_chan
         tt_tensor,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
     )
-    # These checks/unpadding manipulations are only relevant for outputs of the conv3d componennts,
-    # in other worsds one should think of channels last == output from conv3ds.
+    # These checks/unpadding manipulations are only relevant for outputs of the conv3d components,
+    # in other words one should think of channels last == output from conv3ds.
     if is_channels_last:
         if logical_h != tt_output_torch.shape[2]:  # H is at 2 for channels last (BTHWC)
             logger.info(f"Checking that output padded portion is zeros")
