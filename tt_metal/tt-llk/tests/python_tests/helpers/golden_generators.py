@@ -63,27 +63,29 @@ MAX_TILES_32_BIT_DEST = 4
 golden_registry = {}
 
 
-# Hardware always flushes subnormals to zero (FTZ).  Centralised here so that
-# every golden's __call__ funnels through the same pass — covers BFP/MX paths
-# (where near-zero values arise from BFP scale arithmetic with very small
-# shared exponents) and plain FP paths (where it's the only FTZ).
-#
-# The smallest meaningful BFP value has shared_exp=2, giving ~2.35e-38, so a
-# threshold of 1e-37 is just above the largest value the hardware flushes.
-_FTZ_THRESHOLD = 1e-37
+# Hardware flushes subnormals to zero (FTZ): values below a format's smallest
+# normal get snapped to 0. Plain float formats use their smallest-normal, listed
+# below. Other formats (BFP/MX) use 1e-37.
+_FTZ_THRESHOLD = {
+    DataFormat.Float32: float(torch.finfo(torch.float32).tiny),  # 2^-126 ~ 1.18e-38
+    DataFormat.Float16_b: float(torch.finfo(torch.bfloat16).tiny),  # 2^-126 ~ 1.18e-38
+    DataFormat.Float16: float(torch.finfo(torch.float16).tiny),  # 2^-14 ~ 6.10e-5
+}
 
 
 def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
-    """Flush sub-FTZ values in *result* to zero, matching hardware FTZ.
+    """Flush subnormal-magnitude values in *result* to zero, matching hardware FTZ.
 
-    No-op for integer formats — they have no subnormals and the float32
-    round-trip would silently lose precision for large values.
+    The flush boundary is the format's smallest normal value; anything below it
+    is a subnormal the hardware flushes. Integer formats have no subnormals, so
+    they are returned unchanged.
     """
     if data_format.is_integer():
         return result
+    threshold = _FTZ_THRESHOLD.get(data_format, 1e-37)
     result_f32 = result.float()
     return torch.where(
-        result_f32.abs() < _FTZ_THRESHOLD,
+        result_f32.abs() < threshold,
         torch.zeros_like(result_f32),
         result_f32,
     ).to(result.dtype)
