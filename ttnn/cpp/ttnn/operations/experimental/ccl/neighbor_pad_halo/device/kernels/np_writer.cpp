@@ -582,7 +582,9 @@ void kernel_main() {
             }
         }
 
-        // No local interior copy in this kernel. Dedicated local-copy kernels handle that work.
+        // This kernel writes only the halo exchange, never the interior. In padded-output mode the fused
+        // scatter writer copies the interior; in compact mode there is no interior copy (output is the
+        // halo buffer).
 
         outer_dim_offset += (num_sticks_per_halo_dim * output_halo_dim_size);
 
