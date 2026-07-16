@@ -20,6 +20,9 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
+template <bool is_fp32_dest_acc_en>
+void asin_acos_init() {}
+
 static const float PI = 3.1415927410125732f;
 static const float PI_2 = 1.5707963705062866f;
 static const float PI_4 = 0.7853981852531433f;

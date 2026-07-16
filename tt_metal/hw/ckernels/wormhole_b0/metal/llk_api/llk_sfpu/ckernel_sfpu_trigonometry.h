@@ -47,15 +47,22 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_endpoint_(sfpi::vFloat half_d) {
     // non-negative input half_d.  The generic negative and infinity handling
     // is unnecessary here, and the zero path naturally evaluates to zero.
     sfpi::vInt i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(half_d) >> 1);
-    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(0x5f1110a0 - i);
+    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - i);
 
     sfpi::vFloat half_d_y = half_d * y;
     sfpi::vFloat c = (-y) * half_d_y;
-    y = y * (2.2825186f + c * (2.2533049f + c));
+    y = y * (sfpi::vConstFloatPrgm1 + c * (sfpi::vConstFloatPrgm2 + c));
 
     half_d_y = half_d * y;
     sfpi::vFloat one_minus_half_d_yy = 1.0f + (-y) * half_d_y;
     return one_minus_half_d_yy * (0.5f * half_d_y) + half_d_y;
+}
+
+template <bool is_fp32_dest_acc_en>
+void asin_acos_init() {
+    if constexpr (is_fp32_dest_acc_en) {
+        sqrt_init<false>();
+    }
 }
 
 static const float PI = 3.14159274101257324f;
