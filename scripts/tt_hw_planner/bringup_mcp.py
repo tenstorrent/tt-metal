@@ -60,6 +60,7 @@ from scripts.tt_hw_planner import reference_loader_resolver as _rlr  # noqa: E40
 from scripts.tt_hw_planner import shard_plan as _shard  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers import auto_iterate as _auto  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers import bringup_ladder  # noqa: E402
+from scripts.tt_hw_planner._cli_helpers.agent import resolve_claude_bin  # noqa: E402
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
@@ -736,7 +737,7 @@ def resolve_reference_loader(component: str = "") -> dict:
         model_id=_MODEL_ID,
         demo_dir=_DEMO_DIR,
         failure_text=text,
-        agent_bin=os.environ.get("BRINGUP_MCP_AGENT_BIN", "claude"),
+        agent_bin=os.environ.get("BRINGUP_MCP_AGENT_BIN") or resolve_claude_bin() or "claude",
         cwd=_REPO,
     )
     return res

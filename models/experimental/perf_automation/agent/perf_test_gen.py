@@ -193,8 +193,10 @@ def _claude(prompt: str, timeout_s: int = 600) -> str | None:
     else:
         env.pop("ANTHROPIC_API_KEY", None)
     try:
+        from .agent_bin import resolve_claude_bin
+
         r = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "text"],
+            [resolve_claude_bin(), "-p", prompt, "--output-format", "text"],
             capture_output=True,
             text=True,
             timeout=timeout_s,

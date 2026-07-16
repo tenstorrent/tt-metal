@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from ._cli_helpers.agent import resolve_claude_bin
+
 
 _HB_EVERY_S = 45
 _AGENT_LINE = "[agent] "
@@ -190,7 +192,7 @@ def run_cc_loop(
     env: dict,
     gate_fn: Callable[[], dict],
     max_rounds: int = 1000,
-    claude_bin: str = "claude",
+    claude_bin: str = resolve_claude_bin() or "claude",
     on_round: Callable[[int, dict], None] | None = None,
     pre_round: Callable[[int, dict], None] | None = None,
     on_heartbeat: Callable[[dict], None] | None = None,

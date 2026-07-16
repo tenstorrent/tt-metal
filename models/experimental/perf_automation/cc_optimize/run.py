@@ -28,6 +28,22 @@ CC_DIR = PERF_DIR + "/cc_optimize"
 DEFAULT_MAX_ROUNDS = 3
 _LAST_SCORECARD: dict = {}
 
+
+def _resolve_claude_bin() -> str:
+    """Resolve the `claude` CLI to an absolute path so the orchestrator spawn is
+    PATH-independent (fixes-plan Point 9). Inlined (stdlib only) because run.py is
+    loaded standalone and cannot import the agent-package helper. Falls back to
+    bare "claude" so the spawn always gets a string."""
+    local = os.path.expanduser("~/.local/bin/claude")
+    return (
+        os.environ.get("TT_PLANNER_AGENT_BIN")
+        or os.environ.get("CLAUDE_BIN")
+        or shutil.which("claude")
+        or (local if os.path.exists(local) else None)
+        or "claude"
+    )
+
+
 _ALLOWED_TOOLS = [
     "mcp__perf-mcp__profile_model",
     "mcp__perf-mcp__measure_candidate",
@@ -1083,7 +1099,7 @@ def optimize_pipeline(
     max_wedge = int(os.environ.get("PERF_MCP_MAX_WEDGE_STRIKES", "2") or "2")
     wedge_strikes = 0
     round_cmd = [
-        "claude",
+        _resolve_claude_bin(),
         "-p",
         prompt,
         "--mcp-config",

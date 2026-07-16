@@ -186,9 +186,11 @@ def cli_model_files_runner(max_turns: int = 24) -> Callable[[str], str]:
         for _k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
             env.pop(_k, None)
         try:
+            from .agent_bin import resolve_claude_bin
+
             r = subprocess.run(
                 [
-                    "claude",
+                    resolve_claude_bin(),
                     "-p",
                     prompt,
                     "--output-format",
