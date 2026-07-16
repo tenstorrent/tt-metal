@@ -70,6 +70,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
         RA_MASK=str(mask),
         RA_ITERS=str(iters),
         TT_MM_RINGCOST="1",  # emit the factory's RINGCOST route-cost line (ring-order diag); harmless otherwise
+        TT_MM_PLACECOST="1",  # emit the factory's PLACECOST placement-cost line (placement diag); harmless otherwise
     )
     cmd = ["timeout", "-s", "TERM", str(timeout), BIN, "--gtest_filter=RegimeADiagFixture.Run"]
     try:
@@ -103,10 +104,19 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
         for t, c in sorted(by.items())
     }
     maxrel = None
+    placecost = []  # PLACECOST lines (factory, placement diag): per-group reader dist + reader->slave fwd hops
     ringcost = []  # RINGCOST lines (factory, ring-order diag): per-group bank/greedy/opt max+total edge cost
     for line in r.stdout.splitlines():
         if "DIAGPCC" in line:
             maxrel = float(line.split("max_rel_err=")[1])
+        elif "PLACECOST" in line:
+            g = {}
+            for tok in line.split():
+                if tok.startswith(("rdr2tgt=", "maxfwd=")):
+                    k, v = tok.split("=")
+                    g[k] = int(v)
+            if g:
+                placecost.append(g)
         elif "RINGCOST" in line:
             g = {}
             for tok in line.split():
@@ -125,7 +135,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
                 ringcost.append(g)
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -135,6 +145,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
         "risc": risc,
         "max_rel_err": maxrel,
         "ringcost": ringcost,
+        "placecost": placecost,
     }
 
 
@@ -678,6 +689,69 @@ def ringorder(relaunches=3):
     print("RINGORDER DONE", flush=True)
 
 
+PLACE_SHAPES = [
+    ("target", "256x2048x1024_sm2", 256, 2048, 1024, None),  # production Sm=2 primary
+    ("sm2", "128x6144x4608_sm2", 128, 6144, 4608, (1, 6, 2, 2, 1)),
+    ("sm3", "256x2048x1024_sm3", 256, 2048, 1024, (1, 1, 3, 2, 2)),
+    ("sm4", "256x2048x1024_sm4", 256, 2048, 1024, (1, 1, 4, 2, 2)),
+    ("sm4", "256x6144x4608_sm4", 256, 6144, 4608, (1, 3, 4, 2, 1)),
+    ("control", "256x6144x768_sm1", 256, 6144, 768, None),  # Sm=1: placement is a no-op (parity sanity)
+    ("control", "256x6144x4608_sm1", 256, 6144, 4608, None),
+    ("control", "32x6144x4608_sm1", 32, 6144, 4608, None),
+    ("control", "64x6144x4608_sm1", 64, 6144, 4608, None),
+    ("control", "128x6144x4608_sm1", 128, 6144, 4608, None),
+]
+PLACE_VARIANTS = [("current", 0), ("readers_first", 524288), ("in1_near", 1048576)]
+
+
+def placement(relaunches=3):
+    # A/B over M-split worker placement (current / readers_first / in1_near), INTERLEAVED relaunches.
+    # Wall/%change vs current + per-op max reader->slave forward hops (from PLACECOST). Raw:
+    # regime_a_placement_bench.json.
+    out = []
+    for grp, label, M, K, N, explicit in PLACE_SHAPES:
+        cfg = _cfg_for(M, K, N, explicit)
+        ideal = ideal_us(M, K, N)
+        runs = {v: [] for v, _ in PLACE_VARIANTS}
+        for _r in range(relaunches):
+            for v, mask in PLACE_VARIANTS:
+                runs[v].append(run_one(M, K, N, cfg, mask))
+        per = {}
+        for v, mask in PLACE_VARIANTS:
+            oks = [x for x in runs[v] if x.get("ok") and x["wall_us"]]
+            walls = sorted(x["wall_us"] for x in oks)
+            med = statistics.median(walls) if walls else None
+            pcs = next((x["placecost"] for x in runs[v] if x.get("placecost")), [])
+            per[v] = {
+                "mask": mask,
+                "walls": walls,
+                "med_us": med,
+                "n_ok": len(oks),
+                "util512_pct": (ideal / med * 100 if med else None),
+                "max_rel_err": [x.get("max_rel_err") for x in runs[v]],
+                "risc": (oks[0]["risc"] if oks else None),
+                "op_maxfwd": (max((g["maxfwd"] for g in pcs), default=None)),
+                "op_sumfwd": (sum(g["maxfwd"] for g in pcs) if pcs else None),
+                "op_maxrdr2tgt": (max((g["rdr2tgt"] for g in pcs), default=None)),
+            }
+        cm = per["current"]["med_us"]
+        for v, _ in PLACE_VARIANTS:
+            m = per[v]["med_us"]
+            per[v]["vs_current_pct"] = ((m / cm - 1) * 100) if (cm and m) else None
+        rec = {"group": grp, "label": label, "M": M, "K": K, "N": N, "cfg": list(cfg), "ideal_us": ideal}
+        for v, _ in PLACE_VARIANTS:
+            rec[v] = per[v]
+        out.append(rec)
+        summ = " ".join(
+            f"{v}={per[v]['med_us'] and round(per[v]['med_us'],1)}"
+            f"({per[v]['vs_current_pct'] and round(per[v]['vs_current_pct'],1)}%,maxfwd={per[v]['op_maxfwd']})"
+            for v, _ in PLACE_VARIANTS
+        )
+        print(f"[place/{grp}] {label:20} cfg={cfg} ideal={ideal:.1f}  {summ}", flush=True)
+        json.dump(out, open(f"{HERE}/regime_a_placement_bench.json", "w"), indent=2)
+    print("PLACEMENT DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
     {
@@ -689,4 +763,5 @@ if __name__ == "__main__":
         "progressive": progressive,
         "pipelined": pipelined,
         "ringorder": ringorder,
+        "placement": placement,
     }[mode]()

@@ -93,6 +93,15 @@ enum RegimeADiag : uint32_t {
     DIAG_RING_OPT_MM0 = 1u << 14,
     DIAG_RING_TOTAL = 1u << 16,
     DIAG_RING_MAXEDGE = 1u << 18,
+    // M-split (Sm>1) worker-PLACEMENT diagnostics (host-side factory override of cp.coord only; logical core
+    // indices + all ownership + the reader->i+s / slave->i-mm factory arg math are UNCHANGED; the PARETO ring
+    // order is recomputed on the new coords). DEFAULT (neither bit) = CURRENT (the planner's reader-then-slaves
+    // logical-Manhattan find_near spiral). READERS_FIRST places every mm==0 DRAM reader before any slave (same
+    // bank targets / NoC / spiral) so slaves can't displace later readers from bank-adjacent cores. IN1_NEAR
+    // additionally places each slave at the free worker minimizing the directed reader->slave hop distance on
+    // the group's in1-reader NoC (implies readers-first). No effect at Sm==1.
+    DIAG_PLACE_READERS_FIRST = 1u << 19,
+    DIAG_PLACE_IN1_NEAR = 1u << 20,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
