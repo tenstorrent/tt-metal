@@ -32,9 +32,7 @@ _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
 if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
-    _tt_exalens_init.init_ttexalens(
-        simulation_directory=_SIMULATOR_PATH, use_4B_mode=False
-    )
+    _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
@@ -441,7 +439,7 @@ def pytest_configure(config):
                     port=TestConfig.TEST_TARGET.simulator_port,
                 )
         else:
-            tt_exalens_init.init_ttexalens(use_4B_mode=False)
+            tt_exalens_init.init_ttexalens()
 
 
 def pytest_ignore_collect(collection_path, config):
@@ -797,7 +795,7 @@ def pytest_runtest_setup(item):
     if not _exalens_server.running and not _exalens_server.ever_started:
         _exalens_server.start()
         tt_exalens_init.init_ttexalens_remote(
-            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port
         )
     elif not _exalens_server.running:
         logger.error("tt-exalens server is no longer running unexpectedly.")
@@ -807,7 +805,7 @@ def pytest_runtest_setup(item):
         tt_exalens_init.cleanup_global_context()
         _exalens_server.restart()
         tt_exalens_init.init_ttexalens_remote(
-            port=TestConfig.TEST_TARGET.simulator_port, use_4B_mode=False
+            port=TestConfig.TEST_TARGET.simulator_port
         )
 
 
