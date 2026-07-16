@@ -73,13 +73,6 @@ FrobeniusNormalizeTensorReturn FrobeniusNormalizeDeviceOperation::create_output_
     return {create_device_tensor(output_specs[0], tensor_args.input.device())};
 }
 
-ttsl::hash::hash_t FrobeniusNormalizeDeviceOperation::compute_program_hash(
-    const FrobeniusNormalizeAttributes& args, const FrobeniusNormalizeTensorArgs& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    return tt::tt_metal::operation::hash_operation<FrobeniusNormalizeDeviceOperation>(
-        input_tensor.dtype(), input_tensor.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::frobenius_normalize::device
 
 namespace ttnn::prim {

@@ -28,9 +28,6 @@ struct FrobeniusNormalizeDeviceOperation {
 
     static FrobeniusNormalizeTensorReturn create_output_tensors(
         const FrobeniusNormalizeAttributes& operation_attributes, const FrobeniusNormalizeTensorArgs&);
-
-    static ttsl::hash::hash_t compute_program_hash(
-        const FrobeniusNormalizeAttributes&, const FrobeniusNormalizeTensorArgs&);
 };
 
 }  // namespace ttml::metal::ops::frobenius_normalize::device
