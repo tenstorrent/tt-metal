@@ -22,8 +22,9 @@ import contextlib
 import json
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
@@ -40,6 +41,11 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+
+if TYPE_CHECKING:
+    # Type-only import (annotations are lazy under ``from __future__ import annotations``),
+    # so the optional perf-benchmark profiler adds no runtime import cost / no infra dep.
+    from models.perf.benchmarking_utils import BenchmarkProfiler
 
 # =============================================================================
 # Page Table Helpers
@@ -2429,6 +2435,17 @@ class TeacherForceResult:
     predicted_tokens: list[int]
     predicted_tokens_per_user: list[list[int]]
     reference_top5: torch.Tensor  # shape [num_tokens, 5]
+    # Timing — populated by run_teacher_forcing so the token-accuracy leg can emit the SAME
+    # benchmark measurement set as TTTv1's ci-token-matching leg (prefill_t/s, decode_t/s,
+    # decode_t/s/u, TTFT). The decode loop feeds ground-truth tokens (teacher forcing), but the
+    # device ops — and therefore the measured durations — are identical to a free-running decode,
+    # so these are real perf numbers for the accuracy path. Defaults keep the dataclass
+    # backward-compatible for any caller that ignores timing. Mirrors PerfBenchmarkResult.
+    prefill_time_s: float = 0.0
+    compile_decode_time_s: float = 0.0
+    decode_times_s: list[float] = field(default_factory=list)
+    batch_size: int = 1
+    prefill_len: int = 0
 
     def top1_accuracy(self) -> float:
         matches = sum(1 for i, p in enumerate(self.predicted_tokens) if self.reference_top5[i, 0].item() == p)
@@ -2437,6 +2454,31 @@ class TeacherForceResult:
     def top5_accuracy(self) -> float:
         matches = sum(1 for i, p in enumerate(self.predicted_tokens) if p in self.reference_top5[i, :])
         return matches / len(self.predicted_tokens)
+
+    @property
+    def ttft_ms(self) -> float:
+        """Average time-to-first-token per user (ms)."""
+        return self.prefill_time_s / self.batch_size * 1000 if self.batch_size else 0.0
+
+    @property
+    def prefill_time_to_token_s(self) -> float:
+        """Average time-to-first-token per user (seconds) — TTTv1 ``prefill_time_to_token``."""
+        return self.prefill_time_s / self.batch_size if self.batch_size else 0.0
+
+    @property
+    def prefill_tok_s(self) -> float:
+        """Prefill throughput (tokens/s) over all users."""
+        return (self.batch_size * self.prefill_len) / self.prefill_time_s if self.prefill_time_s > 0 else 0.0
+
+    @property
+    def decode_tok_s_u(self) -> float:
+        """Steady-state decode tokens/s/user (compile/warmup step excluded)."""
+        return len(self.decode_times_s) / sum(self.decode_times_s) if self.decode_times_s else 0.0
+
+    @property
+    def decode_tok_s(self) -> float:
+        """Steady-state decode throughput (tokens/s) over all users."""
+        return self.decode_tok_s_u * self.batch_size
 
 
 def run_teacher_forcing(
@@ -2448,11 +2490,19 @@ def run_teacher_forcing(
     kv_cache: list,
     page_table: torch.Tensor,  # Required
     max_batch_size: int = 1,
+    profiler: BenchmarkProfiler | None = None,
 ) -> TeacherForceResult:
     """Run teacher-forcing accuracy measurement.
 
     Teacher forcing feeds ground truth tokens at each step and measures
     prediction accuracy. This is the canonical accuracy measurement for LLMs.
+
+    The prefill and per-step decode regions are timed (compile is excluded — it runs in a
+    separate warmup pass, and the first timed decode step is treated as post-compile warmup like
+    ``run_perf_benchmark``), so the returned ``TeacherForceResult`` also carries prefill/decode
+    throughput. This lets the token-accuracy leg emit the same benchmark measurements as TTTv1's
+    ci-token-matching leg. When ``profiler`` is supplied, the timed regions are also bracketed
+    with ``inference_prefill`` / ``inference_decode`` steps for CI benchmark-data emission.
 
     Args:
         executor: Any executor with prefill_forward() and decode_forward() methods.
@@ -2462,9 +2512,12 @@ def run_teacher_forcing(
         kv_cache: Per-layer KV cache from allocate_kv_cache().
         page_table: Page table for paged attention. Required.
         max_batch_size: Maximum batch size. Must match prompt_tokens.shape[0].
+        profiler: Optional ``BenchmarkProfiler``; when supplied, brackets the timed prefill /
+            decode regions ("inference_prefill" / "inference_decode"). Default ``None`` ⇒
+            byte-inert for callers that don't emit benchmark data.
 
     Returns:
-        TeacherForceResult with predicted tokens and accuracy metrics.
+        TeacherForceResult with predicted tokens, accuracy metrics, and prefill/decode timings.
     """
     batch_size = prompt_tokens.shape[0]
     assert (
@@ -2492,12 +2545,26 @@ def run_teacher_forcing(
         prompt_lens=torch.tensor([prompt_len] * batch_size),
         empty_slots=list(range(batch_size)),
     )
+    # Inference prefill: timed run with ops already compiled (this is TTFT). Mirror
+    # run_perf_benchmark: synchronize inside the timed region for an accurate prefill duration.
+    if profiler is not None:
+        profiler.start("inference_prefill")
+    t0 = time.perf_counter()
     prefill_output = executor.prefill_forward(prompt_tokens, **prefill_kwargs)
+    if hasattr(executor, "mesh_device"):
+        ttnn.synchronize_device(executor.mesh_device)
+    prefill_time_s = time.perf_counter() - t0
+    if profiler is not None:
+        profiler.end("inference_prefill")
 
     first_tokens = torch.argmax(prefill_output, dim=-1).view(-1).tolist()
     predicted_tokens_per_user = [[int(tok)] for tok in first_tokens]
 
     logger.info(f"Teacher forcing: decoding {num_target - 1} tokens")
+    decode_times_s: list[float] = []
+    compile_decode_time_s = 0.0
+    if profiler is not None:
+        profiler.start("inference_decode")
     for step in range(1, num_target):
         gt_token = reference_tokens[prompt_len + step - 1]
         decode_token = torch.full((batch_size,), gt_token, dtype=torch.long)
@@ -2509,16 +2576,31 @@ def run_teacher_forcing(
             kv_cache=kv_cache,
             read_from_device=True,
         )
+        t0 = time.perf_counter()
         logits, _ = executor.decode_forward(decode_token, current_pos, **decode_kwargs)
+        elapsed = time.perf_counter() - t0
+        # First timed decode step is post-compile warmup (excluded from the steady-state average),
+        # mirroring run_perf_benchmark / TTTv1's iteration-0 handling.
+        if step == 1:
+            compile_decode_time_s = elapsed
+        else:
+            decode_times_s.append(elapsed)
 
         next_tokens = torch.argmax(logits[:, -1, :], dim=-1).view(-1).tolist()
         for user_id, tok in enumerate(next_tokens):
             predicted_tokens_per_user[user_id].append(int(tok))
+    if profiler is not None:
+        profiler.end("inference_decode")
 
     return TeacherForceResult(
         predicted_tokens=predicted_tokens_per_user[0],
         predicted_tokens_per_user=predicted_tokens_per_user,
         reference_top5=top5_tokens[:num_target],
+        prefill_time_s=prefill_time_s,
+        compile_decode_time_s=compile_decode_time_s,
+        decode_times_s=decode_times_s,
+        batch_size=batch_size,
+        prefill_len=prompt_len,
     )
 
 
@@ -2576,6 +2658,7 @@ def run_perf_benchmark(
     start_pos: list[int] | None = None,
     sampling_params=None,
     pipeline_readback: bool = True,
+    profiler: BenchmarkProfiler | None = None,
 ) -> PerfBenchmarkResult:
     """Run timed prefill + decode loop for performance measurement.
 
@@ -2596,6 +2679,10 @@ def run_perf_benchmark(
             trace (host one step behind the device). Only engages when the executor's
             on-device decode loop is active on the top-k path; ignored otherwise. Set
             False to A/B against the blocking readback.
+        profiler: Optional ``BenchmarkProfiler``. When supplied, the timed inference-prefill
+            and inference-decode regions are bracketed with ``start``/``end`` steps
+            ("inference_prefill" / "inference_decode") so callers can emit CI benchmark
+            data. Default ``None`` ⇒ byte-inert for every other caller.
 
     Returns:
         PerfBenchmarkResult with raw timings + derived metrics.
@@ -2636,11 +2723,15 @@ def run_perf_benchmark(
     )
 
     # Inference prefill: timed run with ops already compiled (this is TTFT)
+    if profiler is not None:
+        profiler.start("inference_prefill")
     t0 = time.perf_counter()
     prefill_output = executor.prefill_forward(tokens, **prefill_kwargs, sampling_params=sampling_params)
     if hasattr(executor, "mesh_device"):
         ttnn.synchronize_device(executor.mesh_device)
     prefill_time = time.perf_counter() - t0
+    if profiler is not None:
+        profiler.end("inference_prefill")
 
     if isinstance(prefill_output, tuple):
         first_token = prefill_output[0]
@@ -2680,6 +2771,8 @@ def run_perf_benchmark(
         isinstance(_engine, TracedLLMExecutor) and _engine._decode_loop_active(sampling_params) and pipeline_readback
     )
 
+    if profiler is not None:
+        profiler.start("inference_decode")
     if _pipeline_readback:
         cluster_shape = _engine.model_args.cluster_shape if getattr(_engine, "model_args", None) else [1, 1]
         mesh_device = executor.mesh_device
@@ -2756,6 +2849,9 @@ def run_perf_benchmark(
                 generated_token_ids[user_id].append(int(tok))
             current_tokens[:batch_size] = next_tok
             current_pos[:batch_size] += 1
+
+    if profiler is not None:
+        profiler.end("inference_decode")
 
     return PerfBenchmarkResult(
         prefill_time_s=prefill_time,
