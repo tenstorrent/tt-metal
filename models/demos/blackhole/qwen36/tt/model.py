@@ -1592,105 +1592,89 @@ class Qwen36Model:
                 row = row[:, :buf_blocks]
             return row.contiguous()
 
-        import os
-
-        # QWEN_BATCHED_GDN_DEV_ASSEMBLE (default OFF — CONFIRMED BROKEN, do not enable without a
-        # real fix): was meant to assemble each replay's B=1 GDN state into the batched decode
-        # buffer via device-side ttnn.clone()+concat instead of a to_torch/from_torch host round
-        # trip, to cut the per-user host transfer cost that dominates short-prompt batched TTFT.
-        # Root-caused: ttnn.clone()'s output is allocated from the general/ephemeral device memory
-        # pool. The captured bucket trace's OWN internal intermediate tensors (freed-and-reused
-        # scratch during capture, but with fixed addresses baked into every replay) draw from that
-        # SAME pool. Once the allocator hands one of those addresses to a clone, the very next
-        # user's execute_trace() silently overwrites it — confirmed by checksumming the SAME
-        # Python-held clone tensor immediately after creation (matches the live state exactly) vs.
-        # right before assembly (diverges) for user 0, with no code writing to it in between; not a
-        # race (a synchronize_device() right after the clone made no difference — deterministic
-        # identical wrong PCC every run). A correct device-only fix needs snapshot buffers that are
-        # pre-allocated and pinned OUTSIDE the general allocator (like the trace's own persistent
-        # i/o buffers, e.g. _bucket_token_buf) rather than a fresh ttnn.clone() per replay. Until
-        # that's built, force the host round trip (correct, verified bit-identical, just slower).
-        dev_assemble = os.environ.get("QWEN_BATCHED_GDN_DEV_ASSEMBLE", "0") == "1"
-
         # Per-user logits are read to HOST during the loop and re-uploaded at the end: each replay
         # overwrites the persistent trace output, and the post-loop assembly churns device memory.
         host_logits = []  # torch [1, 1, vocab] (one replica) per user
-        # Collect each replay's B=1 GDN state to assemble into the batched decode buffer.
-        per_user_rec = []  # host path
-        per_user_conv = []  # host path
-        per_user_rec_dev = []  # device path: per user, list over GDN layers of CLONED rec_state
-        per_user_conv_dev = []  # device path: per user, list over GDN layers of [K-1 cloned conv slots]
+        # Collect each replay's B=1 GDN state to assemble into the batched decode buffer. Snapshot
+        # via a host to_torch round trip (NOT ttnn.clone() — that allocates from the same general
+        # device pool the captured trace's own baked-address intermediates draw from, so the next
+        # user's execute_trace() silently overwrites the "cloned" snapshot; confirmed via
+        # checksumming a live tensor changing value with nothing writing to it, ruled out as a race
+        # since an added synchronize_device() didn't change the deterministic wrong result).
+        per_user_rec = []
+        per_user_conv = []
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
 
-        for u in range(B):
-            toks = token_ids_list[u]
-            assert toks.shape[0] == 1, f"user {u}: token_ids must be [1, T_u]"
-            actual = valid_lens[u] if valid_lens is not None else toks.shape[1]
-            # CORRECTNESS: traced path serves ONLY full-bucket prompts (see docstring); short
-            # prompts must be routed to eager prefill_paged_peruser.
-            assert actual == bucket, (
-                f"user {u}: actual_len {actual} != bucket {bucket}; the traced bucket prefill "
-                f"only serves full-bucket prompts — route short prompts to prefill_paged_peruser"
-            )
+        try:
+            for u in range(B):
+                toks = token_ids_list[u]
+                assert toks.shape[0] == 1, f"user {u}: token_ids must be [1, T_u]"
+                actual = valid_lens[u] if valid_lens is not None else toks.shape[1]
+                # CORRECTNESS: traced path serves ONLY full-bucket prompts (see docstring); short
+                # prompts must be routed to eager prefill_paged_peruser.
+                assert actual == bucket, (
+                    f"user {u}: actual_len {actual} != bucket {bucket}; the traced bucket prefill "
+                    f"only serves full-bucket prompts — route short prompts to prefill_paged_peruser"
+                )
 
-            # Zero the B=1 GDN scratch before each user (address-stable; the trace baked these in).
-            self._reset_gdn_state_for_new_sequence()
+                # Zero the B=1 GDN scratch before each user (address-stable; the trace baked these in).
+                self._reset_gdn_state_for_new_sequence()
 
-            # Full bucket, no padding (actual == bucket).
-            token_buf = toks[:, :bucket].to(torch.int32)
+                # Full bucket, no padding (actual == bucket).
+                token_buf = toks[:, :bucket].to(torch.int32)
 
-            # DMA this user's inputs into the persistent buffers (addresses preserved).
-            tok_host = ttnn.from_torch(
-                token_buf, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
-            )
-            ttnn.copy_host_to_device_tensor(tok_host, self._bucket_token_buf)
+                # DMA this user's inputs into the persistent buffers (addresses preserved).
+                tok_host = ttnn.from_torch(
+                    token_buf, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
+                )
+                ttnn.copy_host_to_device_tensor(tok_host, self._bucket_token_buf)
 
-            row = _fit_pt_row(page_table_torch[u])
-            pt_host = ttnn.from_torch(row, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
-            ttnn.copy_host_to_device_tensor(pt_host, self._bucket_full_page_table_buf)
-            cpt_host = ttnn.from_torch(
-                row[:, :blocks_per_bucket].contiguous(),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=None,
-                mesh_mapper=rep,
-            )
-            ttnn.copy_host_to_device_tensor(cpt_host, self._bucket_page_table_buf)
+                row = _fit_pt_row(page_table_torch[u])
+                pt_host = ttnn.from_torch(
+                    row, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
+                )
+                ttnn.copy_host_to_device_tensor(pt_host, self._bucket_full_page_table_buf)
+                cpt_host = ttnn.from_torch(
+                    row[:, :blocks_per_bucket].contiguous(),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=None,
+                    mesh_mapper=rep,
+                )
+                ttnn.copy_host_to_device_tensor(cpt_host, self._bucket_page_table_buf)
 
-            # chunk_start=0 and cos/sin for [0, bucket) are baked in; no per-replay DMA needed.
-            ttnn.execute_trace(self.device, self._bucket_trace_id, cq_id=0, blocking=False)
-            # Sync before reading this user's state/logit: the trace writes hidden/rec_state/
-            # conv_states in place and the next replay would overwrite them.
-            ttnn.synchronize_device(self.device)
+                # chunk_start=0 and cos/sin for [0, bucket) are baked in; no per-replay DMA needed.
+                ttnn.execute_trace(self.device, self._bucket_trace_id, cq_id=0, blocking=False)
+                # Sync before reading this user's state/logit: the trace writes hidden/rec_state/
+                # conv_states in place and the next replay would overwrite them.
+                ttnn.synchronize_device(self.device)
 
-            # Gather this replay's B=1 GDN state for assembly after the loop. The next replay resets
-            # the scratch IN PLACE, so snapshot now — device-side clones (default) or host to_torch.
-            if dev_assemble:
-                per_user_rec_dev.append([ttnn.clone(dn.rec_state) for dn in dn_states])
-                per_user_conv_dev.append([[ttnn.clone(dn.conv_states[m]) for m in range(1, dn.K)] for dn in dn_states])
-            else:
+                # Gather this replay's B=1 GDN state for assembly after the loop. The next replay
+                # resets the scratch IN PLACE, so snapshot now via host to_torch (see comment above).
                 per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states])
                 per_user_conv.append(
                     [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
                 )
 
-            # Logit at actual_len-1, read to HOST immediately (before the next replay overwrites
-            # the trace output). Re-uploaded at the end.
-            lg = self._masked_bucket_logits_tp(self._bucket_trace_output, actual, bucket)
-            host_logits.append(ttnn.to_torch(lg, mesh_composer=comp)[0:1].clone())  # [1,1,vocab] one replica
-            ttnn.deallocate(lg)
+                # Logit at actual_len-1, read to HOST immediately (before the next replay overwrites
+                # the trace output). Re-uploaded at the end.
+                lg = self._masked_bucket_logits_tp(self._bucket_trace_output, actual, bucket)
+                host_logits.append(ttnn.to_torch(lg, mesh_composer=comp)[0:1].clone())  # [1,1,vocab] one replica
+                ttnn.deallocate(lg)
 
-        ttnn.synchronize_device(self.device)
+            ttnn.synchronize_device(self.device)
+        finally:
+            # Rebind the batched buffers regardless of success or failure (restore was deferred so
+            # the loop could use the B=1 scratch) — otherwise a mid-loop assertion/exception (e.g. a
+            # short prompt hitting the actual_len == bucket check) leaves every GDN layer pointed at
+            # the B=1 scratch instead of the batched decode buffers.
+            if getattr(self, "_gdn_batched_prev", None) is not None:
+                self._restore_gdn_batched(self._gdn_batched_prev)
+                self._gdn_batched_prev = None
 
-        # Rebind the batched buffers (restore was deferred so the loop could use the B=1 scratch),
-        # then assemble the per-user states into row u in place (_stable_state path).
-        self._restore_gdn_batched(self._gdn_batched_prev)
-        self._gdn_batched_prev = None
-        if dev_assemble:
-            self._assemble_per_user_gdn_dev(per_user_rec_dev, per_user_conv_dev)
-        else:
-            self._assemble_per_user_gdn(per_user_rec, per_user_conv)
+        # Assemble the per-user states into row u in place (_stable_state path).
+        self._assemble_per_user_gdn(per_user_rec, per_user_conv)
 
         # Re-upload the per-user logits as stable device tensors after all allocations.
         return self._reupload_host_logits(host_logits)
@@ -1735,41 +1719,6 @@ class Qwen36Model:
                     )
                     for m in range(1, K)
                 ]
-                staging.extend(slots)
-                conv_carry_list.append(ttnn.concat(slots, dim=1) if K - 1 > 1 else ttnn.reshape(slots[0], (1, 1, D)))
-            # assemble_batched_state takes ownership of rec_list + conv_carry_list and deallocates
-            # them (gdn/tp.py); we only free the per-slot staging tensors it never sees.
-            dn.assemble_batched_state(rec_list, conv_carry_list)
-            for t in staging:
-                ttnn.deallocate(t)
-
-    def _assemble_per_user_gdn_dev(self, per_user_rec_dev, per_user_conv_dev):
-        """Device-side counterpart of _assemble_per_user_gdn: stitch B per-user B=1 GDN states —
-        already cloned onto the device, so NO host round-trip — into row u of the batched [B,...]
-        decode buffers via assemble_batched_state. Bit-identical to the host path: the host path's
-        to_torch(ConcatMeshToTensor,dim=0) -> from_torch(ShardTensorToMesh,dim=0) round-trip is an
-        identity on the mesh layout, so ttnn.clone + ttnn.concat(dim=0) produce the same per-device
-        tensors. Eliminates the ~B*48*(1+K) tiny blocking transfers each way (~60s at B=8, the
-        dominant batched-TTFT overhead). The batched GDN bindings MUST already be rebound (writes
-        happen in place under _stable_state).
-
-        per_user_rec_dev[u][li]:  cloned rec_state [1, Nv, Dk, Dv] for user u, GDN layer li.
-        per_user_conv_dev[u][li]: list of K-1 cloned conv slots (slots 1..K-1), each [1, 1, D]
-                                  (slot 0 is the zeroed shifted-out tap; the assembler re-zeros it).
-        """
-        B = len(per_user_rec_dev)
-        dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
-        for li, dn in enumerate(dn_layers):
-            D = dn.qkv_dim_tp
-            K = dn.K
-            # rec_list: user u's cloned recurrent state; assemble_batched_state concats along dim 0.
-            rec_list = [per_user_rec_dev[u][li] for u in range(B)]
-            # Rebuild the [1, K-1, D] conv carry each user expects from its cloned conv slots
-            # (concat along dim 1), mirroring _assemble_per_user_gdn exactly.
-            conv_carry_list = []
-            staging = []  # the per-slot clones concat consumes; free after assembly
-            for u in range(B):
-                slots = per_user_conv_dev[u][li]  # K-1 device clones, each [1, 1, D]
                 staging.extend(slots)
                 conv_carry_list.append(ttnn.concat(slots, dim=1) if K - 1 > 1 else ttnn.reshape(slots[0], (1, 1, D)))
             # assemble_batched_state takes ownership of rec_list + conv_carry_list and deallocates
@@ -1828,29 +1777,19 @@ class Qwen36Model:
         page_table_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         assert page_table_torch.shape[0] == B, "page_table must have one row per user"
 
-        import os
-
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
-
-        # QWEN_BATCHED_GDN_DEV_ASSEMBLE (default on): after each user's prefill, snapshot its B=1
-        # GDN state via DEVICE-SIDE clones (survives the next user's in-place reset) and assemble
-        # into the batched decode buffer with concat — no host round-trip. The host path below
-        # does ~B*48*(1+K) tiny to_torch snapshots + as many from_torch re-uploads, each a
-        # blocking mesh transfer; that fixed per-user overhead (~60s at B=8) dominates batched
-        # TTFT and is independent of prompt length. Bit-identical (the to_torch(ConcatMesh,0)/
-        # from_torch(ShardMesh,0) round-trip is a mesh identity), so per-user coherence — with
-        # DIFFERENT prompts/lengths — is unchanged. Set =0 to force the legacy host path (A/B).
-        dev_assemble = os.environ.get("QWEN_BATCHED_GDN_DEV_ASSEMBLE", "1") != "0"
 
         # Swap every GDN layer to a B=1 scratch (per-user path is B=1); assembled into the batched
         # buffers after the loop. prev holds the batched bindings for restore.
         prev = self._alloc_gdn_scratch_b1()
         host_logits = []  # torch [1, 1, vocab] (one replica) per user
-        per_user_rec = []  # host path: per user, list over GDN layers of host rec_state snapshots
-        per_user_conv = []  # host path: per user, list over GDN layers of [list of K conv snapshots]
-        per_user_rec_dev = []  # device path: per user, list over GDN layers of CLONED rec_state
-        per_user_conv_dev = []  # device path: per user, list over GDN layers of [K-1 cloned conv slots]
+        # Snapshot each user's B=1 GDN state via a host to_torch round trip (NOT ttnn.clone() — see
+        # prefill_traced_bucket_batched for why the device-side clone path is broken: it aliases
+        # the captured trace's own baked-address intermediates and gets silently overwritten by
+        # the next user's execute_trace()).
+        per_user_rec = []  # per user, list over GDN layers of host rec_state snapshots
+        per_user_conv = []  # per user, list over GDN layers of [list of K conv snapshots]
         try:
             for u in range(B):
                 toks = token_ids_list[u]
@@ -1867,20 +1806,13 @@ class Qwen36Model:
                 host_logits.append(ttnn.to_torch(lg, mesh_composer=comp)[0:1].clone())  # [1,1,vocab] one replica
                 ttnn.deallocate(lg)
 
-                # Snapshot this user's B=1 GDN state for assembly after the loop. The B=1 scratch is
-                # reset IN PLACE for the next user, so the snapshot must copy the state out first —
-                # device-side clones (default) or a host to_torch (legacy A/B). slot 0 of conv_states
-                # is the zeroed shifted-out tap; only slots 1..K-1 carry state.
-                if dev_assemble:
-                    per_user_rec_dev.append([ttnn.clone(dn.rec_state) for dn in dn_layers])
-                    per_user_conv_dev.append(
-                        [[ttnn.clone(dn.conv_states[m]) for m in range(1, dn.K)] for dn in dn_layers]
-                    )
-                else:
-                    per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_layers])
-                    per_user_conv.append(
-                        [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_layers]
-                    )
+                # Snapshot this user's B=1 GDN state for assembly after the loop (host round trip —
+                # the B=1 scratch is reset IN PLACE for the next user). slot 0 of conv_states is
+                # the zeroed shifted-out tap; only slots 1..K-1 carry state.
+                per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_layers])
+                per_user_conv.append(
+                    [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_layers]
+                )
         finally:
             # Restore the batched [B,...] GDN decode buffers and free the B=1 scratch. The clones
             # are independent allocations, so freeing the scratch here does not touch them.
@@ -1888,10 +1820,7 @@ class Qwen36Model:
 
         ttnn.synchronize_device(self.device)
         # Stitch the per-user states into row u of the (now-rebound) batched decode buffers.
-        if dev_assemble:
-            self._assemble_per_user_gdn_dev(per_user_rec_dev, per_user_conv_dev)
-        else:
-            self._assemble_per_user_gdn(per_user_rec, per_user_conv)
+        self._assemble_per_user_gdn(per_user_rec, per_user_conv)
         # Re-upload the per-user logits as stable device tensors (prefill_paged_peruser contract).
         return self._reupload_host_logits(host_logits)
 

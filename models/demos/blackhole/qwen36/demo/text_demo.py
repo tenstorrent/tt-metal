@@ -312,7 +312,7 @@ def test_demo_text(
         logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
         logger.info(f"[TP] GENERATED: {text!r}")
         assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
-        # assert len(set(generated)) > 1, f"degenerate generation: {generated}"
+        assert len(set(generated)) > 1, f"degenerate generation: {generated}"
         # Perf JSON for CI target check (validate_perf_targets.py)
         _save_tp_benchmark(perf, model, seqlen=seqlen, prompt_len=actual_len, num_generated=len(generated))
         return

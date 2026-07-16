@@ -94,9 +94,14 @@ def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     gated = (o_n * F.silu(z.reshape(B, Nv, Dv))).reshape(B, value_dim)
     ref = gated @ sd["linear_attn.out_proj.weight"].float().T  # [B, dim]
 
-    passing, pcc = comp_pcc(ref, out_t, get_pcc_threshold(request))
-    logger.info(f"GDN TP PCC (pos0) = {pcc}")
-    assert passing, f"GDN TP PCC too low: {pcc}"
+    # Per-row PCC: x has distinct random content per user, so a flattened/aggregate PCC over the
+    # whole [B, dim] tensor could mask a single contaminated row.
+    thr = get_pcc_threshold(request)
+    pccs = [compute_pcc(ref[u], out_t[u]) for u in range(B)]
+    worst = min(pccs)
+    logger.info(f"GDN TP PCC (pos0) min={worst:.5f} max={max(pccs):.5f}")
+    bad = [(u, p) for u, p in enumerate(pccs) if p < thr]
+    assert not bad, f"users below PCC {thr}: {bad}"
 
     x2 = replicate_to_device(mesh_device, torch.randn(1, 1, B, args.dim, dtype=torch.bfloat16))
     out2 = gdn.forward_decode(x2)

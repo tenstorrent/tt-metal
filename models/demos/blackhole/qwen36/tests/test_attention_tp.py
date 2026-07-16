@@ -99,9 +99,15 @@ def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     gated = attn_ref * torch.sigmoid(gate)
     ref = gated.reshape(B, NH * HD) @ sd["o_proj.weight"].float().T  # [B, dim]
 
-    passing, pcc = comp_pcc(ref, out_t, get_pcc_threshold(request))
-    logger.info(f"ATTENTION TP PCC (pos0) = {pcc}")
-    assert passing, f"attention TP PCC too low: {pcc}"
+    # Per-row PCC: x has distinct random content per user, so a flattened/aggregate PCC over the
+    # whole [B, dim] tensor could mask a single contaminated row (e.g. B-1 correct rows out of B
+    # still clears a high aggregate threshold).
+    thr = get_pcc_threshold(request)
+    pccs = [compute_pcc(ref[u], out_t[u]) for u in range(B)]
+    worst = min(pccs)
+    logger.info(f"ATTENTION TP PCC (pos0) min={worst:.5f} max={max(pccs):.5f}")
+    bad = [(u, p) for u, p in enumerate(pccs) if p < thr]
+    assert not bad, f"users below PCC {thr}: {bad}"
 
     # second decode step @ pos1: real 2-key attention; shape/NaN only
     cur1 = torch.ones(B, dtype=torch.int32)
