@@ -71,7 +71,10 @@ from models.experimental.hunyuan_image_3_0.ref.recaption import (
     system_prompt_for_bot_task,
 )
 from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
-from models.experimental.hunyuan_image_3_0.tt.attention.mask import build_attention_mask_tt
+from models.experimental.hunyuan_image_3_0.tt.attention.mask import (
+    build_attention_mask_tt,
+    build_attention_mask_tt_sp_sharded,
+)
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, default_bf16_layers
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
@@ -850,7 +853,18 @@ def main():
                 seq_len=S,
             )
 
-            mask_tt = build_attention_mask_tt(mesh_device, S, image_slices=[span], bsz=1, dtype=ttnn.bfloat16)
+            if os.environ.get("HY_SHARDED_MASK", "1") == "1":
+                mask_tt = build_attention_mask_tt_sp_sharded(
+                    mesh_device,
+                    S,
+                    image_slices=[span],
+                    bsz=1,
+                    sp_factor=2,
+                    dtype=ttnn.bfloat16,
+                )
+                print("[demo] attention mask: SP query-sharded upload path", flush=True)
+            else:
+                mask_tt = build_attention_mask_tt(mesh_device, S, image_slices=[span], bsz=1, dtype=ttnn.bfloat16)
             image_infos = [[(span, grid)]]
 
             def cond_dict(row):

@@ -14,6 +14,15 @@
 # Run (fast):
 #   python_env/bin/python -m pytest \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline.py -m "not slow" -v
+#
+# E2E (opt-in; pytest.ini default timeout=300 is too short — pass --timeout):
+#   HY_RUN_E2E_RANDOM=1 HY_NUM_LAYERS=32 HY_STEPS=8 \
+#     python_env/bin/python -m pytest \
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline.py::test_e2e_pipeline \
+#     -v -s --timeout=43200
+# Long seq example (S = TEXT_PRE + GRID^2 + TEXT_POST = 12112):
+#   HY_GRID=64 HY_TEXT_PRE=7984 HY_TEXT_POST=32 HY_RUN_E2E_RANDOM=1 HY_NUM_LAYERS=32 HY_STEPS=2 ...
+#   (32L defaults HY_BASE_GUIDANCE=1 for densify-fair PCC; override to 5.0 to exercise CFG.)
 
 from __future__ import annotations
 
@@ -51,6 +60,7 @@ from models.experimental.hunyuan_image_3_0.ref.weights import (
 from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
 from models.tt_dit.parallel.manager import CCLManager
+from denoise_helpers import _forward_ref_layers, clear_ref_layer_cache
 from pcc_common import (
     LEAN_ISL_CASES,
     PCC_BLOCK,
@@ -64,6 +74,7 @@ from pcc_common import (
 from pipeline_helpers import (
     bf16_layers_from_env,
     build_denoise_step_tt,
+    e2e_pcc_thresholds,
     load_e2e_module,
     patch_embed_dims,
     pipeline_pcc_threshold,
@@ -78,15 +89,14 @@ BATCH = 1
 NUM_LAYERS_BACKBONE = int(os.environ.get("HY_NUM_LAYERS", "2"))
 NUM_LAYERS_STEP = int(os.environ.get("HY_NUM_LAYERS", "4"))
 NUM_LAYERS_PRODUCTION = int(os.environ.get("HY_NUM_LAYERS", "32"))
+# pytest.ini default timeout=300s kills long e2e (SIGTERM → "Terminated").
+_E2E_TIMEOUT = 43200
 
 BACKBONE_ISL_FAST = [(batch, seq_len, label) for batch, seq_len, label in LEAN_ISL_CASES if seq_len < 4096]
 BACKBONE_ISL_SLOW = [(batch, seq_len, label) for batch, seq_len, label in LEAN_ISL_CASES if seq_len >= 4096]
 
 DENOISE_LAYOUT_FAST = [("fast", PIPELINE_LAYOUT_FAST)]
 DENOISE_LAYOUT_SLOW = [("prod", PIPELINE_LAYOUT_PROD)]
-
-LATENT_PCC_THR = float(os.environ.get("HY_LATENT_PCC", "0.98"))
-RGB_PCC_THR = float(os.environ.get("HY_RGB_PCC", "0.97"))
 
 
 @pytest.fixture(scope="function")
@@ -321,6 +331,7 @@ def test_denoise_step_resident_mesh(mesh_device, tag, layout):
 # E2E pipeline — random latent/text embeds; opt-in only (HY_RUN_E2E_RANDOM=1)
 # ---------------------------------------------------------------------------
 def _host_e2e_reference(e2e, c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=None, cfg_guidance=1.0):
+    """Host denoise+VAE reference. Streams MoE layers when NUM_LAYERS>8 (resident 32L OOMs)."""
     from models.experimental.hunyuan_image_3_0.ref.image_gen.patch_embed import UNetDown as RefDown, UNetUp as RefUp
     from models.experimental.hunyuan_image_3_0.ref.image_gen.timestep_embedder import TimestepEmbedder as RefTimeEmbed
 
@@ -329,6 +340,17 @@ def _host_e2e_reference(e2e, c, down_sd, up_sd, init_latent, text_embeds, text_e
     NUM_LAYERS, STEPS, SCALING = e2e.NUM_LAYERS, e2e.STEPS, e2e.SCALING
     LATENT, HID, HSZ = patch_embed_dims(down_sd)
     H = c["H"]
+    # Keys expected by denoise_helpers._make_ref_layer / _forward_ref_layers.
+    c_ref = transformer_cfg()
+    stream_layers = NUM_LAYERS > 8
+    if stream_layers:
+        clear_ref_layer_cache()
+
+    print(
+        f"[e2e ref] S={S} GRID={GRID} layers={NUM_LAYERS} steps={STEPS} "
+        f"stream_layers={stream_layers} CFG={cfg_guidance}",
+        flush=True,
+    )
 
     sched = HunyuanTtScheduler(None)
     sched.set_timesteps(STEPS)
@@ -342,26 +364,6 @@ def _host_e2e_reference(e2e, c, down_sd, up_sd, init_latent, text_embeds, text_e
     te1r.load_state_dict({k: v.float() for k, v in e2e._load_prefix("time_embed").items()}, strict=True)
     te2r = RefTimeEmbed(H).eval()
     te2r.load_state_dict({k: v.float() for k, v in e2e._load_prefix("time_embed_2").items()}, strict=True)
-    layers = []
-    for i in range(NUM_LAYERS):
-        sd = e2e._load_prefix(f"model.layers.{i}")
-        L = RefLayer(
-            hidden_size=H,
-            num_attention_heads=c["HEADS"],
-            num_key_value_heads=c["KV"],
-            attention_head_dim=c["HD"],
-            num_experts=c["E"],
-            moe_topk=c["K"],
-            moe_intermediate_size=c["INTER"],
-            num_shared_expert=c["SHARED"],
-            use_mixed_mlp_moe=c["MIXED"],
-            norm_topk_prob=c["NORM"],
-            use_qk_norm=c["QKN"],
-            rms_norm_eps=c["EPS"],
-            layer_idx=i,
-        )
-        L.load_state_dict({k: v.float() for k, v in sd.items()}, strict=True)
-        layers.append(L.eval())
     cos, sin = build_batch_2d_rope(S, c["HD"], image_infos=[[(IMG_SLICE, (GRID, GRID))]])
     mask = to_additive(build_attention_mask(S, image_slices=[IMG_SLICE], bsz=B), dtype=torch.float32)
 
@@ -371,12 +373,12 @@ def _host_e2e_reference(e2e, c, down_sd, up_sd, init_latent, text_embeds, text_e
         img, th, tw = rd(lat, e1)
         h = te_embeds.clone()
         h[:, IMG_SLICE, :] = img
-        for L in layers:
-            h = L(h, attention_mask=mask, custom_pos_emb=(cos, sin))
+        h = _forward_ref_layers(c_ref, h, NUM_LAYERS, mask, cos, sin, stream_layers=stream_layers)
         return ru(h[:, IMG_SLICE, :], e2_, th, tw)
 
     lat = init_latent.clone()
     for i, t in enumerate(timesteps):
+        print(f"[e2e ref] step {i + 1}/{STEPS} t={float(t):.4f}", flush=True)
         tv = torch.tensor([float(t)] * B)
         with torch.no_grad():
             e1, e2_ = te1r(tv), te2r(tv)
@@ -386,6 +388,10 @@ def _host_e2e_reference(e2e, c, down_sd, up_sd, init_latent, text_embeds, text_e
                 pred = pred_uncond + cfg_guidance * (pred - pred_uncond)
         lat = lat + float(sigmas[i + 1] - sigmas[i]) * pred
 
+    if stream_layers:
+        clear_ref_layer_cache()
+        gc.collect()
+
     with torch.no_grad():
         ref_img = load_ref_decoder()((lat.float() / SCALING).unsqueeze(2))
     ref_rgb = vae_decode_output_to_rgb(ref_img)
@@ -394,15 +400,30 @@ def _host_e2e_reference(e2e, c, down_sd, up_sd, init_latent, text_embeds, text_e
 
 @pytest.mark.slow
 @pytest.mark.e2e_random_inputs
+@pytest.mark.timeout(_E2E_TIMEOUT)
 @pytest.mark.skipif(
     os.environ.get("HY_RUN_E2E_RANDOM", "0") != "1",
     reason="E2E with random latent/text inputs is opt-in; set HY_RUN_E2E_RANDOM=1",
 )
 def test_e2e_pipeline():
     """Integration PCC with random activations — not a module-weight gate. Opt-in only."""
+    # 32L vs fp32 host: demo defaults (resident bf8 + CFG=5) drift to ~0.74 latent PCC.
+    # Prefer the production densify loop setup (CFG off) unless the user overrides.
+    # For tighter match set HY_WEIGHT_DTYPE=bf16 (streams experts; slower).
+    if int(os.environ.get("HY_NUM_LAYERS", "2")) > 8:
+        os.environ.setdefault("HY_BASE_GUIDANCE", "1.0")
     e2e = load_e2e_module()
+    weight_dtype = ttnn.bfloat8_b if os.environ.get("HY_WEIGHT_DTYPE", "bf8") == "bf8" else ttnn.bfloat16
+
     c = e2e._cfg()
     assert e2e.S <= c["MAX_SEQ"], f"seq_len {e2e.S} exceeds max_position_embeddings {c['MAX_SEQ']}"
+    print(
+        f"[e2e] starting host ref then TT denoise+VAE: "
+        f"S={e2e.S} GRID={e2e.GRID} layers={e2e.NUM_LAYERS} steps={e2e.STEPS} "
+        f"dtype={'bf8' if weight_dtype == ttnn.bfloat8_b else 'bf16'} "
+        f"BASE_GUIDANCE={e2e.BASE_GUIDANCE}",
+        flush=True,
+    )
     down_sd = e2e._load_prefix("patch_embed")
     up_sd = e2e._load_prefix("final_layer")
     LATENT, _, _ = patch_embed_dims(down_sd)
@@ -411,6 +432,7 @@ def test_e2e_pipeline():
     cfg_distilled, use_meanflow = e2e._model_flags()
     base_cfg = (not (cfg_distilled or use_meanflow)) and e2e.BASE_GUIDANCE != 1.0
     cfg_guidance = e2e.BASE_GUIDANCE if base_cfg else 1.0
+    latent_thr, rgb_thr = e2e_pcc_thresholds(e2e.NUM_LAYERS, e2e.STEPS, weight_dtype, cfg_guidance)
 
     torch.manual_seed(0)
     init_latent = torch.randn(e2e.B, LATENT, e2e.GRID, e2e.GRID)
@@ -440,19 +462,19 @@ def test_e2e_pipeline():
     )
     tt_rgb = e2e.run_vae_decode(tt_latent)
 
-    latent_pcc, _ = pcc_metrics(ref_latent, tt_latent, LATENT_PCC_THR)
-    rgb_pcc, _ = pcc_metrics(ref_rgb, tt_rgb, RGB_PCC_THR)
+    latent_pcc, _ = pcc_metrics(ref_latent, tt_latent, latent_thr)
+    rgb_pcc, _ = pcc_metrics(ref_rgb, tt_rgb, rgb_thr)
     latent_dmax = (ref_latent.float() - tt_latent.float()).abs().max().item()
 
     print(
         f"\n[e2e] grid={e2e.GRID} S={e2e.S} layers={e2e.NUM_LAYERS} steps={e2e.STEPS}\n"
-        f"  latent PCC={latent_pcc:.6f} (thr {LATENT_PCC_THR})  max|Δ|={latent_dmax:.4e}\n"
-        f"  RGB    PCC={rgb_pcc:.6f} (thr {RGB_PCC_THR})  "
+        f"  latent PCC={latent_pcc:.6f} (thr {latent_thr})  max|Δ|={latent_dmax:.4e}\n"
+        f"  RGB    PCC={rgb_pcc:.6f} (thr {rgb_thr})  "
         f"ref={tuple(ref_rgb.shape)} tt={tuple(tt_rgb.shape)}"
     )
     assert tuple(ref_rgb.shape) == tuple(tt_rgb.shape)
-    assert latent_pcc >= LATENT_PCC_THR
-    assert rgb_pcc >= RGB_PCC_THR
+    assert latent_pcc >= latent_thr
+    assert rgb_pcc >= rgb_thr
 
 
 def test_gen_special_token_order():

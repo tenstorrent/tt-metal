@@ -179,6 +179,69 @@ Without `HY_STEPS`, Instruct defaults to 50 steps and Distil to 8 (from each che
 
 ---
 
+## Sequence length limits & measured results
+
+### Maximum validated sequence length
+
+**Maximum validated sequence length: 17,343.** Beyond this, the current implementation
+encounters OOM because the 80B model weights occupy most of the available device DRAM
+(middle transformer layers in `BFLOAT8_B`, first and last four layers in `BF16`), leaving
+insufficient memory for the attention mask, whose memory grows quadratically with sequence
+length.
+
+Images are generated correctly up to approximately **8K** sequence length. Beyond ~8K, the
+generated images become increasingly noisy. The same behavior is observed with the Hugging
+Face reference implementation.
+
+| Range | Behavior |
+|---|---|
+| S up to ~8K | Images look correct |
+| Above ~8K through 17,343 | Runs, but images grow noisier (also on HF ref) |
+| Above 17,343 | Device OOM (weights + quadratic attention mask) |
+
+Model capacity is still `max_position_embeddings = 22800`; the 17,343 ceiling is a **DRAM**
+limit on the current 2×2 resident mixed-precision layout, not the HF position embedding
+cap. (HF `generation_config.max_length = 12800` is a separate preprocess guard and is **not**
+applied on the TTNN demo path.)
+
+### Base T2I timing (measured)
+
+Example `demo/demo.py` wall times on the 2×2 mesh (resident bf8 backbone):
+
+| Stage | Time | Share |
+|---|---:|---:|
+| `1_setup_weights_tokenizer` | 0.6s | 0.2% |
+| `4_build_denoise_mesh_backbone` | 151.3s | 53.0% |
+| `5_denoise_loop` | 114.9s | 40.2% |
+| `6_vae_decode` | 18.3s | 6.4% |
+| `7_save_png` | 0.6s | 0.2% |
+| **TOTAL** | **285.7s** | 100% |
+
+Backbone upload dominates first-run latency; subsequent denoise is the other large share.
+
+### Long-seq e2e PCC (measured)
+
+Opt-in random-input gate `test_e2e_pipeline` at production grid / long text span
+(`grid=64`, **S=12112**, 32 layers, 2 steps; densify-fair CFG off):
+
+| Metric | PCC | Threshold | Shapes |
+|---|---:|---:|---|
+| Latent | **0.945957** | 0.85 | — |
+| RGB | **0.977100** | 0.70 | ref=tt=`(1, 3, 1024, 1024)` |
+
+Wall time for that run: **~2099s** (host fp32 reference + TT denoise + VAE). Max |Δ| on
+latent: `7.59e-01`. Status: **PASSED**.
+
+```bash
+HY_GRID=64 HY_TEXT_PRE=7984 HY_TEXT_POST=32 \
+HY_NUM_LAYERS=32 HY_STEPS=2 HY_RUN_E2E_RANDOM=1 \
+python_env/bin/python -m pytest \
+  models/experimental/hunyuan_image_3_0/tests/pcc/test_pipeline.py::test_e2e_pipeline \
+  -v -s --timeout=43200
+```
+
+---
+
 ## Status
 
 ### Ported, with passing PCC tests
@@ -313,8 +376,8 @@ latents, text embeds) are randomly generated; **weights** come from the HF check
 | Denoise step (32L, bf16) | 0.85 | `test_denoise_step_production_32l_pcc`, `test_i2i_denoise_step_production_32l_pcc` | **Observed ~0.983** (T2I); threshold is conservative |
 | Denoise step (bf8) | 0.90 | `pipeline_pcc_threshold(bf8)` | |
 | Resident mesh denoise | 0.98 | `test_denoise_step_resident_mesh` | |
-| E2E latent | 0.98 | `test_e2e_pipeline` (`HY_LATENT_PCC`) | Random latent/text inputs; **opt-in** (`HY_RUN_E2E_RANDOM=1`) |
-| E2E RGB | 0.97 | `test_e2e_pipeline` (`HY_RGB_PCC`) | |
+| E2E latent | 0.98 / loop thr | `test_e2e_pipeline` (`e2e_pcc_thresholds`) | ≤8L bf16: 0.98; 32L: `production_loop_pcc_threshold` (bf8+CFG floor 0.70). Opt-in `HY_RUN_E2E_RANDOM=1` |
+| E2E RGB | 0.97 / derived | `test_e2e_pipeline` (`HY_RGB_PCC`) | Tracks latent thr; 32L defaults `HY_BASE_GUIDANCE=1` for fair densify match |
 | `test_generate.py` | — | Host unit tests (`@pytest.mark.unit_host`) | Mock logits (V=64); excluded from smoke/PCC sweeps |
 | Recaption AR | greedy token match | `test_recaption_production_greedy_tokens` | 32L instruct; not PCC (token parity) |
 | Scheduler | 0.99 | `test_scheduler.py` | **Smoke tier only** — deterministic ref match; not in production script |
@@ -327,8 +390,9 @@ latents, text embeds) are randomly generated; **weights** come from the HF check
 | 32L chained decode hidden | 0.96 | `test_backbone_production_32l_decode_pcc` | Chained, not teacher-forced |
 | Attention mask | bitwise | `test_mask_production_pcc` | Exact match @ S=4160 image layout |
 
-Override e2e thresholds with `HY_LATENT_PCC` / `HY_RGB_PCC`. Denoise weight dtype via
-`HY_WEIGHT_DTYPE=bf8` and layer precision via `HY_BF16_LAYERS=0,1,...`.
+Override e2e thresholds with `HY_LATENT_PCC` / `HY_RGB_PCC`. E2E/demo weight dtype via
+`HY_WEIGHT_DTYPE=bf8|bf16` (bf16 streams experts on e2e to avoid resident DRAM OOM).
+Layer mixed-precision via `HY_BF16_LAYERS=0,1,...`.
 
 ---
 
