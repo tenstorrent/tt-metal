@@ -4,8 +4,11 @@
 
 #include "gather_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -15,9 +18,20 @@ constexpr uint32_t GATHER_WT_THRESHOLD = 60;
 
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    // Calculate Wt to decide which program factory to use
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
     const auto input_index_tensor_shape = tensor_args.input_index_tensor.padded_shape();
+
+    if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
+        // Multi-core splits over W_index only (each core owns a slice of every output row);
+        // W_input is mirrored in full to every core, so it gives no parallelism gain.
+        const uint32_t W_index = input_index_tensor_shape[-1];
+        constexpr uint32_t rm_w_threshold = GATHER_WT_THRESHOLD * tt::constants::TILE_WIDTH;
+        if (W_index > rm_w_threshold) {
+            return RmSingleRowMultiCore{};
+        }
+        return RmSingleRowSingleCore{};
+    }
+
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const uint32_t Wt_input = input_tensor_shape[3] / tile_width;
     const uint32_t Wt_index = input_index_tensor_shape[3] / tile_width;
@@ -71,19 +85,29 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
             input_index_tensor_shape[i],
             input_tensor_shape[i]);
     }
+    // Both input and index must share the same layout; mixed TILE/RM is unsupported because
+    // the value/index/output streams are co-iterated stick-for-stick (or tile-for-tile).
     TT_FATAL(
-        attributes.output_mem_config.is_sharded() == false,
-        "Sharded implementation not supported yet. Shard status: {}",
-        attributes.output_mem_config.is_sharded());
-
-    TT_FATAL(
-        tensor_args.input_tensor.layout() == Layout::TILE,
-        "The input tensor must be in tiled format. Current layout: {}",
-        tensor_args.input_tensor.layout());
-    TT_FATAL(
-        tensor_args.input_index_tensor.layout() == Layout::TILE,
-        "The input index tensor must be in tiled format. Current layout: {}",
+        tensor_args.input_tensor.layout() == tensor_args.input_index_tensor.layout(),
+        "Input tensor and index tensor must have the same layout. Got input layout: {} and index layout: {}",
+        tensor_args.input_tensor.layout(),
         tensor_args.input_index_tensor.layout());
+    TT_FATAL(
+        tensor_args.input_tensor.layout() == Layout::TILE || tensor_args.input_tensor.layout() == Layout::ROW_MAJOR,
+        "Gather only supports TILE or ROW_MAJOR layout. Current layout: {}",
+        tensor_args.input_tensor.layout());
+
+    // TILE-only: any user-provided output shard_spec must be tile-aligned. RM operates at
+    // stick granularity, so sub-tile shards are valid there.
+    if (tensor_args.input_tensor.layout() == Layout::TILE && attributes.output_mem_config.is_sharded() &&
+        attributes.output_mem_config.shard_spec().has_value()) {
+        const auto& spec = attributes.output_mem_config.shard_spec().value();
+        TT_FATAL(
+            spec.shape[0] % tt::constants::TILE_HEIGHT == 0 && spec.shape[1] % tt::constants::TILE_WIDTH == 0,
+            "TILE sharded gather requires tile-aligned output shard shape; got ({}, {})",
+            spec.shape[0],
+            spec.shape[1]);
+    }
 
     TT_FATAL(
         (tensor_args.input_tensor.buffer() != nullptr) && (tensor_args.input_index_tensor.buffer() != nullptr),
@@ -105,12 +129,46 @@ GatherDeviceOperation::spec_return_value_t GatherDeviceOperation::compute_output
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor.value().tensor_spec();
     }
-    // Create output tensor specs
-    const auto input_index_tensor_shape = tensor_args.input_index_tensor.logical_shape();
-    const auto tensor_specs = TensorSpec(
-        input_index_tensor_shape,
-        TensorLayout(tensor_args.input_tensor.dtype(), PageConfig(Layout::TILE), attributes.output_mem_config));
-    return tensor_specs;
+
+    const auto output_shape = tensor_args.input_index_tensor.logical_shape();
+    auto output_mem_config = attributes.output_mem_config;
+
+    // Synthesize shard_spec when the user requested sharded output without one. Mirrors slice.
+    if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value()) {
+        const auto& index = tensor_args.input_index_tensor;
+        std::optional<ShardSpec> derived;
+        if (index.is_sharded() && index.memory_config().shard_spec().has_value() &&
+            index.memory_config().memory_layout() == output_mem_config.memory_layout() &&
+            index.logical_shape().rank() == output_shape.rank()) {
+            auto adjusted = ttnn::operations::data_movement::transpose::adjust_shard_spec_to_shape(
+                *index.memory_config().shard_spec(), index.logical_shape(), output_shape);
+            if (adjusted.has_value()) {
+                // TILE factories require tile-aligned shards; otherwise re-derive below.
+                const bool tile_layout = tensor_args.input_tensor.layout() == Layout::TILE;
+                const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
+                                          adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
+                if (!tile_layout || tile_aligned) {
+                    derived = std::move(adjusted);
+                }
+            }
+        }
+        if (!derived.has_value()) {
+            // Preserve index orientation on cross-layout / sub-tile-fallthrough (mirrors #48025).
+            std::optional<ShardOrientation> orientation_hint;
+            if (index.shard_spec().has_value()) {
+                orientation_hint = index.shard_spec()->orientation;
+            }
+            derived = ttnn::operations::data_movement::transpose::generate_transpose_shard_spec(
+                tensor_args.input_tensor, output_shape, output_mem_config.memory_layout(), orientation_hint);
+        }
+        output_mem_config = MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
+    }
+
+    // Output layout matches the input layout: TILE-in → TILE-out, RM-in → RM-out.
+    return TensorSpec(
+        output_shape,
+        TensorLayout(
+            tensor_args.input_tensor.dtype(), PageConfig(tensor_args.input_tensor.layout()), output_mem_config));
 }
 
 GatherDeviceOperation::tensor_return_value_t GatherDeviceOperation::create_output_tensors(

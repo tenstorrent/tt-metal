@@ -33,14 +33,14 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<11>();
     const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
 
-    experimental::CB output_cb(output_cb_id);
-    experimental::CB fill_cb(fill_cb_id);
+    DataflowBuffer output_dfb(output_cb_id);
+    DataflowBuffer fill_dfb(fill_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
-    uint32_t fill_stick_addr = fill_cb.get_write_ptr();
+    uint32_t fill_stick_addr = fill_dfb.get_write_ptr();
     if constexpr (fill_is_zero) {
-        zero_out_page(noc, fill_cb);
+        zero_out_page(noc, fill_dfb);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);
         const uint32_t fill_value_packed = (fill_value_bf16 << 16) | fill_value_bf16;
@@ -57,7 +57,7 @@ void kernel_main() {
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
         uint32_t sticks_this_burst =
             (num_sticks - local_stick_idx) < burst_size ? (num_sticks - local_stick_idx) : burst_size;
-        output_cb.reserve_back(sticks_this_burst);
+        output_dfb.reserve_back(sticks_this_burst);
         uint32_t write_offset = 0;
 
         for (uint32_t i = 0; i < sticks_this_burst; i++, local_stick_idx++) {
@@ -89,14 +89,14 @@ void kernel_main() {
                     batch_idx * (input_height * input_width) + nearest_y * input_width + nearest_x;
                 noc.async_read(
                     input_tensor_accessor,
-                    output_cb,
+                    output_dfb,
                     input_stick_nbytes_unaligned,
                     {.page_id = input_stick_index},
                     {.offset_bytes = write_offset});
             } else {
                 noc.async_read(
                     self_ep,
-                    output_cb,
+                    output_dfb,
                     input_stick_nbytes_unaligned,
                     experimental::local_addr(fill_stick_addr, noc.get_noc_id()),
                     {.offset_bytes = write_offset});
@@ -105,6 +105,6 @@ void kernel_main() {
         }
 
         noc.async_read_barrier();
-        output_cb.push_back(sticks_this_burst);
+        output_dfb.push_back(sticks_this_burst);
     }
 }
