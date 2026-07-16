@@ -131,7 +131,8 @@ void kernel_main() {
     constexpr uint32_t cb_out_rm = get_compile_time_arg_val(11);
     constexpr uint32_t num_y_tiles = get_compile_time_arg_val(12);
     constexpr uint32_t num_uv_tiles_per_plane = get_compile_time_arg_val(13);
-    constexpr uint32_t num_t_tiles = get_compile_time_arg_val(14);
+    // Index 14 (num_t_tiles) is passed by the host for layout symmetry with the
+    // reader/writer kernels but is unused by the compute kernel.
     constexpr uint32_t cb_out_bf16 = get_compile_time_arg_val(15);
 
     compute_kernel_hw_startup(cb_R_rm, cb_tilized);

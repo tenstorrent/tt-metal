@@ -71,9 +71,9 @@ void kernel_main() {
     constexpr uint32_t cb_off = get_compile_time_arg_val(6);
     constexpr uint32_t num_t_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t T = get_compile_time_arg_val(9);
-    constexpr uint32_t H = get_compile_time_arg_val(10);
+    // Indices 10 (H) and 12 (H2) are passed by the host for layout symmetry
+    // with the writer/compute kernels but are unused by the reader.
     constexpr uint32_t W = get_compile_time_arg_val(11);
-    constexpr uint32_t H2 = get_compile_time_arg_val(12);
     constexpr uint32_t W2 = get_compile_time_arg_val(13);
     constexpr uint32_t HW = get_compile_time_arg_val(14);
     constexpr auto src_tensor_args = TensorAccessorArgs<15>();
