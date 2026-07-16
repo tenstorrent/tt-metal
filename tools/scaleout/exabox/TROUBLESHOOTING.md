@@ -868,11 +868,20 @@ The host order must follow the physical ring topology.
 
 **How to determine the correct order**:
 
+Use `resolve_host_ring_order.py` to derive the correct order automatically from descriptor files:
+
+```bash
+python3 tools/scaleout/exabox/resolve_host_ring_order.py \
+    --hosts b02u08,b02u02,b09u02,b09u08 \
+    --cabling /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+    --deployment /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
+```
+
+The tool reads the same descriptor files that physical validation trusts and outputs the ring-ordered host list. You can also pass `--fsd` with a Factory System Descriptor instead. Alternatively, determine the order manually:
+
 1. Check the cabling diagram or FSD for your pod
 2. Identify which hosts are directly connected via QSFP cables
 3. Order them so consecutive hosts in your list are physically connected
-
-**Long-term fix**: Automatic mesh placement and rank binding is being developed to eliminate this manual ordering requirement (TT-Distributed infrastructure improvement).
 
 **Diagnostic**: If you're unsure about connectivity, run physical validation first:
 
