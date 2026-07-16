@@ -107,7 +107,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
             maxrel = float(line.split("max_rel_err=")[1])
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048)
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -464,6 +464,99 @@ def progressive():
     print("PROGRESSIVE DONE", flush=True)
 
 
+def _rup(x, y):
+    return cdiv(x, y) * y
+
+
+def _pd_geom(M, K, N, cfg):
+    """K_num_blocks, N_bpc, out-block tiles (M_block_cap * N_sub) — mirrors build_plan."""
+    Ns, Pk, Sm, kb, nsb = cfg
+    Mt, Kt, Nt = cdiv(M, 32), cdiv(K, 32), cdiv(N, 32)
+    Knb = _rup(cdiv(Kt, Pk), kb * 8) // kb
+    N_own = cdiv(Nt, 8 * Ns)
+    N_sub = nsb if nsb else N_own
+    N_bpc = cdiv(N_own, N_sub)
+    M_block_cap = cdiv(Mt, Sm)
+    return Knb, N_bpc, M_block_cap * N_sub
+
+
+# (group, label, M, K, N, explicit cfg or None). control_pk1 isolates output draining (no reduction).
+PD_SHAPES = [
+    ("target", "256x2048x1024", 256, 2048, 1024, None),
+    ("target", "256x6144x768", 256, 6144, 768, None),
+    ("control", "256x6144x2304", 256, 6144, 2304, None),
+    ("control", "256x6144x4608", 256, 6144, 4608, None),
+    ("control", "mt1_32x6144x4608", 32, 6144, 4608, None),
+    ("control", "mt2_64x6144x4608", 64, 6144, 4608, None),
+    ("control", "mt4_128x6144x4608", 128, 6144, 4608, None),
+    ("control_pk1", "pk1_32x6144x3072", 32, 6144, 3072, (1, 1, 1, 4, 6)),
+]
+
+
+def pipelined(relaunches=3):
+    # A/B: barrier baseline (mask 0) vs pipelined phase-2 drain (DIAG_PIPELINED_DRAIN, mask 2048) at identical
+    # configs, INTERLEAVED relaunches. Reports median, %change vs baseline, util%512, per-RISC, PCC, Pk, N_bpc,
+    # out-block tiles. Raw: regime_a_pipelined_bench.json.
+    VARIANTS = [("pipelined", 0), ("barrier", 2048)]  # mask 0 = pipelined (default); 2048 = DIAG_BARRIER_DRAIN
+    out = []
+    for grp, label, M, K, N, explicit in PD_SHAPES:
+        cfg = _cfg_for(M, K, N, explicit)
+        Pk = cfg[1]
+        Knb, N_bpc, out_blk_tiles = _pd_geom(M, K, N, cfg)
+        ideal = ideal_us(M, K, N)
+        runs = {v: [] for v, _ in VARIANTS}
+        for _r in range(relaunches):  # interleaved
+            for v, mask in VARIANTS:
+                runs[v].append(run_one(M, K, N, cfg, mask))
+        per = {}
+        for v, mask in VARIANTS:
+            oks = [x for x in runs[v] if x.get("ok") and x["wall_us"]]
+            walls = sorted(x["wall_us"] for x in oks)
+            med = statistics.median(walls) if walls else None
+            per[v] = {
+                "mask": mask,
+                "walls": walls,
+                "med_us": med,
+                "min_us": (walls[0] if walls else None),
+                "n_ok": len(oks),
+                "util512_pct": (ideal / med * 100 if med else None),
+                "max_rel_err": [x.get("max_rel_err") for x in runs[v]],
+                "risc": (oks[0]["risc"] if oks else None),
+            }
+        bm = per["barrier"]["med_us"]
+        pm = per["pipelined"]["med_us"]
+        delta = (pm / bm - 1) * 100 if (bm and pm) else None  # negative = pipelined faster
+        out.append(
+            {
+                "group": grp,
+                "label": label,
+                "M": M,
+                "K": K,
+                "N": N,
+                "cfg": list(cfg),
+                "Pk": Pk,
+                "N_bpc": N_bpc,
+                "out_blk_tiles": out_blk_tiles,
+                "ideal_us": ideal,
+                "barrier": per["barrier"],
+                "pipelined": per["pipelined"],
+                "pipelined_vs_barrier_pct": delta,
+            }
+        )
+        print(
+            f"[pd/{grp}] {label:18} cfg={cfg} Pk={Pk} N_bpc={N_bpc} oblk={out_blk_tiles} ideal={ideal:.1f}  "
+            f"barrier={bm if bm is None else round(bm,1)} pipe={pm if pm is None else round(pm,1)} "
+            f"delta={delta if delta is None else round(delta,1)}%  "
+            f"bar_all={[round(w,1) for w in per['barrier']['walls']]} "
+            f"pipe_all={[round(w,1) for w in per['pipelined']['walls']]} "
+            f"util {per['barrier']['util512_pct'] and round(per['barrier']['util512_pct'],1)}"
+            f"->{per['pipelined']['util512_pct'] and round(per['pipelined']['util512_pct'],1)}%",
+            flush=True,
+        )
+        json.dump(out, open(f"{HERE}/regime_a_pipelined_bench.json", "w"), indent=2)
+    print("PIPELINED DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
     {
@@ -473,4 +566,5 @@ if __name__ == "__main__":
         "scatter": scatter,
         "variants": variants,
         "progressive": progressive,
+        "pipelined": pipelined,
     }[mode]()
