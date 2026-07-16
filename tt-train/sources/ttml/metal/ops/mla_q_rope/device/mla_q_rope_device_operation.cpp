@@ -124,12 +124,6 @@ MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_o
     return create_device_tensor(spec, tensor_args.q_in.device());
 }
 
-ttsl::hash::hash_t MlaQRopeDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<MlaQRopeDeviceOperation>(
-        args, tensor_args.q_in.dtype(), tensor_args.q_in.logical_shape(), tensor_args.cos_cache.logical_shape());
-}
-
 MlaQRopeDeviceOperation::program_factory_t MlaQRopeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return MlaQRopeProgramFactory{};
