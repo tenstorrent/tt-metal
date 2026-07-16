@@ -416,10 +416,9 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
 
     x_abs = sfpi::setsgn(x, 0);
     a = x_abs;
-    sfpi::vFloat x_abs_m1 = x_abs - 1.0f;
     sfpi::vInt a_exp = sfpi::exexp(a);
 
-    v_if(x_abs_m1 >= 0.0f) {
+    v_if(a_exp >= 0) {
         // if a is not NaN, convert to 0.0, otherwise remains NaN.
         a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - 1) * 0.0f;
 
@@ -455,7 +454,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     r = t * a + a;
 
     // Special cases:
-    v_if(x_abs_m1 >= 0.0f) { r = half_pi - r; }
+    v_if(a_exp >= 0) { r = half_pi - r; }
     v_endif;
 
     r = sfpi::copysgn(r, x);
@@ -613,14 +612,17 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     coefficient = 0x1.555536p-3f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    polynomial *= square;
     sfpi::vUInt x_bits = sfpi::as<sfpi::vUInt>(x);
     sfpi::vUInt tmp_bits = sfpi::as<sfpi::vUInt>(tmp);
-    reduced = sfpi::copysgn(reduced, sfpi::as<sfpi::vFloat>(x_bits ^ tmp_bits));
+    x_bits ^= tmp_bits;
+    polynomial *= square;
+    reduced = sfpi::copysgn(reduced, sfpi::as<sfpi::vFloat>(x_bits));
     result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // Map asin(reduced) back to acos(x).
-    sfpi::vFloat add_pio2 = sfpi::as<sfpi::vFloat>(x_bits | tmp_bits);
+    sfpi::vUInt add_pio2_bits = sfpi::as<sfpi::vUInt>(reduced);
+    add_pio2_bits |= tmp_bits;
+    sfpi::vFloat add_pio2 = sfpi::as<sfpi::vFloat>(add_pio2_bits);
     v_if(add_pio2 < 0.0f) { result += 1.57079637050628662109f; }
     v_endif;
 
