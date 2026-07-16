@@ -26,6 +26,13 @@ struct MorehAdamOperation {
 
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "beta1", "beta2", "eps", "weight_decay", "amsgrad", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                beta1, beta2, eps, weight_decay, amsgrad, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {
@@ -51,9 +58,7 @@ struct MorehAdamOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    // lr and step are excluded from compute_program_hash (so calls differing only in those
+    // lr and step are excluded from the program hash (so calls differing only in those
     // values cache-hit).  Buffer addresses are patched on a hit via BufferBinding, but the
     // descriptor is never rebuilt, so lr/step baked at the first miss would otherwise stay
     // frozen.  Re-apply them here every dispatch.  Mirrors the reader/compute runtime-arg
