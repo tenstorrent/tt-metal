@@ -255,50 +255,6 @@ def _write_optimize_fallback(demo_dir, label, args, summ) -> None:
         pass
 
 
-def run_perf_optimization(
-    demo_dir,
-    repo_root,
-    devices="0",
-    mesh=None,
-    box=None,
-    metric="device_ms",
-    max_iter=1000,
-    perf_test=None,
-    case=None,
-    baseline_only=False,
-):
-    perf_dir = repo_root / PERF_DIR
-    env = _perf_env(repo_root)
-    py = _python_bin(repo_root)
-    before = [
-        py,
-        "-m",
-        "agent.before_loop",
-        str(demo_dir),
-        "--metric",
-        metric,
-        "--devices",
-        devices,
-        "--max-iter",
-        str(max_iter),
-    ]
-    if box:
-        before += ["--box", box]
-    if mesh:
-        before += ["--mesh", mesh]
-    if perf_test:
-        before += ["--perf-test", perf_test]
-    if case:
-        before += ["--case", case]
-    rc = subprocess.run(before, cwd=str(perf_dir), env=env).returncode
-    if rc != 0:
-        return None, rc
-    if baseline_only:
-        return _latest_summary(perf_dir), 0
-    rc = subprocess.run([py, "-m", "agent.loop", "runs"], cwd=str(perf_dir), env=env).returncode
-    return _latest_summary(perf_dir), rc
-
-
 def _chip_count_from_mesh(mesh_arg) -> int:
     if not mesh_arg:
         return 0
@@ -476,26 +432,3 @@ def cmd_optimize(args) -> int:
         if iso is not None:
             _report_isolation(iso, repo_root)
         return 0
-    summary, rc = run_perf_optimization(
-        demo_dir,
-        repo_root,
-        devices=args.devices,
-        mesh=args.mesh,
-        box=getattr(args, "box", None),
-        metric=args.metric,
-        max_iter=args.max_iter,
-        perf_test=getattr(args, "perf_test", None),
-        case=getattr(args, "case", None),
-        baseline_only=getattr(args, "baseline_only", False),
-    )
-    if summary is None:
-        print(f"  [optimize] perf run failed (rc={rc})")
-        return rc or 1
-    print(
-        f"  [optimize] baseline={summary['baseline_ms']} ms, {summary['iters']} iters, "
-        f"{summary['kept']} kept, final={summary['final_ms']} ms  ({summary['run_dir']})"
-    )
-    for k in summary["kept_levers"]:
-        print(f"      keep {k['lever']}: {k['before']} -> {k['after']} ms")
-    _write_optimize_fallback(demo_dir, args.target or demo_dir.name, args, summary)
-    return 0 if rc == 0 else rc

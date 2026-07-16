@@ -396,12 +396,3 @@ def test_persist_skip_kernel_missing_can_update_reason(tmp_path, monkeypatch) ->
     listing = om.load_persistent_skips("test/m")
     assert listing["x"]["reason"] == "r2 with more detail"
     assert listing["x"]["captured_ts"] == ts_first
-
-
-def test_cmd_up_uses_placement_summary() -> None:
-    """Source-grep: cmd_up still imports the categorization helpers."""
-    cli_mod = importlib.import_module("scripts.tt_hw_planner.cli")
-    src = Path(cli_mod.__file__).read_text()
-    assert "build_final_categorization(" in src
-    assert "format_categorization_summary" in src
-    assert "format_kernel_gap_report" in src

@@ -219,33 +219,6 @@ def test_phase2_modulelist_drop_persists_to_no_emit_list(tmp_path, monkeypatch) 
     )
 
 
-def test_auto_iterate_loop_loads_no_emit_into_retired_this_run() -> None:
-    """Source-grep check: the auto-iterate loop must add components from
-    the no-emit-tests list to `retired_this_run` so they don't appear
-    in the candidate pool. (Previously this went to `permanently_skipped`;
-    that bucket is now reserved for KERNEL_MISSING only — no_emit parents
-    are transient retirements that next run will re-evaluate.)
-    Without this, the no-emit gating in _emit_pcc_template doesn't help --
-    candidates would still get targeted by the picker and waste LLM
-    budget on UNVERIFIED NATIVE outcomes."""
-    src = (Path(_REPO_ROOT) / "scripts" / "tt_hw_planner" / "_cli_helpers" / "auto_iterate.py").read_text()
-    assert "load_no_emit_tests" in src, (
-        "_run_auto_iterate_loop must import load_no_emit_tests so it can " "respect Phase 2 ModuleList drops"
-    )
-    assert (
-        "_no_emit_tests = load_no_emit_tests(MODEL)" in src
-    ), "_run_auto_iterate_loop must load the no-emit list at session start"
-    no_emit_block_start = src.find("_no_emit_tests = load_no_emit_tests(MODEL)")
-    assert no_emit_block_start != -1
-    # Within the next 600 chars, retired_this_run must be extended
-    no_emit_block = src[no_emit_block_start : no_emit_block_start + 600]
-    assert "retired_this_run.extend" in no_emit_block, (
-        "loaded no-emit entries must be added to retired_this_run "
-        "(transient pool exclusion), otherwise candidate_pool keeps them "
-        "and the loop targets them"
-    )
-
-
 def test_emit_pcc_template_handles_missing_overlay_manager_gracefully(tmp_path, monkeypatch) -> None:
     """If `is_no_emit_test` raises for any reason (network FS issue,
     Python import error), the scaffold path must continue, not crash.

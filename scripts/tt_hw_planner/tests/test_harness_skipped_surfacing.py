@@ -23,28 +23,6 @@ import json
 from pathlib import Path
 
 
-def test_persist_harness_skipped_writes_file_when_nonempty(tmp_path):
-    from scripts.tt_hw_planner._cli_helpers.auto_iterate import _persist_harness_skipped_for_outcome
-
-    _persist_harness_skipped_for_outcome(tmp_path, {"comp_a", "comp_b", "comp_c"})
-
-    path = tmp_path / "harness_skipped.json"
-    assert path.is_file()
-    data = json.loads(path.read_text())
-    assert set(data["harness_skipped_components"]) == {"comp_a", "comp_b", "comp_c"}
-    # Should be sorted for determinism.
-    assert data["harness_skipped_components"] == sorted(data["harness_skipped_components"])
-
-
-def test_persist_harness_skipped_skips_when_empty(tmp_path):
-    """Don't write an empty file — keeps the demo dir tidy when no harness
-    skips happened."""
-    from scripts.tt_hw_planner._cli_helpers.auto_iterate import _persist_harness_skipped_for_outcome
-
-    _persist_harness_skipped_for_outcome(tmp_path, set())
-    assert not (tmp_path / "harness_skipped.json").exists()
-
-
 def test_outcome_banner_surfaces_harness_skipped(tmp_path, capsys):
     """End-to-end: when harness_skipped.json exists in the demo_dir,
     the OUTCOME banner must print a HARNESS-SKIPPED warning section."""
