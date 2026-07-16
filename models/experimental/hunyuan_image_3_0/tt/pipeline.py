@@ -198,17 +198,17 @@ class HunyuanTtDenoiseStep:
         # 3) final_layer: image-span hidden -> velocity prediction (NHWC flat)
         if verbose:
             print("[denoise_step] final_layer ...", flush=True)
-        H = self.backbone.hidden_size
         signpost("start_final_layer")
-        img_out = ttnn.slice(
+        pred, _, _ = self.final_layer.forward_from_hidden(
             hidden,
-            [0, self.img_slice.start, 0],
-            [batch, self.img_slice.stop, H],
+            t_emb2,
+            th,
+            tw,
+            img_slice=self.img_slice,
+            batch=batch,
+            n_img=self.n_img,
+            deallocate_hidden=True,
         )
-        ttnn.deallocate(hidden)
-        img_out = ttnn.reshape(img_out, [1, 1, self.n_img, H])
-        pred, _, _ = self.final_layer(img_out, t_emb2, th, tw, B=batch)
-        ttnn.deallocate(img_out)
         signpost("stop_final_layer")
         signpost("stop_denoise_step")
         return pred  # ttnn NHWC flat [1,1,B*h*w,latent_ch]
@@ -253,16 +253,16 @@ class HunyuanTtDenoiseStep:
         )
         ttnn.deallocate(seq)
 
-        Hdim = self.backbone.hidden_size
-        img_out = ttnn.slice(
+        pred, _, _ = self.final_layer.forward_from_hidden(
             hidden,
-            [0, self.img_slice.start, 0],
-            [batch, self.img_slice.stop, Hdim],
+            t_emb2,
+            th,
+            tw,
+            img_slice=self.img_slice,
+            batch=batch,
+            n_img=self.n_img,
+            deallocate_hidden=True,
         )
-        ttnn.deallocate(hidden)
-        img_out = ttnn.reshape(img_out, [1, 1, self.n_img, Hdim])
-        pred, _, _ = self.final_layer(img_out, t_emb2, th, tw, B=batch)
-        ttnn.deallocate(img_out)
         return pred
 
 
@@ -337,6 +337,11 @@ def denoise_loop(
             channels=C,
             h=h,
             w=w,
+            timestep_emb=timestep_emb,
+            guidance_emb=guidance_emb,
+            timestep_r_emb=timestep_r_emb,
+            cfg_distilled=cfg_distilled,
+            use_meanflow=use_meanflow,
         )
         try:
             latent = tracer.run(init_latent, scheduler.timesteps)
