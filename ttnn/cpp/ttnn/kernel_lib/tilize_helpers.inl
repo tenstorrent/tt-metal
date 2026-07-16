@@ -150,7 +150,9 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
 #endif
             }
         } else {
-            tilize_init(input_dfb, block_width_tiles, output_dfb);
+            // Thread block_width_tiles as a compile-time template arg so the Quasar UnpackToDestEn batched
+            // tilize can program its block MOP (ignored on WH/BH and the non-UNPACK_TO_DEST paths).
+            tilize_init<block_width_tiles>(input_dfb, block_width_tiles, output_dfb);
         }
     }
 
@@ -198,7 +200,9 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             ASSERT(false);
 #endif
         } else {
-            tilize_block(input_dfb, block_width_tiles, output_dfb);
+            // Compile-time block_width_tiles: enables the Quasar UnpackToDestEn batched tilize-to-DEST path
+            // (ignored on WH/BH and the non-UNPACK_TO_DEST Quasar path).
+            tilize_block<block_width_tiles>(input_dfb, block_width_tiles, output_dfb);
         }
 
         out_dfb.push_back(block_width_tiles);

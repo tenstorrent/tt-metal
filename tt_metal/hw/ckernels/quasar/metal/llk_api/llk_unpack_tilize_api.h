@@ -91,6 +91,55 @@ inline void llk_unpack_tilize_to_dest(
 }
 
 /**
+ * @brief Initializes the unpacker for BATCHED tilize directly into DEST (UNP_DEST block path).
+ *
+ * Programs the batched-tilize MOP (BLOCK_CT_DIM tiles per invocation, DEST-Z stride = one full tile) —
+ * the LLK-intended unpack-to-dest tilize, unlike the single-tile @ref llk_unpack_tilize_to_dest which
+ * lands every tile in DEST slot 0. Pair with @ref llk_unpack_tilize_block_to_dest as the execute call.
+ *
+ * @tparam FULL_CT_DIM  Number of tiles in a full row of the input tensor (row-major stride within a tile).
+ * @tparam BLOCK_CT_DIM Number of tiles unpacked per @ref llk_unpack_tilize_block_to_dest call (MOP inner loop).
+ * @param operand       The input dataflow buffer identifier.
+ */
+template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
+inline void llk_unpack_tilize_block_to_dest_init(const std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(operand_id, tensor_shape);
+}
+
+/**
+ * @brief Executes one BATCHED unpack-tilize of BLOCK_CT_DIM tiles from a single tile-row directly into DEST.
+ *
+ * Tilizes BLOCK_CT_DIM consecutive column-tiles (starting at col_tile_offset within the row) into DEST slots
+ * dest_tile_idx .. dest_tile_idx+BLOCK_CT_DIM-1. The MOP auto-advances the L1 source by SRC_Z_STRIDE
+ * (= num_faces_c_dim) per tile and DEST by one full tile per tile, so the caller sets the row-start L1 face
+ * index and the DEST slot once. Call @ref llk_unpack_tilize_block_to_dest_init first (matching BLOCK_CT_DIM),
+ * then issue @ref llk_unpack_dest_dvalid_section_done once the DEST section is fully populated.
+ *
+ * @param operand          The input dataflow buffer identifier.
+ * @param input_tile_index Block-start tile index (encodes the row offset via the DFB read position).
+ * @param col_tile_offset  Column-tile offset of this chunk within the row (steps L1 by num_faces_c_dim each).
+ * @param dest_tile_idx    DEST slot for the first tile of this chunk.
+ */
+inline void llk_unpack_tilize_block_to_dest(
+    const std::uint32_t operand,
+    const std::uint32_t input_tile_index,
+    const std::uint32_t col_tile_offset,
+    const std::uint32_t dest_tile_idx) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+    const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
+    const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
+    const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].rd_entry_idx;
+    // Row-start L1 face index (same base as the single-tile path) plus the within-row column offset. Moving
+    // right one column-tile advances the source face counter by num_faces_c_dim (== the MOP's SRC_Z_STRIDE).
+    const std::uint32_t l1_face_idx =
+        (rd_entry_idx + input_tile_index) * faces_per_entry + col_tile_offset * tensor_shape.num_faces_c_dim;
+    _llk_unpack_tilize_block_(l1_face_idx, dest_tile_idx);
+}
+
+/**
  * @brief No-op on Quasar — tilize teardown is not required.
  */
 inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operand) {}

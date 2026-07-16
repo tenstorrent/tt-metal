@@ -38,6 +38,38 @@
 
 namespace ckernel {
 
+#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
+// Batched unpack-to-dest tilize (tt-metal #49445): the LLK-intended tilize-to-DEST unpacks a whole tile-row
+// into DISTINCT DEST slots with ONE section_done per DEST section — unlike the single-tile UNP_DEST path,
+// which lands every tile in DEST slot 0 with a per-tile section_done and mis-orders the tilized data (PCC~0).
+// A conv tilize block is one 32-row tile-row of `block_width` column-tiles; when block_width exceeds the DEST
+// tile capacity the row is split into equal compile-time column chunks that each fit DEST.
+
+// DEST tile capacity in the CURRENT sync/accum mode: full DEST holds DEST_REGISTER_FULL_SIZE/(NUM_FACES*
+// FACE_R_DIM) full tiles in fp16 (== DEST_NUM_TILES_FP16); half-sync holds half, and 32-bit dest (accum)
+// halves it again. Derived from ckernel_trisc_common.h constants (pulled in by the unpack/math/pack LLK
+// headers this file includes) rather than ckernel_defs.h's DEST_NUM_TILES_FP16, which the compute-API build
+// does not transitively include.
+constexpr uint32_t qsr_tilize_dest_tile_cap() {
+    constexpr uint32_t full_tiles =
+        ckernel::trisc::DEST_REGISTER_FULL_SIZE / (ckernel::trisc::NUM_FACES * ckernel::trisc::FACE_R_DIM);
+    uint32_t cap = (DST_SYNC_MODE == DstSync::SyncFull) ? full_tiles : (full_tiles >> 1);
+    return DST_ACCUM_MODE ? (cap >> 1) : cap;
+}
+
+// Largest column-chunk width that (a) fits DEST and (b) divides block_width evenly, so every chunk reuses the
+// same compile-time MOP (no tail re-program). Degenerates to 1 (per-tile) only for block widths sharing no
+// divisor <= cap other than 1.
+constexpr uint32_t qsr_tilize_chunk_width(uint32_t block_width) {
+    uint32_t cap = qsr_tilize_dest_tile_cap();
+    uint32_t c = (block_width < cap) ? block_width : cap;
+    while (c > 1 && (block_width % c) != 0) {
+        --c;
+    }
+    return c;
+}
+#endif
+
 // clang-format off
 /**
  * Initializes the tilize operation. Should be called once at the beginning of a kernel.
@@ -51,6 +83,7 @@ namespace ckernel {
  * | Function   | ocb    | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
+template <uint32_t block_ct_dim_ct = 0>
 ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
@@ -73,7 +106,17 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // per-tile MATH A2D datacopy issues NO MOP (sync-only forwarder) — sidestepping the Quasar tilize
     // datacopy DEST-section-release fault (ERROR_TRISC1 0x19). The math init is skipped for unpack_to_dest
     // (llk_math_unary_datacopy_api.h:47). Enabled only for the conv Program-A tilize (factory-injected define).
-    UNPACK((llk_unpack_tilize_init<true /*unpack_to_dest*/>(icb, block /*full_ct_dim*/)));
+    if constexpr (block_ct_dim_ct > 0) {
+        // BATCHED path: program the block MOP with the compile-time column-chunk width (must match the chunk
+        // width the batched tilize_block below computes from the same block_ct_dim_ct). FULL_CT_DIM = the full
+        // source-row width in tiles (== block_ct_dim_ct).
+        constexpr uint32_t chunk = qsr_tilize_chunk_width(block_ct_dim_ct);
+        UNPACK((llk_unpack_tilize_block_to_dest_init<block_ct_dim_ct /*FULL_CT_DIM*/, chunk /*BLOCK_CT_DIM*/>(icb)));
+    } else {
+        // Fallback single-tile MOP (block_ct_dim_ct not threaded by the caller).
+        UNPACK((llk_unpack_tilize_init<true /*unpack_to_dest*/>(icb, block /*full_ct_dim*/)));
+    }
+    // Sync-only math init (no MOP): sets up the UNPACK->PACK DEST-dvalid client scheme for unpack-to-dest.
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
           DST_ACCUM_MODE,
@@ -229,6 +272,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
  * | Function   | output_tile_index| Index of the output tile in the ocb      | uint32_t | >= 0        | False    |
  */
 // clang-format on
+template <uint32_t block_ct_dim_ct = 0>
 ALWI void tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
 #ifdef ARCH_QUASAR
@@ -261,17 +305,37 @@ ALWI void tilize_block(
         (uint32_t)get_operand_face_r_dim(icb)));
 #endif
 #if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
-    // UnpackToDestEn bypass (tt-metal #49445): the unpacker tilizes each tile DIRECTLY into DEST (UNP_DEST).
-    // Per the Quasar UNP_DEST contract (llk_unpack_tilize.h:36,45 — "data goes directly to DEST WITHOUT
-    // involving the math thread; the section_done signal handles sync"), this uses the UNPACK<->PACK
-    // DEST-dvalid section-done handshake, NOT the MATH semaphore. So MATH is bypassed entirely and the
-    // faulting per-tile A2D datacopy MOP (ERROR_TRISC1 0x19, Quasar DEST-section leak) is never issued.
-    // The single-tile UNP_DEST unpack lands each tile in DEST slot 0, so unpack+pack INTERLEAVE per tile
-    // (pack drains slot 0 before the next tile overwrites it) — unlike the UNP_A path's up-front block-unpack.
+    // UnpackToDestEn bypass (tt-metal #49445): the unpacker tilizes DIRECTLY into DEST (UNP_DEST), so the
+    // per-tile MATH A2D datacopy MOP (ERROR_TRISC1 0x19, Quasar DEST-section leak) is never issued. Sync is the
+    // UNPACK<->PACK DEST-dvalid section-done handshake, NOT the MATH semaphore; MATH is bypassed entirely.
+    if constexpr (block_ct_dim_ct > 0) {
+        // BATCHED unpack-to-dest (the LLK-intended tilize-to-DEST — see the reference in tt-llk
+        // tests/sources/quasar/unpack_tilize_quasar_test.cpp). One tilize block is a single 32-row tile-row of
+        // block_ct_dim_ct column-tiles; the batched MOP tilizes a run of column-tiles into DISTINCT DEST slots
+        // (advancing the L1 source by SRC_Z_STRIDE and DEST by one full tile per tile) with ONE section_done
+        // per DEST section — fixing the single-tile path's slot-0 overwrite + per-tile section_done that
+        // mis-ordered the tilized data (PCC~0). When the row is wider than DEST, split into equal compile-time
+        // column chunks that each fit DEST; each chunk fills DEST slots 0..chunk-1 then packs them out.
+        constexpr uint32_t chunk = qsr_tilize_chunk_width(block_ct_dim_ct);
+        constexpr uint32_t num_chunks = block_ct_dim_ct / chunk;  // exact by construction of chunk
+        static_assert(chunk * num_chunks == block_ct_dim_ct, "column chunks must tile the row exactly");
+        for (uint32_t c = 0; c < num_chunks; c++) {
+            // Tilize `chunk` column-tiles (cols c*chunk .. c*chunk+chunk-1) into DEST slots 0..chunk-1.
+            UNPACK((llk_unpack_tilize_block_to_dest(icb, input_tile_index, c * chunk, 0 /*dest slot*/)));
+            UNPACK((llk_unpack_dest_dvalid_section_done<DST_SYNC_MODE>()));  // whole chunk valid for PACK
+            for (uint32_t j = 0; j < chunk; j++) {
+                PACK((llk_pack<true /*out_of_order*/>(j /*DEST slot*/, ocb, output_tile_index + c * chunk + j)));
+            }
+            PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));  // clear dvalid, free DEST
+        }
+        return;
+    }
+    // Fallback single-tile UNP_DEST (block_ct_dim_ct not threaded by the caller): each tile -> DEST slot 0 with
+    // a per-tile section_done. Mis-orders wide blocks; kept only for API completeness. The conv
+    // (compute_kernel_lib::tilize) always threads block_ct_dim_ct, so the batched path above is what runs.
     for (uint32_t t = 0; t < block; t++) {
         UNPACK((llk_unpack_tilize_to_dest(icb, input_tile_index, t)));   // tile t -> DEST slot 0
         UNPACK((llk_unpack_dest_dvalid_section_done<DST_SYNC_MODE>()));  // mark DEST section valid for PACK
-        PACK(DPRINT("TZPK t={} l1idx={}\n", (uint32_t)t, (uint32_t)(t + output_tile_index)));
         PACK((llk_pack<true /*out_of_order*/>(
             0 /*tile index*/, ocb, t + output_tile_index)));                         // PACR waits on DEST dvalid
         PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));  // clear dvalid, free DEST bank
