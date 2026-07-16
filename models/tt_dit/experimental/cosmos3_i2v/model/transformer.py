@@ -152,8 +152,8 @@ class Cosmos3OmniTransformer(Module):
             else None
         )
 
-    def _dump_layer_tensor(self, t: ttnn.Tensor, path: str) -> None:
-        """Read an sp-sharded-or-replicated gen tensor off the mesh and save as torch .pt.
+    def _read_gen_tensor(self, t: ttnn.Tensor):
+        """Read an sp-sharded-or-replicated gen tensor off the mesh into a full torch tensor.
 
         At sp_factor==1 the tensor is replicated; device 0 carries the full sequence.
         At sp_factor>1 the sequence dim is sharded across sp_axis; we concat the
@@ -171,10 +171,14 @@ class Cosmos3OmniTransformer(Module):
                 slices = [ttnn.to_torch(devs[i * tp_factor]) for i in range(sp_factor)]
             else:
                 slices = [ttnn.to_torch(devs[i]) for i in range(sp_factor)]
-            full = _torch.cat(slices, dim=2)  # concat on sequence dim
-        else:
-            full = ttnn.to_torch(devs[0])
-        _torch.save(full.detach().cpu(), path)
+            return _torch.cat(slices, dim=2)  # concat on sequence dim
+        return ttnn.to_torch(devs[0])
+
+    def _dump_layer_tensor(self, t: ttnn.Tensor, path: str) -> None:
+        """Save an sp-sharded-or-replicated gen tensor off the mesh as torch .pt."""
+        import torch as _torch
+
+        _torch.save(self._read_gen_tensor(t).detach().cpu(), path)
 
     def forward(
         self,
@@ -236,7 +240,10 @@ class Cosmos3OmniTransformer(Module):
             _dump_dir = _os.environ.get("TT_COSMOS3_DUMP_GEN_SEQ_DIR", "/tmp")
             _os.makedirs(_dump_dir, exist_ok=True)
             _trunk_id = f"trunk{id(self) & 0xFFFF:04x}"
-            _gen_tensor = ttnn.to_torch(ttnn.get_device_tensors(gen_seq)[0])
+            # Concat all sp shards: at sp>1 device 0 holds only its slice, so a bare
+            # get_device_tensors[0] would dump a fragment that can't be compared to the
+            # host reference's full [N, hidden] tensor.
+            _gen_tensor = self._read_gen_tensor(gen_seq)
             _path = f"{_dump_dir}/{_trunk_id}_gen_seq_after_proj_in_step{_gen_seq_call_idx}.pt"
             _torch.save(_gen_tensor.detach().cpu(), _path)
             print(
