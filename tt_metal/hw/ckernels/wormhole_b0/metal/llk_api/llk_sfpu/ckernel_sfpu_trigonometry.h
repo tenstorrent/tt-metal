@@ -861,7 +861,7 @@ void sinh_init() {
 
 template <bool APPROXIMATION_MODE>
 void atan_init() {
-    // Initialisation for use of sfpu_reciprocal<false>.
+    // Initialisation for use of sfpu_reciprocal<false> by sfpu_atan_bf16.
     sfpu_reciprocal_init<false>();
 }
 
