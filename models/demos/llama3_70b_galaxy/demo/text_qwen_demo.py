@@ -21,8 +21,8 @@ from models.common.utility_functions import (
     comp_pcc,
 )
 from models.demos.utils.device_sku import get_current_device_sku_name
-from models.demos.utils.llm_demo_utils import verify_perf
-from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.llm_demo_utils import verify_perf, verify_accuracy
+from models.demos.utils.model_targets import resolve_perf_targets, resolve_accuracy_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Qwen-specific imports
@@ -73,33 +73,22 @@ class TokenAccuracy:
         return count / matching_sz, count_t5 / matching_sz
 
 
-def get_accuracy_thresholds(model_args):
-    """Parse token accuracy thresholds from the common PERF.md Performance table."""
-    perf_file = "models/tt_transformers/PERF.md"
-    with open(perf_file, "r") as f:
-        content = f.read()
-
-    sections = content.split("## ")
-    target_section = next(s for s in sections if s.lower().startswith("performance\n"))
-
-    base_model_name = model_args.base_model_name
-    device_name = model_args.device_name
-    correct_line = (
-        lambda line: "|" in line
-        and base_model_name.lower() in line.split("|")[1].strip().lower()
-        and device_name.lower() in line.split("|")[2].strip().lower()
-        and not "(DP=".lower() in line.lower()
+def get_accuracy_thresholds(model_args, seq_len, batch_size=1):
+    """Resolve token accuracy thresholds from the centralized model targets."""
+    centralized_targets = resolve_accuracy_targets(
+        model_name="qwen3-32b-galaxy",
+        sku=model_args.device_name,
+        batch_size=batch_size,
+        seq_len=seq_len,
     )
-    rows = [line.split("|")[1:] for line in target_section.split("\n") if correct_line(line)]
-    if not rows:
-        raise ValueError(f"Could not find accuracy data for {base_model_name} on {device_name} in {perf_file}")
+    if not centralized_targets or "top1" not in centralized_targets or "top5" not in centralized_targets:
+        raise ValueError(
+            "Could not find centralized accuracy targets for qwen3-32b-galaxy on "
+            f"{model_args.device_name} (batch_size={batch_size}, seq_len={seq_len})"
+        )
 
-    assert len(rows) == 1, f"Found multiple rows for {base_model_name} on {device_name} in {perf_file}"
-    row = rows[0]
-    top1_acc = float(row[2].strip())
-    top5_acc = float(row[3].strip())
-
-    return top1_acc - 0.5, top5_acc - 0.5
+    # Preserve previous behavior for integer-rounded CI checks.
+    return float(centralized_targets["top1"]) - 0.5, float(centralized_targets["top5"]) - 0.5
 
 
 def load_demo_targets(filename):
@@ -1231,14 +1220,15 @@ def test_qwen_demo_text(
         measurements["Top 1 Accuracy"] = total_top1_acc
         measurements["Top 5 Accuracy"] = total_top5_acc
 
-        min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args)
-        assert (
-            total_top1_acc >= min_top1_acc
-        ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-        assert (
-            total_top5_acc >= min_top5_acc
-        ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
-        logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
+        min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args, seq_len=len(token_acc.input_prompt))
+        verify_accuracy(
+            measurements={
+                "top1_token_accuracy": total_top1_acc,
+                "top5_token_accuracy": total_top5_acc,
+            },
+            expected_accuracy_metrics={"top1": min_top1_acc, "top5": min_top5_acc},
+        )
+        logger.info("Checks of top-1 and top-5 accuracy against centralized model targets passed")
 
     # Decode performance for some specific tokens
     tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
@@ -1319,4 +1309,38 @@ def test_qwen_demo_text(
             profiler,
             run_type=f"tg_qwen_text_demo_prefill_6U",
             ml_model_name="qwen32b-tg",
+        )
+
+    # The token-accuracy CI run uses a single batch, so publish the accuracy metrics separately (the
+    # perf save above only runs for repeat batches). Saving top1/top5 here lets the centralized
+    # "Validate perf and accuracy targets" CI step read them from the demo_accuracy run.
+    if is_ci_env and token_accuracy:
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_decode",
+            "top1_token_accuracy",
+            acc[0] * 100,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_decode",
+            "top5_token_accuracy",
+            acc[1] * 100,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_accuracy",
+            ml_model_name="qwen3-32b-galaxy",
+            ml_model_type="llm",
+            device_name=get_current_device_sku_name(),
+            num_layers=model_args.n_layers,
+            batch_size=batch_size,
+            input_sequence_length=len(token_acc.input_prompt),
+            output_sequence_length=len(token_acc.store_predicted_tokens),
         )
