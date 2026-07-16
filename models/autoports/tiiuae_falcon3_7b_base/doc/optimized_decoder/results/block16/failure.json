@@ -1,0 +1,9 @@
+{
+  "candidate": "prefill_block16",
+  "error": "Statically allocated circular buffers on core range [0-0 - 10-8] grow to 1729280 B which is beyond max L1 size of 1572864 B",
+  "l1_budget_bytes": 1572864,
+  "required_circular_buffer_bytes": 1729280,
+  "status": "rejected_hard_l1_limit",
+  "weights": "real_layer_14",
+  "inputs": "recorded_layer14_activations"
+}

@@ -1,0 +1,41 @@
+{
+  "batch": 32,
+  "inputs": "recorded",
+  "results": {
+    "dram_all_bfp4_48c": {
+      "decode_ms": 0.7684286078438163,
+      "decode_pcc": 0.9999983882601708,
+      "decode_query_pcc": 0.9910325274054042,
+      "key_cache_pcc": 0.9966165337119968,
+      "options": {
+        "decode_matmul_mode": "dram_sharded",
+        "dram_mlp_target_cores": 48,
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "all_bfp4_lofi",
+      "prefill_ms": 3.297863993793726,
+      "prefill_pcc": 0.9999818853727185,
+      "value_cache_pcc": 0.9954348181180206
+    },
+    "dram_all_bfp4_48c_unaligned_down": {
+      "decode_ms": 0.7732508890330791,
+      "decode_pcc": 0.9999983882601708,
+      "decode_query_pcc": 0.9910325274054042,
+      "key_cache_pcc": 0.9966165337119968,
+      "options": {
+        "align_dram_mlp_down_input": false,
+        "decode_matmul_mode": "dram_sharded",
+        "dram_mlp_target_cores": 48,
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "all_bfp4_lofi",
+      "prefill_ms": 3.2579582184553146,
+      "prefill_pcc": 0.9999818853727185,
+      "value_cache_pcc": 0.9954348181180206
+    }
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_14"
+}

@@ -1,0 +1,23 @@
+{
+  "batch": 1,
+  "results": {
+    "optimized_advisor_all_bfp4": {
+      "decode_ms": 0.6528488360345364,
+      "decode_pcc": 0.9999988224268405
+    },
+    "optimized_bf16": {
+      "decode_ms": 1.4022806379944086,
+      "decode_pcc": 0.9999999470742446
+    },
+    "optimized_dram_bfp8": {
+      "decode_ms": 1.0099068516865373,
+      "decode_pcc": 0.9999999380209572
+    },
+    "optimized_selected_dram_all_bfp4_48c": {
+      "decode_ms": 0.644046668894589,
+      "decode_pcc": 0.9999988119025173
+    }
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_14"
+}

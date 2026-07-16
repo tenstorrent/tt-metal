@@ -1,0 +1,50 @@
+{
+  "batch": 32,
+  "inputs": "recorded",
+  "results": {
+    "advisor_mlp_bfp4": {
+      "decode_ms": 0.7832396309822798,
+      "decode_pcc": 0.999999034524936,
+      "decode_query_pcc": 0.9999156597319777,
+      "key_cache_pcc": 0.99988097059191,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_lofi",
+      "prefill_ms": 3.301638178527355,
+      "prefill_pcc": 0.9999860274584622,
+      "value_cache_pcc": 0.9998598158543409
+    },
+    "selected_attention_lofi": {
+      "decode_ms": 0.7826866582036018,
+      "decode_pcc": 0.9999990609117135,
+      "decode_query_pcc": 0.9998472983770588,
+      "key_cache_pcc": 0.9998535451070376,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_attention_lofi",
+      "prefill_ms": 3.2588057219982147,
+      "prefill_pcc": 0.999985386634483,
+      "value_cache_pcc": 0.9998231012429635
+    },
+    "selected_mlp_hifi2": {
+      "decode_ms": 0.785516994073987,
+      "decode_pcc": 0.999999034524936,
+      "decode_query_pcc": 0.9999156597319777,
+      "key_cache_pcc": 0.99988097059191,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_hifi2",
+      "prefill_ms": 3.510946873575449,
+      "prefill_pcc": 0.9999860274584622,
+      "value_cache_pcc": 0.9998598158543409
+    }
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_14"
+}

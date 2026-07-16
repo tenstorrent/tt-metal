@@ -1,0 +1,50 @@
+{
+  "batch": 32,
+  "inputs": "random_sensitivity",
+  "results": {
+    "advisor_mlp_bfp4": {
+      "decode_ms": 0.7833974901586771,
+      "decode_pcc": 0.9924820573159578,
+      "decode_query_pcc": 0.9998949205816395,
+      "key_cache_pcc": 0.9998394135026499,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_lofi",
+      "prefill_ms": 3.279956988990307,
+      "prefill_pcc": 0.9927842310190168,
+      "value_cache_pcc": 0.9998433831903039
+    },
+    "selected_attention_lofi": {
+      "decode_ms": 0.7831089431419969,
+      "decode_pcc": 0.9906307798335259,
+      "decode_query_pcc": 0.999818031192217,
+      "key_cache_pcc": 0.9997806824946499,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_attention_lofi",
+      "prefill_ms": 3.346423152834177,
+      "prefill_pcc": 0.9907173946577378,
+      "value_cache_pcc": 0.9997843422319111
+    },
+    "selected_mlp_hifi2": {
+      "decode_ms": 0.7844414561986923,
+      "decode_pcc": 0.9924820573159578,
+      "decode_query_pcc": 0.9998949205816395,
+      "key_cache_pcc": 0.9998394135026499,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_hifi2",
+      "prefill_ms": 4.0230718441307545,
+      "prefill_pcc": 0.9927842310190168,
+      "value_cache_pcc": 0.9998433831903039
+    }
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_14"
+}

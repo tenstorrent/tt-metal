@@ -1,0 +1,92 @@
+{
+  "batch": 32,
+  "inputs": "recorded",
+  "results": {
+    "advisor_mlp_bfp4": {
+      "decode_ms": 0.7832579547539353,
+      "decode_pcc": 0.999999034524936,
+      "decode_query_pcc": 0.9999156597319777,
+      "key_cache_pcc": 0.99988097059191,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_lofi",
+      "prefill_ms": 3.2709892839193344,
+      "prefill_pcc": 0.9999860274584622,
+      "value_cache_pcc": 0.9998598158543409
+    },
+    "prefill_block1": {
+      "decode_ms": 0.7830576505511999,
+      "decode_pcc": 0.9999990993325362,
+      "decode_query_pcc": 0.9999156597319777,
+      "key_cache_pcc": 0.9998719026070503,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 1
+      },
+      "precision_policy": "mlp_bfp4_lofi",
+      "prefill_ms": 4.00383397936821,
+      "prefill_pcc": 0.9999853132249388,
+      "value_cache_pcc": 0.9998517619227837
+    },
+    "prefill_block2": {
+      "decode_ms": 0.7829749491065741,
+      "decode_pcc": 0.9999990978824651,
+      "decode_query_pcc": 0.9999156597319777,
+      "key_cache_pcc": 0.9998935183063121,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 2
+      },
+      "precision_policy": "mlp_bfp4_lofi",
+      "prefill_ms": 3.48492618650198,
+      "prefill_pcc": 0.9999860838809216,
+      "value_cache_pcc": 0.999867674199701
+    },
+    "prefill_block4": {
+      "decode_ms": 0.7825712440535426,
+      "decode_pcc": 0.9999990939133699,
+      "decode_query_pcc": 0.9999156597319777,
+      "key_cache_pcc": 0.9998937873617266,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 4
+      },
+      "precision_policy": "mlp_bfp4_lofi",
+      "prefill_ms": 3.4133391454815865,
+      "prefill_pcc": 0.9999862587933964,
+      "value_cache_pcc": 0.9998755748835666
+    },
+    "prefill_block8": {
+      "decode_ms": 0.7831357419490814,
+      "decode_pcc": 0.999999034524936,
+      "decode_query_pcc": 0.9999156597319777,
+      "key_cache_pcc": 0.99988097059191,
+      "options": {
+        "prefill_grid_x": 11,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_lofi",
+      "prefill_ms": 3.28645808622241,
+      "prefill_pcc": 0.9999860274584622,
+      "value_cache_pcc": 0.9998598158543409
+    },
+    "prefill_grid8": {
+      "decode_ms": 0.7829844485968351,
+      "decode_pcc": 0.999999034524936,
+      "decode_query_pcc": 0.9999156597319777,
+      "key_cache_pcc": 0.99988097059191,
+      "options": {
+        "prefill_grid_x": 8,
+        "prefill_in0_block_w": 8
+      },
+      "precision_policy": "mlp_bfp4_lofi",
+      "prefill_ms": 3.584246151149273,
+      "prefill_pcc": 0.9999860274584622,
+      "value_cache_pcc": 0.9998598158543409
+    }
+  },
+  "sequence_length": 17,
+  "weights": "real_layer_14"
+}

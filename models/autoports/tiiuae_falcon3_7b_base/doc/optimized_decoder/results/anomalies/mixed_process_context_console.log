@@ -1,0 +1,192 @@
+2026-07-16 05:05:16.073 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 13 items
+
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_optimized_runtime_is_implementation_owned_and_host_fallback_free PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_optimized_bf16_layout_prefill_decode_smoke 2026-07-16 05:05:17.756 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-16 05:05:17.756 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-16 05:05:17.756 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-16 05:05:17.756 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-16 05:05:17.759 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-16 05:05:17.759 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-16 05:05:17.762 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-16 05:05:17.873 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1}/[2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-16 05:05:17.873 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-16 05:05:17.873 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-16 05:05:17.873 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-16 05:05:17.874 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-16 05:05:17.935 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-16 05:05:18.012 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 05:05:18.012 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 05:05:18.012 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-16 05:05:18.012 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-16 05:05:18.012 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 05:05:18.012 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 05:05:18.012 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 05:05:18.012 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-16 05:05:18.013 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2342)
+2026-07-16 05:05:18.013 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2350)
+2026-07-16 05:05:18.017 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-16 05:05:18.017 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-16 05:05:18.031 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-16 05:05:18.071 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-16 05:05:18.648 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349993 GHz, device_time_at_sync=1365461027986 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-16 05:05:22.113 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - optimized bf16 prefill seq=17: PCC=0.99880755 target=0.99
+2026-07-16 05:05:22.161 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - optimized bf16 decode position=17: PCC=0.99961181 target=0.99
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_shard_advisor_candidate_prefill_decode_smoke 2026-07-16 05:05:27.706 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - shard-advisor bfp8 prefill seq=17: PCC=0.99863828 target=0.99
+2026-07-16 05:05:27.749 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - shard-advisor bfp8 decode position=17: PCC=0.99930066 target=0.99
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_selected_decoder_semantics_cache_and_repeated_decode 2026-07-16 05:05:30.939 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected prefill seq=17: PCC=0.99276784 target=0.99
+2026-07-16 05:05:31.370 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected prefill seq=31: PCC=0.99247048 target=0.99
+2026-07-16 05:05:32.521 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected prefill seq=128: PCC=0.99190377 target=0.99
+2026-07-16 05:05:32.679 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - synthetic prefill key cache: PCC=0.99983862 target=0.99
+2026-07-16 05:05:32.685 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - synthetic prefill value cache: PCC=0.99984311 target=0.99
+2026-07-16 05:05:32.692 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected decode query position=17: PCC=0.99989585 target=0.99
+2026-07-16 05:05:32.718 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected decode position=17: PCC=0.99241727 target=0.99
+2026-07-16 05:05:32.735 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - synthetic prefill key cache: PCC=0.99984035 target=0.99
+2026-07-16 05:05:32.741 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - synthetic prefill value cache: PCC=0.99984483 target=0.99
+2026-07-16 05:05:32.748 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected decode query position=18: PCC=0.99989558 target=0.99
+2026-07-16 05:05:32.769 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected decode position=18: PCC=0.99236339 target=0.99
+2026-07-16 05:05:32.786 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - synthetic prefill key cache: PCC=0.99984166 target=0.99
+2026-07-16 05:05:32.792 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - synthetic prefill value cache: PCC=0.99984619 target=0.99
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_selected_decoder_real_layer_prefill_decode 2026-07-16 05:05:35.896 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected real layer 14 prefill: PCC=0.99278423 target=0.99
+2026-07-16 05:05:35.919 | INFO     | models.autoports.tiiuae_falcon3_7b_base.tests.test_functional_decoder:_assert_pcc:158 - selected real layer 14 decode: PCC=0.99248206 target=0.99
+PASSED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_warmed_prefill_and_traced_decode_candidates[device_params0] 2026-07-16 05:05:36.316 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 05:05:36.316 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 05:05:36.316 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-16 05:05:36.352 | critical |          Always | TT_FATAL: context_id -1535932888 is invalid. (assert.hpp:104)
+2026-07-16 05:05:36.353 | critical |          Always | TT_FATAL: context_id -1535932888 is invalid. (assert.hpp:104)
+2026-07-16 05:05:36.354 | warning  |           Metal | Exception during device close in ScopedDevices destructor: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/context/metal_context.cpp:74: context_id.get() >= 0
+info:
+context_id -1535932888 is invalid.
+backtrace:
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa7cc30) [0x7a89a3e7cc30]
+ --- tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::SystemMemoryManager::issue_queue_reserve(unsigned int, unsigned char)
+ --- tt::tt_metal::HWCommandQueue::terminate()
+ --- tt::tt_metal::DispatchKernelInitializer::teardown(std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> >&)
+ --- tt::tt_metal::DeviceManager::close_devices(std::vector<tt::tt_metal::IDevice*, std::allocator<tt::tt_metal::IDevice*> > const&, bool)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::ScopedDevices::~ScopedDevices()
+ --- tt::tt_metal::distributed::MeshDeviceImpl::~MeshDeviceImpl()
+ --- tt::tt_metal::distributed::MeshDeviceImpl::~MeshDeviceImpl()
+ --- tt::tt_metal::distributed::MeshDevice::~MeshDevice()
+ --- tt::tt_metal::distributed::MeshDevice::~MeshDevice()
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x69a2af) [0x7a89a3a9a2af]
+ --- tt::tt_metal::distributed::MeshDeviceImpl::create_unit_meshes(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, std::vector<int, std::allocator<int> > const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::create_unit_mesh(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, int, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- tt::tt_metal::distributed::MeshDevice::create_unit_mesh(int, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x42042f) [0x7a89a6a2042f]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7a89a6915575]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1812dc3]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18121cd]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xba3) [0x18139e3]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a89ecf8d1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a89ecf8d28b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+. The device may be in an unrecoverable state and require a reset. (mesh_device.cpp:213)
+ERROR
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_batch1_traced_decode_candidates[device_params0] 2026-07-16 05:05:36.559 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-16 05:05:36.559 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-16 05:05:36.559 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-16 05:05:36.595 | critical |          Always | TT_FATAL: context_id -1535950824 is invalid. (assert.hpp:104)
+2026-07-16 05:05:36.596 | critical |          Always | TT_FATAL: context_id -1535950824 is invalid. (assert.hpp:104)
+2026-07-16 05:05:36.597 | warning  |           Metal | Exception during device close in ScopedDevices destructor: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/context/metal_context.cpp:74: context_id.get() >= 0
+info:
+context_id -1535950824 is invalid.
+backtrace:
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0xa7cc30) [0x7a89a3e7cc30]
+ --- tt::tt_metal::MetalContext::instance(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::SystemMemoryManager::issue_queue_reserve(unsigned int, unsigned char)
+ --- tt::tt_metal::HWCommandQueue::terminate()
+ --- tt::tt_metal::DispatchKernelInitializer::teardown(std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> >&)
+ --- tt::tt_metal::DeviceManager::close_devices(std::vector<tt::tt_metal::IDevice*, std::allocator<tt::tt_metal::IDevice*> > const&, bool)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::ScopedDevices::~ScopedDevices()
+ --- tt::tt_metal::distributed::MeshDeviceImpl::~MeshDeviceImpl()
+ --- tt::tt_metal::distributed::MeshDeviceImpl::~MeshDeviceImpl()
+ --- tt::tt_metal::distributed::MeshDevice::~MeshDevice()
+ --- tt::tt_metal::distributed::MeshDevice::~MeshDevice()
+ --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x69a2af) [0x7a89a3a9a2af]
+ --- tt::tt_metal::distributed::MeshDeviceImpl::create_unit_meshes(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, std::vector<int, std::allocator<int> > const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::create_unit_mesh(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, int, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- tt::tt_metal::distributed::MeshDevice::create_unit_mesh(int, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x42042f) [0x7a89a6a2042f]
+ --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7a89a6915575]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x3133) [0x1815f73]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1812dc3]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18121cd]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0xba3) [0x18139e3]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7a89ecf8d1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7a89ecf8d28b]
+ --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+. The device may be in an unrecoverable state and require a reset. (mesh_device.cpp:213)
+ERROR
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_decode_candidate_sweep[device_params0] SKIPPED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_dram_bfp4_weight_materialization SKIPPED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_dram_bfp4_matmul_localization SKIPPED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_dram_bfp4_stage_localization SKIPPED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_dram_bfp4_prefill_stage_localization SKIPPED
+models/autoports/tiiuae_falcon3_7b_base/tests/test_optimized_decoder.py::test_profile_selected_decoder[device_params0] SKIPPED
