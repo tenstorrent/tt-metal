@@ -140,3 +140,7 @@ The second fresh-context review at `/root/functional_decoder_stage_rereview` ind
 - Branch: `mvasiljevic/model/meta-llama-llama-3.1-70b-instruct`
 - Functional-decoder checkpoint: `0d020f9ea7221dc89ae32d205421e6bdf4bc5493`
 - Remote action: none; the checkpoint was not pushed.
+
+## Multichip provenance
+
+The retro-generated structured sharding record is `multichip_provenance.json`. It captures representative layer 39 on the compiler IR's `2x2` mesh (TP degree 4): residual/hidden shards use cluster axis 0, Q/K/V head and MLP-intermediate ownership use cluster axis 1, and KV caches own 4 of 8 heads per axis-1 coordinate. The complete collective set is two prefill RMS-stat `all_gather` operations and two decode `distributed_rms_norm` operations on axis 0, plus Q/K/V/gate/up `all_reduce` sums on axis 0 and O/down `all_reduce` sums on axis 1 in both paths. This was pure IR analysis; no device was opened or queried.

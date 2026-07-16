@@ -1,0 +1,1115 @@
+{
+  "schema_version": 1,
+  "hf_model": "meta-llama/Llama-3.1-70B-Instruct",
+  "source_ir": {
+    "artifact_root": "/home/mvasiljevic/qb2-irs/ttnn-mlir-ttnn_llama_3_1_70b_tp_qb2_bs32_isl128_1784014705663",
+    "graph_directory": "/home/mvasiljevic/qb2-irs/ttnn-mlir-ttnn_llama_3_1_70b_tp_qb2_bs32_isl128_1784014705663/ttnn_llama_3_1_70b_tp_qb2_bs32_isl128_1784014705663",
+    "prefill": "ttnn_llama_3_1_70b_tp_qb2_bs32_isl128_runbb45_g0_1784014705663.mlir",
+    "decode": "ttnn_llama_3_1_70b_tp_qb2_bs32_isl128_runbb45_g1_1784015812679.mlir"
+  },
+  "graph_classification": {
+    "prefill": {
+      "runtime": false,
+      "returns_logits": false,
+      "fill_cache_ops": 5120,
+      "paged_update_cache_ops": 0,
+      "decode_sdpa_ops": 0,
+      "batch": 32,
+      "sequence_length": 18
+    },
+    "decode": {
+      "runtime": false,
+      "returns_logits": false,
+      "fill_cache_ops": 0,
+      "paged_update_cache_ops": 160,
+      "decode_sdpa_ops": 80,
+      "batch": 32,
+      "sequence_length": 1
+    }
+  },
+  "mesh": {
+    "symbol": "mesh",
+    "shape": [
+      2,
+      2
+    ],
+    "axes": [
+      {
+        "name": "cluster_axis_0",
+        "index": 0,
+        "size": 2
+      },
+      {
+        "name": "cluster_axis_1",
+        "index": 1,
+        "size": 2
+      }
+    ],
+    "tp_degree": 4,
+    "axis_name_provenance": "The TTNN IR names the mesh symbol 'mesh' and represents its two axes numerically through cluster_axis=0 and cluster_axis=1. The stable names above preserve those exact numeric identities; no upstream Shardy axis names survive in these TTNN dumps."
+  },
+  "layer_index": 39,
+  "logical_model_dimensions": {
+    "hidden_size": 8192,
+    "num_attention_heads": 64,
+    "num_key_value_heads": 8,
+    "head_dim": 128,
+    "intermediate_size": 28672,
+    "cache_length": 128
+  },
+  "tensors": [
+    {
+      "name": "model.layers.39.input_layernorm.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "full_shape": [
+        8192
+      ],
+      "per_device_shape": [
+        4096
+      ],
+      "dtype": "bf16",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "hidden",
+          "mesh_dim": 0
+        }
+      ]
+    },
+    {
+      "name": "model.layers.39.self_attn.q_proj.weight",
+      "kind": "tensor_column+tensor_row",
+      "shard_axes": [
+        "out_features",
+        "in_features"
+      ],
+      "mesh_dims": [
+        1,
+        0
+      ],
+      "replicated_mesh_dims": [],
+      "full_shape": [
+        8192,
+        8192
+      ],
+      "per_device_shape": [
+        4096,
+        4096
+      ],
+      "source_dtype": "bf16",
+      "emitted_dtype": "bfp_bf8",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "out_features_q_heads",
+          "mesh_dim": 1
+        },
+        {
+          "tensor_axis": 1,
+          "axis_name": "in_features_hidden",
+          "mesh_dim": 0
+        }
+      ],
+      "emitted_form": "Const-eval transposes and fuses Q, K, V into a per-device [4096, 5120] matmul weight in Q-K-V order."
+    },
+    {
+      "name": "model.layers.39.self_attn.k_proj.weight",
+      "kind": "tensor_column+tensor_row",
+      "shard_axes": [
+        "out_features",
+        "in_features"
+      ],
+      "mesh_dims": [
+        1,
+        0
+      ],
+      "replicated_mesh_dims": [],
+      "full_shape": [
+        1024,
+        8192
+      ],
+      "per_device_shape": [
+        512,
+        4096
+      ],
+      "source_dtype": "bf16",
+      "emitted_dtype": "bfp_bf8",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "out_features_kv_heads",
+          "mesh_dim": 1
+        },
+        {
+          "tensor_axis": 1,
+          "axis_name": "in_features_hidden",
+          "mesh_dim": 0
+        }
+      ],
+      "kv_head_ownership": "4 of 8 KV heads per cluster_axis_1 coordinate; replicated after reduction across cluster_axis_0."
+    },
+    {
+      "name": "model.layers.39.self_attn.v_proj.weight",
+      "kind": "tensor_column+tensor_row",
+      "shard_axes": [
+        "out_features",
+        "in_features"
+      ],
+      "mesh_dims": [
+        1,
+        0
+      ],
+      "replicated_mesh_dims": [],
+      "full_shape": [
+        1024,
+        8192
+      ],
+      "per_device_shape": [
+        512,
+        4096
+      ],
+      "source_dtype": "bf16",
+      "emitted_dtype": "bfp_bf8",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "out_features_kv_heads",
+          "mesh_dim": 1
+        },
+        {
+          "tensor_axis": 1,
+          "axis_name": "in_features_hidden",
+          "mesh_dim": 0
+        }
+      ],
+      "kv_head_ownership": "4 of 8 KV heads per cluster_axis_1 coordinate; replicated after reduction across cluster_axis_0."
+    },
+    {
+      "name": "model.layers.39.self_attn.o_proj.weight",
+      "kind": "tensor_row+tensor_column",
+      "shard_axes": [
+        "out_features",
+        "in_features"
+      ],
+      "mesh_dims": [
+        0,
+        1
+      ],
+      "replicated_mesh_dims": [],
+      "full_shape": [
+        8192,
+        8192
+      ],
+      "per_device_shape": [
+        4096,
+        4096
+      ],
+      "source_dtype": "bf16",
+      "emitted_dtype": "bfp_bf8",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "out_features_hidden",
+          "mesh_dim": 0
+        },
+        {
+          "tensor_axis": 1,
+          "axis_name": "in_features_q_heads",
+          "mesh_dim": 1
+        }
+      ]
+    },
+    {
+      "name": "model.layers.39.post_attention_layernorm.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "full_shape": [
+        8192
+      ],
+      "per_device_shape": [
+        4096
+      ],
+      "dtype": "bf16",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "hidden",
+          "mesh_dim": 0
+        }
+      ]
+    },
+    {
+      "name": "model.layers.39.mlp.gate_proj.weight",
+      "kind": "tensor_column+tensor_row",
+      "shard_axes": [
+        "out_features",
+        "in_features"
+      ],
+      "mesh_dims": [
+        1,
+        0
+      ],
+      "replicated_mesh_dims": [],
+      "full_shape": [
+        28672,
+        8192
+      ],
+      "per_device_shape": [
+        14336,
+        4096
+      ],
+      "source_dtype": "bf16",
+      "emitted_dtype": "bfp_bf4",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "out_features_intermediate",
+          "mesh_dim": 1
+        },
+        {
+          "tensor_axis": 1,
+          "axis_name": "in_features_hidden",
+          "mesh_dim": 0
+        }
+      ]
+    },
+    {
+      "name": "model.layers.39.mlp.up_proj.weight",
+      "kind": "tensor_column+tensor_row",
+      "shard_axes": [
+        "out_features",
+        "in_features"
+      ],
+      "mesh_dims": [
+        1,
+        0
+      ],
+      "replicated_mesh_dims": [],
+      "full_shape": [
+        28672,
+        8192
+      ],
+      "per_device_shape": [
+        14336,
+        4096
+      ],
+      "source_dtype": "bf16",
+      "emitted_dtype": "bfp_bf4",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "out_features_intermediate",
+          "mesh_dim": 1
+        },
+        {
+          "tensor_axis": 1,
+          "axis_name": "in_features_hidden",
+          "mesh_dim": 0
+        }
+      ]
+    },
+    {
+      "name": "model.layers.39.mlp.down_proj.weight",
+      "kind": "tensor_row+tensor_column",
+      "shard_axes": [
+        "out_features",
+        "in_features"
+      ],
+      "mesh_dims": [
+        0,
+        1
+      ],
+      "replicated_mesh_dims": [],
+      "full_shape": [
+        8192,
+        28672
+      ],
+      "per_device_shape": [
+        4096,
+        14336
+      ],
+      "source_dtype": "bf16",
+      "emitted_dtype": "bfp_bf8",
+      "axis_mapping": [
+        {
+          "tensor_axis": 0,
+          "axis_name": "out_features_hidden",
+          "mesh_dim": 0
+        },
+        {
+          "tensor_axis": 1,
+          "axis_name": "in_features_intermediate",
+          "mesh_dim": 1
+        }
+      ]
+    },
+    {
+      "name": "model.rotary_emb.inv_freq",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "replicated_mesh_dims": [
+        0,
+        1
+      ],
+      "full_shape": [
+        64
+      ],
+      "per_device_shape": [
+        64
+      ],
+      "source_dtype": "bf16",
+      "emitted_shape": [
+        1,
+        1,
+        1,
+        64
+      ],
+      "emitted_dtype": "f32"
+    },
+    {
+      "name": "model.rotary_emb.cos",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "replicated_mesh_dims": [
+        0,
+        1
+      ],
+      "path_shapes": {
+        "prefill": [
+          1,
+          1,
+          18,
+          128
+        ],
+        "decode": [
+          1,
+          1,
+          1,
+          128
+        ]
+      },
+      "dtype": "bf16",
+      "derived_from": "model.rotary_emb.inv_freq and replicated position input"
+    },
+    {
+      "name": "model.rotary_emb.sin",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "replicated_mesh_dims": [
+        0,
+        1
+      ],
+      "path_shapes": {
+        "prefill": [
+          1,
+          1,
+          18,
+          128
+        ],
+        "decode": [
+          1,
+          1,
+          1,
+          128
+        ]
+      },
+      "dtype": "bf16",
+      "derived_from": "model.rotary_emb.inv_freq and replicated position input"
+    },
+    {
+      "name": "model.layers.39.self_attn.key_cache",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "full_shape": [
+        32,
+        8,
+        128,
+        128
+      ],
+      "per_device_shape": [
+        32,
+        4,
+        128,
+        128
+      ],
+      "dtype": "bfp_bf8",
+      "axis_mapping": [
+        {
+          "tensor_axis": 1,
+          "axis_name": "kv_heads",
+          "mesh_dim": 1
+        }
+      ],
+      "updated_by": [
+        "prefill ttnn.fill_cache",
+        "decode ttnn.paged_update_cache"
+      ]
+    },
+    {
+      "name": "model.layers.39.self_attn.value_cache",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "full_shape": [
+        32,
+        8,
+        128,
+        128
+      ],
+      "per_device_shape": [
+        32,
+        4,
+        128,
+        128
+      ],
+      "dtype": "bfp_bf8",
+      "axis_mapping": [
+        {
+          "tensor_axis": 1,
+          "axis_name": "kv_heads",
+          "mesh_dim": 1
+        }
+      ],
+      "updated_by": [
+        "prefill ttnn.fill_cache",
+        "decode ttnn.paged_update_cache"
+      ]
+    }
+  ],
+  "activations": [
+    {
+      "name": "layer_input_residual",
+      "boundary": "input",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "path_shapes": {
+        "prefill": {
+          "full": [
+            1,
+            1,
+            576,
+            8192
+          ],
+          "per_device": [
+            1,
+            1,
+            576,
+            4096
+          ]
+        },
+        "decode": {
+          "full": [
+            1,
+            1,
+            32,
+            8192
+          ],
+          "per_device": [
+            1,
+            1,
+            32,
+            4096
+          ]
+        }
+      }
+    },
+    {
+      "name": "input_layernorm_output",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "per_device_last_dim": 4096,
+      "full_last_dim": 8192
+    },
+    {
+      "name": "q_projection_post_all_reduce",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "attention_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "path_shapes": {
+        "prefill": {
+          "full": [
+            32,
+            18,
+            64,
+            128
+          ],
+          "per_device": [
+            32,
+            18,
+            32,
+            128
+          ]
+        },
+        "decode": {
+          "full": [
+            1,
+            32,
+            64,
+            128
+          ],
+          "per_device": [
+            1,
+            32,
+            32,
+            128
+          ]
+        }
+      }
+    },
+    {
+      "name": "k_projection_post_all_reduce",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "path_shapes": {
+        "prefill": {
+          "full": [
+            32,
+            18,
+            8,
+            128
+          ],
+          "per_device": [
+            32,
+            18,
+            4,
+            128
+          ]
+        },
+        "decode": {
+          "full": [
+            1,
+            32,
+            8,
+            128
+          ],
+          "per_device": [
+            1,
+            32,
+            4,
+            128
+          ]
+        }
+      }
+    },
+    {
+      "name": "v_projection_post_all_reduce",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "path_shapes": {
+        "prefill": {
+          "full": [
+            32,
+            18,
+            8,
+            128
+          ],
+          "per_device": [
+            32,
+            18,
+            4,
+            128
+          ]
+        },
+        "decode": {
+          "full": [
+            1,
+            32,
+            8,
+            128
+          ],
+          "per_device": [
+            1,
+            32,
+            4,
+            128
+          ]
+        }
+      }
+    },
+    {
+      "name": "attention_context_before_o_proj",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "attention_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "full_last_dim": 8192,
+      "per_device_last_dim": 4096
+    },
+    {
+      "name": "attention_output_post_all_reduce",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "full_last_dim": 8192,
+      "per_device_last_dim": 4096
+    },
+    {
+      "name": "post_attention_residual",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "full_last_dim": 8192,
+      "per_device_last_dim": 4096
+    },
+    {
+      "name": "post_attention_layernorm_output",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "full_last_dim": 8192,
+      "per_device_last_dim": 4096
+    },
+    {
+      "name": "gate_projection_post_all_reduce",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "intermediate"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "full_last_dim": 28672,
+      "per_device_last_dim": 14336
+    },
+    {
+      "name": "up_projection_post_all_reduce",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "intermediate"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "full_last_dim": 28672,
+      "per_device_last_dim": 14336
+    },
+    {
+      "name": "swiglu_intermediate",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "intermediate"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "replicated_mesh_dims": [
+        0
+      ],
+      "full_last_dim": 28672,
+      "per_device_last_dim": 14336
+    },
+    {
+      "name": "down_projection_post_all_reduce",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "full_last_dim": 8192,
+      "per_device_last_dim": 4096
+    },
+    {
+      "name": "layer_output_residual",
+      "boundary": "output",
+      "kind": "tensor_column",
+      "shard_axes": [
+        "hidden"
+      ],
+      "mesh_dims": [
+        0
+      ],
+      "replicated_mesh_dims": [
+        1
+      ],
+      "path_shapes": {
+        "prefill": {
+          "full": [
+            1,
+            1,
+            576,
+            8192
+          ],
+          "per_device": [
+            1,
+            1,
+            576,
+            4096
+          ]
+        },
+        "decode": {
+          "full": [
+            1,
+            1,
+            32,
+            8192
+          ],
+          "per_device": [
+            1,
+            1,
+            32,
+            4096
+          ]
+        }
+      }
+    }
+  ],
+  "collectives": [
+    {
+      "op": "ttnn.all_gather",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "prefill layer 39 input RMSNorm partial statistics",
+      "graph": "prefill",
+      "ir_op": "%11487",
+      "lowered_emit_op": "ttnn_all_gather_78",
+      "gather_dim": 3,
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "prefill layer 39 V projection input-feature partials",
+      "graph": "prefill",
+      "ir_op": "%11503",
+      "lowered_emit_op": "ttnn_all_reduce_273",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "prefill layer 39 K projection input-feature partials",
+      "graph": "prefill",
+      "ir_op": "%11634",
+      "lowered_emit_op": "ttnn_all_reduce_274",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "prefill layer 39 Q projection input-feature partials",
+      "graph": "prefill",
+      "ir_op": "%11736",
+      "lowered_emit_op": "ttnn_all_reduce_275",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "cluster_axis_1",
+      "where": "prefill layer 39 O projection attention-head partials",
+      "graph": "prefill",
+      "ir_op": "%11746",
+      "lowered_emit_op": "ttnn_all_reduce_276",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_gather",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "prefill layer 39 post-attention RMSNorm partial statistics",
+      "graph": "prefill",
+      "ir_op": "%11751",
+      "lowered_emit_op": "ttnn_all_gather_79",
+      "gather_dim": 3,
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "prefill layer 39 gate projection input-feature partials",
+      "graph": "prefill",
+      "ir_op": "%11764",
+      "lowered_emit_op": "ttnn_all_reduce_277",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "prefill layer 39 up projection input-feature partials",
+      "graph": "prefill",
+      "ir_op": "%11769",
+      "lowered_emit_op": "ttnn_all_reduce_278",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "cluster_axis_1",
+      "where": "prefill layer 39 down projection intermediate-feature partials",
+      "graph": "prefill",
+      "ir_op": "%11774",
+      "lowered_emit_op": "ttnn_all_reduce_279",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.distributed_rms_norm",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "decode layer 39 input RMSNorm reduction",
+      "graph": "decode",
+      "ir_op": "%2088",
+      "lowered_emit_op": "ttnn_fused_rms_minimal_78",
+      "communication": "fused distributed RMS reduction using a global semaphore"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "decode layer 39 V projection input-feature partials before value-cache append",
+      "graph": "decode",
+      "ir_op": "%2096",
+      "lowered_emit_op": "ttnn_all_reduce_273",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "decode layer 39 K projection input-feature partials before RoPE and key-cache append",
+      "graph": "decode",
+      "ir_op": "%2100",
+      "lowered_emit_op": "ttnn_all_reduce_274",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "decode layer 39 Q projection input-feature partials before RoPE",
+      "graph": "decode",
+      "ir_op": "%2106",
+      "lowered_emit_op": "ttnn_all_reduce_275",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "cluster_axis_1",
+      "where": "decode layer 39 O projection attention-head partials",
+      "graph": "decode",
+      "ir_op": "%2116",
+      "lowered_emit_op": "ttnn_all_reduce_276",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.distributed_rms_norm",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "decode layer 39 post-attention RMSNorm reduction",
+      "graph": "decode",
+      "ir_op": "%2121",
+      "lowered_emit_op": "ttnn_fused_rms_minimal_79",
+      "communication": "fused distributed RMS reduction using a global semaphore"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "decode layer 39 gate projection input-feature partials",
+      "graph": "decode",
+      "ir_op": "%2126",
+      "lowered_emit_op": "ttnn_all_reduce_277",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 0,
+      "mesh_axis": "cluster_axis_0",
+      "where": "decode layer 39 up projection input-feature partials",
+      "graph": "decode",
+      "ir_op": "%2131",
+      "lowered_emit_op": "ttnn_all_reduce_278",
+      "reduce_type": "sum",
+      "topology": "ring"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_axis": "cluster_axis_1",
+      "where": "decode layer 39 down projection intermediate-feature partials",
+      "graph": "decode",
+      "ir_op": "%2136",
+      "lowered_emit_op": "ttnn_all_reduce_279",
+      "reduce_type": "sum",
+      "topology": "ring"
+    }
+  ],
+  "collective_summary": {
+    "prefill": {
+      "ttnn.all_gather": 2,
+      "ttnn.all_reduce": 7
+    },
+    "decode": {
+      "ttnn.all_gather": 0,
+      "ttnn.all_reduce": 7,
+      "ttnn.distributed_rms_norm": 2
+    },
+    "not_present_in_layer": [
+      "ttnn.mesh_shard",
+      "ttnn.reduce_scatter",
+      "ttnn.all_to_all",
+      "ttnn.collective_permute"
+    ]
+  },
+  "absent_tensor_families": [
+    {
+      "family": "attention_and_mlp_biases",
+      "reason": "No layer-39 bias parameters appear in either selected graph; this Llama block uses bias-free projections."
+    },
+    {
+      "family": "q_norm_and_k_norm_weights",
+      "reason": "No QK-norm parameters or QK-norm operations appear in the layer-39 weight map or segmented graphs."
+    },
+    {
+      "family": "moe_router_and_expert_tensors",
+      "reason": "Layer 39 is the dense Llama SwiGLU block; neither selected graph contains router, expert, or all-to-all operations."
+    }
+  ],
+  "tp_collapse_cross_check": {
+    "captured_to_full": [
+      "hidden/residual: 4096 per device x cluster_axis_0 size 2 = 8192",
+      "Q heads: 32 per device x cluster_axis_1 size 2 = 64",
+      "KV heads: 4 per device x cluster_axis_1 size 2 = 8",
+      "intermediate: 14336 per device x cluster_axis_1 size 2 = 28672",
+      "KV cache: [32,4,128,128] per device x cluster_axis_1 size 2 = [32,8,128,128]"
+    ],
+    "functional_decoder": {
+      "path": "models/autoports/meta_llama_llama_3_1_70b_instruct/tt/functional_decoder.py",
+      "captured_mesh": [
+        2,
+        2
+      ],
+      "tp_degree": 4,
+      "collapse": "Loads full canonical HF weights, fuses full Q-K-V at setup, uses 64 Q heads and 8 KV heads, allocates the full 8-head cache, and omits all inter-device collectives on its required 1x1 mesh."
+    }
+  }
+}
