@@ -134,8 +134,15 @@ static-shape layout specialization out of the runtime":
   collective and matmul the full weight. Use the shard/collective structure only to *understand* which
   axis each projection is parallel over and to get the fusion/slice order right.
 - Determine the mesh/TP degree from the raw `.mlir` (mesh shape attribute, `all_reduce` cluster axis,
-  shard specs) and record it in the README + context contract as provenance, but keep it out of the
-  runtime forward. `head_dim`, head counts, and intermediate size come from `AutoConfig` at full
+  shard specs) and record it as provenance, but keep it out of the   runtime forward. Capture it
+  structured and complete, not just prose — write `doc/functional_decoder/multichip_provenance.json`
+  recording the mesh (axis names + sizes) and **every** sharded tensor and collective the layer's
+  graph contains — the tensors named here are examples, not a closed set: per tensor (weights, biases,
+  norm/QK-norm/RoPE tables, KV cache, and any MoE router/expert tensors) its parallel kind (tensor
+  column/row, sequence, expert, data, or replicated — possibly across more than one mesh axis on a
+  2D/ND mesh), its shard axis(es) + mesh dim(s); the boundary activation/residual shardings; and every
+  collective (`all_reduce`/`all_gather`/`reduce_scatter`/`all_to_all`/`mesh_shard`/`collective_permute`/…)
+  with its cluster/mesh axis. The `$multichip` stage reads this as a known-correct sharding prior. `head_dim`, head counts, and intermediate size come from `AutoConfig` at full
   (un-sharded) width — the per-device shapes in the graph are `full / tp_degree`; do not bake the
   per-device shape into the layer.
 
@@ -186,7 +193,8 @@ vs one HF decode step, and a static grep audit that the runtime forwards contain
 `.agents/scripts/check_context_contract.py` with `hf_advertised_context`, `current_supported_context`,
 and per-path status; `README.md` + `work_log.md` with the runtime contract, a PCC table, the
 **IR-graph provenance** (which `.mlir` files you translated, their classification signals, the TP
-degree/mesh you collapsed), and a Limitations section. Watcher / tracy / long-context / paged-KV
+degree/mesh you collapsed, captured structured in `doc/functional_decoder/multichip_provenance.json`
+for the `$multichip` stage), and a Limitations section. Watcher / tracy / long-context / paged-KV
 evidence is not required this pass but do not claim it.
 
 ## Reuse Pointers
