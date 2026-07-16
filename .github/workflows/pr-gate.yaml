@@ -182,7 +182,7 @@ jobs:
       - id: find-changes
         uses: ./.github/actions/find-changed-files
 
-  metalium-smoke-tests:
+  runtime-smoke-tests:
     needs: [asan-build, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
@@ -232,7 +232,7 @@ jobs:
       wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-artifact-name }}
       build-type: 'ASan'
 
-  metalium-examples:
+  runtime-examples:
     needs: [ asan-build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
@@ -461,9 +461,9 @@ jobs:
       }}
     needs:
       - asan-build
-      - metalium-smoke-tests
+      - runtime-smoke-tests
       - ttnn-smoke-tests
-      - metalium-examples
+      - runtime-examples
       - ttnn-examples
       - code-analysis
       - model-charts-sync
@@ -482,7 +482,7 @@ jobs:
           required-jobs: ""
           optional-jobs: >-
             asan-build, code-analysis,
-            metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, ttnn-examples,
+            runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,
             model-charts-sync, build-docs,
             llk-smoke-tests, llk-build-quasar
         env:
