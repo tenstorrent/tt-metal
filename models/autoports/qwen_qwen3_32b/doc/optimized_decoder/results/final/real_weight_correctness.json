@@ -1,0 +1,165 @@
+{
+  "activation_kind": "prompt-derived HF layer-32 input",
+  "activation_metadata": {
+    "artifact_path": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_32b/doc/optimized_decoder/activations/layer32_prompt_inputs.pt",
+    "artifact_sha256": "03cd6658c365761d09a30b9f1d357bbd8b6daec6420eec72e3d95c4fe691ad3e",
+    "batch_policy": "repeat one prompt-derived HF boundary activation across 32 decoder slots",
+    "captured_boundary": "input_to_model.layers.32",
+    "checkpoint_revision": "9216db5781bf21249d130ec9da846c4624c16137",
+    "config_sha256": "855a9d23f97f8771c84280619ae156c8f73c9cd64a5d53a059125b4aecab12d4",
+    "dtype": "torch.bfloat16",
+    "index_sha256": "bed42c6c55274bc08a1f616bceb3bcb84b3f02cb6584c573bd18c6519291ecd0",
+    "model": "Qwen/Qwen3-32B",
+    "reference_tokens_sha256": "d705dc91bde379e29c9cad92b94d4e1eb9dfeae2aa1256c5d47618625a6e7da5",
+    "shape": [
+      1,
+      21,
+      5120
+    ],
+    "used_shards": {
+      "model-00001-of-00017.safetensors": "52562b2ff97b61764260273e71bf5b4cf8a66f569399398f26dec0300fcf1316",
+      "model-00002-of-00017.safetensors": "e26764b2c6878e3fb7198895fa833ec62838d84a19665e6abfbae43c6daf02b3",
+      "model-00003-of-00017.safetensors": "6c5ba7bed9c52bc121e75cbe8a7be46936d0006cc80f42a6d5886ed40b4c2a62",
+      "model-00004-of-00017.safetensors": "f736f6ac4d8c30866107fb1185a05b3c3cfce9717720082f466fa44e691bcec8",
+      "model-00005-of-00017.safetensors": "a52ed375c083209c54d42ac510afeb1fbb5af4f193be2dc7d103f665a0f212d3",
+      "model-00006-of-00017.safetensors": "37fae28990b0e4a70228549d040c0393e87bee3820d59e58e47844974d8dff5b",
+      "model-00007-of-00017.safetensors": "37776006aeaba29eca8bc73b2b963fe3477e1c2e3f6a27cb9527be75b905e1bf",
+      "model-00008-of-00017.safetensors": "73e74e9129674fe330948005075d70ab4fa0b92b68fb220c5a693f9cea553730",
+      "model-00009-of-00017.safetensors": "a044b3602a01bd8ea62ff51badf9cc038ab1d73d97399480e6a55b4c86fa7fa6"
+    }
+  },
+  "batch": 32,
+  "decode_pcc": 0.9989900681899612,
+  "decode_position": 17,
+  "key_cache_pcc": 0.9988585641441664,
+  "optimization_config": {
+    "activation_dtype": "bfloat16",
+    "advisor_head_layouts": true,
+    "advisor_legal_layouts": null,
+    "attention_fidelity": "MathFidelity.LoFi",
+    "attention_weight_dtype": "DataType.BFLOAT4_B",
+    "decode_down_in0_block_w_limit": null,
+    "decode_down_target_cores": 32,
+    "decode_gate_in0_block_w_limit": null,
+    "decode_in0_block_w_limit": null,
+    "decode_matmul_mode": "dram_sharded",
+    "decode_mlp_target_cores": 40,
+    "decode_sdpa_exp_approx": false,
+    "decode_sdpa_grid": [
+      8,
+      8
+    ],
+    "decode_target_cores": 40,
+    "dram_sharded_program_config_contract": {
+      "output_subblock": "factory-derived; not exposed by this TTNN program-config class",
+      "user_fields": [
+        "in0_block_w",
+        "per_core_M",
+        "per_core_N",
+        "fused_activation"
+      ]
+    },
+    "kv_cache_dtype": "DataType.BFLOAT8_B",
+    "mlp_down_weight_dtype": "DataType.BFLOAT4_B",
+    "mlp_fidelity": "MathFidelity.LoFi",
+    "mlp_gate_up_weight_dtype": "DataType.BFLOAT4_B",
+    "precision_policy": "all_bfp4_lofi",
+    "prefill_in0_block_w": 10,
+    "roles": {
+      "down": {
+        "grid": {
+          "cores": 32,
+          "x": 8,
+          "y": 4
+        },
+        "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":1}, {\"start\":{\"x\":0,\"y\":2},\"end\":{\"x\":9,\"y\":2}], shape=[32, 160], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "program_config": {
+          "class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+          "in0_block_w": 25,
+          "per_core_M": 1,
+          "per_core_N": 5,
+          "repr": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=25,per_core_M=1,per_core_N=5,fused_activation=std::nullopt)"
+        },
+        "weight_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[25600, 640], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[25600, 640],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0)"
+      },
+      "gate_up": {
+        "grid": {
+          "cores": 40,
+          "x": 10,
+          "y": 4
+        },
+        "input_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":9,\"y\":3}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":2}, {\"start\":{\"x\":0,\"y\":3},\"end\":{\"x\":6,\"y\":3}], shape=[32, 640], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "program_config": {
+          "class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+          "in0_block_w": 4,
+          "per_core_M": 1,
+          "per_core_N": 20,
+          "repr": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4,per_core_M=1,per_core_N=20,fused_activation=std::nullopt)"
+        }
+      },
+      "o": {
+        "grid": {
+          "cores": 32,
+          "x": 8,
+          "y": 4
+        },
+        "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":1}, {\"start\":{\"x\":0,\"y\":2},\"end\":{\"x\":9,\"y\":2}], shape=[32, 160], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "program_config": {
+          "class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+          "in0_block_w": 8,
+          "per_core_M": 1,
+          "per_core_N": 5,
+          "repr": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=8,per_core_M=1,per_core_N=5,fused_activation=std::nullopt)"
+        },
+        "weight_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[8192, 640], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[8192, 640],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0)"
+      },
+      "qkv": {
+        "grid": {
+          "cores": 40,
+          "x": 10,
+          "y": 4
+        },
+        "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":10,\"y\":2}, {\"start\":{\"x\":0,\"y\":3},\"end\":{\"x\":6,\"y\":3}], shape=[32, 256], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)",
+        "program_config": {
+          "class": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig",
+          "in0_block_w": 4,
+          "per_core_M": 1,
+          "per_core_N": 8,
+          "repr": "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4,per_core_M=1,per_core_N=8,fused_activation=std::nullopt)"
+        },
+        "weight_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::DRAM,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}], shape=[5120, 1280], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={\"shard_shape\":[5120, 1280],\"grid\":[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":7,\"y\":0}}],\"orientation\":\"ShardOrientation::ROW_MAJOR\",\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"},created_with_nd_shard_spec=0)"
+      },
+      "residual": {
+        "grid": {
+          "cores": 40,
+          "x": 10,
+          "y": 4
+        },
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":9,\"y\":3}], shape=[32, 128], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
+      }
+    },
+    "use_packed_mlp": false
+  },
+  "prefill_pcc": 0.9999969777290055,
+  "sequence_length": 17,
+  "source_sha256": {
+    "models/autoports/qwen_qwen3_32b/doc/context_contract.json": "c003fad34c835d9a2ac33b96749d45fc7c62614296af6e9d9fae44e636c56b7c",
+    "models/autoports/qwen_qwen3_32b/tests/test_optimized_decoder.py": "e249c009d8a8addc70da4c5bd7ff70cae14b55e7299f1b70a013bfff67cbe936",
+    "models/autoports/qwen_qwen3_32b/tt/optimized_decoder.py": "b136bfe65d8453a991b8870c591c8601d39ccad391111629408d2e73b25197b4"
+  },
+  "value_cache_pcc": 0.9944051895467568,
+  "watcher": {
+    "enabled": "10",
+    "fault_patterns": [
+      "error",
+      "assert",
+      "hang",
+      "stuck",
+      "timeout"
+    ],
+    "log_path": "/home/mvasiljevic/tt-metal/generated/watcher/watcher.log",
+    "log_sha256": "6fa510d51c3a19c96237d26555e0cdb9a39c9dda3ad52576cf3d313c6d2f4395",
+    "matches": []
+  }
+}

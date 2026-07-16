@@ -1,0 +1,17 @@
+{
+  "batch": 32,
+  "decoder": "optimized",
+  "output_shape": [
+    1,
+    32,
+    8192,
+    5120
+  ],
+  "result": "pass",
+  "sequence_length": 8192,
+  "source_sha256": {
+    "models/autoports/qwen_qwen3_32b/doc/context_contract.json": "be98e99638c8dfdf5ce6c740c2a9698936deb2f90947f3fd78901d99182d6fd7",
+    "models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py": "3246ee7a1ccd4b4c4706354404ffa83beddb522625ceecf020f6817deffdbdbe",
+    "models/autoports/qwen_qwen3_32b/tt/optimized_decoder.py": "9a21a33ee5521f98f141e5510bc8427e7c0c4c540e7f0c3e75a3dd406ea88711"
+  }
+}

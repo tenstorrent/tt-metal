@@ -1,0 +1,69 @@
+{
+  "activation_kind": "prompt-derived HF layer-32 input",
+  "activation_metadata": {
+    "artifact_path": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_32b/doc/optimized_decoder/activations/layer32_prompt_inputs.pt",
+    "artifact_sha256": "03cd6658c365761d09a30b9f1d357bbd8b6daec6420eec72e3d95c4fe691ad3e",
+    "batch_policy": "repeat one prompt-derived HF boundary activation across 32 decoder slots",
+    "captured_boundary": "input_to_model.layers.32",
+    "checkpoint_revision": "9216db5781bf21249d130ec9da846c4624c16137",
+    "config_sha256": "855a9d23f97f8771c84280619ae156c8f73c9cd64a5d53a059125b4aecab12d4",
+    "dtype": "torch.bfloat16",
+    "index_sha256": "bed42c6c55274bc08a1f616bceb3bcb84b3f02cb6584c573bd18c6519291ecd0",
+    "model": "Qwen/Qwen3-32B",
+    "reference_tokens_sha256": "d705dc91bde379e29c9cad92b94d4e1eb9dfeae2aa1256c5d47618625a6e7da5",
+    "shape": [
+      1,
+      21,
+      5120
+    ],
+    "used_shards": {
+      "model-00001-of-00017.safetensors": "52562b2ff97b61764260273e71bf5b4cf8a66f569399398f26dec0300fcf1316",
+      "model-00002-of-00017.safetensors": "e26764b2c6878e3fb7198895fa833ec62838d84a19665e6abfbae43c6daf02b3",
+      "model-00003-of-00017.safetensors": "6c5ba7bed9c52bc121e75cbe8a7be46936d0006cc80f42a6d5886ed40b4c2a62",
+      "model-00004-of-00017.safetensors": "f736f6ac4d8c30866107fb1185a05b3c3cfce9717720082f466fa44e691bcec8",
+      "model-00005-of-00017.safetensors": "a52ed375c083209c54d42ac510afeb1fbb5af4f193be2dc7d103f665a0f212d3",
+      "model-00006-of-00017.safetensors": "37fae28990b0e4a70228549d040c0393e87bee3820d59e58e47844974d8dff5b",
+      "model-00007-of-00017.safetensors": "37776006aeaba29eca8bc73b2b963fe3477e1c2e3f6a27cb9527be75b905e1bf",
+      "model-00008-of-00017.safetensors": "73e74e9129674fe330948005075d70ab4fa0b92b68fb220c5a693f9cea553730",
+      "model-00009-of-00017.safetensors": "a044b3602a01bd8ea62ff51badf9cc038ab1d73d97399480e6a55b4c86fa7fa6"
+    }
+  },
+  "decode_pccs": [
+    0.9990026920769163,
+    0.9990696583383915,
+    0.9995161866600231,
+    0.9992638504460613
+  ],
+  "key_history_pccs": [
+    0.9988748931212086,
+    0.9988858126083767,
+    0.9988842448327423,
+    0.9988981076122309
+  ],
+  "outputs_changed_across_positions": true,
+  "position_buffer_payload_bytes": 16640,
+  "positions": [
+    17,
+    18,
+    19,
+    20
+  ],
+  "source_sha256": {
+    "models/autoports/qwen_qwen3_32b/doc/context_contract.json": "be98e99638c8dfdf5ce6c740c2a9698936deb2f90947f3fd78901d99182d6fd7",
+    "models/autoports/qwen_qwen3_32b/tests/test_optimized_decoder.py": "0b675d8f2ae6694025ebbb56634b9028f635b2292759ef47b6703fd90f31cbb5",
+    "models/autoports/qwen_qwen3_32b/tt/optimized_decoder.py": "9a21a33ee5521f98f141e5510bc8427e7c0c4c540e7f0c3e75a3dd406ea88711"
+  },
+  "stable_buffer_addresses": [
+    75624064,
+    77590272,
+    77592320,
+    77590144,
+    77594368
+  ],
+  "value_history_pccs": [
+    0.9944066854040927,
+    0.9944233301237511,
+    0.994402072220411,
+    0.9943905318311421
+  ]
+}

@@ -1,32 +1,44 @@
 {
   "model": "Qwen/Qwen3-32B",
   "hf_advertised_context": 40960,
-  "current_supported_context": 4096,
+  "current_supported_context": 8192,
   "limiting_reason": "device_dram",
-  "notes": "This correctness-first functional implementation proves the largest feasible batch-32 prefill length on one Blackhole device. The reduction from the HF-advertised context is a measured device-DRAM limit, not a convenience cap; downstream optimization or multichip stages may extend it.",
+  "notes": "The optimized decoder raises the tested batch-32 single-device prefill floor from 4096 to 8192 tokens by using BFP8 KV caches and bounded internal projection/MLP chunks. The value is an evidence-backed supported floor, not a claim that 8193 is the exact boundary. A 16384-token probe reaches a hard device-DRAM allocation failure. The reduction from the HF-advertised context is a physical single-device capacity limit, not a public alignment or convenience cap; multichip work may extend it.",
   "capacity_evidence": {
     "hardware": "Blackhole p300c, one device (1x1 mesh), eight DRAM banks",
-    "workload": "one translated layer, batch 32, BF16/TILE/DRAM functional defaults",
+    "workload": "one optimized dense decoder layer, batch 32, BF16 activations, BFP4 projection weights, BFP8 KV caches, internal chunks of at most 640 rows",
     "largest_passing_probe": {
-      "sequence_length": 4096,
+      "sequence_length": 8192,
       "result": "pass",
-      "output_shape": [1, 32, 4096, 5120],
-      "log": "doc/functional_decoder/capacity_4096_pass.log"
+      "output_shape": [1, 32, 8192, 5120],
+      "command_record": "doc/optimized_decoder/work_log.md"
     },
-    "adjacent_failing_probe": {
-      "sequence_length": 4097,
-      "padded_sequence_length": 4128,
+    "tested_failing_probe": {
+      "sequence_length": 16384,
+      "padded_sequence_length": 16384,
       "result": "expected_out_of_memory",
-      "requested_allocation_bytes": 1352663040,
-      "largest_free_block_bytes": 98279424,
-      "log": "doc/functional_decoder/capacity_4097_oom.log"
+      "requested_allocation_bytes": 10737418240,
+      "largest_free_block_bytes": 29524352,
+      "command_record": "doc/optimized_decoder/work_log.md"
     },
     "advertised_context_impossibility": {
-      "single_mlp_activation_bytes": 67108864000,
+      "packed_qkv_output_bytes": 26843545600,
       "single_hidden_tensor_bytes": 13421772800,
-      "two_kv_cache_tensor_bytes": 5368709120,
+      "two_bfp8_kv_cache_tensor_bytes": 2684354560,
       "device_dram_bytes": 34178731008,
-      "note": "The BF16 gate or up activation alone at batch 32 and sequence 40960 exceeds total device DRAM."
+      "note": "At batch 32 and sequence 40960, the required BF16 packed-QKV output plus one BF16 hidden tensor already total 40265318400 bytes, exceeding all device DRAM before KV caches, weights, attention output, allocator fragmentation, or other live tensors."
+    },
+    "decode_trace_state": {
+      "position_slots_per_layer": 1,
+      "position_buffer_payload_bytes_per_slot": 16640,
+      "components": "two 32x128 BF16 RoPE tiles (8192 bytes each), 32 uint32 RoPE lookup indices (128 bytes), and 32 int32 cache-update indices (128 bytes)",
+      "lifecycle": "fixed-address index buffers refreshed by host-to-device writes, then embedding lands in preallocated RoPE outputs before replay; no device allocation and no per-position retention while a trace is live",
+      "stack_note": "The position inputs are model-independent and may be shared by a future layer stack; even if separately owned by all 64 layers, payload is bounded at 1064960 bytes.",
+      "row_major_lookup_tables": {
+        "bytes_per_layer": 4194304,
+        "bytes_for_64_separate_layers": 268435456,
+        "note": "Two bounded 8192x128 BF16 lookup tables enable allocation-free traced position refresh. They are model-independent and shareable by a future layer stack; the single-layer capacity probes include one copy."
+      }
     }
   },
   "paths": {
@@ -41,7 +53,7 @@
         "runtime_graph": false
       },
       "emitted_shape": [1, 32, 17, 5120],
-      "tested_sequence_lengths": [4, 17, 128, 1024, 2048, 4096]
+      "tested_sequence_lengths": [4, 17, 31, 128, 1024, 2048, 4096, 4097, 8192]
     },
     "decode": {
       "status": "translated_and_tested",
@@ -54,7 +66,7 @@
         "runtime_graph": false
       },
       "emitted_shape": [1, 32, 1, 5120],
-      "tested_positions": [17]
+      "tested_positions": [17, 31, 32, 33, 34]
     }
   },
   "translation": {
@@ -68,6 +80,14 @@
       "qkv_o_gate_up_down_weights": "BFLOAT8_B after load-time fusion or transposition",
       "normalization_weights": "BFLOAT16"
     },
-    "functional_precision_policy": "All weights and activations use BFLOAT16 for this correctness-first stage; source BFLOAT8_B weight casts are intentionally not retained."
+    "functional_precision_policy": "All weights and activations use BFLOAT16 for the correctness-first stage; source BFLOAT8_B weight casts are intentionally not retained.",
+    "optimized_precision_policy": {
+      "activations_norms_residuals": "BFLOAT16",
+      "attention_weights": "BFLOAT4_B with LoFi",
+      "mlp_weights": "BFLOAT4_B with LoFi",
+      "kv_cache": "BFLOAT8_B",
+      "decode_weights": "DRAM width-sharded across banks",
+      "decode_residual": "L1 width-sharded across 40 cores; down projection uses 32 cores"
+    }
   }
 }

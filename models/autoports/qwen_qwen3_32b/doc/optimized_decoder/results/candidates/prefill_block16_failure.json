@@ -1,0 +1,20 @@
+{
+  "adaptation": {
+    "candidate": "prefill_in0_block_w=10",
+    "evidence": "results/candidates/prefill_block8_vs_10_precise.json",
+    "reason": "largest tested legal block width below 16; compared over 25 warmed iterations",
+    "result": "pass_and_selected"
+  },
+  "candidate": "prefill_in0_block_w=16",
+  "error": {
+    "kind": "l1_out_of_memory",
+    "maximum_bytes": 1572864,
+    "requested_bytes": 2044672
+  },
+  "result": "failed_then_adapted",
+  "source_sha256": {
+    "models/autoports/qwen_qwen3_32b/doc/context_contract.json": "be98e99638c8dfdf5ce6c740c2a9698936deb2f90947f3fd78901d99182d6fd7",
+    "models/autoports/qwen_qwen3_32b/tests/test_optimized_decoder.py": "097e43f8ad19ade950bac144f9b3897df61dd6dbf0001188f18e950a5699f42c",
+    "models/autoports/qwen_qwen3_32b/tt/optimized_decoder.py": "9a21a33ee5521f98f141e5510bc8427e7c0c4c540e7f0c3e75a3dd406ea88711"
+  }
+}

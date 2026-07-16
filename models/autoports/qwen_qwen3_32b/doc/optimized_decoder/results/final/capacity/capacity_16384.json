@@ -1,0 +1,12 @@
+{
+  "batch": 32,
+  "decoder": "optimized",
+  "error": "Out of Memory: Not enough space to allocate 10737418240 B DRAM buffer across 8 banks, where each bank needs to store 1342177280 B, but bank size is 4272341376 B (allocated: 4241653760 B, free: 30687616 B, largest free block: 29524352 B)",
+  "result": "expected_out_of_memory",
+  "sequence_length": 16384,
+  "source_sha256": {
+    "models/autoports/qwen_qwen3_32b/doc/context_contract.json": "c003fad34c835d9a2ac33b96749d45fc7c62614296af6e9d9fae44e636c56b7c",
+    "models/autoports/qwen_qwen3_32b/tests/test_context_capacity.py": "3246ee7a1ccd4b4c4706354404ffa83beddb522625ceecf020f6817deffdbdbe",
+    "models/autoports/qwen_qwen3_32b/tt/optimized_decoder.py": "b136bfe65d8453a991b8870c591c8601d39ccad391111629408d2e73b25197b4"
+  }
+}

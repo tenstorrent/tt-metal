@@ -1,0 +1,12 @@
+{
+  "batch": 32,
+  "results": {
+    "optimized_mlp_bfp4_lofi_40c": {
+      "decode_ms": 1.3668780401349068,
+      "decode_pcc": 0.9919230956140437,
+      "prefill_ms": 5.635480862110853,
+      "prefill_pcc": 0.9920677022701044
+    }
+  },
+  "sequence_length": 17
+}

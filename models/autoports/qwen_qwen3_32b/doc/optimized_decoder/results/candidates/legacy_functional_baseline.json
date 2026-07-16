@@ -1,0 +1,12 @@
+{
+  "batch": 32,
+  "results": {
+    "functional_bf16": {
+      "decode_ms": 82.1024383418262,
+      "decode_pcc": 0.9985761292169285,
+      "prefill_ms": 83.30992888659239,
+      "prefill_pcc": 0.9988867237773101
+    }
+  },
+  "sequence_length": 17
+}
