@@ -1,0 +1,36 @@
+{
+  "prompt_token_count": 149,
+  "alignment_remainders": {
+    "tile_32": 21,
+    "page_64": 21,
+    "trace_128": 21
+  },
+  "status_code": 200,
+  "response": {
+    "id": "cmpl-ab1a541f3ccc6ae0",
+    "object": "text_completion",
+    "created": 1784166321,
+    "model": "/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3",
+    "choices": [
+      {
+        "index": 0,
+        "text": "\n",
+        "logprobs": null,
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null,
+        "prompt_logprobs": null,
+        "prompt_token_ids": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "prompt_tokens": 149,
+      "total_tokens": 150,
+      "completion_tokens": 1,
+      "prompt_tokens_details": null
+    },
+    "kv_transfer_params": null
+  }
+}

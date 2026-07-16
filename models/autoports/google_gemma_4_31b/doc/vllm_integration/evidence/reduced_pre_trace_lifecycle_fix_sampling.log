@@ -1,0 +1,291 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal/vllm
+configfile: pyproject.toml
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+collecting ... collected 4 items
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch FAILED [ 25%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy PASSED [ 50%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab FAILED [ 75%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p PASSED [100%]
+
+=================================== FAILURES ===================================
+__________________ TestBatchIsolation.test_mixed_params_batch __________________
+
+self = <tests.tt.test_request_isolation.TestBatchIsolation object at 0x7f734ff0c100>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7f73500d1a50>
+tt_model_name = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+max_batch_size = 32
+
+    def test_mixed_params_batch(self, tt_server, tt_model_name, max_batch_size):
+        """
+        Batch where each request has completely different parameters.
+        """
+        configs = [
+            # Greedy
+            RequestConfig(prompt="Count: ", max_tokens=5, temperature=0),
+            # High temp with seed
+            RequestConfig(
+                prompt="Random: ", max_tokens=5, temperature=2.0, top_k=100, seed=42
+            ),
+            # With repetition penalty
+            RequestConfig(
+                prompt="test test. Say: ",
+                max_tokens=5,
+                temperature=0.5,
+                repetition_penalty=3.0,
+                seed=42,
+            ),
+            # With presence penalty
+            RequestConfig(
+                prompt="List: ",
+                max_tokens=10,
+                temperature=0.5,
+                presence_penalty=2.0,
+                seed=42,
+            ),
+            # top_k=1 (should be greedy-like)
+            RequestConfig(
+                prompt="Word: ", max_tokens=3, temperature=2.0, top_k=1, seed=99
+            ),
+            # Low temp
+            RequestConfig(prompt="Letter: ", max_tokens=3, temperature=0.01, seed=42),
+            # High temp low top_k
+            RequestConfig(
+                prompt="Number: ", max_tokens=3, temperature=2.0, top_k=5, seed=42
+            ),
+            # With frequency penalty
+            RequestConfig(
+                prompt="a a a. Next: ",
+                max_tokens=5,
+                temperature=0.5,
+                frequency_penalty=2.0,
+                seed=42,
+            ),
+            # Combined penalties
+            RequestConfig(
+                prompt="All: ",
+                max_tokens=8,
+                temperature=0.5,
+                repetition_penalty=1.5,
+                presence_penalty=1.0,
+                frequency_penalty=1.0,
+                seed=6,
+            ),
+            # Top-p variation
+            RequestConfig(
+                prompt="TopP: ", max_tokens=8, temperature=1.0, top_p=0.5, seed=7
+            ),
+        ][:max_batch_size]
+
+        # Run twice, with random batch order on second run
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # Shuffle configs and results1 together for the second run
+        indices = list(range(len(configs)))
+        random.shuffle(indices)
+        configs = [configs[i] for i in indices]
+        results1 = [results1[i] for i in indices]
+
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+        # Each deterministic config should reproduce
+        for i, (r1, r2) in enumerate(zip(results1, results2)):
+            if configs[i].temperature == 0 or configs[i].seed is not None:
+>               assert r1 == r2, (
+                    f"Request {i} should be deterministic/reproducible.\n"
+                    f"Config:"
+                    f"temp={configs[i].temperature},"
+                    f"seed={configs[i].seed}\n"
+                    f"Run 1: {r1!r}\n"
+                    f"Run 2: {r2!r}"
+                )
+E               AssertionError: Request 2 should be deterministic/reproducible.
+E                 Config:temp=2.0,seed=99
+E                 Run 1: '</sup>”。órica'
+E                 Run 2: ' pptd baseHP-//'
+E               assert '</sup>”。órica' == ' pptd baseHP-//'
+E
+E                 -  pptd baseHP-//
+E                 + </sup>”。órica
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_request_isolation.py:88: AssertionError
+__________________ TestLogprobs.test_chat_logprobs_all_vocab ___________________
+
+self = <tests.tt.test_logprobs.TestLogprobs object at 0x7f734ff40a60>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7f73500d1a50>
+tt_model_name = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+
+    def test_chat_logprobs_all_vocab(self, tt_server, tt_model_name):
+        """Test chat completions with top_logprobs=-1 (all vocab logprobs).
+
+        The legacy completions API rejects logprobs=-1, so this must go
+        through the chat API where top_logprobs=-1 is allowed.
+        Servers with a low max_logprobs cap will reject this request;
+        the test is skipped in that case.
+        """
+        configs = [
+            RequestConfig(
+                prompt="Say hello.",
+                max_tokens=5,
+                logprobs=-1,
+            )
+        ]
+        try:
+>           results = run_concurrent_batch(
+                tt_server,
+                tt_model_name,
+                configs,
+                use_chat=True,
+                return_full_response=True,
+            )
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py:100:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:159: in run_concurrent_batch
+    return asyncio.run(_run())
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/asyncio/runners.py:44: in run
+    return loop.run_until_complete(main)
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py:649: in run_until_complete
+    return future.result()
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:149: in _run
+    return await send_batch_concurrent(
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:127: in send_batch_concurrent
+    return await asyncio.gather(*tasks)
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:89: in send_chat_request
+    response = await async_client.chat.completions.create(
+/opt/venv/lib/python3.10/site-packages/openai/resources/chat/completions/completions.py:2877: in create
+    return await self._post(
+/opt/venv/lib/python3.10/site-packages/openai/_base_client.py:1931: in post
+    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <openai.AsyncOpenAI object at 0x7f734c2c9a20>
+cast_to = <class 'openai.types.chat.chat_completion.ChatCompletion'>
+options = FinalRequestOptions(method='post', url='/chat/completions', params={}, headers=NOT_GIVEN, max_retries=NOT_GIVEN, timeo...ens': 5, 'presence_penalty': 0.0, 'seed': None, 'temperature': 1.0, 'top_logprobs': -1, 'top_p': 1.0}, extra_json=None)
+
+    async def request(
+        self,
+        cast_to: Type[ResponseT],
+        options: FinalRequestOptions,
+        *,
+        stream: bool = False,
+        stream_cls: type[_AsyncStreamT] | None = None,
+    ) -> ResponseT | _AsyncStreamT:
+        if self._platform is None:
+            # `get_platform` can make blocking IO calls so we
+            # execute it earlier while we are in an async context
+            self._platform = await asyncify(get_platform)()
+
+        cast_to = self._maybe_override_cast_to(cast_to, options)
+
+        # create a copy of the options we were given so that if the
+        # options are mutated later & we then retry, the retries are
+        # given the original options
+        input_options = model_copy(options)
+        if input_options.idempotency_key is None and input_options.method.lower() != "get":
+            # ensure the idempotency key is reused between requests
+            input_options.idempotency_key = self._idempotency_key()
+
+        response: httpx.Response | None = None
+        max_retries = input_options.get_max_retries(self.max_retries)
+
+        retries_taken = 0
+        for retries_taken in range(max_retries + 1):
+            options = model_copy(input_options)
+            options = await self._prepare_options(options)
+
+            remaining_retries = max_retries - retries_taken
+            request = self._build_request(options, retries_taken=retries_taken)
+            await self._prepare_request(request)
+
+            kwargs: HttpxSendArgs = {}
+            if self.custom_auth is not None:
+                kwargs["auth"] = self.custom_auth
+
+            if options.follow_redirects is not None:
+                kwargs["follow_redirects"] = options.follow_redirects
+
+            log.debug("Sending HTTP Request: %s %s", request.method, request.url)
+
+            response = None
+            try:
+                response = await self._send_request(
+                    request,
+                    stream=stream or self._should_stream_response_body(request=request),
+                    **kwargs,
+                )
+            except httpx.TimeoutException as err:
+                log.debug("Encountered httpx.TimeoutException", exc_info=True)
+
+                if remaining_retries > 0:
+                    await self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=None,
+                    )
+                    continue
+
+                log.debug("Raising timeout error")
+                raise APITimeoutError(request=request) from err
+            except OpenAIError as err:
+                # Propagate OpenAIErrors as-is, without retrying or wrapping in APIConnectionError
+                raise err
+            except Exception as err:
+                log.debug("Encountered Exception", exc_info=True)
+
+                if remaining_retries > 0:
+                    await self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=None,
+                    )
+                    continue
+
+                log.debug("Raising connection error")
+                raise APIConnectionError(request=request) from err
+
+            log.debug(
+                'HTTP Response: %s %s "%i %s" %s',
+                request.method,
+                request.url,
+                response.status_code,
+                response.reason_phrase,
+                response.headers,
+            )
+            log.debug("request_id: %s", response.headers.get("x-request-id"))
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:  # thrown on 4xx and 5xx status code
+                log.debug("Encountered httpx.HTTPStatusError", exc_info=True)
+
+                if remaining_retries > 0 and self._should_retry(err.response):
+                    await err.response.aclose()
+                    await self._sleep_for_retry(
+                        retries_taken=retries_taken,
+                        max_retries=max_retries,
+                        options=input_options,
+                        response=response,
+                    )
+                    continue
+
+                # If the response is streamed then we need to explicitly read the response
+                # to completion before attempting to access the response text.
+                if not err.response.is_closed:
+                    await err.response.aread()
+
+                log.debug("Re-raising status error")
+>               raise self._make_status_error_from_response(err.response) from None
+E               openai.BadRequestError: Error code: 400 - {'error': {'message': 'As of transformers v4.44, default chat template is no longer allowed, so you must provide a chat template if the tokenizer does not define one.', 'type': 'BadRequestError', 'param': None, 'code': 400}}
+
+/opt/venv/lib/python3.10/site-packages/openai/_base_client.py:1716: BadRequestError
+=========================== short test summary info ============================
+FAILED vllm/plugins/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+FAILED vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+========================= 2 failed, 2 passed in 18.03s =========================

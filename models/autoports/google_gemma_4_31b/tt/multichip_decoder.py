@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 from models.autoports.google_gemma_4_31b.tt.functional_decoder import (
+    FULL_ATTN_Q_CHUNK,
     MLP_CHUNK,
     FunctionalDecoder,
     _validate_target_config,
@@ -32,11 +33,11 @@ from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_MAX_SEQ,
+    PREFILL_SLIDING_CHUNK_SIZE,
     apply_per_head_norm,
     apply_qkv_projection,
     apply_rope,
     apply_rope_decode_peruser,
-    chunked_prefill_sdpa_sliding,
     effective_block_size,
     prefill_sdpa_program_config,
     split_qkv_heads_decode,
@@ -915,7 +916,10 @@ class MultichipDecoder(OptimizedDecoder):
         cache_position = current_position_cache if current_position_cache is not None else current_position
         k_cache, v_cache = kv_cache
         block_size = effective_block_size(k_cache, config.head_dim, local_kv_heads)
-        if config.cache_position_modulo is None:
+        cache_geometry_matches = (
+            int(k_cache.padded_shape[1]) == local_kv_heads and int(k_cache.padded_shape[-1]) == config.head_dim
+        )
+        if config.cache_position_modulo is None and cache_geometry_matches:
             device_grid = self.mesh_device.compute_with_storage_grid_size()
             grid_x = min(batch_size, device_grid.x)
             while batch_size % grid_x:
@@ -969,8 +973,9 @@ class MultichipDecoder(OptimizedDecoder):
                 page_table=page_table,
                 block_size=block_size,
                 num_kv_heads=local_kv_heads,
-                cache_position_modulo=config.cache_position_modulo,
             )
+            if config.cache_position_modulo is not None:
+                update_args["cache_position_modulo"] = config.cache_position_modulo
             ttnn.experimental.paged_update_cache(k_cache, k, **update_args)
             ttnn.experimental.paged_update_cache(v_cache, v, **update_args)
         k.deallocate(True)
@@ -1095,16 +1100,29 @@ class MultichipDecoder(OptimizedDecoder):
         self,
         hidden_states,
         *,
+        source_hidden_states=None,
         rope_mats,
         page_table,
         kv_cache,
         user_id,
         valid_seq_len,
+        residual=None,
     ):
         """TP-local prefill with the optimized BFP8 cache-fill contract."""
         attention = self.layer.self_attn
         config, weights = attention.config, attention.weights
         qkv = apply_qkv_projection(hidden_states, weights)
+        # Prefill never reads the normalized attention input after QKV
+        # projection.  Releasing this prompt-sized DRAM buffer here is
+        # required before head concat and the output all-reduce allocate their
+        # prompt-sized results.  The caller retains the separate residual.
+        hidden_states.deallocate(True)
+        if source_hidden_states is not None and source_hidden_states.is_allocated():
+            # A batched reshape is normally an alias, but non-tile-aligned
+            # per-user lengths can materialize a distinct tiled tensor.  Free
+            # that original normalization result as well when it still owns
+            # storage.
+            source_hidden_states.deallocate(True)
         q, k, v = split_qkv_heads_prefill(
             qkv,
             config,
@@ -1152,10 +1170,40 @@ class MultichipDecoder(OptimizedDecoder):
                 v_fill.deallocate(True)
 
         seq_len = q.shape[-2]
+        concatenated = None
         if seq_len > PREFILL_SDPA_MAX_SEQ and config.is_sliding:
-            sdpa = chunked_prefill_sdpa_sliding(q, k, v, config.sliding_window, config.head_dim, scale=1.0)
+            # Sliding attention must retain the prompt K/V sources, but its
+            # bounded SDPA chunks can still be written directly into the final
+            # TP-local head layout.  Avoid materializing both the accumulated
+            # [heads, seq, dim] result and a full-sequence head permutation.
+            concatenated = self._chunked_sliding_attention_concatenated(
+                q,
+                k,
+                v,
+                config.sliding_window,
+                config.head_dim,
+            )
+            q = None
+            k = None
+            v = None
+            sdpa = None
         elif seq_len > PREFILL_SDPA_MAX_SEQ:
-            sdpa = self._chunked_full_attention(q, k_cache, v_cache, page_table, user_id, config.head_dim)
+            # Full attention consumes K/V through the cache after the fill.
+            # Release the prompt-sized source tensors, then stream each bounded
+            # SDPA result directly into its final head-concatenated output.
+            # This avoids both the accumulated-output concat and a giant final
+            # permute that requires a late contiguous DRAM allocation.
+            k.deallocate(True)
+            v.deallocate(True)
+            k = None
+            v = None
+            read_k_cache = self._paged_cache_read_view(k_cache, local_kv_heads, config.head_dim)
+            read_v_cache = self._paged_cache_read_view(v_cache, local_kv_heads, config.head_dim)
+            concatenated = self._chunked_full_attention_concatenated(
+                q, read_k_cache, read_v_cache, page_table, user_id, config.head_dim
+            )
+            q = None
+            sdpa = None
         else:
             sdpa = ttnn.transformer.scaled_dot_product_attention(
                 q,
@@ -1166,24 +1214,306 @@ class MultichipDecoder(OptimizedDecoder):
                 sliding_window_size=config.sliding_window if config.is_sliding else None,
                 program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
             )
+        if q is not None:
+            q.deallocate(True)
+        if k is not None:
+            k.deallocate(True)
+        if v is not None:
+            v.deallocate(True)
+        local_heads = config.num_attention_heads // TP_SIZE
+        if concatenated is None:
+            concatenated = self._concatenate_heads(sdpa, num_heads=local_heads, head_dim=config.head_dim)
+            sdpa.deallocate(True)
+        if seq_len > PREFILL_SDPA_MAX_SEQ:
+            output = self._chunked_attention_output_projection(concatenated, weights.o_proj, residual=residual)
+            concatenated.deallocate(True)
+            return output, residual is not None
+        partial = ttnn.linear(concatenated, weights.o_proj)
+        concatenated.deallocate(True)
+        return (
+            _tp_allreduce(
+                partial,
+                self.mesh_config,
+                self.ccl_manager,
+                # BFP8 async communication wins at M=1, while prefill pays for the
+                # explicit casts and is faster with its native BF16 reduction.
+                communication_dtype=self.prefill_communication_dtype,
+                use_persistent_async=False,
+                persistent_role="attention_o_prefill",
+            ),
+            False,
+        )
+
+    @staticmethod
+    def _paged_cache_read_view(cache, num_kv_heads, head_dim):
+        """Return a zero-copy HMA layer view for paged attention reads.
+
+        vLLM may share one physical hybrid-cache tensor between sliding and
+        global layers with different heads, block size, and head dimension.
+        Paged fill writes raw tiles using the layer's effective block geometry;
+        chunked SDPA must read those same tiles through that geometry rather
+        than the allocation owner's shape.
+        """
+        block_size = effective_block_size(cache, head_dim, num_kv_heads)
+        desired_shape = (cache.padded_shape[0], num_kv_heads, block_size, head_dim)
+        if tuple(cache.padded_shape) == desired_shape:
+            return cache
+        if cache.dtype != ttnn.bfloat8_b:
+            raise ValueError(f"HMA cache read views require BFP8 storage, got {cache.dtype}")
+        if cache.layout != ttnn.TILE_LAYOUT:
+            raise ValueError(f"HMA cache read views require TILE layout, got {cache.layout}")
+        if block_size % ttnn.TILE_SIZE or head_dim % ttnn.TILE_SIZE:
+            raise ValueError(f"HMA cache read view is not tile aligned: block_size={block_size}, head_dim={head_dim}")
+        if math.prod(desired_shape) != math.prod(cache.padded_shape):
+            raise ValueError(
+                f"HMA cache view volume mismatch: allocation={tuple(cache.padded_shape)}, desired={desired_shape}"
+            )
+        # Every dimension is tile aligned and the paged-fill kernel stores the
+        # layer view as a raw contiguous tile stream.  experimental.view only
+        # changes the tensor spec; it neither copies nor changes vLLM ownership.
+        return ttnn.experimental.view(cache, desired_shape)
+
+    def _chunked_attention_output_projection(self, concatenated, output_weight, *, residual=None):
+        """Project and reduce long attention outputs without a giant CCL temporary.
+
+        The inter-device all-reduce needs a reduce-scatter workspace larger
+        than its logical BF16 result.  Running it on the complete prompt can
+        therefore fail even after SDPA/head concatenation has been streamed.
+        Reduce bounded chunks and write their sharded TILE results directly
+        into one final TILE tensor so slice-write does not perform a repeated
+        full-output TILE/row-major conversion.
+        """
+        seq_len, hidden = concatenated.shape[-2], output_weight.shape[-1]
+        output = ttnn.allocate_tensor_on_device(
+            shape=(1, 1, seq_len, hidden),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        width_cores = 7
+        if hidden % (width_cores * ttnn.TILE_SIZE):
+            raise ValueError(f"attention output width {hidden} is not tile-divisible over {width_cores} cores")
+        for start in range(0, seq_len, MLP_CHUNK):
+            end = min(start + MLP_CHUNK, seq_len)
+            chunk_rows = end - start
+            chunk = ttnn.slice(concatenated, [0, 0, start, 0], [1, 1, end, concatenated.shape[-1]])
+            partial = ttnn.linear(chunk, output_weight)
+            chunk.deallocate(True)
+            reduced = _tp_allreduce(
+                partial,
+                self.mesh_config,
+                self.ccl_manager,
+                communication_dtype=self.prefill_communication_dtype,
+                use_persistent_async=False,
+                persistent_role="attention_o_prefill_chunk",
+            )
+            chunk_output = reduced
+            if residual is not None:
+                # RMSNorm and the residual add are independent for every row.
+                # Fuse them into this bounded chunk so long prefill never has
+                # three full hidden-width prompt tensors alive together.
+                normalized = self.layer.post_attention_layernorm.forward(reduced)
+                reduced.deallocate(True)
+                residual_chunk = ttnn.slice(residual, [0, 0, start, 0], [1, 1, end, hidden])
+                chunk_output = ttnn.add(residual_chunk, normalized)
+                residual_chunk.deallocate(True)
+                normalized.deallocate(True)
+            padded_chunk_rows = math.ceil(chunk_rows / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            tile_rows = padded_chunk_rows // ttnn.TILE_SIZE
+            height_cores = math.gcd(tile_rows, 8)
+            shard_memory = ttnn.create_sharded_memory_config(
+                shape=(padded_chunk_rows // height_cores, hidden // width_cores),
+                core_grid=ttnn.CoreGrid(x=width_cores, y=height_cores),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            write_chunk = ttnn.to_memory_config(chunk_output, shard_memory)
+            chunk_output.deallocate(True)
+            ttnn.experimental.slice_write(
+                write_chunk,
+                output,
+                [0, 0, start, 0],
+                [1, 1, end, hidden],
+                [1, 1, 1, 1],
+            )
+            write_chunk.deallocate(True)
+        return output
+
+    def _chunked_full_attention_concatenated(self, q, k_cache, v_cache, page_table, user_id, head_dim):
+        """Stream full-attention chunks into the final TP-local head layout."""
+        num_heads, seq_len = q.shape[1], q.shape[2]
+        user_page_table = page_table
+        owns_page_table = False
+        if page_table.shape[0] > 1:
+            user_page_table = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
+            owns_page_table = True
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        output_rm = ttnn.allocate_tensor_on_device(
+            shape=(1, 1, seq_len, num_heads * head_dim),
+            dtype=q.dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for start in range(0, seq_len, FULL_ATTN_Q_CHUNK):
+            end = min(start + FULL_ATTN_Q_CHUNK, seq_len)
+            q_chunk = ttnn.slice(q, [0, 0, start, 0], [1, num_heads, end, head_dim])
+            sdpa_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_chunk,
+                k_cache,
+                v_cache,
+                user_page_table,
+                chunk_start_idx=start,
+                scale=1.0,
+                program_config=program_config,
+            )
+            q_chunk.deallocate(True)
+            transposed = ttnn.permute(sdpa_chunk, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            sdpa_chunk.deallocate(True)
+            chunk = ttnn.reshape(transposed, [1, 1, end - start, num_heads * head_dim])
+            chunk_rm = ttnn.to_layout(chunk, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.experimental.slice_write(
+                chunk_rm,
+                output_rm,
+                [0, 0, start, 0],
+                [1, 1, end, num_heads * head_dim],
+                [1, 1, 1, 1],
+            )
+            chunk_rm.deallocate(True)
+            chunk.deallocate(True)
+            if transposed.is_allocated():
+                transposed.deallocate(True)
+        if owns_page_table:
+            user_page_table.deallocate(True)
+        q.deallocate(True)
+        output = ttnn.to_layout(output_rm, ttnn.TILE_LAYOUT)
+        output_rm.deallocate(True)
+        return output
+
+    def _chunked_sliding_attention_concatenated(self, q, k, v, sliding_window, head_dim):
+        """Stream sliding-attention chunks into the final TP-local head layout."""
+        num_heads, num_kv_heads, seq_len = q.shape[1], k.shape[1], q.shape[2]
+        history = math.ceil(sliding_window / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        output_rm = ttnn.allocate_tensor_on_device(
+            shape=(1, 1, seq_len, num_heads * head_dim),
+            dtype=q.dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for start in range(0, seq_len, PREFILL_SLIDING_CHUNK_SIZE):
+            end = min(start + PREFILL_SLIDING_CHUNK_SIZE, seq_len)
+            slice_start = max(0, start - history)
+            q_slice = ttnn.slice(q, [0, 0, slice_start, 0], [1, num_heads, end, head_dim])
+            k_slice = ttnn.slice(k, [0, 0, slice_start, 0], [1, num_kv_heads, end, head_dim])
+            v_slice = ttnn.slice(v, [0, 0, slice_start, 0], [1, num_kv_heads, end, head_dim])
+            sdpa_chunk = ttnn.transformer.scaled_dot_product_attention(
+                q_slice,
+                k_slice,
+                v_slice,
+                is_causal=True,
+                scale=1.0,
+                sliding_window_size=sliding_window,
+            )
+            q_slice.deallocate(True)
+            k_slice.deallocate(True)
+            v_slice.deallocate(True)
+            drop = start - slice_start
+            if drop:
+                padded_chunk = sdpa_chunk
+                sdpa_chunk = ttnn.slice(
+                    padded_chunk,
+                    [0, 0, drop, 0],
+                    [1, num_heads, end - slice_start, head_dim],
+                )
+                padded_chunk.deallocate(True)
+            transposed = ttnn.permute(sdpa_chunk, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            sdpa_chunk.deallocate(True)
+            chunk = ttnn.reshape(transposed, [1, 1, end - start, num_heads * head_dim])
+            chunk_rm = ttnn.to_layout(chunk, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.experimental.slice_write(
+                chunk_rm,
+                output_rm,
+                [0, 0, start, 0],
+                [1, 1, end, num_heads * head_dim],
+                [1, 1, 1, 1],
+            )
+            chunk_rm.deallocate(True)
+            chunk.deallocate(True)
+            if transposed.is_allocated():
+                transposed.deallocate(True)
         q.deallocate(True)
         k.deallocate(True)
         v.deallocate(True)
-        local_heads = config.num_attention_heads // TP_SIZE
-        concatenated = self._concatenate_heads(sdpa, num_heads=local_heads, head_dim=config.head_dim)
-        sdpa.deallocate(True)
-        partial = ttnn.linear(concatenated, weights.o_proj)
-        concatenated.deallocate(True)
-        return _tp_allreduce(
-            partial,
-            self.mesh_config,
-            self.ccl_manager,
-            # BFP8 async communication wins at M=1, while prefill pays for the
-            # explicit casts and is faster with its native BF16 reduction.
-            communication_dtype=self.prefill_communication_dtype,
-            use_persistent_async=False,
-            persistent_role="attention_o_prefill",
+        output = ttnn.to_layout(output_rm, ttnn.TILE_LAYOUT)
+        output_rm.deallocate(True)
+        return output
+
+    def _chunked_mlp_residual(self, residual):
+        """Stream the complete long-prefill MLP residual branch by row chunks."""
+        seq_len, hidden = residual.shape[-2], residual.shape[-1]
+        output = ttnn.allocate_tensor_on_device(
+            shape=(1, 1, seq_len, hidden),
+            dtype=self.residual_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        width_cores = 7
+        if hidden % (width_cores * ttnn.TILE_SIZE):
+            raise ValueError(f"MLP residual width {hidden} is not tile-divisible over {width_cores} cores")
+        for start in range(0, seq_len, MLP_CHUNK):
+            end = min(start + MLP_CHUNK, seq_len)
+            chunk_rows = end - start
+            residual_chunk = ttnn.slice(residual, [0, 0, start, 0], [1, 1, end, hidden])
+            normed = self.layer.pre_feedforward_layernorm.forward(residual_chunk)
+            residual_chunk.deallocate(True)
+            mlp_output = self.layer.shared_mlp(normed)
+            normed.deallocate(True)
+            post_norm = self.layer.post_feedforward_layernorm.forward(mlp_output)
+            mlp_output.deallocate(True)
+            residual_chunk = ttnn.slice(residual, [0, 0, start, 0], [1, 1, end, hidden])
+            combined = ttnn.add(residual_chunk, post_norm)
+            residual_chunk.deallocate(True)
+            post_norm.deallocate(True)
+            if combined.dtype != self.residual_dtype:
+                converted = ttnn.typecast(combined, self.residual_dtype)
+                combined.deallocate(True)
+                combined = converted
+            if self.layer.layer_scalar != 1.0:
+                scaled = ttnn.mul(combined, self.layer.layer_scalar)
+                combined.deallocate(True)
+                combined = scaled
+
+            padded_chunk_rows = math.ceil(chunk_rows / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            tile_rows = padded_chunk_rows // ttnn.TILE_SIZE
+            height_cores = math.gcd(tile_rows, 8)
+            shard_memory = ttnn.create_sharded_memory_config(
+                shape=(padded_chunk_rows // height_cores, hidden // width_cores),
+                core_grid=ttnn.CoreGrid(x=width_cores, y=height_cores),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            write_chunk = ttnn.to_memory_config(combined, shard_memory)
+            combined.deallocate(True)
+            ttnn.experimental.slice_write(
+                write_chunk,
+                output,
+                [0, 0, start, 0],
+                [1, 1, end, hidden],
+                [1, 1, 1, 1],
+            )
+            write_chunk.deallocate(True)
+        residual.deallocate(True)
+        return output
 
     def _forward_device(
         self,
@@ -1217,21 +1547,32 @@ class MultichipDecoder(OptimizedDecoder):
                 current_position_cache=current_position_cache,
                 batch_size=batch_size,
             )
+            attention_residual_fused = False
         else:
-            attn_output = self._prefill_attention_tp(
+            attn_output, attention_residual_fused = self._prefill_attention_tp(
                 attn_input,
+                source_hidden_states=normed,
                 rope_mats=rope_mats,
                 page_table=page_table,
                 kv_cache=kv_cache,
                 user_id=user_id,
                 valid_seq_len=valid_seq_len,
+                residual=residual if batch_size == 1 else None,
             )
-        normed.deallocate(True)
-        attn_output = self.layer.post_attention_layernorm.forward(attn_output)
-        if not is_decode and batch_size > 1:
-            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3], -1])
-        hidden_states = ttnn.add(residual, attn_output)
-        attn_output.deallocate(True)
+        if is_decode:
+            normed.deallocate(True)
+        if attention_residual_fused:
+            residual.deallocate(True)
+            hidden_states = attn_output
+        else:
+            attn_output = self.layer.post_attention_layernorm.forward(attn_output)
+            if not is_decode and batch_size > 1:
+                residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3], -1])
+            hidden_states = ttnn.add(residual, attn_output)
+            attn_output.deallocate(True)
+
+        if not is_decode and batch_size == 1 and hidden_states.shape[-2] > MLP_CHUNK:
+            return self._chunked_mlp_residual(hidden_states)
 
         residual = hidden_states
         normed = self.layer.pre_feedforward_layernorm.forward(hidden_states)
@@ -1242,12 +1583,15 @@ class MultichipDecoder(OptimizedDecoder):
                 chunk = ttnn.slice(normed, [0, 0, start, 0], [1, 1, end, normed.shape[-1]])
                 outputs.append(self.layer.shared_mlp(chunk))
                 chunk.deallocate(True)
+            # Every chunk has consumed the full normalization result.  Release
+            # it before concat allocates another prompt-sized BF16 tensor.
+            normed.deallocate(True)
             mlp_output = ttnn.concat(outputs, dim=2)
             for output in outputs:
                 output.deallocate(True)
         else:
             mlp_output = self.layer.shared_mlp(normed)
-        normed.deallocate(True)
+            normed.deallocate(True)
         hidden_states = self.layer.post_feedforward_layernorm.forward(mlp_output)
         mlp_output.deallocate(True)
         combined = ttnn.add(residual, hidden_states)

@@ -1,0 +1,11 @@
+Launching vLLM server for /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 on P150x4
+  cmd: /opt/venv/bin/python -m vllm.entrypoints.openai.api_server --model /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --block_size 64 --max_num_seqs 32 --port 8000 --max_model_len 113280 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 268435456, "fabric_config": "FABRIC_1D", "trace_mode": "all", "enable_model_warmup": true}}' --async-scheduling --chat-template /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/vllm_integration/chat_template.jinja
+  log: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/server.log
+Waiting up to 2400s for server to become ready...
+  Server ready after ~1490s
+  Non-aligned prompt check PASS (149 tokens): /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/non_aligned_prompt_check.json
+  Logit determinism PASS (token_id:108, exact top-20): /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/logit_determinism.json
+  Max-context serving PASS (113279 input + 1 output): /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/max_context_prompt_check.json
+
+Server ready at http://localhost:8000
+Server is running. Press Ctrl-C (or send SIGTERM) to stop.

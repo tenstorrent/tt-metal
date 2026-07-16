@@ -1,0 +1,302 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/datatype_sweep/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 42,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1429
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/datatype_sweep/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 53,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3396
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/datatype_sweep/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 55,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1091
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/datatype_sweep/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3529
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/datatype_sweep/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 47,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3191
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/datatype_sweep/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 39,
+      "adjacent_duplication": 0.0263,
+      "trigram_loop_fraction": 0.0769
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 40,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.15
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 53,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3396
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 55,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1091
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3529
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2941
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 39,
+      "adjacent_duplication": 0.0263,
+      "trigram_loop_fraction": 0.0769
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/candidate_fibonacci_block2/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 39,
+      "adjacent_duplication": 0.0263,
+      "trigram_loop_fraction": 0.0769
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 40,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.15
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 53,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3396
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 55,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1091
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3529
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2941
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 39,
+      "adjacent_duplication": 0.0263,
+      "trigram_loop_fraction": 0.0769
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative_block3_rejected/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 42,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1429
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative_block3_rejected/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 53,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3396
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative_block3_rejected/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 55,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1091
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative_block3_rejected/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 51,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3529
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative_block3_rejected/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 47,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3191
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/doc/optimized_full_model/qualitative_block3_rejected/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 53,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.283
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 158,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1709
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[0] sampled_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 194,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0464
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 209,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3301
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 196,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0306
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 102,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0294
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[2] sampled_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 234,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1282
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 215,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.293
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[3] sampled_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 198,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3485
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 189,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2698
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[4] sampled_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 142,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2113
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 68,
+      "adjacent_duplication": 0.0149,
+      "trigram_loop_fraction": 0.0441
+    },
+    {
+      "artifact": "models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 64,
+      "adjacent_duplication": 0.0159,
+      "trigram_loop_fraction": 0.0469
+    }
+  ],
+  "exit_code": 0
+}

@@ -1,0 +1,248 @@
+{
+  "prompt": "Write a haiku about machine learning.",
+  "standalone_baseline": {
+    "artifact": "doc/datatype_sweep/qualitative/vllm_qualitative_outputs.json",
+    "selected_tt_first_token_id": 108,
+    "selected_tt_first_token": "token_id:108"
+  },
+  "run_to_run": [
+    {
+      "index": 0,
+      "text": "\n\n",
+      "logprobs": {
+        "text_offset": [
+          0
+        ],
+        "token_logprobs": [
+          -0.7133015990257263
+        ],
+        "tokens": [
+          "token_id:108"
+        ],
+        "top_logprobs": [
+          {
+            "token_id:108": -0.7133015990257263,
+            "token_id:107": -2.213301658630371,
+            "token_id:236743": -4.088301658630371,
+            "token_id:562": -4.088301658630371,
+            "token_id:6890": -4.213301658630371,
+            "token_id:669": -4.213301658630371,
+            "token_id:109": -4.338301658630371,
+            "token_id:1599": -4.463301658630371,
+            "token_id:4298": -4.588301658630371,
+            "token_id:5180": -4.713301658630371,
+            "token_id:1174": -4.713301658630371,
+            "token_id:568": -4.713301658630371,
+            "token_id:12213": -4.713301658630371,
+            "token_id:1030": -4.713301658630371,
+            "token_id:15642": -4.713301658630371,
+            "token_id:9996": -4.838301658630371,
+            "token_id:564": -4.963301658630371,
+            "token_id:42085": -4.963301658630371,
+            "token_id:5715": -4.963301658630371,
+            "token_id:2199": -5.213301658630371
+          }
+        ]
+      },
+      "finish_reason": "length",
+      "stop_reason": null,
+      "token_ids": null,
+      "prompt_logprobs": null,
+      "prompt_token_ids": null
+    },
+    {
+      "index": 0,
+      "text": "\n\n",
+      "logprobs": {
+        "text_offset": [
+          0
+        ],
+        "token_logprobs": [
+          -0.7133015990257263
+        ],
+        "tokens": [
+          "token_id:108"
+        ],
+        "top_logprobs": [
+          {
+            "token_id:108": -0.7133015990257263,
+            "token_id:107": -2.213301658630371,
+            "token_id:236743": -4.088301658630371,
+            "token_id:562": -4.088301658630371,
+            "token_id:6890": -4.213301658630371,
+            "token_id:669": -4.213301658630371,
+            "token_id:109": -4.338301658630371,
+            "token_id:1599": -4.463301658630371,
+            "token_id:4298": -4.588301658630371,
+            "token_id:5180": -4.713301658630371,
+            "token_id:1174": -4.713301658630371,
+            "token_id:568": -4.713301658630371,
+            "token_id:12213": -4.713301658630371,
+            "token_id:1030": -4.713301658630371,
+            "token_id:15642": -4.713301658630371,
+            "token_id:9996": -4.838301658630371,
+            "token_id:564": -4.963301658630371,
+            "token_id:42085": -4.963301658630371,
+            "token_id:5715": -4.963301658630371,
+            "token_id:2199": -5.213301658630371
+          }
+        ]
+      },
+      "finish_reason": "length",
+      "stop_reason": null,
+      "token_ids": null,
+      "prompt_logprobs": null,
+      "prompt_token_ids": null
+    }
+  ],
+  "cross_batch_positions": [
+    {
+      "target_position": 0,
+      "choice": {
+        "index": 0,
+        "text": "\n\n",
+        "logprobs": {
+          "text_offset": [
+            0
+          ],
+          "token_logprobs": [
+            -0.7133015990257263
+          ],
+          "tokens": [
+            "token_id:108"
+          ],
+          "top_logprobs": [
+            {
+              "token_id:108": -0.7133015990257263,
+              "token_id:107": -2.213301658630371,
+              "token_id:236743": -4.088301658630371,
+              "token_id:562": -4.088301658630371,
+              "token_id:6890": -4.213301658630371,
+              "token_id:669": -4.213301658630371,
+              "token_id:109": -4.338301658630371,
+              "token_id:1599": -4.463301658630371,
+              "token_id:4298": -4.588301658630371,
+              "token_id:5180": -4.713301658630371,
+              "token_id:1174": -4.713301658630371,
+              "token_id:568": -4.713301658630371,
+              "token_id:12213": -4.713301658630371,
+              "token_id:1030": -4.713301658630371,
+              "token_id:15642": -4.713301658630371,
+              "token_id:9996": -4.838301658630371,
+              "token_id:564": -4.963301658630371,
+              "token_id:42085": -4.963301658630371,
+              "token_id:5715": -4.963301658630371,
+              "token_id:2199": -5.213301658630371
+            }
+          ]
+        },
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null,
+        "prompt_logprobs": null,
+        "prompt_token_ids": null
+      }
+    },
+    {
+      "target_position": 1,
+      "choice": {
+        "index": 1,
+        "text": "\n\n",
+        "logprobs": {
+          "text_offset": [
+            0
+          ],
+          "token_logprobs": [
+            -0.7133015990257263
+          ],
+          "tokens": [
+            "token_id:108"
+          ],
+          "top_logprobs": [
+            {
+              "token_id:108": -0.7133015990257263,
+              "token_id:107": -2.213301658630371,
+              "token_id:236743": -4.088301658630371,
+              "token_id:562": -4.088301658630371,
+              "token_id:6890": -4.213301658630371,
+              "token_id:669": -4.213301658630371,
+              "token_id:109": -4.338301658630371,
+              "token_id:1599": -4.463301658630371,
+              "token_id:4298": -4.588301658630371,
+              "token_id:5180": -4.713301658630371,
+              "token_id:1174": -4.713301658630371,
+              "token_id:568": -4.713301658630371,
+              "token_id:12213": -4.713301658630371,
+              "token_id:1030": -4.713301658630371,
+              "token_id:15642": -4.713301658630371,
+              "token_id:9996": -4.838301658630371,
+              "token_id:564": -4.963301658630371,
+              "token_id:42085": -4.963301658630371,
+              "token_id:5715": -4.963301658630371,
+              "token_id:2199": -5.213301658630371
+            }
+          ]
+        },
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null,
+        "prompt_logprobs": null,
+        "prompt_token_ids": null
+      }
+    },
+    {
+      "target_position": 2,
+      "choice": {
+        "index": 2,
+        "text": "\n\n",
+        "logprobs": {
+          "text_offset": [
+            0
+          ],
+          "token_logprobs": [
+            -0.7133015990257263
+          ],
+          "tokens": [
+            "token_id:108"
+          ],
+          "top_logprobs": [
+            {
+              "token_id:108": -0.7133015990257263,
+              "token_id:107": -2.213301658630371,
+              "token_id:236743": -4.088301658630371,
+              "token_id:562": -4.088301658630371,
+              "token_id:6890": -4.213301658630371,
+              "token_id:669": -4.213301658630371,
+              "token_id:109": -4.338301658630371,
+              "token_id:1599": -4.463301658630371,
+              "token_id:4298": -4.588301658630371,
+              "token_id:5180": -4.713301658630371,
+              "token_id:1174": -4.713301658630371,
+              "token_id:568": -4.713301658630371,
+              "token_id:12213": -4.713301658630371,
+              "token_id:1030": -4.713301658630371,
+              "token_id:15642": -4.713301658630371,
+              "token_id:9996": -4.838301658630371,
+              "token_id:564": -4.963301658630371,
+              "token_id:42085": -4.963301658630371,
+              "token_id:5715": -4.963301658630371,
+              "token_id:2199": -5.213301658630371
+            }
+          ]
+        },
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null,
+        "prompt_logprobs": null,
+        "prompt_token_ids": null
+      }
+    }
+  ],
+  "checks": {
+    "chosen_token_matches_standalone": true,
+    "chosen_token_run_to_run_equal": true,
+    "chosen_token_cross_batch_equal": true,
+    "top20_logprobs_run_to_run_equal": true,
+    "top20_logprobs_cross_batch_equal": true
+  }
+}

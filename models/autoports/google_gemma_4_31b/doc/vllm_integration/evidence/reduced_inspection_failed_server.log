@@ -1,0 +1,105 @@
+INFO 07-15 12:58:55 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 07-15 12:58:55 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 07-15 12:58:55 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 07-15 12:58:55 [__init__.py:212] Platform plugin tt is activated
+INFO 07-15 12:58:59 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-15 12:58:59 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+(APIServer pid=366208) INFO 07-15 12:59:01 [utils.py:287]
+(APIServer pid=366208) INFO 07-15 12:59:01 [utils.py:287]        █     █     █▄   ▄█
+(APIServer pid=366208) INFO 07-15 12:59:01 [utils.py:287]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.1.dev1+g44c6ab1b2.d20260715
+(APIServer pid=366208) INFO 07-15 12:59:01 [utils.py:287]   █▄█▀ █     █     █     █  model   /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3
+(APIServer pid=366208) INFO 07-15 12:59:01 [utils.py:287]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=366208) INFO 07-15 12:59:01 [utils.py:287]
+(APIServer pid=366208) INFO 07-15 12:59:01 [utils.py:223] non-default args: {'model': '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3', 'max_model_len': 262144, 'block_size': 64, 'max_num_seqs': 32, 'async_scheduling': True, 'additional_config': {'tt': {'sample_on_device_mode': 'all', 'trace_region_size': 268435456, 'fabric_config': 'FABRIC_1D', 'trace_mode': 'all', 'enable_model_warmup': True}}}
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] Error in inspecting model architecture 'Gemma4ForConditionalGeneration'
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] Traceback (most recent call last):
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/model_executor/models/registry.py", line 1249, in _run_in_subprocess
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     returned.check_returncode()
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/subprocess.py", line 457, in check_returncode
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     raise CalledProcessError(self.returncode, self.args, self.stdout,
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] subprocess.CalledProcessError: Command '['/opt/venv/bin/python', '-m', 'vllm.model_executor.models.registry']' returned non-zero exit status 1.
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] The above exception was the direct cause of the following exception:
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] Traceback (most recent call last):
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/model_executor/models/registry.py", line 823, in _try_inspect_model_cls
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     return model.inspect_model_cls()
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/logging_utils/log_time.py", line 21, in _wrapper
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     result = func(*args, **kwargs)
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/model_executor/models/registry.py", line 784, in inspect_model_cls
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     mi = _run_in_subprocess(
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/model_executor/models/registry.py", line 1252, in _run_in_subprocess
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     raise RuntimeError(
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] RuntimeError: Error raised in subprocess:
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] /usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py:126: RuntimeWarning: 'vllm.model_executor.models.registry' found in sys.modules after import of package 'vllm.model_executor.models', but prior to execution of 'vllm.model_executor.models.registry'; this may result in unpredictable behaviour
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   warn(RuntimeWarning(msg))
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] Traceback (most recent call last):
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     return _run_code(code, main_globals, None,
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     exec(code, run_globals)
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/model_executor/models/registry.py", line 1275, in <module>
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     _run()
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/model_executor/models/registry.py", line 1268, in _run
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     result = fn()
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/model_executor/models/registry.py", line 785, in <lambda>
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     lambda: _ModelInfo.from_model_cls(self.load_model_cls())
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/vllm/vllm/model_executor/models/registry.py", line 798, in load_model_cls
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     mod = importlib.import_module(self.module_name)
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/importlib/__init__.py", line 126, in import_module
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     return _bootstrap._gcd_import(name[level:], package, level)
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 992, in _find_and_load_unlocked
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap_external>", line 883, in exec_module
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/__init__.py", line 1, in <module>
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     from .functional_decoder import FunctionalDecoder
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/tt/functional_decoder.py", line 21, in <module>
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     from models.demos.gemma4.tt.attention.operations import (
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/models/demos/gemma4/tt/attention/__init__.py", line 18, in <module>
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     from .weights import AttentionWeights, load_attention_weights
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/models/demos/gemma4/tt/attention/weights.py", line 27, in <module>
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     class AttentionWeights:
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]   File "/localdev/odjuricic/tt-metal/models/demos/gemma4/tt/attention/weights.py", line 30, in AttentionWeights
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]     wqkv: ttnn.Tensor  # Fused Q+K+V per TP device, column-parallel sharded
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825] AttributeError: module 'ttnn' has no attribute 'Tensor'
+(APIServer pid=366208) ERROR 07-15 12:59:09 [registry.py:825]
+(APIServer pid=366208) Traceback (most recent call last):
+(APIServer pid=366208)   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+(APIServer pid=366208)     return _run_code(code, main_globals, None,
+(APIServer pid=366208)   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+(APIServer pid=366208)     exec(code, run_globals)
+(APIServer pid=366208)   File "/localdev/odjuricic/tt-metal/vllm/vllm/entrypoints/openai/api_server.py", line 545, in <module>
+(APIServer pid=366208)     uvloop.run(run_server(args))
+(APIServer pid=366208)   File "/opt/venv/lib/python3.10/site-packages/uvloop/__init__.py", line 69, in run
+(APIServer pid=366208)     return loop.run_until_complete(wrapper())
+(APIServer pid=366208)   File "uvloop/loop.pyx", line 1518, in uvloop.loop.Loop.run_until_complete
+(APIServer pid=366208)   File "/opt/venv/lib/python3.10/site-packages/uvloop/__init__.py", line 48, in wrapper
+(APIServer pid=366208)     return await main
+(APIServer pid=366208)   File "/localdev/odjuricic/tt-metal/vllm/vllm/entrypoints/openai/api_server.py", line 471, in run_server
+(APIServer pid=366208)     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+(APIServer pid=366208)   File "/localdev/odjuricic/tt-metal/vllm/vllm/entrypoints/openai/api_server.py", line 490, in run_server_worker
+(APIServer pid=366208)     async with build_async_engine_client(
+(APIServer pid=366208)   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=366208)     return await anext(self.gen)
+(APIServer pid=366208)   File "/localdev/odjuricic/tt-metal/vllm/vllm/entrypoints/openai/api_server.py", line 96, in build_async_engine_client
+(APIServer pid=366208)     async with build_async_engine_client_from_engine_args(
+(APIServer pid=366208)   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=366208)     return await anext(self.gen)
+(APIServer pid=366208)   File "/localdev/odjuricic/tt-metal/vllm/vllm/entrypoints/openai/api_server.py", line 122, in build_async_engine_client_from_engine_args
+(APIServer pid=366208)     vllm_config = engine_args.create_engine_config(usage_context=usage_context)
+(APIServer pid=366208)   File "/localdev/odjuricic/tt-metal/vllm/vllm/engine/arg_utils.py", line 1420, in create_engine_config
+(APIServer pid=366208)     model_config = self.create_model_config()
+(APIServer pid=366208)   File "/localdev/odjuricic/tt-metal/vllm/vllm/engine/arg_utils.py", line 1272, in create_model_config
+(APIServer pid=366208)     return ModelConfig(
+(APIServer pid=366208)   File "/opt/venv/lib/python3.10/site-packages/pydantic/_internal/_dataclasses.py", line 121, in __init__
+(APIServer pid=366208)     s.__pydantic_validator__.validate_python(ArgsKwargs(args, kwargs), self_instance=s)
+(APIServer pid=366208) pydantic_core._pydantic_core.ValidationError: 1 validation error for ModelConfig
+(APIServer pid=366208)   Value error, Model architectures ['Gemma4ForConditionalGeneration'] failed to be inspected. Please check the logs for more details. [type=value_error, input_value=ArgsKwargs((), {'model': ...rocessor_plugin': None}), input_type=ArgsKwargs]
+(APIServer pid=366208)     For further information visit https://errors.pydantic.dev/2.14/v/value_error

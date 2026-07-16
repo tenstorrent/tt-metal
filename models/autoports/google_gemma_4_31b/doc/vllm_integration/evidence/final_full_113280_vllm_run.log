@@ -1,0 +1,119 @@
+Launching vLLM server for /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 on P150x4
+  cmd: /opt/venv/bin/python -m vllm.entrypoints.openai.api_server --model /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --block_size 64 --max_num_seqs 32 --port 8000 --max_model_len 113280 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 268435456, "fabric_config": "FABRIC_1D", "trace_mode": "all", "enable_model_warmup": true}}' --async-scheduling --chat-template /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/vllm_integration/chat_template.jinja
+  log: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/server.log
+Waiting up to 2400s for server to become ready...
+  Server ready after ~1330s
+  Non-aligned prompt check PASS (149 tokens): /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/non_aligned_prompt_check.json
+  Logit determinism PASS (token_id:108, exact top-20): /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/logit_determinism.json
+  Max-context serving PASS (113279 input + 1 output): /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/max_context_prompt_check.json
+
+=== Running plugin sampling tests ===
+  profile: full (1 target(s))
+  tt-max-num-seqs: 32
+  cmd: /opt/venv/bin/python -m pytest /localdev/odjuricic/tt-metal/vllm/plugins/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --tt-max-num-seqs=32
+  log: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/sampling_tests.log
+  PASS
+
+=== Running qualitative prompts from /localdev/odjuricic/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : '  In the realm of data, Algorithms learn and evolve, Patterns emerge clear.  Wri'
+    Sampled: '  In the realm of data, Patterns emerge, unseen, Machines learn to see.  Write a'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : '  What is the difference between supervised and unsupervised learning?  What is '
+    Sampled: '  How does linear regression work in machine learning?  What is the difference b'
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : ' a magical portal that led to a world filled with talking animals and enchanted '
+    Sampled: ' a magical potion that granted extraordinary powers to whoever drank it. Little '
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : '  What is the first law of thermodynamics?  What is the second law of thermodyna'
+    Sampled: '  What are the equations for enthalpy change, internal energy change, entropy ch'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : '  Translate the following to French: "I am going to the store."  Translate the f'
+    Sampled: '  Translate the following sentence into French: "I like to play soccer on weeken'
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : ' The Fibonacci sequence is a series of numbers where each number is the sum of t'
+    Sampled: ' The function should take an integer n as input and return a list containing the'
+
+Saved 6 completions to /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+=== Running vLLM serving benchmark: single_user_decode ===
+  prompt_len=128, output_len=128, num_requests=1, concurrency=1, temperature=0.0
+  comparison_scope: Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.
+  command: /opt/venv/bin/vllm bench serve --backend vllm --model /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 128 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0
+  log: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_benchmark.log
+
+=== Serving benchmark summary: single_user_decode ===
+  Requests : 1/1 completed
+  TTFT     : P50=992.6ms  P99=992.6ms
+  TPOT     : mean=38.0ms  P99=38.0ms
+  ITL      : P50=29.3ms  P99=29.7ms
+  Output   : 22.0 tok/s aggregate
+  Decode   : 26.3 t/s/u from mean TPOT
+  Raw      : /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_result.json
+  Summary  : /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_benchmark.json
+
+=== Running vLLM serving benchmark: ci_serving_burst ===
+  prompt_len=100, output_len=100, num_requests=32, concurrency=None, temperature=0.0
+  comparison_scope: vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT.
+  command: /opt/venv/bin/vllm bench serve --backend vllm --model /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3 --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 100 --random-output-len 100 --num-prompts 32 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_ci_serving_result.json --temperature 0.0
+  log: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_ci_serving_benchmark.log
+
+=== Serving benchmark summary: ci_serving_burst ===
+  Requests : 32/32 completed
+  TTFT     : P50=8485.2ms  P99=8488.5ms
+  TPOT     : mean=77.4ms  P99=127.4ms
+  ITL      : P50=55.8ms  P99=687.7ms
+  Output   : 201.1 tok/s aggregate
+  Decode   : 12.9 t/s/u from mean TPOT
+  Raw      : /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_ci_serving_result.json
+  Summary  : /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_ci_serving_benchmark.json
+
+============================================================
+vLLM checks complete. Results in /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm
+============================================================
+
+Shutting down server (PID 461611)...
+  Terminated cleanly.
+
+=== Server log tail (/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/server.log, last 30 lines) ===
+ - leaked instance 0x55740c1d64b0 of type "ttnn._ttnn.operations.unary.isinf_t"
+ - leaked instance 0x55740da94200 of type "ttnn._ttnn.operations.unary.floor_t"
+ - leaked instance 0x55740dd58180 of type "ttnn._ttnn.operations.unary.atan_t"
+ - ... skipped remainder
+nanobind: leaked 911 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.SliceDeviceOperation"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "ttnn._ttnn.operations.binary.lt__t"
+ - leaked type "ttnn._ttnn.operations.binary_backward.xlogy_bw_t"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.isclose_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - leaked type "DispatchCoreAxis"
+ - ... skipped remainder
+nanobind: leaked 4198 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_descriptor"
+ - leaked function "__call__"
+ - leaked function "default_core_range"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

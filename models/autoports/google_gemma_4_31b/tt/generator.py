@@ -273,6 +273,7 @@ class Gemma4Generator(Generator):
         max_batch_size: int | None = None,
         cache_context: int | None = None,
         tensor_cache_path: str | Path | None = None,
+        allocate_standalone_cache: bool = True,
     ) -> None:
         self.model_dir = Path(model_dir)
         self.mesh_device = mesh_device
@@ -299,9 +300,18 @@ class Gemma4Generator(Generator):
             raise ValueError("generator and model max_batch_size must match")
         self.host_sampling_compat = bool(host_sampling_compat)
         self.cache_context = int(cache_context or self.model.config.max_seq_len)
-        self.kv_cache, self.page_tables = self.model.allocate_paged_kv_cache(
-            max_context=self.cache_context, batch_size=self.max_batch_size
-        )
+        self._owns_standalone_cache = bool(allocate_standalone_cache)
+        if self._owns_standalone_cache:
+            self.kv_cache, self.page_tables = self.model.allocate_paged_kv_cache(
+                max_context=self.cache_context, batch_size=self.max_batch_size
+            )
+        else:
+            # vLLM owns serving-cache sizing and allocation.  Keeping these
+            # handles unset makes an accidental fallback to the standalone
+            # cache fail at the ownership boundary instead of silently using a
+            # second cache with incompatible block tables.
+            self.kv_cache = None
+            self.page_tables = None
         self.page_table_generation = 0
         self._cache_dirty = False
         self.timings: dict[str, float] = {}
@@ -335,15 +345,20 @@ class Gemma4Generator(Generator):
             vocab_per_device=self.model.vocab_per_device,
             max_batch_size=self.max_batch_size,
         )
-        # Prefill returns one sampler-ready row per active prompt. Keep canonical
-        # traced sampling fixed at max_batch_size, and lazily materialize the
-        # same common sampler for smaller eager batches before trace capture.
+        # Prefill returns one sampler-ready row per active prompt. Standalone
+        # traced sampling defaults to max_batch_size; serving may explicitly
+        # trace a smaller physical batch. Lazily materialize the common sampler
+        # for smaller eager batches before trace capture.
         self._eager_samplers: dict[tuple[int, bool], Sampling1D] = {}
         self._sampling_trace_id: int | None = None
         self._sampling_trace_output: tuple[ttnn.Tensor, Any] | None = None
         self._sampling_trace_logits: ttnn.Tensor | None = None
         self._sampling_trace_key: tuple[int, int, float, float, bool] | None = None
         self._sampling_params: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None
+        self.trace_lifecycle_counters = {
+            "release_calls": 0,
+            "release_synchronizations": 0,
+        }
 
     def _new_token_buffer(self, batch_size: int) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -360,6 +375,8 @@ class Gemma4Generator(Generator):
         if (page_table is None) != (kv_cache is None):
             raise ValueError("page_table and kv_cache must either both be provided or both be omitted")
         if page_table is None:
+            if not getattr(self, "_owns_standalone_cache", True):
+                raise ValueError("serving mode requires caller-owned page_table and kv_cache handles")
             return self.page_tables, self.kv_cache, False
         return page_table, kv_cache, True
 
@@ -439,6 +456,14 @@ class Gemma4Generator(Generator):
 
     def _release_all_decode_traces(self) -> None:
         """Release both trace programs before freeing either trace's buffers."""
+        self.trace_lifecycle_counters["release_calls"] += 1
+        if self._sampling_trace_id is not None or self.model.trace_state.trace_id is not None:
+            # Model and sampler replay are intentionally nonblocking.  Drain
+            # CQ0 before releasing their programs or deallocating any bound
+            # buffers; the following prefill/layout transition is allowed to
+            # allocate only after both traces are gone.
+            ttnn.synchronize_device(self.mesh_device)
+            self.trace_lifecycle_counters["release_synchronizations"] += 1
         if self._sampling_trace_id is not None:
             ttnn.release_trace(self.mesh_device, self._sampling_trace_id)
         self._sampling_trace_id = None
@@ -638,7 +663,7 @@ class Gemma4Generator(Generator):
         # Release both decode traces before any such allocation so trace DRAM
         # cannot alias the new request's buffers.
         self._release_all_decode_traces()
-        if self._cache_dirty:
+        if self._cache_dirty and self._owns_standalone_cache:
             self.model.zero_kv_cache(self.kv_cache)
             ttnn.synchronize_device(self.mesh_device)
             self._cache_dirty = False
@@ -670,8 +695,8 @@ class Gemma4Generator(Generator):
         # an omitted pair. All real external state remains both-or-neither.
         if kv_cache is None and isinstance(page_table, ttnn.Tensor):
             page_table = None
-        page_table, kv_cache, _ = self._resolve_cache_pair(page_table, kv_cache)
-        self._cache_dirty = True
+        page_table, kv_cache, external_state = self._resolve_cache_pair(page_table, kv_cache)
+        self._cache_dirty = getattr(self, "_cache_dirty", False) or not external_state
         if return_device_logits:
             return self.model.prefill_forward_device_logits(
                 tokens, page_table=page_table, kv_cache=kv_cache, prompt_lens=prompt_lens
@@ -698,8 +723,8 @@ class Gemma4Generator(Generator):
         """Explicit eager one-step API; traced callers use the token-out methods below."""
         if enable_trace:
             raise ValueError("use prepare_token_out_decode/decode_next_token_traced for traced decode")
-        page_table, kv_cache, _ = self._resolve_cache_pair(page_table, kv_cache)
-        self._cache_dirty = True
+        page_table, kv_cache, external_state = self._resolve_cache_pair(page_table, kv_cache)
+        self._cache_dirty = getattr(self, "_cache_dirty", False) or not external_state
         return self.model.decode_forward(
             tokens,
             start_pos,
@@ -718,6 +743,7 @@ class Gemma4Generator(Generator):
         page_table_generations: Sequence[int] | None = None,
         prompt_lengths: Sequence[int] | None = None,
         active_batch_size: int | None = None,
+        pad_to_max_batch: bool = True,
         top_k: int = 1,
         top_p: float = 0.0,
         temperature: float = 1.0,
@@ -730,7 +756,7 @@ class Gemma4Generator(Generator):
         normalized_prompt_lengths, active_batch_size = self._normalize_decode_slots(
             positions, prompt_lengths=prompt_lengths, active_batch_size=active_batch_size
         )
-        if tokens.shape[0] < self.max_batch_size:
+        if pad_to_max_batch and tokens.shape[0] < self.max_batch_size:
             padding = self.max_batch_size - tokens.shape[0]
             tokens = torch.cat((tokens, torch.zeros((padding, 1), dtype=torch.int32)))
             positions = torch.cat((positions, torch.full((padding,), -1, dtype=torch.int32)))
@@ -745,7 +771,7 @@ class Gemma4Generator(Generator):
             raise ValueError("page-table generations must match the layer count")
         cache_identity = _kv_cache_identity(resolved_kv_cache)
         requested_key = (
-            self.max_batch_size,
+            int(tokens.shape[0]),
             int(top_k),
             float(top_p),
             float(temperature),

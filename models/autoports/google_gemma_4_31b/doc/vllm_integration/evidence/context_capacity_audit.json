@@ -1,0 +1,97 @@
+{
+  "model": "google/gemma-4-31B",
+  "hardware": "4x Blackhole P150b",
+  "mesh": "1x4",
+  "hybrid_layers": {
+    "sliding_attention": 50,
+    "full_attention": 10,
+    "layers_per_group": 10,
+    "physical_kv_pairs": 10,
+    "physical_kv_buffers": 20
+  },
+  "pool_block_formula": "B(C) = 5 * (ceil(C / 64) + 1) + ceil(C / 128)",
+  "bytes_per_pool_block_per_bank_per_buffer": 8704,
+  "post_kv_contiguous_formula": "P(C) = 2178911936 - 174080 * B(C)",
+  "page_table_formula": "T(C) = 60 * 4 * ceil((4 * ceil(C / 64)) / 32) * 32",
+  "streamed_attention_peak_formula": "A(C) = 4096 * C + 4032 * 4096",
+  "streamed_mlp_peak_formula": "M(C) = 3072 * C + 5376 * 4096",
+  "dominant_runtime_requirement": "A(C): chunked attention output projection, BF16 all-reduce, post-attention RMSNorm, residual add, and direct tiled slice-write; the complete MLP residual branch is separately streamed in 4096-row chunks",
+  "capacity_fixes": [
+    "release normalized attention input immediately after QKV projection",
+    "release complete pre-FFN normalization before concatenating chunk outputs",
+    "stream full-attention SDPA and head concatenation in bounded row-major chunks",
+    "stream sliding-attention SDPA and head concatenation in bounded row-major chunks",
+    "project and all-reduce long attention outputs in 4096-row chunks",
+    "fuse post-attention RMSNorm and residual add into each attention-output chunk",
+    "stream the complete long-prompt MLP residual branch in 4096-row chunks",
+    "read global layers from HMA-owned cache through a zero-copy full-layer geometry view"
+  ],
+  "failed_attempts": [
+    {
+      "context": 262144,
+      "pool_blocks": 22533,
+      "failure": "full-depth KV allocation OOM",
+      "artifact": "full_262144_capacity_failed_server.log"
+    },
+    {
+      "context": 157696,
+      "pool_blocks": 13557,
+      "failure": "nineteenth of twenty physical KV buffers OOM",
+      "artifact": "full_157696_capacity_failed_server.log"
+    },
+    {
+      "context": 101888,
+      "failure": "full-attention head-concat transpose OOM",
+      "artifact": "full_101888_max_context_failed_server.log"
+    },
+    {
+      "context": 100800,
+      "failure": "attention output all-reduce OOM; HTTP 200 carried an embedded error envelope",
+      "artifact": "full_100800_max_context_unstable_server.log",
+      "checker_fix": "max-context gate now rejects embedded error payloads and missing completion choices"
+    },
+    {
+      "context": 111488,
+      "failure": "full-prompt attention all-reduce allocation OOM before chunked projection",
+      "artifact": "full_111488_sliding_streaming_max_context_failed_server.log"
+    },
+    {
+      "context": 111488,
+      "failure": "post-attention RMSNorm full-output allocation OOM before fused chunk norm/residual",
+      "artifact": "full_111488_attention_reduce_streaming_max_context_failed_server.log"
+    },
+    {
+      "context": 111488,
+      "failure": "global HMA cache exposed allocation-owner 4x64x256 geometry to SDPA instead of filled 1x128x512 layer geometry",
+      "artifact": "full_111488_full_layer_streaming_max_context_failed_server.log"
+    }
+  ],
+  "passing_control": {
+    "context": 111488,
+    "pool_blocks": 9586,
+    "max_length_request": "111487 input tokens + 1 output token",
+    "artifact": "full_111488_full_layer_streaming_max_context_passing_server.log"
+  },
+  "selected": {
+    "context": 113280,
+    "pool_blocks": 9740,
+    "post_kv_largest_contiguous_bytes_per_bank": 483372736,
+    "mandatory_prefill_live_set_bytes_per_bank": 480509952,
+    "adapter_page_table_bytes_per_bank": 1704960,
+    "runtime_margin_bytes_per_bank": 1157824,
+    "max_length_request": "113279 input tokens + 1 output token",
+    "artifact": "full_113280_source_ceiling_max_context_passing_server.log",
+    "status": "hardware_verified"
+  },
+  "next_64_token_candidate": {
+    "context": 113344,
+    "pool_blocks": 9746,
+    "post_kv_largest_contiguous_bytes_per_bank": 482328256,
+    "mandatory_prefill_live_set_bytes_per_bank": 480772096,
+    "adapter_page_table_bytes_per_bank": 1704960,
+    "runtime_margin_bytes_per_bank": -148800,
+    "hard_physical_shortfall_bytes_per_bank": 148800,
+    "status": "source_proven_physically_infeasible"
+  },
+  "conclusion": "113280 is the largest 64-token-aligned serving context: its exact maximum-total-length request passes on hardware, while 113344 exceeds the per-bank contiguous-allocation bound by 148800 bytes"
+}

@@ -1,0 +1,162 @@
+INFO 07-15 13:02:46 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 07-15 13:02:46 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 07-15 13:02:46 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-07-15 13:02:47.886 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 07-15 13:02:47 [__init__.py:212] Platform plugin tt is activated
+INFO 07-15 13:02:51 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-15 13:02:51 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+(APIServer pid=368774) INFO 07-15 13:02:52 [utils.py:287]
+(APIServer pid=368774) INFO 07-15 13:02:52 [utils.py:287]        █     █     █▄   ▄█
+(APIServer pid=368774) INFO 07-15 13:02:52 [utils.py:287]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.1.dev1+g44c6ab1b2.d20260715
+(APIServer pid=368774) INFO 07-15 13:02:52 [utils.py:287]   █▄█▀ █     █     █     █  model   /home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3
+(APIServer pid=368774) INFO 07-15 13:02:52 [utils.py:287]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=368774) INFO 07-15 13:02:52 [utils.py:287]
+(APIServer pid=368774) INFO 07-15 13:02:52 [utils.py:223] non-default args: {'model': '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3', 'max_model_len': 262144, 'block_size': 64, 'max_num_seqs': 32, 'async_scheduling': True, 'additional_config': {'tt': {'sample_on_device_mode': 'all', 'trace_region_size': 268435456, 'fabric_config': 'FABRIC_1D', 'trace_mode': 'all', 'enable_model_warmup': True}}}
+(APIServer pid=368774) INFO 07-15 13:03:03 [model.py:526] Resolved architecture: Gemma4ForConditionalGeneration
+(APIServer pid=368774) INFO 07-15 13:03:03 [model.py:1550] Using max model len 262144
+(APIServer pid=368774) INFO 07-15 13:03:03 [scheduler.py:224] Chunked prefill is enabled with max_num_batched_tokens=2048.
+(APIServer pid=368774) INFO 07-15 13:03:03 [vllm.py:698] Asynchronous scheduling is enabled.
+(APIServer pid=368774) WARNING 07-15 13:03:03 [vllm.py:743] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(APIServer pid=368774) INFO 07-15 13:03:03 [platform.py:561] Chunked prefill is not yet supported for TT backend
+(APIServer pid=368774) WARNING 07-15 13:03:03 [platform.py:572] max_num_batched_tokens=2048 < max_model_len=262144 with chunked prefill disabled, bumping max_num_batched_tokens to match.
+(APIServer pid=368774) WARNING 07-15 13:03:03 [platform.py:761] Prefix caching is not supported in TT backend for models.autoports.google_gemma_4_31b.tt.generator_vllm, disabling it
+(APIServer pid=368774) INFO 07-15 13:03:03 [platform.py:778] Automatic prefix caching is disabled
+INFO 07-15 13:03:09 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 07-15 13:03:09 [__init__.py:46] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 07-15 13:03:09 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-07-15 13:03:11.045 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+INFO 07-15 13:03:11 [__init__.py:212] Platform plugin tt is activated
+INFO 07-15 13:03:14 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-15 13:03:14 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+(EngineCore_DP0 pid=368944) INFO 07-15 13:03:16 [core.py:98] Initializing a V1 LLM engine (v0.1.dev1+g44c6ab1b2.d20260715) with config: model='/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3', speculative_config=None, tokenizer='/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=262144, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, disable_custom_all_reduce=True, quantization=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=None, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_fallback=False, disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False), seed=0, served_model_name=/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3, enable_prefix_caching=False, enable_chunked_prefill=False, pooler_config=None, compilation_config={'level': None, 'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'eager', 'custom_ops': ['all'], 'splitting_ops': ['vllm::unified_attention', 'vllm::unified_attention_with_output', 'vllm::unified_mla_attention', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::linear_attention', 'vllm::plamo2_mamba_mixer', 'vllm::gdn_attention_core', 'vllm::kda_attention', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::unified_kv_cache_update'], 'compile_mm_encoder': False, 'compile_sizes': None, 'compile_ranges_split_points': [2048], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'fuse_act_padding': False}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': True, 'static_all_moe_layers': []}
+(EngineCore_DP0 pid=368944) INFO 07-15 13:03:17 [platform.py:778] Automatic prefix caching is disabled
+2026-07-15 13:03:17.519 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-15 13:03:17.519 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-15 13:03:17.519 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-15 13:03:17.519 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-15 13:03:17.520 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-15 13:03:17.520 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-15 13:03:17.523 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-15 13:03:17.693 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-15 13:03:17.693 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-15 13:03:17.693 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-15 13:03:17.693 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-15 13:03:17.696 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-15 13:03:17.849 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+(EngineCore_DP0 pid=368944) INFO 07-15 13:03:18 [worker.py:773] Attempting to open mesh device with grid shape (1, 4)
+(EngineCore_DP0 pid=368944) INFO 07-15 13:03:18 [worker.py:681] Setting fabric config: FabricConfig.FABRIC_1D, reliability mode: FabricReliabilityMode.STRICT_INIT
+2026-07-15 13:03:18.467 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-15 13:03:18.467 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-15 13:03:18.467 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-15 13:03:18.467 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:18.468 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:18.468 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-15 13:03:18.482 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-15 13:03:18.483 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-15 13:03:18.483 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-15 13:03:18.483 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-15 13:03:18.539 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-15 13:03:18.601 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-15 13:03:18.606 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-15 13:03:18.607 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-15 13:03:18.609 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-15 13:03:18.609 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-15 13:03:18.609 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-15 13:03:18.661 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-15 13:03:18.661 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-15 13:03:18.661 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-15 13:03:18.661 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-15 13:03:19.234 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349982 GHz, device_time_at_sync=85224713033943 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-15 13:03:19.235 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349989 GHz, device_time_at_sync=85213033657649 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-15 13:03:19.246 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349979 GHz, device_time_at_sync=85237745985082 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-15 13:03:19.246 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349962 GHz, device_time_at_sync=85226031663240 cycles (realtime_profiler_manager.cpp:1127)
+(EngineCore_DP0 pid=368944) INFO 07-15 13:03:19 [worker.py:786] multidevice with 4 devices and grid (1, 4) is created
+(EngineCore_DP0 pid=368944) INFO 07-15 13:03:19 [model_runner.py:168] TTModelRunner: trace_mode=all, sample_on_device_mode=all, enable_model_warmup=True
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:55.717 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/final_norm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.353 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.354 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.354 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/pre_feedforward_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.355 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/post_feedforward_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.507 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/self_attn/wqkv_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 4096])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.521 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/self_attn/o_proj_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 2048, 5376])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.521 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/self_attn/q_norm.weight_tp4_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 8, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.522 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/self_attn/k_norm.weight_tp4_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 8, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.584 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/mlp/gate_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.608 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/mlp/up_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:03:57.633 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_0/layer_0/mlp/down_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.359 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/input_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.360 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/post_attention_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.360 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/pre_feedforward_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.360 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/post_feedforward_layernorm/weight_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 168, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.499 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/self_attn/wqkv_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5120])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.515 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/self_attn/o_proj_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 4096, 5376])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.516 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/self_attn/q_norm.weight_tp4_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 16, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.516 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/self_attn/k_norm.weight_tp4_dtype_BFLOAT16_layout_ROW_MAJOR.tensorbin of shape Shape([1, 1, 16, 32])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.580 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/mlp/gate_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.599 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/mlp/up_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+(EngineCore_DP0 pid=368944) 2026-07-15 13:04:18.618 | DEBUG    | core:as_tensor:724 - Loaded cache for /tmp/gemma4_31b_full_model_tensor_cache/layer_5/layer_5/mlp/down_proj.weight_tp4_bfp8_dtype_BFLOAT8_B_layout_TILE.tensorbin of shape Shape([1, 1, 5376, 5376])
+(EngineCore_DP0 pid=368944) INFO 07-15 13:04:41 [worker.py:539] Getting max_tokens_all_users=262144 for number of blocks in KV cache from generator '<class 'models.autoports.google_gemma_4_31b.tt.generator_vllm.Gemma4ForCausalLM'>'.
+(EngineCore_DP0 pid=368944) INFO 07-15 13:04:41 [kv_cache_utils.py:820] Overriding num_gpu_blocks=1759218604441 with num_gpu_blocks_override=8224
+(EngineCore_DP0 pid=368944) INFO 07-15 13:04:41 [kv_cache_utils.py:1308] GPU KV cache size: 87,680 tokens
+(EngineCore_DP0 pid=368944) INFO 07-15 13:04:41 [kv_cache_utils.py:1313] Maximum concurrency for 262,144 tokens per request: 0.36x
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033] EngineCore failed to start.
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033] Traceback (most recent call last):
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 1023, in run_engine_core
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     engine_core = engine_core_cls(*args, engine_index=dp_rank, **kwargs)
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 755, in __init__
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     super().__init__(
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 114, in __init__
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     num_gpu_blocks, num_cpu_blocks, kv_cache_config = self._initialize_kv_caches(
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 283, in _initialize_kv_caches
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     self.model_executor.initialize_from_config(kv_cache_configs)
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/executor/abstract.py", line 117, in initialize_from_config
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     self.collective_rpc("initialize_from_config", args=(kv_cache_configs,))
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/executor/uniproc_executor.py", line 75, in collective_rpc
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     result = run_method(self.driver_worker, method, args, kwargs)
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/serial_utils.py", line 459, in run_method
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     return func(*args, **kwargs)
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/worker/worker_base.py", line 316, in initialize_from_config
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     self.worker.initialize_from_config(kv_cache_config)  # type: ignore
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 306, in initialize_from_config
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     _validate_tt_kv_cache_capacity(self.vllm_config, kv_cache_config)
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]   File "/localdev/odjuricic/tt-metal/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 84, in _validate_tt_kv_cache_capacity
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033]     raise ValueError(
+(EngineCore_DP0 pid=368944) ERROR 07-15 13:04:41 [core.py:1033] ValueError: TT KV cache cannot hold one request at max_model_len. Maximum concurrency for 262,144 tokens per request is 0.36x, but must be at least 1.00x. num_blocks=8224, corresponding to approximately 526,336 tokens, Increase max_tokens_all_users or reduce max_model_len.
+(EngineCore_DP0 pid=368944) Process EngineCore_DP0:
+(EngineCore_DP0 pid=368944) Traceback (most recent call last):
+(EngineCore_DP0 pid=368944)   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/multiprocessing/process.py", line 314, in _bootstrap
+(EngineCore_DP0 pid=368944)     self.run()
+(EngineCore_DP0 pid=368944)   File "/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/multiprocessing/process.py", line 108, in run
+(EngineCore_DP0 pid=368944)     self._target(*self._args, **self._kwargs)
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 1037, in run_engine_core
+(EngineCore_DP0 pid=368944)     raise e
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 1023, in run_engine_core
+(EngineCore_DP0 pid=368944)     engine_core = engine_core_cls(*args, engine_index=dp_rank, **kwargs)
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 755, in __init__
+(EngineCore_DP0 pid=368944)     super().__init__(
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 114, in __init__
+(EngineCore_DP0 pid=368944)     num_gpu_blocks, num_cpu_blocks, kv_cache_config = self._initialize_kv_caches(
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/engine/core.py", line 283, in _initialize_kv_caches
+(EngineCore_DP0 pid=368944)     self.model_executor.initialize_from_config(kv_cache_configs)
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/executor/abstract.py", line 117, in initialize_from_config
+(EngineCore_DP0 pid=368944)     self.collective_rpc("initialize_from_config", args=(kv_cache_configs,))
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/executor/uniproc_executor.py", line 75, in collective_rpc
+(EngineCore_DP0 pid=368944)     result = run_method(self.driver_worker, method, args, kwargs)
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/serial_utils.py", line 459, in run_method
+(EngineCore_DP0 pid=368944)     return func(*args, **kwargs)
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/vllm/v1/worker/worker_base.py", line 316, in initialize_from_config
+(EngineCore_DP0 pid=368944)     self.worker.initialize_from_config(kv_cache_config)  # type: ignore
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 306, in initialize_from_config
+(EngineCore_DP0 pid=368944)     _validate_tt_kv_cache_capacity(self.vllm_config, kv_cache_config)
+(EngineCore_DP0 pid=368944)   File "/localdev/odjuricic/tt-metal/vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 84, in _validate_tt_kv_cache_capacity
+(EngineCore_DP0 pid=368944)     raise ValueError(
+(EngineCore_DP0 pid=368944) ValueError: TT KV cache cannot hold one request at max_model_len. Maximum concurrency for 262,144 tokens per request is 0.36x, but must be at least 1.00x. num_blocks=8224, corresponding to approximately 526,336 tokens, Increase max_tokens_all_users or reduce max_model_len.
+2026-07-15 13:04:43.191 | info     |    BuildKernels | JIT cache stats: 50/50 hits (100.0%) [50 cached, 50 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-15 13:04:43.191 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-15 13:04:43.212 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-15 13:04:43.212 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-15 13:04:43.879 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-15 13:04:43.879 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-15 13:04:43.879 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

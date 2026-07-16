@@ -104,6 +104,7 @@ DEFAULT_MAX_NUM_SEQS = 32
 DEFAULT_SERVER_TIMEOUT_S = 1200
 # Matches the nightly CI workflow.
 DEFAULT_VLLM_RPC_TIMEOUT_MS = 300000
+NON_ALIGNED_PROMPT_LEN = 149
 
 STAGE_SERVE = "serve"
 STAGE_SAMPLING = "sampling"
@@ -316,6 +317,146 @@ def _probe_external_server(server_url: str) -> None:
         raise RuntimeError(f"Server at {health} returned {resp.status_code}; expected 200.")
 
 
+def _run_non_aligned_prompt_check(*, server_url: str, hf_model: str, output_file: Path) -> None:
+    """Issue an exact 149-token request, deliberately unaligned to TT sizes."""
+    tokenizer = AutoTokenizer.from_pretrained(hf_model, local_files_only=True)
+    probe_ids = tokenizer.encode("x", add_special_tokens=False)
+    if not probe_ids:
+        raise RuntimeError("tokenizer produced no token for the non-aligned prompt probe")
+    bos = tokenizer.bos_token_id
+    prompt_ids = ([int(bos)] if bos is not None else []) + [int(probe_ids[0])] * NON_ALIGNED_PROMPT_LEN
+    prompt_ids = prompt_ids[:NON_ALIGNED_PROMPT_LEN]
+    if len(prompt_ids) != NON_ALIGNED_PROMPT_LEN:
+        raise AssertionError("non-aligned prompt construction returned the wrong token count")
+
+    payload = {
+        "model": hf_model,
+        "prompt": prompt_ids,
+        "max_tokens": 1,
+        "temperature": 0.0,
+    }
+    response = requests.post(
+        f"{server_url.rstrip('/')}/v1/completions",
+        json=payload,
+        timeout=DEFAULT_VLLM_RPC_TIMEOUT_MS / 1000,
+    )
+    response_body = response.json() if response.content else None
+    artifact = {
+        "prompt_token_count": len(prompt_ids),
+        "alignment_remainders": {
+            "tile_32": len(prompt_ids) % 32,
+            "page_64": len(prompt_ids) % 64,
+            "trace_128": len(prompt_ids) % 128,
+        },
+        "status_code": response.status_code,
+        "response": response_body,
+    }
+    output_file.write_text(json.dumps(artifact, indent=2) + "\n")
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"non-aligned {NON_ALIGNED_PROMPT_LEN}-token request returned {response.status_code}; "
+            f"inspect {output_file}"
+        )
+    print(f"  Non-aligned prompt check PASS ({NON_ALIGNED_PROMPT_LEN} tokens): {output_file}")
+
+
+def _run_logit_determinism_check(*, server_url: str, hf_model: str, model_dir: Path, output_file: Path) -> None:
+    """Prove one-step logits are stable across runs and active batch positions."""
+    baseline_file = model_dir / "doc/datatype_sweep/qualitative/vllm_qualitative_outputs.json"
+    baseline = json.loads(baseline_file.read_text())[0]
+    prompt = str(baseline["prompt"])
+    standalone_token_id = int(baseline["tt_token_ids"][0])
+    distractors = ["The capital of France is", "One plus one equals"]
+
+    def request(prompts: list[str]) -> list[dict[str, Any]]:
+        response = requests.post(
+            f"{server_url.rstrip('/')}/v1/completions",
+            json={
+                "model": hf_model,
+                "prompt": prompts,
+                "max_tokens": 1,
+                "temperature": 0.0,
+                "logprobs": 20,
+                "return_tokens_as_token_ids": True,
+            },
+            timeout=DEFAULT_VLLM_RPC_TIMEOUT_MS / 1000,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"logit determinism request returned {response.status_code}: {response.text}")
+        return sorted(response.json()["choices"], key=lambda choice: int(choice["index"]))
+
+    single_a = request([prompt])[0]
+    single_b = request([prompt])[0]
+    batch_records = []
+    for target_position in range(3):
+        prompts = list(distractors)
+        prompts.insert(target_position, prompt)
+        choice = request(prompts)[target_position]
+        batch_records.append({"target_position": target_position, "choice": choice})
+
+    records = [single_a, single_b, *(record["choice"] for record in batch_records)]
+    tokens = [record["logprobs"]["tokens"][0] for record in records]
+    top_logprobs = [record["logprobs"]["top_logprobs"][0] for record in records]
+    expected_token = f"token_id:{standalone_token_id}"
+    checks = {
+        "chosen_token_matches_standalone": all(token == expected_token for token in tokens),
+        "chosen_token_run_to_run_equal": tokens[0] == tokens[1],
+        "chosen_token_cross_batch_equal": len(set(tokens)) == 1,
+        "top20_logprobs_run_to_run_equal": top_logprobs[0] == top_logprobs[1],
+        "top20_logprobs_cross_batch_equal": all(item == top_logprobs[0] for item in top_logprobs[2:]),
+    }
+    artifact = {
+        "prompt": prompt,
+        "standalone_baseline": {
+            "artifact": str(baseline_file.relative_to(model_dir)),
+            "selected_tt_first_token_id": standalone_token_id,
+            "selected_tt_first_token": expected_token,
+        },
+        "run_to_run": [single_a, single_b],
+        "cross_batch_positions": batch_records,
+        "checks": checks,
+    }
+    output_file.write_text(json.dumps(artifact, indent=2) + "\n")
+    if not all(checks.values()):
+        raise RuntimeError(f"logit determinism check failed; inspect {output_file}")
+    print(f"  Logit determinism PASS ({expected_token}, exact top-20): {output_file}")
+
+
+def _run_max_context_prompt_check(*, server_url: str, hf_model: str, max_model_len: int, output_file: Path) -> None:
+    """Execute an actual advertised-length prefill, not merely a startup allocation."""
+    tokenizer = AutoTokenizer.from_pretrained(hf_model, local_files_only=True)
+    probe_ids = tokenizer.encode("x", add_special_tokens=False)
+    if not probe_ids:
+        raise RuntimeError("tokenizer produced no token for the max-context prompt probe")
+    bos = tokenizer.bos_token_id
+    prompt_len = int(max_model_len) - 1
+    prompt_ids = ([int(bos)] if bos is not None else []) + [int(probe_ids[0])] * prompt_len
+    prompt_ids = prompt_ids[:prompt_len]
+    response = requests.post(
+        f"{server_url.rstrip('/')}/v1/completions",
+        json={"model": hf_model, "prompt": prompt_ids, "max_tokens": 1, "temperature": 0.0},
+        timeout=1800,
+    )
+    response_body = response.json() if response.content else None
+    artifact = {
+        "prompt_token_count": len(prompt_ids),
+        "advertised_max_model_len": int(max_model_len),
+        "requested_output_tokens": 1,
+        "total_requested_sequence_length": len(prompt_ids) + 1,
+        "status_code": response.status_code,
+        "response": response_body,
+    }
+    output_file.write_text(json.dumps(artifact, indent=2) + "\n")
+    if response.status_code != 200:
+        raise RuntimeError(f"max-context request returned {response.status_code}; inspect {output_file}")
+    if not isinstance(response_body, dict) or response_body.get("error"):
+        raise RuntimeError(f"max-context request returned an error payload; inspect {output_file}")
+    choices = response_body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError(f"max-context request returned no completion choices; inspect {output_file}")
+    print(f"  Max-context serving PASS ({len(prompt_ids)} input + 1 output): {output_file}")
+
+
 def _run_plugin_sampling_tests(
     *,
     server_url: str,
@@ -392,6 +533,7 @@ def _run_qualitative_prompts(
     hf_model: str,
     prompts_file: Path,
     output_dir: Path,
+    raw_prompts: bool = False,
 ) -> None:
     """Run prompts through the server and save completions for manual review."""
     print(f"\n=== Running qualitative prompts from {prompts_file} ===")
@@ -429,20 +571,25 @@ def _run_qualitative_prompts(
     results: List[dict[str, Any]] = []
     for i, prompt in enumerate(prompts, 1):
         print(f"\n  Prompt {i}/{len(prompts)}: {prompt[:60]}...")
-        messages = [{"role": "user", "content": prompt}]
-        try:
-            rendered_prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=False,
-            )
-        except TypeError:
-            rendered_prompt = tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+        if raw_prompts:
+            rendered_prompt = prompt
+            prompt_format = "raw_continuation"
+        else:
+            messages = [{"role": "user", "content": prompt}]
+            try:
+                rendered_prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                rendered_prompt = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            prompt_format = "tokenizer_chat_template"
 
         greedy_text = completion(rendered_prompt, temperature=0.0)
         sampled_text = completion(rendered_prompt, temperature=0.7, top_p=0.9)
@@ -450,6 +597,7 @@ def _run_qualitative_prompts(
         results.append(
             {
                 "prompt": prompt,
+                "prompt_format": prompt_format,
                 "rendered_prompt": rendered_prompt,
                 "greedy_completion": greedy_text,
                 "sampled_completion": sampled_text,
@@ -784,6 +932,14 @@ def _main() -> None:
         type=Path,
         default=Path(__file__).parent / "vllm_prompts.txt",
     )
+    parser.add_argument(
+        "--qualitative-raw-prompts",
+        action="store_true",
+        help=(
+            "Send qualitative prompts as raw text continuations instead of applying the tokenizer chat template. "
+            "Use this for base models without an instruction/chat contract."
+        ),
+    )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--max-num-seqs", type=int, default=DEFAULT_MAX_NUM_SEQS)
     parser.add_argument(
@@ -809,6 +965,11 @@ def _main() -> None:
         type=int,
         default=None,
         help="vLLM --max_model_len. Required for some models (e.g. Llama-3.1-8B on N150 caps at 32768).",
+    )
+    parser.add_argument(
+        "--check-max-context-prompt",
+        action="store_true",
+        help="Submit one actual --max-model-len-token completion request before other checks.",
     )
     parser.add_argument(
         "--tt-config",
@@ -967,6 +1128,9 @@ def _main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     server_log = output_dir / "server.log"
     sampling_log = output_dir / "sampling_tests.log"
+    non_aligned_log = output_dir / "non_aligned_prompt_check.json"
+    logit_determinism_log = output_dir / "logit_determinism.json"
+    max_context_log = output_dir / "max_context_prompt_check.json"
 
     server_proc: Optional[subprocess.Popen] = None
     try:
@@ -994,6 +1158,27 @@ def _main() -> None:
             server_url = args.server_url.rstrip("/")
             _probe_external_server(server_url)
 
+        _run_non_aligned_prompt_check(
+            server_url=server_url,
+            hf_model=args.hf_model,
+            output_file=non_aligned_log,
+        )
+        _run_logit_determinism_check(
+            server_url=server_url,
+            hf_model=args.hf_model,
+            model_dir=model_dir,
+            output_file=logit_determinism_log,
+        )
+        if args.check_max_context_prompt:
+            if args.max_model_len is None:
+                parser.error("--check-max-context-prompt requires --max-model-len")
+            _run_max_context_prompt_check(
+                server_url=server_url,
+                hf_model=args.hf_model,
+                max_model_len=args.max_model_len,
+                output_file=max_context_log,
+            )
+
         check_stages = [s for s in stages if s != STAGE_SERVE]
 
         if serve_locally and not check_stages:
@@ -1020,6 +1205,7 @@ def _main() -> None:
                     hf_model=args.hf_model,
                     prompts_file=args.prompts.resolve(),
                     output_dir=output_dir,
+                    raw_prompts=args.qualitative_raw_prompts,
                 )
             elif stage == STAGE_BENCHMARK:
                 primary_summary = _run_serving_benchmark(

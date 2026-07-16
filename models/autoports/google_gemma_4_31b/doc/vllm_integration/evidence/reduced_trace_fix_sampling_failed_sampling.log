@@ -1,0 +1,60 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal/vllm
+configfile: pyproject.toml
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+collecting ... collected 4 items
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch PASSED [ 25%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy FAILED [ 50%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab SKIPPED [ 75%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p PASSED [100%]
+
+=================================== FAILURES ===================================
+__________________ TestSeedingAndVariety.test_top1_is_greedy ___________________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7ffb4aee4be0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7ffb4b0b1ae0>
+tt_model_name = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+
+    def test_top1_is_greedy(self, tt_server, tt_model_name):
+        prompt = "Number: "
+        greedy_config = RequestConfig(prompt=prompt, max_tokens=10, temperature=0)
+        top1_config = RequestConfig(
+            prompt=prompt, max_tokens=10, temperature=2.0, top_k=1
+        )
+        batch = [greedy_config] + [top1_config] * 3
+        result_1 = run_concurrent_batch(tt_server, tt_model_name, batch)
+        result_2 = run_concurrent_batch(tt_server, tt_model_name, batch)
+
+        all_results = result_1 + result_2
+>       assert_deterministic(
+            all_results,
+            "top_k=1 requests should produce the same outputacross positions and runs.",
+        )
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:374:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+results = ['�<unused53><unused53><unused53><unused53><unused53><unused53><unused53><unused53><unused53>', 'Issledovatel)/( గారిی...used53><unused53><unused53><unused53><unused53><unused53>', 'Issledovatel)/( గారిیکیشن மற்றும்銨ں indivíduosี่ยม៦', ...]
+explanation = 'top_k=1 requests should produce the same outputacross positions and runs.'
+
+    def assert_deterministic(results, explanation):
+        unique_results = set(results)
+>       assert len(unique_results) == 1, (
+            f"{explanation}\n"
+            f"Expected reproducible outputs.\n"
+            f"Got {len(unique_results)} unique results out of {len(results)}.\n"
+            f"Results: {results}"
+        )
+E       AssertionError: top_k=1 requests should produce the same outputacross positions and runs.
+E       Expected reproducible outputs.
+E       Got 2 unique results out of 8.
+E       Results: ['�<unused53><unused53><unused53><unused53><unused53><unused53><unused53><unused53><unused53>', 'Issledovatel)/( గారిیکیشن மற்றும்銨ں indivíduosี่ยม៦', 'Issledovatel)/( గారిیکیشن மற்றும்銨ں indivíduosี่ยม៦', 'Issledovatel)/( గారిیکیشن மற்றும்銨ں indivíduosี่ยม៦', '�<unused53><unused53><unused53><unused53><unused53><unused53><unused53><unused53><unused53>', 'Issledovatel)/( గారిیکیشن மற்றும்銨ں indivíduosี่ยม៦', 'Issledovatel)/( గారిیکیشن மற்றும்銨ں indivíduosี่ยม៦', 'Issledovatel)/( గారిیکیشن மற்றும்銨ں indivíduosี่ยม៦']
+
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:183: AssertionError
+=========================== short test summary info ============================
+FAILED vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+=================== 1 failed, 2 passed, 1 skipped in 15.56s ====================

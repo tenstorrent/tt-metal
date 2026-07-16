@@ -1,0 +1,346 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal/vllm
+configfile: pyproject.toml
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+collecting ... collected 4 items
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch FAILED [ 25%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy FAILED [ 50%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab FAILED [ 75%]
+vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p FAILED [100%]
+
+=================================== FAILURES ===================================
+__________________ TestBatchIsolation.test_mixed_params_batch __________________
+
+self = <tests.tt.test_request_isolation.TestBatchIsolation object at 0x7fcacadad9f0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7fcacaf655a0>
+tt_model_name = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+max_batch_size = 32
+
+    def test_mixed_params_batch(self, tt_server, tt_model_name, max_batch_size):
+        """
+        Batch where each request has completely different parameters.
+        """
+        configs = [
+            # Greedy
+            RequestConfig(prompt="Count: ", max_tokens=5, temperature=0),
+            # High temp with seed
+            RequestConfig(
+                prompt="Random: ", max_tokens=5, temperature=2.0, top_k=100, seed=42
+            ),
+            # With repetition penalty
+            RequestConfig(
+                prompt="test test. Say: ",
+                max_tokens=5,
+                temperature=0.5,
+                repetition_penalty=3.0,
+                seed=42,
+            ),
+            # With presence penalty
+            RequestConfig(
+                prompt="List: ",
+                max_tokens=10,
+                temperature=0.5,
+                presence_penalty=2.0,
+                seed=42,
+            ),
+            # top_k=1 (should be greedy-like)
+            RequestConfig(
+                prompt="Word: ", max_tokens=3, temperature=2.0, top_k=1, seed=99
+            ),
+            # Low temp
+            RequestConfig(prompt="Letter: ", max_tokens=3, temperature=0.01, seed=42),
+            # High temp low top_k
+            RequestConfig(
+                prompt="Number: ", max_tokens=3, temperature=2.0, top_k=5, seed=42
+            ),
+            # With frequency penalty
+            RequestConfig(
+                prompt="a a a. Next: ",
+                max_tokens=5,
+                temperature=0.5,
+                frequency_penalty=2.0,
+                seed=42,
+            ),
+            # Combined penalties
+            RequestConfig(
+                prompt="All: ",
+                max_tokens=8,
+                temperature=0.5,
+                repetition_penalty=1.5,
+                presence_penalty=1.0,
+                frequency_penalty=1.0,
+                seed=6,
+            ),
+            # Top-p variation
+            RequestConfig(
+                prompt="TopP: ", max_tokens=8, temperature=1.0, top_p=0.5, seed=7
+            ),
+        ][:max_batch_size]
+
+        # Run twice, with random batch order on second run
+>       results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_request_isolation.py:75:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:159: in run_concurrent_batch
+    return asyncio.run(_run())
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/asyncio/runners.py:44: in run
+    return loop.run_until_complete(main)
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py:649: in run_until_complete
+    return future.result()
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:149: in _run
+    return await send_batch_concurrent(
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:127: in send_batch_concurrent
+    return await asyncio.gather(*tasks)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+async_client = <openai.AsyncOpenAI object at 0x7fcacaf67ac0>
+model = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+config = RequestConfig(prompt='TopP: ', max_tokens=8, temperature=1.0, top_k=None, top_p=0.5, seed=7, presence_penalty=0.0, fre...ne, min_p=0.0, bad_words=None, logit_bias=None, allowed_token_ids=None, min_tokens=0, return_tokens_as_token_ids=False)
+return_full_response = False
+
+    async def send_request(
+        async_client, model: str, config: RequestConfig, return_full_response: bool = False
+    ):
+        """Send a single async legacy completion request (old API)."""
+        extra_body: dict[str, Any] = {}
+        if config.top_k is not None:
+            extra_body["top_k"] = config.top_k
+        if config.repetition_penalty != 1.0:
+            extra_body["repetition_penalty"] = config.repetition_penalty
+        if config.min_p != 0.0:
+            extra_body["min_p"] = config.min_p
+        if config.min_tokens != 0:
+            extra_body["min_tokens"] = config.min_tokens
+        if config.logit_bias is not None:
+            extra_body["logit_bias"] = config.logit_bias
+        if config.allowed_token_ids is not None:
+            extra_body["allowed_token_ids"] = config.allowed_token_ids
+        if config.return_tokens_as_token_ids:
+            extra_body["return_tokens_as_token_ids"] = True
+        if config.bad_words is not None:
+            raise ValueError("bad_words is not supported in legacy completions API")
+
+        response = await async_client.completions.create(
+            model=model,
+            prompt=config.prompt,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+            top_p=config.top_p,
+            seed=config.seed,
+            presence_penalty=config.presence_penalty,
+            frequency_penalty=config.frequency_penalty,
+            logprobs=config.logprobs,
+            extra_body=extra_body if extra_body else None,
+        )
+        if return_full_response:
+            return response
+>       return response.choices[0].text
+E       TypeError: 'NoneType' object is not subscriptable
+
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:66: TypeError
+__________________ TestSeedingAndVariety.test_top1_is_greedy ___________________
+
+self = <tests.tt.test_seeding_and_variety.TestSeedingAndVariety object at 0x7fcacaf8eb30>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7fcacaf655a0>
+tt_model_name = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+
+    def test_top1_is_greedy(self, tt_server, tt_model_name):
+        prompt = "Number: "
+        greedy_config = RequestConfig(prompt=prompt, max_tokens=10, temperature=0)
+        top1_config = RequestConfig(
+            prompt=prompt, max_tokens=10, temperature=2.0, top_k=1
+        )
+        batch = [greedy_config] + [top1_config] * 3
+>       result_1 = run_concurrent_batch(tt_server, tt_model_name, batch)
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py:370:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:159: in run_concurrent_batch
+    return asyncio.run(_run())
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/asyncio/runners.py:44: in run
+    return loop.run_until_complete(main)
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py:649: in run_until_complete
+    return future.result()
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:149: in _run
+    return await send_batch_concurrent(
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:127: in send_batch_concurrent
+    return await asyncio.gather(*tasks)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+async_client = <openai.AsyncOpenAI object at 0x7fcaca547460>
+model = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+config = RequestConfig(prompt='Number: ', max_tokens=10, temperature=0, top_k=None, top_p=1.0, seed=None, presence_penalty=0.0,...ne, min_p=0.0, bad_words=None, logit_bias=None, allowed_token_ids=None, min_tokens=0, return_tokens_as_token_ids=False)
+return_full_response = False
+
+    async def send_request(
+        async_client, model: str, config: RequestConfig, return_full_response: bool = False
+    ):
+        """Send a single async legacy completion request (old API)."""
+        extra_body: dict[str, Any] = {}
+        if config.top_k is not None:
+            extra_body["top_k"] = config.top_k
+        if config.repetition_penalty != 1.0:
+            extra_body["repetition_penalty"] = config.repetition_penalty
+        if config.min_p != 0.0:
+            extra_body["min_p"] = config.min_p
+        if config.min_tokens != 0:
+            extra_body["min_tokens"] = config.min_tokens
+        if config.logit_bias is not None:
+            extra_body["logit_bias"] = config.logit_bias
+        if config.allowed_token_ids is not None:
+            extra_body["allowed_token_ids"] = config.allowed_token_ids
+        if config.return_tokens_as_token_ids:
+            extra_body["return_tokens_as_token_ids"] = True
+        if config.bad_words is not None:
+            raise ValueError("bad_words is not supported in legacy completions API")
+
+        response = await async_client.completions.create(
+            model=model,
+            prompt=config.prompt,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+            top_p=config.top_p,
+            seed=config.seed,
+            presence_penalty=config.presence_penalty,
+            frequency_penalty=config.frequency_penalty,
+            logprobs=config.logprobs,
+            extra_body=extra_body if extra_body else None,
+        )
+        if return_full_response:
+            return response
+>       return response.choices[0].text
+E       TypeError: 'NoneType' object is not subscriptable
+
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:66: TypeError
+__________________ TestLogprobs.test_chat_logprobs_all_vocab ___________________
+
+self = <tests.tt.test_logprobs.TestLogprobs object at 0x7fcacae19510>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7fcacaf655a0>
+tt_model_name = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+
+    def test_chat_logprobs_all_vocab(self, tt_server, tt_model_name):
+        """Test chat completions with top_logprobs=-1 (all vocab logprobs).
+
+        The legacy completions API rejects logprobs=-1, so this must go
+        through the chat API where top_logprobs=-1 is allowed.
+        Servers with a low max_logprobs cap will reject this request;
+        the test is skipped in that case.
+        """
+        configs = [
+            RequestConfig(
+                prompt="Say hello.",
+                max_tokens=5,
+                logprobs=-1,
+            )
+        ]
+        try:
+            results = run_concurrent_batch(
+                tt_server,
+                tt_model_name,
+                configs,
+                use_chat=True,
+                return_full_response=True,
+            )
+        except openai.BadRequestError as e:
+            if "max allowed" in str(e).lower() and "logprobs" in str(e).lower():
+                pytest.skip(f"Server does not support all-vocab logprobs: {e}")
+            raise
+        assert len(results) == 1
+
+>       choice = results[0].choices[0]
+E       TypeError: 'NoneType' object is not subscriptable
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py:113: TypeError
+______________________ TestHostOnlyParameters.test_min_p _______________________
+
+self = <tests.tt.test_host_only_params.TestHostOnlyParameters object at 0x7fcacae19cf0>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7fcacaf655a0>
+tt_model_name = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+max_batch_size = 32
+
+    def test_min_p(self, tt_server, tt_model_name, max_batch_size):
+        """Test min_p parameter (smoke test - verifies it doesn't error)."""
+        configs = [
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.1),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.2),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.3),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.4),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.5),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.6),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.7),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.8),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=0.9),
+            RequestConfig(prompt="Random: ", max_tokens=10, min_p=1.0),
+        ]
+>       results = run_concurrent_batch(tt_server, tt_model_name, configs)
+
+vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py:27:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:159: in run_concurrent_batch
+    return asyncio.run(_run())
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/asyncio/runners.py:44: in run
+    return loop.run_until_complete(main)
+/usr/local/share/uv/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py:649: in run_until_complete
+    return future.result()
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:149: in _run
+    return await send_batch_concurrent(
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:127: in send_batch_concurrent
+    return await asyncio.gather(*tasks)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+async_client = <openai.AsyncOpenAI object at 0x7fcaca344130>
+model = '/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3'
+config = RequestConfig(prompt='Random: ', max_tokens=10, temperature=1.0, top_k=None, top_p=1.0, seed=None, presence_penalty=0....ne, min_p=0.4, bad_words=None, logit_bias=None, allowed_token_ids=None, min_tokens=0, return_tokens_as_token_ids=False)
+return_full_response = False
+
+    async def send_request(
+        async_client, model: str, config: RequestConfig, return_full_response: bool = False
+    ):
+        """Send a single async legacy completion request (old API)."""
+        extra_body: dict[str, Any] = {}
+        if config.top_k is not None:
+            extra_body["top_k"] = config.top_k
+        if config.repetition_penalty != 1.0:
+            extra_body["repetition_penalty"] = config.repetition_penalty
+        if config.min_p != 0.0:
+            extra_body["min_p"] = config.min_p
+        if config.min_tokens != 0:
+            extra_body["min_tokens"] = config.min_tokens
+        if config.logit_bias is not None:
+            extra_body["logit_bias"] = config.logit_bias
+        if config.allowed_token_ids is not None:
+            extra_body["allowed_token_ids"] = config.allowed_token_ids
+        if config.return_tokens_as_token_ids:
+            extra_body["return_tokens_as_token_ids"] = True
+        if config.bad_words is not None:
+            raise ValueError("bad_words is not supported in legacy completions API")
+
+        response = await async_client.completions.create(
+            model=model,
+            prompt=config.prompt,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+            top_p=config.top_p,
+            seed=config.seed,
+            presence_penalty=config.presence_penalty,
+            frequency_penalty=config.frequency_penalty,
+            logprobs=config.logprobs,
+            extra_body=extra_body if extra_body else None,
+        )
+        if return_full_response:
+            return response
+>       return response.choices[0].text
+E       TypeError: 'NoneType' object is not subscriptable
+
+vllm/plugins/vllm-tt-plugin/tests/tt/utils.py:66: TypeError
+=========================== short test summary info ============================
+FAILED vllm/plugins/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+FAILED vllm/plugins/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+FAILED vllm/plugins/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+FAILED vllm/plugins/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+============================== 4 failed in 23.87s ==============================

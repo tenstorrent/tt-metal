@@ -1,0 +1,34 @@
+{
+  "prompt_token_count": 113279,
+  "advertised_max_model_len": 113280,
+  "requested_output_tokens": 1,
+  "total_requested_sequence_length": 113280,
+  "status_code": 200,
+  "response": {
+    "id": "cmpl-9b0cba3a43099587",
+    "object": "text_completion",
+    "created": 1784166329,
+    "model": "/home/odjuricic/.cache/huggingface/hub/models--google--gemma-4-31B/snapshots/d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3",
+    "choices": [
+      {
+        "index": 0,
+        "text": "x",
+        "logprobs": null,
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null,
+        "prompt_logprobs": null,
+        "prompt_token_ids": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": null,
+    "usage": {
+      "prompt_tokens": 113279,
+      "total_tokens": 113280,
+      "completion_tokens": 1,
+      "prompt_tokens_details": null
+    },
+    "kv_transfer_params": null
+  }
+}

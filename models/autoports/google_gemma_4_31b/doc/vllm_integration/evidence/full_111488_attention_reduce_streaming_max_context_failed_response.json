@@ -1,0 +1,15 @@
+{
+  "prompt_token_count": 111487,
+  "advertised_max_model_len": 111488,
+  "requested_output_tokens": 1,
+  "total_requested_sequence_length": 111488,
+  "status_code": 200,
+  "response": {
+    "error": {
+      "message": "EngineCore encountered an issue. See stack trace (above) for the root cause.",
+      "type": "InternalServerError",
+      "param": null,
+      "code": 500
+    }
+  }
+}
