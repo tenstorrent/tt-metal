@@ -17,6 +17,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/program/kernel_prewarm.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/tt_cluster.hpp"
 
@@ -116,6 +117,13 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     auto& ctx = tt::tt_metal::MetalContext::instance();
     if (ctx.rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
+        // Capture-only pass: compile() above generated genfiles + captured the manifest without gcc, so
+        // there are no binaries to load or dispatch. Skip execution -- the pipeline still traverses all
+        // program construction (capturing the full kernel set), and the off-device prewarm compiles it
+        // before the real run.
+        if (kernel_prewarm::capture_only()) {
+            return;
+        }
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     } else if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {

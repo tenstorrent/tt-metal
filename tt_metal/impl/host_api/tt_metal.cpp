@@ -55,6 +55,8 @@
 #include <tt_metal_profiler.hpp>
 #include <program.hpp>
 #include "program/program_impl.hpp"
+#include "program/kernel_prewarm.hpp"
+#include <tt-metalium/kernel_prewarm_control.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -1247,6 +1249,27 @@ std::string SerializeClusterDescriptor() {
 
 // This function is used to set a default root directory for the tt_metal library.
 void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
+
+void KernelPrewarmSetCaptureOnly(bool enabled) { kernel_prewarm::set_capture_only(enabled); }
+
+bool KernelPrewarmColdStartNeeded() { return kernel_prewarm::cold_start_needed(); }
+
+std::size_t KernelPrewarmOfflineCompile() {
+    // Resolve out_root/root_dir the way JitBuildEnv::init does (build.cpp): root_dir is the TT-Metal
+    // root; out_root is the specified cache dir, else the default cache root. A device is open when the
+    // pipeline calls this, so rtoptions already carries the run's TT_METAL_CACHE / TT_METAL_HOME.
+    auto& rtoptions = MetalContext::instance().rtoptions();
+    const std::string root_dir = rtoptions.get_root_dir();
+    std::string out_root;
+    if (rtoptions.is_cache_dir_specified()) {
+        out_root = rtoptions.get_cache_dir();
+    } else if (const char* home = std::getenv("HOME"); home != nullptr && home[0] != '\0') {
+        out_root = std::string(home) + "/.cache/tt-metal-cache/";
+    } else {
+        out_root = "/tmp/tt-metal-cache/";
+    }
+    return kernel_prewarm::prewarm_manifest_offline(out_root, root_dir);
+}
 
 IDevice* CreateDevice(
     ChipId device_id,
