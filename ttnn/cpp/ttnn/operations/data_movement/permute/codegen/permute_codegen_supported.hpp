@@ -12,12 +12,12 @@
 namespace ttnn::operations::data_movement::permute_codegen {
 
 // Correctness gate: can the codegen prim produce a bit-exact result for these inputs?
-// Placeholder — phase 4a transcribes the real predicate from codegen_permute.py's
-// invalidate_vector and the _fused_wh_ok gate (see manifest cases with scope: out).
+// Transcribed from codegen_permute.py's invalidate_vector and the _fused_wh_ok gate (see manifest
+// cases with scope: out). Consulted by both the free function and validate_on_program_cache_miss.
 bool supported_by_codegen(const Tensor& input_tensor, ttsl::Span<const uint32_t> dims);
 
-// Perf gate, auto-routing only: enumerated in-scope cases known not to win on device.
-// Placeholder — phase 4a (and Iterate) populate this from the perf-demote list.
+// Perf gate, auto-routing only: enumerated in-scope cases known not to win on device. Never
+// consulted by validate — a demoted case must still run under forced implementation="codegen".
 bool is_demoted(const Tensor& input_tensor, ttsl::Span<const uint32_t> dims);
 
 enum class ImplementationSelector { Auto, Native, Codegen };
