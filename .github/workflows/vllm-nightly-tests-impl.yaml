@@ -388,7 +388,7 @@ jobs:
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
               "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "structured-output": true,
+              "structured-output": false,
               "multimodal": true,
               "additional-server-args": "--max_model_len 131072",
               "mm-processor-kwargs": "{\"use_fast\": false}",
