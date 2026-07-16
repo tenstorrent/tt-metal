@@ -3010,7 +3010,14 @@ void DeviceProfiler::pollDebugDumpResults(
 }
 
 bool getDeviceProfilerState(ContextId context_id) {
-    return MetalContext::instance(context_id).rtoptions().get_profiler_enabled();
+    auto& ctx = MetalContext::instance(context_id);
+
+    // Device profiler cannot be enabled on mock device.
+    if (ctx.get_cluster().is_mock_or_emulated()) {
+        return false;
+    }
+
+    return ctx.rtoptions().get_profiler_enabled();
 }
 
 bool getDeviceDebugDumpEnabled(ContextId context_id) {
