@@ -76,6 +76,34 @@ rounding difference (ab_maxdiff ≈ one ULP at the output magnitude; PCC 0.99999
 default. Watcher: the in1_near Sm>1 path still trips the **pre-existing** in1_reader atomic-drain warning
 (identical under current placement) — addressed in the forwarding part.
 
-## Part 3 — forwarding (in progress)
-On top of in1_near, evaluating: the atomic-drain safety fix (required for watcher-clean Sm>1), and forwarding
-candidates (per-peer cumulative, pipelined unicast, multicast, tree/chain). Details appended when complete.
+## Part 3 — forwarding & synchronization (on top of in1_near)
+
+**Atomic-drain fix (landed).** The audit's watcher gap is fixed: the M-split reader now drains its forwarded
+payloads + the non-posted `valid` atomics (`noc_async_write_barrier(); noc_async_atomic_barrier()`), and each
+slave drains its `ready` atomics, once at kernel exit — guarded to the M-split path (`mrole==1`/slave) so the
+Sm==1 solo public path stays byte-identical. This is the `PIPELINED_UNICAST` "drain both payload writes and
+non-posted atomics before kernel exit" requirement. Result: **every Sm>1 path is now watcher-clean**
+(verified Sm=2 production + Sm=4); output unchanged (PlacementCorrectness + 20/20 pass); no perf change (a
+one-time exit barrier — Sm=2 primary stays −6.4% vs current, drain present in both arms).
+
+**Forwarding-perf candidates — not adopted (correctly scoped out for the production target).** The only
+production Sm>1 shape is 256×2048×1024 (**Sm=2**), which forwards exactly **one copy per block** with a
+group-wait that, at `mpeers=1`, is already per-peer. Therefore:
+- `PER_PEER_CUMULATIVE`: identical to the current group-wait at Sm=2 (one slave) — no Sm=2 effect.
+- `MULTICAST` / `TREE_OR_CHAIN`: cannot reduce a single copy; only help `Sm≥3` payload fan-out.
+- `PIPELINED_UNICAST`: the current forward is already write→flush→valid with no per-block completion barrier;
+  the only missing piece was the exit atomic drain, now landed.
+
+`Sm≥3` is **not selected by the picker for any production shape**, so per-peer/multicast/tree would be
+effort for non-production gains and are **not implemented**. The Sm=2 delivery win came from **placement**
+(in1_near, −6.3/−7.2%), as expected; the forwarding cost at Sm=2 is **intrinsically small** (one short
+~3-hop forward per block after in1_near, overlapped behind the reader's DRAM read and compute).
+
+**Decision:** retain the current unicast forwarding; land only the atomic-drain safety fix. Forwarding gains
+were attributed to nothing (no candidate adopted); the placement gain stands alone.
+
+## Correctness & watcher (Part 4)
+Random-BF16 vs CPU golden PCC ≥ 0.999 fresh+cached across Sm=1/2/3/4, Pk=1/split-K, both reader NoCs, Ns>1,
+W=1/W>1, K/N tails, PARETO ring (PlacementCorrectness + the existing ring/pipelined/progressive gtests);
+public 20/20 pass on the in1_near default. Watcher clean on every accepted Sm>1 path (Sm=2 production, Sm=4):
+payload visibility precedes validity (unchanged), and the semaphore atomics are now drained before exit.

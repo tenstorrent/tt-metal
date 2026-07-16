@@ -73,6 +73,9 @@ void kernel_main() {
             noc_semaphore_wait_min(valid, b + 1);
             cb_push_back(in1_cb, in1_blk);
         }
+        // Drain the non-posted `reader_ready` semaphore atomics before exit (the reader already observed them
+        // via its own valid signalling, but the atomics must not outlive the program — the watcher flags this).
+        noc_async_atomic_barrier();
         return;
     }
 
@@ -160,5 +163,13 @@ void kernel_main() {
                 cb_push_back(in1_cb, in1_blk);
             }
         }
+    }
+    // M-split READER exit drain: forwarded payloads are flushed per block, but the per-block `valid` semaphore
+    // incs are non-posted atomics that were never drained -> the watcher flags pending NOC transactions at
+    // kernel exit. Drain both writes and atomics once here. Guarded to the reader (mrole==1); the Sm==1 solo
+    // path (mrole==2) has no forwarding and stays byte-identical.
+    if (mrole == 1u) {
+        noc_async_write_barrier();
+        noc_async_atomic_barrier();
     }
 }
