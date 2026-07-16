@@ -309,6 +309,80 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     EXPECT_THAT(readback.to_vector<float>(), Pointwise(Eq(), input));
 }
 
+bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
+    return a == b && experimental::per_core_allocation::is_per_core_allocation(a.memory_config()) ==
+                         experimental::per_core_allocation::is_per_core_allocation(b.memory_config());
+}
+
+TEST(VectorConversionTest, ExactSpecPredicateCustomAlignment) {
+    Shape shape{32, 32};
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto alignment = tt::tt_metal::Alignment({64, 64});
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+
+    auto host_tensor = HostTensor::from_vector(input, spec);
+
+    // Exact spec match!
+    EXPECT_TRUE(exact_spec_match(host_tensor.tensor_spec(), spec));
+}
+
+TEST(VectorConversionTest, ExactSpecPredicateCustomAlignmentRvalueVector) {
+    Shape shape{64, 64};  // Matches alignment so logical_matches_physical is true
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto alignment = tt::tt_metal::Alignment({64, 64});
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+
+    auto host_tensor = HostTensor::from_vector(std::move(input), spec);
+
+    EXPECT_TRUE(exact_spec_match(host_tensor.tensor_spec(), spec));
+}
+
+TEST(VectorConversionTest, ExactSpecPredicateCustomAlignmentFromSpan) {
+    Shape shape{32, 32};
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto alignment = tt::tt_metal::Alignment({64, 64});
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+
+    auto host_tensor = HostTensor::from_span<float>(std::span<float>(input), spec);
+
+    EXPECT_TRUE(exact_spec_match(host_tensor.tensor_spec(), spec));
+}
+
+TEST(VectorConversionTest, ExactSpecShardedPackedSizes) {
+    Shape shape{64, 64};
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto memory_config = MemoryConfig{
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec{CoreRangeSet({CoreRange({0, 0}, {0, 1})}), {32, 64}, ShardOrientation::ROW_MAJOR}};
+    experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+    auto alignment = tt::tt_metal::Alignment({64, 64});
+    auto spec =
+        TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config, alignment));
+
+    auto host_tensor = HostTensor::from_vector(input, spec);
+
+    EXPECT_TRUE(exact_spec_match(host_tensor.tensor_spec(), spec));
+
+    // Check packed size
+    const size_t expected_shard_size = spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : host_tensor.buffer().shard_coords()) {
+        auto shard = host_tensor.buffer().get_shard(coord);
+        ASSERT_TRUE(shard.has_value());
+        EXPECT_EQ(shard->view_bytes().size(), expected_shard_size);
+    }
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 }  // namespace tt::tt_metal

@@ -1123,21 +1123,23 @@ struct bfloat8_tag {};
 
 // Preprocess the storage to unpack the bfloat8/4 tiles into float32.
 tt::tt_metal::DistributedHostBuffer preprocess_buffers(
-    const tt::tt_metal::DistributedHostBuffer& input_storage, const DataType input_dtype) {
+    const tt::tt_metal::DistributedHostBuffer& input_storage,
+    const DataType input_dtype,
+    const tt::tt_metal::Tile& tile) {
     constexpr bool row_major_output = false;
     constexpr bool is_exp_a = false;
 
     if (input_dtype == DataType::BFLOAT8_B) {
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
-            auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
+            auto float_unpacked_data = unpack_bfp8_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
     if (input_dtype == DataType::BFLOAT4_B) {
         return input_storage.transform([&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const uint32_t> uint32_data = buffer.view_as<const uint32_t>();
-            auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a);
+            auto float_unpacked_data = unpack_bfp4_tiles_into_float_vec(uint32_data, row_major_output, is_exp_a, tile);
             return tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
         });
     }
@@ -1146,7 +1148,9 @@ tt::tt_metal::DistributedHostBuffer preprocess_buffers(
 
 template <typename SrcType, typename DstType>
 tt::tt_metal::DistributedHostBuffer transform_buffers(
-    const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::DistributedHostBuffer& input_buffer) {
+    const tt::tt_metal::TensorSpec& input_tensor_spec,
+    const tt::tt_metal::TensorSpec& output_spec,
+    const tt::tt_metal::DistributedHostBuffer& input_buffer) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
         return input_buffer;
     } else if constexpr (std::is_same_v<SrcType, float8_e4m3> || std::is_same_v<DstType, float8_e4m3>) {
@@ -1175,8 +1179,8 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
             std::vector<SrcType> tilized_data;  // empty if `data` is already in tile layout.
             if (input_tensor_spec.layout() == Layout::ROW_MAJOR) {
-                tilized_data = tensor_impl::to_tile_major_layout(
-                    input_tensor_spec.physical_shape(), input_tensor_spec.tile(), data);
+                tilized_data =
+                    tensor_impl::to_tile_major_layout(output_spec.physical_shape(), output_spec.tile(), data);
                 data = ttsl::make_const_span(tilized_data);
             }
 
@@ -1184,9 +1188,9 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
                 constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, output_spec.tile());
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -1218,12 +1222,46 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         return input_tensor;
     }
 
-    auto input_buffer = CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type);
+    const size_t expected_input_shard_size = input_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    for (const auto& coord : input_tensor.buffer().shard_coords()) {
+        auto shard = input_tensor.buffer().get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_input_shard_size,
+                "to_dtype input shard size mismatch before conversion: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_input_shard_size);
+        }
+    }
 
-    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer]() {
+    auto input_buffer =
+        CMAKE_UNIQUE_NAMESPACE::preprocess_buffers(input_tensor.buffer(), src_type, input_tensor.tensor_spec().tile());
+
+    const auto layout =
+        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
+
+    tt::tt_metal::PageConfig page_config(layout, input_tensor.tensor_spec().tile());
+
+    auto output_spec = TensorSpec(
+        input_tensor.logical_shape(),
+        tt::tt_metal::TensorLayout(
+            dtype,
+            page_config,
+            input_tensor.tensor_spec().memory_config(),
+            input_tensor.tensor_spec().tensor_layout().get_alignment()));
+
+    TT_FATAL(
+        input_tensor.tensor_spec().physical_shape() == output_spec.physical_shape(),
+        "to_dtype: Converting layout to {} implicitly changed physical shape from {} to {} due to alignment "
+        "constraints. This is currently unsupported. Please pad the tensor explicitly before conversion.",
+        layout,
+        input_tensor.tensor_spec().physical_shape(),
+        output_spec.physical_shape());
+
+    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer, &output_spec]() {
         auto with_src_and_dst = [&]<typename SrcType, typename DstType>() {
             return CMAKE_UNIQUE_NAMESPACE::transform_buffers<SrcType, DstType>(
-                input_tensor.tensor_spec(), input_buffer);
+                input_tensor.tensor_spec(), output_spec, input_buffer);
         };
 
         auto with_src = [dst_type, &with_src_and_dst]<typename SrcType>() {
@@ -1259,24 +1297,20 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
         TT_THROW("Unreachable");
     }();
 
-    const auto layout =
-        (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
-
-    tt::tt_metal::PageConfig page_config(layout);
-    if (input_tensor.layout() == Layout::TILE) {
-        page_config = tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile());
+    auto result_buffer = std::move(output_storage);
+    const size_t expected_shard_size = output_spec.compute_packed_buffer_size_bytes();
+    for (const auto& coord : result_buffer.shard_coords()) {
+        auto shard = result_buffer.get_shard(coord);
+        if (shard) {
+            TT_FATAL(
+                shard->view_bytes().size() == expected_shard_size,
+                "to_dtype shard size mismatch after conversion: actual {} != expected {}",
+                shard->view_bytes().size(),
+                expected_shard_size);
+        }
     }
 
-    auto output_spec = TensorSpec(
-        input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
-            dtype,
-            page_config,
-            input_tensor.tensor_spec().memory_config(),
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
-
-    return HostTensor::from_buffer(std::move(output_storage), output_spec, input_tensor.tensor_topology());
+    return HostTensor::from_buffer(std::move(result_buffer), output_spec, input_tensor.tensor_topology());
 }
 
 // ======================================================================================
