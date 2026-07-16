@@ -302,13 +302,19 @@ class HunyuanTtModel(LightweightModule):
             mult = n * TILE
             S_pad = ((seq_len + mult - 1) // mult) * mult
             sp_pad = S_pad - seq_len
+            mask_already_sp_sharded = False
+            if attention_mask is not None:
+                mshape = list(attention_mask.shape)
+                # Fast path: caller provided a query-sharded mask [B,1,S_pad/n,S_pad]
+                # (uploaded with a mesh mapper), so skip full-mask pad/shard.
+                mask_already_sp_sharded = len(mshape) >= 4 and mshape[2] == (S_pad // n) and mshape[3] == S_pad
             if sp_pad:
                 # hidden/cos/sin: zero-pad the seq dim (padded query outputs are
                 # discarded at exit; padded keys are masked out below).
                 hidden = ttnn.pad(hidden, [(0, 0), (0, sp_pad), (0, 0)], value=0.0)
                 cos_tt = ttnn.pad(cos_tt, [(0, 0), (0, 0), (0, sp_pad), (0, 0)], value=0.0)
                 sin_tt = ttnn.pad(sin_tt, [(0, 0), (0, 0), (0, sp_pad), (0, 0)], value=0.0)
-                if attention_mask is not None:
+                if attention_mask is not None and not mask_already_sp_sharded:
                     # Mask the padded KEY columns (-1e30) so real queries ignore the
                     # padding; padded query ROWS can be anything (sliced off later).
                     attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, 0), (0, sp_pad)], value=-1.0e30)
@@ -323,8 +329,9 @@ class HunyuanTtModel(LightweightModule):
             cos_tt = sp_shard(ccl, cos_tt, dim=2, mesh_axis=ax, n=n, out_memory_config=ttnn.L1_MEMORY_CONFIG)
             sin_tt = sp_shard(ccl, sin_tt, dim=2, mesh_axis=ax, n=n, out_memory_config=ttnn.L1_MEMORY_CONFIG)
             if attention_mask is not None:
-                attention_mask = sp_shard(ccl, attention_mask, dim=2, mesh_axis=ax, n=n)  # [B,1,S_pad/n,S_pad]
-                sp_owned.append(attention_mask)
+                if not mask_already_sp_sharded:
+                    attention_mask = sp_shard(ccl, attention_mask, dim=2, mesh_axis=ax, n=n)  # [B,1,S_pad/n,S_pad]
+                    sp_owned.append(attention_mask)
 
         for layer in self.layers:
             nxt = layer(
