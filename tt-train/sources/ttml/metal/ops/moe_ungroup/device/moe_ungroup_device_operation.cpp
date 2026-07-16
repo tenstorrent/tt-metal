@@ -100,12 +100,6 @@ tensor_return_value_t MoeUngroupDeviceOperation::create_output_tensors(
     return create_device_tensor(spec, device);
 }
 
-ttsl::hash::hash_t MoeUngroupDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& args) {
-    return tt::tt_metal::operation::hash_operation<MoeUngroupDeviceOperation>(
-        attrs, args.expert_out.dtype(), args.expert_out.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::moe_ungroup::device
 
 namespace ttnn::prim {

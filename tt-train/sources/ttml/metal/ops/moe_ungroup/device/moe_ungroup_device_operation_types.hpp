@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <tuple>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -17,6 +18,11 @@ struct MoeUngroupAttributes {
     uint32_t s{};
     uint32_t h{};
     uint32_t t_cap{};
+
+    static constexpr auto attribute_names = std::forward_as_tuple("e_local", "d", "b", "s", "h", "t_cap");
+    auto attribute_values() const {
+        return std::forward_as_tuple(e_local, d, b, s, h, t_cap);
+    }
 };
 
 struct MoeUngroupTensorArgs {
@@ -24,6 +30,11 @@ struct MoeUngroupTensorArgs {
     ttnn::Tensor plan;            // [1, 1, 1, T_cap]     ROW_MAJOR uint32
     ttnn::Tensor offsets;         // [1, 1, 1, E_local+1] ROW_MAJOR uint32
     ttnn::Tensor grouped_scores;  // [1, 1, 1, T_cap]     ROW_MAJOR bf16
+
+    static constexpr auto attribute_names = std::forward_as_tuple("expert_out_dtype", "expert_out_logical_shape");
+    auto attribute_values() const {
+        return std::make_tuple(expert_out.dtype(), std::cref(expert_out.logical_shape()));
+    }
 };
 
 using MoeUngroupSpecReturn = ttnn::TensorSpec;
