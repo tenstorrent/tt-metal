@@ -397,24 +397,31 @@ def profile_denoise_region(
     rt.mesh_device.enable_program_cache()
     warmup_region(rt, region, iters=warmup)
 
-    signpost(start_signpost)
+    # Build setup tensors OUTSIDE the timed window so Tracy regions match
+    # pipeline.py (especially backbone / final_layer MoE vs UNetUp isolation).
     if region == "patch_embed":
+        signpost(start_signpost)
         for _ in range(iters):
             img_tok, _, _ = _run_patch_embed(rt)
             ttnn.deallocate(img_tok, force=False)
+        signpost(stop_signpost)
     elif region == "scatter":
         img_tok, _, _ = _run_patch_embed(rt)
+        signpost(start_signpost)
         for _ in range(iters):
             seq = _run_scatter(rt, img_tok)
             ttnn.deallocate(seq, force=False)
+        signpost(stop_signpost)
         ttnn.deallocate(img_tok, force=False)
     elif region == "backbone":
         img_tok, _, _ = _run_patch_embed(rt)
         seq = _run_scatter(rt, img_tok)
         ttnn.deallocate(img_tok, force=False)
+        signpost(start_signpost)
         for _ in range(iters):
             hidden = _run_backbone(rt, seq)
             ttnn.deallocate(hidden, force=False)
+        signpost(stop_signpost)
         ttnn.deallocate(seq, force=False)
     elif region == "final_layer":
         img_tok, th, tw = _run_patch_embed(rt)
@@ -422,16 +429,19 @@ def profile_denoise_region(
         hidden = _run_backbone(rt, seq)
         ttnn.deallocate(img_tok, force=False)
         ttnn.deallocate(seq, force=False)
+        signpost(start_signpost)
         for _ in range(iters):
             pred = _run_final_layer(rt, hidden, th, tw)
             ttnn.deallocate(pred, force=False)
+        signpost(stop_signpost)
         ttnn.deallocate(hidden, force=False)
     elif region == "full":
+        signpost(start_signpost)
         for _ in range(iters):
             pred = _run_full_step(rt)
             ttnn.deallocate(pred, force=False)
+        signpost(stop_signpost)
     else:
         raise ValueError(f"unknown denoise perf region: {region}")
-    signpost(stop_signpost)
     ttnn.synchronize_device(rt.mesh_device)
     logger.info(f"[denoise perf] done region={region}")
