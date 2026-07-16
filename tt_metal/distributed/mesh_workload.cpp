@@ -85,7 +85,7 @@ MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
 
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
-Program& MeshWorkloadImpl::add_program_impl(const MeshCoordinateRange& device_range, Program&& program) {
+void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
     TT_FATAL(!is_finalized(), "Cannot add programs to a MeshWorkload after it has been finalized.");
     auto potential_intersection = find_intersection(programs_, device_range);
     TT_FATAL(
@@ -95,11 +95,6 @@ Program& MeshWorkloadImpl::add_program_impl(const MeshCoordinateRange& device_ra
         *potential_intersection);
     Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
     programs_[device_range] = std::move(program);
-    return programs_.at(device_range);
-}
-
-void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
-    add_program_impl(device_range, std::move(program));
 }
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
