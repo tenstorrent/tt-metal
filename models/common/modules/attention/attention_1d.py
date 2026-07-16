@@ -71,9 +71,27 @@ MAX_QKV_MM_SEQ_LEN = 2048  # Maximum sequence length for single QKV matmul
 # Source: TTTv1 model_config.py "MAX_MM_SEQ_LEN": 1024
 MAX_MM_SEQ_LEN = 1024
 
-# Total tokens in KV cache must fit in device DRAM. The 128K limit is a hardware
-# constraint for Wormhole devices (by 12GB DRAM per chip) - exceeding it causes OOM based on previous tests.
-MAX_TOTAL_TOKENS = 128 * 1024  # 131072 tokens
+
+def _validate_local_paged_cache_capacity(config: "Attention1DConfig") -> None:
+    """Ensure a locally managed page pool can hold one maximum-length request."""
+    if config.use_vllm_paged_kv_cache:
+        # External cache allocation, page-table management, and DRAM sizing are
+        # owned by the caller.
+        return
+
+    paged_cfg = config.paged_attention_config
+    if paged_cfg is None:
+        return
+
+    total_tokens = paged_cfg.block_size * paged_cfg.max_num_blocks
+    if total_tokens < config.max_seq_len:
+        raise ValueError(
+            f"Paged attention cache is too small for one maximum-length sequence: "
+            f"block_size ({paged_cfg.block_size}) × max_num_blocks ({paged_cfg.max_num_blocks}) = "
+            f"{total_tokens:,} tokens, but max_seq_len is {config.max_seq_len:,}. "
+            f"Increase max_num_blocks or reduce max_seq_len."
+        )
+
 
 # =============================================================================
 # Attention1DConfig dataclass
@@ -1442,15 +1460,8 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             "Typically: head_dim = hidden_size // num_attention_heads."
         )
 
-    # --- Phase 1b: Token budget validation (fail-fast for memory) ---
-    total_tokens = config.max_batch_size * config.max_seq_len
-    if total_tokens > MAX_TOTAL_TOKENS:
-        raise ValueError(
-            f"Total token budget exceeded: max_batch_size ({config.max_batch_size}) × "
-            f"max_seq_len ({config.max_seq_len}) = {total_tokens:,} tokens, "
-            f"but maximum is {MAX_TOTAL_TOKENS:,} tokens (128K). "
-            f"Reduce max_batch_size or max_seq_len to fit in device DRAM."
-        )
+    # --- Phase 1b: Local paged-cache capacity validation ---
+    _validate_local_paged_cache_capacity(config)
 
     # Reject sliding_window + paged attention (chunked prefill doesn't support window masking)
     if config.sliding_window is not None and config.paged_attention_config is not None:
@@ -1971,26 +1982,6 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
                 mesh_shape_override=ttnn.MeshShape([num_devices]),
             ),
         )
-
-        # Validate paged attention has enough blocks for the specified token budget
-        if config.paged_attention_config is not None:
-            paged_cfg = config.paged_attention_config
-            block_size = paged_cfg.block_size
-            max_num_blocks = paged_cfg.max_num_blocks
-            # Each user needs ceil(max_seq_len / block_size) blocks
-            blocks_per_user = (config.max_seq_len + block_size - 1) // block_size
-            required_blocks = blocks_per_user * config.max_batch_size
-            paged_cache_max_seq_len = (block_size * max_num_blocks) // config.max_batch_size
-
-            if required_blocks > max_num_blocks:
-                raise ValueError(
-                    f"Paged attention block budget exceeded: "
-                    f"max_batch_size ({config.max_batch_size}) × "
-                    f"ceil(max_seq_len ({config.max_seq_len}) / block_size ({block_size})) = "
-                    f"{required_blocks} blocks required, but max_num_blocks is only {max_num_blocks}. "
-                    f"With current config, max supported seq_len is {paged_cache_max_seq_len}. "
-                    f"Either increase max_num_blocks or reduce max_seq_len/max_batch_size."
-                )
 
         if config.kv_cache is None:
             # Create default kv_cache LazyWeights
