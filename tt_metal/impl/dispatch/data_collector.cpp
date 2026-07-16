@@ -132,8 +132,7 @@ void DataCollector::RecordKernelGroup(
 void DataCollector::RecordProgramRun(uint64_t program_id) { program_id_to_call_count[program_id]++; }
 
 void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
-    // The real-time profiler currently narrows the runtime ID to 16 bits, so we do the same here.
-    uint16_t runtime_id = static_cast<uint16_t>(program.get_runtime_id());
+    uint32_t runtime_id = static_cast<uint32_t>(program.get_runtime_id());
     uint64_t program_id = program.get_id();
     std::lock_guard<std::mutex> lock(kernel_source_mutex_);
     auto [it, inserted] = program_id_to_kernel_sources_.try_emplace(program_id);
@@ -149,7 +148,17 @@ void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
             }
         }
     }
-    runtime_id_to_kernel_sources_[runtime_id].store(&it->second, std::memory_order_release);
+
+    const uint32_t page_index = runtime_id >> kRuntimeIdPageBits;
+    const uint32_t slot_index = runtime_id & kRuntimeIdPageMask;
+    KernelSourcesPage* page = kernel_sources_page_directory_[page_index].load(std::memory_order_relaxed);
+    if (page == nullptr) {
+        auto new_page = std::make_unique<KernelSourcesPage>();
+        page = new_page.get();
+        kernel_sources_pages_.push_back(std::move(new_page));
+        kernel_sources_page_directory_[page_index].store(page, std::memory_order_release);
+    }
+    (*page)[slot_index].store(&it->second, std::memory_order_release);
 }
 
 void DataCollector::RecordProgramSubDevice(

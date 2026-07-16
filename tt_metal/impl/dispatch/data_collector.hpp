@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <string>
@@ -65,8 +66,14 @@ public:
     std::optional<tt::ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) const;
     // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
     // The returned span is valid until MetalContext teardown or reinitialization.
-    std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) const noexcept {
-        const auto* sources = runtime_id_to_kernel_sources_[runtime_id].load(std::memory_order_acquire);
+    std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint32_t runtime_id) const noexcept {
+        const uint32_t page_index = runtime_id >> kRuntimeIdPageBits;
+        const uint32_t slot_index = runtime_id & kRuntimeIdPageMask;
+        const KernelSourcesPage* page = kernel_sources_page_directory_[page_index].load(std::memory_order_acquire);
+        if (page == nullptr) {
+            return {};
+        }
+        const auto* sources = (*page)[slot_index].load(std::memory_order_acquire);
         return sources != nullptr ? std::span<const std::string_view>(*sources) : std::span<const std::string_view>{};
     }
     // Register a callback to be invoked when real-time profiler data arrives.
@@ -88,7 +95,11 @@ public:
     void DumpData();
 
 private:
-    static constexpr size_t kRuntimeIdSlots = 1u << 16;
+    static constexpr uint32_t kRuntimeIdPageBits = 13;
+    static constexpr size_t kRuntimeIdsPerPage = size_t{1} << kRuntimeIdPageBits;
+    static constexpr size_t kRuntimeIdPageCount = size_t{1} << (32 - kRuntimeIdPageBits);
+    static constexpr uint32_t kRuntimeIdPageMask = static_cast<uint32_t>(kRuntimeIdsPerPage - 1);
+    using KernelSourcesPage = std::array<std::atomic<const std::vector<std::string_view>*>, kRuntimeIdsPerPage>;
 
     struct RealtimeCallbackRegistration {
         tt::ProgramRealtimeProfilerCallbackHandle handle;
@@ -106,12 +117,11 @@ private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
-    // Kernel source bookkeeping for the real-time profiler. Guarded because the dispatch thread writes and
-    // the real-time profiler receiver thread reads.
     mutable std::mutex kernel_source_mutex_;
     std::unordered_set<std::string> unique_kernel_sources_;
     std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources_;
-    std::array<std::atomic<const std::vector<std::string_view>*>, kRuntimeIdSlots> runtime_id_to_kernel_sources_{};
+    std::array<std::atomic<KernelSourcesPage*>, kRuntimeIdPageCount> kernel_sources_page_directory_{};
+    std::vector<std::unique_ptr<KernelSourcesPage>> kernel_sources_pages_;
     std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
     mutable std::mutex runtime_id_to_sub_device_mutex_;
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;
