@@ -162,8 +162,8 @@ bool allocation_context_contains(std::string_view ctx) {
         });
 }
 
-void AllocatorImpl::verify_safe_allocation() const {
-    if (!allocations_unsafe_) {
+void AllocatorImpl::verify_safe_allocation(const Buffer* buffer) const {
+    if (!allocations_unsafe_ || buffer->buffer_type() == BufferType::TRACE) {
         return;
     }
     thread_local static bool warning_generated = false;
@@ -176,6 +176,29 @@ void AllocatorImpl::verify_safe_allocation() const {
     }
 }
 
+void AllocatorImpl::track_buffer_if_unsafe(Buffer* buffer) {
+    if (!tracking_enabled_ || !allocations_unsafe_ || unsafe_tracked_ids_by_trace_.empty()) {
+        return;
+    }
+
+    // If a suppression marker appears anywhere in the context stack, suppress tracking for nested allocations too.
+    const auto& ctx = current_allocation_context();
+    bool skip = buffer->buffer_type() == BufferType::TRACE ||
+                allocation_context_contains("corruptible_allocation_scope") ||
+                (skip_program_cache_ && ctx.starts_with("program_cache:"));
+    if (skip) {
+        return;
+    }
+
+    for (auto& trace_entry : unsafe_tracked_ids_by_trace_) {
+        trace_entry.second.insert(buffer->unique_id());
+    }
+    unsafe_allocation_contexts_[buffer->unique_id()] = ctx;
+    if (traceback_capture_enabled_) {
+        pending_traceback_ids.push_back(buffer->unique_id());
+    }
+}
+
 DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     DeviceAddr address = 0;
@@ -184,7 +207,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->bottom_up();
     auto num_cores = buffer->num_cores();
-    this->verify_safe_allocation();
+    this->verify_safe_allocation(buffer);
     if (config_->disable_interleaved) {
         TT_FATAL(num_cores.has_value(), "Interleaved allocation is disabled, see validate_num_banks");
     }
@@ -211,6 +234,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
+        this->track_buffer_if_unsafe(buffer);
         return buffer->per_core_addresses_.at(cores[0]);
     }
 
@@ -255,23 +279,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
-    if (tracking_enabled_ && allocations_unsafe_) {
-        // If corruptible_allocation_scope appears anywhere in the context stack,
-        // suppress tracking for all nested allocations, including program-cache misses.
-        const auto& ctx = current_allocation_context();
-        bool skip = false;
-        if (allocation_context_contains("corruptible_allocation_scope")) {
-            skip = true;
-        } else if (skip_program_cache_ && ctx.starts_with("program_cache:")) {
-            skip = true;
-        }
-        if (!skip) {
-            unsafe_tracked_ids_[buffer->unique_id()] = ctx;
-            if (traceback_capture_enabled_) {
-                pending_traceback_ids.push_back(buffer->unique_id());
-            }
-        }
-    }
+    this->track_buffer_if_unsafe(buffer);
     return address;
 }
 
@@ -279,6 +287,12 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
+    if (tracking_enabled_) {
+        for (auto& trace_entry : unsafe_tracked_ids_by_trace_) {
+            trace_entry.second.erase(buffer->unique_id());
+        }
+        unsafe_allocation_contexts_.erase(buffer->unique_id());
+    }
 
     // Per-core deallocation path
     if (buffer->per_core_allocation_) {
@@ -302,9 +316,6 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.erase(buffer);
-    if (tracking_enabled_) {
-        unsafe_tracked_ids_.erase(buffer->unique_id());
-    }
 }
 
 void AllocatorImpl::deallocate_buffers() {
@@ -534,9 +545,12 @@ void AllocatorImpl::reset_allocator_size(const BufferType& buffer_type) {
     }
 }
 
-void AllocatorImpl::mark_allocations_unsafe() {
+void AllocatorImpl::mark_allocations_unsafe(std::uint32_t trace_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     allocations_unsafe_ = true;
+    if (tracking_enabled_) {
+        unsafe_tracked_ids_by_trace_.try_emplace(trace_id);
+    }
 }
 
 void AllocatorImpl::mark_allocations_safe() {
@@ -549,19 +563,46 @@ bool AllocatorImpl::allocations_unsafe() const {
     return allocations_unsafe_;
 }
 
-std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids() const {
+std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids(std::uint32_t trace_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return unsafe_tracked_ids_;
+    std::unordered_map<size_t, std::string> result;
+    auto trace_it = unsafe_tracked_ids_by_trace_.find(trace_id);
+    if (trace_it == unsafe_tracked_ids_by_trace_.end()) {
+        return result;
+    }
+    for (size_t buffer_unique_id : trace_it->second) {
+        auto context_it = unsafe_allocation_contexts_.find(buffer_unique_id);
+        result.emplace(
+            buffer_unique_id, context_it == unsafe_allocation_contexts_.end() ? std::string{} : context_it->second);
+    }
+    return result;
 }
 
 void AllocatorImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    unsafe_tracked_ids_.erase(buffer_unique_id);
+    for (auto& trace_entry : unsafe_tracked_ids_by_trace_) {
+        trace_entry.second.erase(buffer_unique_id);
+    }
+    unsafe_allocation_contexts_.erase(buffer_unique_id);
 }
 
-void AllocatorImpl::clear_unsafe_tracked_ids() {
+void AllocatorImpl::clear_unsafe_tracked_ids(std::uint32_t trace_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    unsafe_tracked_ids_.clear();
+    auto trace_it = unsafe_tracked_ids_by_trace_.find(trace_id);
+    if (trace_it == unsafe_tracked_ids_by_trace_.end()) {
+        return;
+    }
+    auto removed_buffer_ids = std::move(trace_it->second);
+    unsafe_tracked_ids_by_trace_.erase(trace_it);
+    for (size_t buffer_unique_id : removed_buffer_ids) {
+        bool tracked_by_another_trace = std::any_of(
+            unsafe_tracked_ids_by_trace_.begin(),
+            unsafe_tracked_ids_by_trace_.end(),
+            [buffer_unique_id](const auto& entry) { return entry.second.contains(buffer_unique_id); });
+        if (!tracked_by_another_trace) {
+            unsafe_allocation_contexts_.erase(buffer_unique_id);
+        }
+    }
 }
 
 std::vector<size_t> AllocatorImpl::drain_pending_traceback_ids() {

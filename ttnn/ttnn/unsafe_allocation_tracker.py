@@ -63,10 +63,11 @@ class UnsafeAllocationTracker:
         remove_unsafe_tracked_id(tensor.device(), buf_id)
         return buf_id
 
-    def verify_before_replay(self) -> None:
+    def verify_before_replay(self, trace_id) -> None:
         """
-        Call before execute_trace. Triggers GC, then checks for unsafe
-        buffers still alive. Raises RuntimeError with details if any are found.
+        Call before execute_trace. Triggers GC, then checks for buffers that
+        are unsafe for this trace and still alive. Raises RuntimeError with
+        details if any are found.
 
         Reports allocation context (op name + compile args) and Python-side referrers.
         """
@@ -75,7 +76,7 @@ class UnsafeAllocationTracker:
         gc.collect()
 
         # get_unsafe_tracked_ids returns dict[int, str] mapping buffer_id -> allocation context
-        live_unsafe_map = get_unsafe_tracked_ids(self.mesh_device)
+        live_unsafe_map = get_unsafe_tracked_ids(self.mesh_device, trace_id)
         # Filter out corruptible_allocation_scope entries — those are acknowledged-safe
         live_unsafe_map = {bid: ctx for bid, ctx in live_unsafe_map.items() if ctx != "corruptible_allocation_scope"}
         if not live_unsafe_map:
