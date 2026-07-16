@@ -6,8 +6,6 @@
 #include "recv_async_op_device_operation.hpp"
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_recv_utils.hpp"
 
 namespace ttnn::experimental::prim {
@@ -29,13 +27,6 @@ RecvAsyncDeviceOperation::spec_return_value_t RecvAsyncDeviceOperation::compute_
 RecvAsyncDeviceOperation::tensor_return_value_t RecvAsyncDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     return {tensor_args};
-}
-
-ttsl::hash::hash_t RecvAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "RecvAsyncDeviceOperation::compute_program_hash is called");
-    const ttnn::Tensor& output_tensor = tensor_args;
-    return tt::tt_metal::operation::hash_operation<RecvAsyncDeviceOperation>(args.mesh_socket, output_tensor);
 }
 
 }  // namespace ttnn::experimental::prim

@@ -5,6 +5,7 @@
 #pragma once
 #include <tt_stl/reflection.hpp>
 
+#include <tuple>
 #include <vector>
 
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -22,6 +23,9 @@ struct RecvAsyncParams {
         attrs.emplace_back("mesh_socket", mesh_socket);
         return attrs;
     }
+
+    static constexpr auto attribute_names = std::forward_as_tuple("mesh_socket");
+    auto attribute_values() const { return std::make_tuple(std::cref(mesh_socket)); }
 };
 
 }  // namespace ttnn::experimental::prim
