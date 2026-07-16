@@ -103,8 +103,9 @@ if(TT_METAL_USE_EMULE)
     # Per-fiber ASAN sanitizer-state isolation test. Its own binary because it
     # includes the emule kernel-side context header (jit_hw/internal/
     # emule_thread_ctx.h) directly, which isn't on the shared api test lib's
-    # include path and shouldn't be dragged into its unity build / PCH.
-    add_executable(unit_tests_fiber_asan emule/test_fiber_sanitizer_isolation.cpp)
+    # include path and shouldn't be dragged into its unity build / PCH. Sources come
+    # from the emule-owned emule/sources.cmake (included via sources.cmake above).
+    add_executable(unit_tests_fiber_asan ${UNIT_TESTS_FIBER_ASAN_SOURCES})
     target_include_directories(
         unit_tests_fiber_asan
         BEFORE

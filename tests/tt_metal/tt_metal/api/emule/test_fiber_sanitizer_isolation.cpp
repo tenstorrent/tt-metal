@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// To run:
-// $ROOT/tt-metal/build_emule/test/tt_metal/unit_tests_fiber_asan --gtest_filter="EmuleSanitizerFiberState.*"
+// To run (from the tt-metal repo root, after an emule build):
+//   build_emule/test/tt_metal/unit_tests_fiber_asan --gtest_filter="EmuleSanitizerFiberState.*"
 //
 // Structural regression guard for the *per-fiber* ASAN sanitizer state.
 //
