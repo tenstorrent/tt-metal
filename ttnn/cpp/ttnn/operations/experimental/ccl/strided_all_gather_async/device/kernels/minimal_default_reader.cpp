@@ -127,7 +127,7 @@ void kernel_main() {
             // Send out local
             uint32_t input_chunk_start_tile = global_tile_index;
             for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[my_chip_id]; chunk_idx++) {
-                DeviceZoneScopedN("AG-LOCAL-READ");
+                // DeviceZoneScopedN("AG-LOCAL-READ");
                 uint32_t actual_chunk_w = device_chunk_widths[my_chip_id][chunk_idx];
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                     input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
@@ -181,7 +181,7 @@ void kernel_main() {
                         !is_split_received_slice ||
                         (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));
                     if (receive_this_chunk) {
-                        DeviceZoneScopedN("AG-RECV-WAIT");
+                        // DeviceZoneScopedN("AG-RECV-WAIT");
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                         sem_target++;
@@ -197,7 +197,7 @@ void kernel_main() {
                             !is_split_forwarded_slice ||
                             (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));
                         if (relay_this_chunk) {
-                            DeviceZoneScopedN("AG-REMOTE-READ");
+                            // DeviceZoneScopedN("AG-REMOTE-READ");
                             uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
                             read_chunk(
                                 input_chunk_start_tile,
@@ -228,8 +228,8 @@ void kernel_main() {
                     }
                     if constexpr (fuse_op) {
                         if (!writer_signals_mm && receive_this_chunk) {
-                            DeviceZoneScopedN("AG-MM-SIGNAL");
-                            // Signal matmul to go
+                            // DeviceZoneScopedN("AG-MM-SIGNAL");
+                            //  Signal matmul to go
                             op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
                         }
                     }
