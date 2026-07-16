@@ -604,6 +604,11 @@ Noc::async_write(
     src.commit_implicit_write();
 }
 
+#else  // COMPILE_FOR_TRISC
+
+inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t) { return {}; }
+inline void DataflowBuffer::lock_release_impl(ScopedLockRegion, uint16_t) {}
+
 #endif  // !COMPILE_FOR_TRISC
 
 #endif  // ARCH_QUASAR
