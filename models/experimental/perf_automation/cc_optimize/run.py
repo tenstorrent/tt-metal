@@ -594,16 +594,42 @@ def _reset_chip_list(devices: str) -> str:
 
 
 def _reset_devices(devices: str) -> str:
-    """tt-smi reset the visible chips to recover a wedged fabric. Best-effort; returns a status string."""
-    chips = _reset_chip_list(devices)
+    """tt-smi reset the visible chips to recover a wedged fabric. Best-effort; returns a status string.
+
+    GALAXY-AWARE and UNIFIED with the profiler-layer reset (agent.probes._reset_arg_sets): a Galaxy host
+    uses -glx_reset (a plain `-r` does NOT reset a Galaxy), a plain board uses `-r`, and the
+    TT_HW_PLANNER_RESET_ARGS / TT_HW_PLANNER_GALAXY overrides are honored -- previously this path
+    hard-coded `-r` and ignored all of that. For 'all'/'' the plain reset stays BARE `tt-smi -r` (resets
+    EVERY chip): the enumerated count comes from tt-smi -s / ttnn and a stale value would reset only
+    chip 0, leaving a multi-chip ETH fabric half-reset (heartbeat-stuck wedge). Explicit/single ids
+    target exactly those chips."""
+    d = (devices or "").strip().lower()
     tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
-    if not chips or not Path(tt_smi).is_file():
-        return "device reset SKIPPED (tt-smi not found or no chip list)"
+    if not Path(tt_smi).is_file():
+        return "device reset SKIPPED (tt-smi not found)"
     try:
-        r = subprocess.run([tt_smi, "-r", chips], capture_output=True, text=True, timeout=420)
-        return "tt-smi -r %s rc=%d" % (chips, r.returncode)
-    except Exception as exc:  # noqa: BLE001
-        return "device reset FAILED (%s)" % exc
+        import agent.probes as _pr  # galaxy-aware reset invocations (single source of truth)
+
+        if _pr._GALAXY_HOST is None and not os.environ.get("TT_HW_PLANNER_GALAXY"):
+            try:
+                _pr.note_board(tt_smi=tt_smi)  # one-time galaxy capability probe (cheap on plain boards)
+            except Exception:  # noqa: BLE001
+                pass
+        arg_sets = _pr._reset_arg_sets()
+    except Exception:  # noqa: BLE001
+        arg_sets = [["-r"]]
+    chips = _reset_chip_list(devices) if d not in ("all", "") else ""
+    last = "no reset ran"
+    for args in arg_sets:
+        cmd = [tt_smi, "-r", chips] if (chips and args == ["-r"]) else [tt_smi, *args]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=420)
+            last = "tt-smi %s rc=%d" % (" ".join(cmd[1:]), r.returncode)
+            if r.returncode == 0:
+                return last
+        except Exception as exc:  # noqa: BLE001
+            last = "tt-smi %s FAILED (%s)" % (" ".join(cmd[1:]), exc)
+    return "device reset (%s)" % last
 
 
 def _reclaim_device(devices: str) -> str:
@@ -1166,6 +1192,18 @@ def _chip_count(devices) -> int:
         return max(1, len([x for x in d.split(",") if x.strip()]))
     if d == "single":
         return 1
+    # 'all'/'' -> count the REAL chips. ttnn.GetNumAvailableDevices() returns 1 until the fabric is
+    # initialized, which silently collapsed multi-chip runs to a single chip (wrong reset target, wrong
+    # TP/DP sizing, wrong scorecard). Prefer `tt-smi -s` (authoritative device_info enumeration); fall
+    # back to ttnn, then 1.
+    try:
+        tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+        r = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=120)
+        n = len((json.loads(r.stdout) or {}).get("device_info") or [])
+        if n > 0:
+            return n
+    except Exception:
+        pass
     try:
         import ttnn
 
