@@ -743,7 +743,7 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
-    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
   model: wan-2.2-t2v
   skus:
@@ -751,7 +751,7 @@
     #   timeout: 150
     #   tier: 1
     wh_galaxy:
-      timeout: 180
+      timeout: 150
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

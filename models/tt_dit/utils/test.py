@@ -40,6 +40,11 @@ def skip_if_unsupported_num_links(mesh_device, num_links):
     from models.common.modules.tt_ccl import get_num_links
 
     available_links = get_num_links(mesh_device)
+
+    # WARNING: get_num_links() returns 0 for 1x1 device meshes.
+    # Some tests requested a 1x1 device mesh with nl=1. They will
+    # be erroneously skipped. TODO Fix all parameterizations which request
+    # 1x1 mesh_device with num_links = 1.
     if available_links < num_links:
         pytest.skip(
             f"Mesh device supports {available_links} link(s) but test requires {num_links}. "

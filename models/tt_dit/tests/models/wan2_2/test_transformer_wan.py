@@ -225,9 +225,6 @@ def test_wan_transformer_block(
                 temb=temb_input,
                 rotary_emb=[torch_rope_cos, torch_rope_sin],
             )
-        for h in hooks:
-            h.remove()
-        del parent_torch_model, torch_model
 
         save_golden(
             commit_hash,
@@ -244,6 +241,10 @@ def test_wan_transformer_block(
                 "torch_spatial_out": torch_spatial_out,
             },
         )
+
+    for h in hooks:
+        h.remove()
+    del parent_torch_model, torch_model
 
     # Create TT model
     tt_model = WanTransformerBlock(

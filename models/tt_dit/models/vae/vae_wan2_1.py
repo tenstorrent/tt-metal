@@ -1028,6 +1028,21 @@ class WanResample(Module):
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
                     x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
             else:
+                # NOTE: This else section was written with the sole objective of
+                # of getting our model to match the reference  model (i.e. huggingface's
+                # WanResample module)'s behavior in
+                # test_vae_wan2_1.py::test_wan_resample when feat_cache is None
+                # and for T = 1, 2, 4.
+                #
+                # It's very possible that the overall algorithm  may be incorrect for other edge
+                # cases not tested. It may also be we deliberately break compatibility against reference
+                # models for performance purposes. This needs to be audited.
+                #
+                # Claude was not able to reference this piece of code to any pat of the WanResample
+                # code from hugging face's models, but the results pass for the test cases.
+                #
+                # TODO: Does the comment below 1) make sense? 2) convey the correct intention?
+                # I don't know. Why should we try to replicate the cached path for feat_cache = None?
                 # Replicate cached path's "Rep" boundary behavior:
                 # - Frame 0: output directly (no time_conv), like when feat_cache is None → "Rep"
                 # - Frames 1..T-1: time_conv with zero-padded boundary
@@ -1082,6 +1097,20 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
+                # NOTE: This else section was commented out in order
+                # to match the reference model (i.e. huggingface's WanResample module)'s behavior in
+                # test_vae_wan2_1.py::test_wan_resample when feature_cache is None.
+                # I had claude cross reference the reference model's implementation
+                # and doing nothing is the naive way to replicate the reference model, which also does
+                # nothing when feature_cache is None.
+                #
+                # Given this was put in at some point it's possible the overall algorithm
+                # may be incorrect for other edge cases not tested. It may also
+                # be we deliberately break compatibility against reference model for performance purposes,
+                # so I'm leaving it here.
+                #
+                # TODO: Does the comment below 1) make sense? 2) convey the correct intention?
+                # I don't know.
                 # Full-T mode: frame 0 passes through without time_conv (matches
                 # the cached path's first-iteration behavior), remaining frames
                 # get the strided temporal conv with frame 0 prepended as context.
