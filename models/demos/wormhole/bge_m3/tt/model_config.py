@@ -26,6 +26,7 @@ class ModelArgs:
         hf_model_name=None,
         dtype=ttnn.bfloat16,
         data_parallel=False,
+        use_experimental_encoder_sdpa=False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -56,6 +57,12 @@ class ModelArgs:
                 f"got seq_len={self.max_seq_len}, shape={tuple(mesh_device.shape) if mesh_device else None}"
             )
         self.data_parallel = data_parallel
+        # Opt-in model-local JIT encoder SDPA (DP S8192 path only). Runs the
+        # non-FP32-dest / half-sync configuration (DEST=8), measured -2.3ms/SDPA
+        # call and -57ms full-model wall vs stock, with equal-or-better PCC.
+        # Only takes effect on the exact head-folded DP S8192 contract; any
+        # deviation falls back to stock SDPA (see attention.py guard).
+        self.use_experimental_encoder_sdpa = use_experimental_encoder_sdpa
         self.attention_mask_dtype = (
             dtype if self.max_seq_len == 512 and max(1, int(self.max_batch_size)) in (1, 32) else ttnn.bfloat16
         )

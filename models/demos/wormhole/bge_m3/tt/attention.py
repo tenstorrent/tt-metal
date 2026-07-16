@@ -81,6 +81,11 @@ class BgeM3AttentionConfig:
     # True when the attention scale was folded into the Q projection weight at
     # build time, so SDPA must run with scale=1.0 regardless of mask presence.
     qkv_scale_prefolded: bool = False
+    # Opt-in: use the model-local JIT encoder-SDPA descriptor (custom_ops/
+    # encoder_sdpa) instead of stock ttnn SDPA. Only valid on the DP S8192
+    # head-folded path (Q[6,32,4096,64] bf8 / K bf4 / V bf8, no mask, scale 1).
+    # Stock SDPA is the default/fallback. Parity-verified (PCC 1.0, wall==stock).
+    use_experimental_encoder_sdpa: bool = False
 
     @property
     def qkv_out_dim(self) -> int:
@@ -315,17 +320,44 @@ class BgeM3Attention(LightweightModule):
             sequence_parallel=self.config.sequence_parallel_axis is not None,
             data_parallel=self.config.data_parallel,
         )
-        context = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=False,
-            attn_mask=sdpa_mask,
-            scale=sdpa_scale,
-            program_config=sdpa_program_config,
-            compute_kernel_config=self.config.score_compute_kernel_cfg,
-            memory_config=self.config.score_memcfg,
+        # Opt-in model-local JIT encoder SDPA: only on the exact DP S8192 head-
+        # folded contract it was built for (Q[6,32,4096,64] bf8, K bf4, V bf8,
+        # no mask, scale 1). Any deviation falls back to stock SDPA.
+        use_encoder_sdpa = (
+            self.config.use_experimental_encoder_sdpa
+            and head_fold
+            and sdpa_mask is None
+            and sdpa_scale == 1.0
+            and tuple(q.shape) == (6, 32, 4096, 64)
+            and tuple(k.shape) == (6, 16, 8192, 64)
+            and tuple(v.shape) == (6, 16, 8192, 64)
+            and q.dtype == ttnn.bfloat8_b
+            and k.dtype == ttnn.bfloat4_b
+            and v.dtype == ttnn.bfloat8_b
         )
+        if use_encoder_sdpa:
+            from models.demos.wormhole.bge_m3.tt.custom_ops.encoder_sdpa import (
+                EncoderSDPAConfig,
+                bge_encoder_sdpa_experimental,
+            )
+
+            # Non-FP32-dest / half-sync (DEST=8): measured -2.3ms/SDPA call,
+            # -57ms full-model wall, PCC 0.9423 -> 0.9548. This is the whole
+            # point of the experimental path.
+            _ecfg = EncoderSDPAConfig(fp32_dest_acc_en=False)
+            context = bge_encoder_sdpa_experimental(q, k, v, output_mem_config=self.config.score_memcfg, config=_ecfg)
+        else:
+            context = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                attn_mask=sdpa_mask,
+                scale=sdpa_scale,
+                program_config=sdpa_program_config,
+                compute_kernel_config=self.config.score_compute_kernel_cfg,
+                memory_config=self.config.score_memcfg,
+            )
         if head_fold:
             # [B, H*G, S/G, DH] -> [B, H, S, DH]
             b0, hg, sg, dh0 = context.shape

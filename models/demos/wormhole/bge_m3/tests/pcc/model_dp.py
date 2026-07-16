@@ -73,6 +73,7 @@ def test_model_dp2_b12_s8192(mesh_device, model_artifacts, reset_seeds):
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
         data_parallel=True,
+        use_experimental_encoder_sdpa=True,
     )
     assert tt_model._data_parallel, "DP mode not active"
 

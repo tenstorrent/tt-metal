@@ -208,6 +208,8 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         sequence_parallel_axis=sp_axis,
         # S8192 folds the attention scale into the Q weight at build time.
         qkv_scale_prefolded=(max_seq_len == 8192),
+        # Opt-in JIT encoder SDPA (DP S8192 only), from the explicit model arg.
+        use_experimental_encoder_sdpa=bool(getattr(args, "use_experimental_encoder_sdpa", False)),
     )
     if optimizations is not None and optimizations.attention is not None:
         attn_opts = optimizations.attention

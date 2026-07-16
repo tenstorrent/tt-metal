@@ -14,6 +14,7 @@ def create_tt_model(
     hf_model_name="BAAI/bge-m3",
     pooling=None,
     data_parallel=False,
+    use_experimental_encoder_sdpa=False,
 ):
     """
     BGE-M3 version of create_tt_model that matches tt_transformers interface.
@@ -31,6 +32,7 @@ def create_tt_model(
         hf_model_name=hf_model_name,
         dtype=dtype,
         data_parallel=data_parallel,
+        use_experimental_encoder_sdpa=use_experimental_encoder_sdpa,
     )
 
     if not state_dict:
