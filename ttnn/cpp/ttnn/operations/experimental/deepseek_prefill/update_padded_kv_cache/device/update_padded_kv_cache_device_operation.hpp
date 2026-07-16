@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <variant>
 
 #include <tt-metalium/program.hpp>
@@ -31,6 +32,35 @@ struct UpdatePaddedKvCacheDeviceOperation {
         uint32_t layer_idx;
         uint32_t num_layers;
         uint32_t cluster_axis;
+        DataType input_dtype;
+        Layout input_layout;
+        MemoryConfig input_memory_config;
+        Shape input_padded_shape;
+        MemoryConfig cache_memory_config;
+        Shape cache_padded_shape;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "layer_idx",
+            "num_layers",
+            "cluster_axis",
+            "input_dtype",
+            "input_layout",
+            "input_memory_config",
+            "input_padded_shape",
+            "cache_memory_config",
+            "cache_padded_shape");
+        auto attribute_values() const {
+            return std::forward_as_tuple(
+                layer_idx,
+                num_layers,
+                cluster_axis,
+                input_dtype,
+                input_layout,
+                std::cref(input_memory_config),
+                input_padded_shape,
+                std::cref(cache_memory_config),
+                cache_padded_shape);
+        }
     };
 
     struct tensor_args_t {
@@ -85,7 +115,6 @@ struct UpdatePaddedKvCacheDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
