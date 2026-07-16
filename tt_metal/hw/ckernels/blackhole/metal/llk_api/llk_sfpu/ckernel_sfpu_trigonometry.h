@@ -681,7 +681,7 @@ void sinh_init() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
     // Initialisation for use of sfpu_reciprocal<false>.
     sfpu_reciprocal_init<false>();

@@ -23,12 +23,17 @@ namespace ckernel::sfpu {
 
 // Magic seed locally tuned for this sequence, targeting 0 < x < 2^24.
 // fp32 path: exhaustively validated maxulperr < 0.94 for normal fp32 2^-126 <= x <= 2^103.
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
-    constexpr std::uint32_t MAGIC_SEED = 0xfef392e0;
+static constexpr std::uint32_t RECIPROCAL_GT0_MAGIC_SEED = 0xfef392e0;
 
+template <bool is_fp32_dest_acc_en, bool preloaded_constants = false>
+sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
     // initial estimate y = -reciprocal(x)
-    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(MAGIC_SEED - sfpi::as<sfpi::vInt>(x));
+    sfpi::vFloat y;
+    if constexpr (preloaded_constants) {
+        y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - sfpi::as<sfpi::vInt>(x));
+    } else {
+        y = sfpi::as<sfpi::vFloat>(RECIPROCAL_GT0_MAGIC_SEED - sfpi::as<sfpi::vInt>(x));
+    }
     sfpi::vFloat e = x * y + 1.0f;
 
     if constexpr (is_fp32_dest_acc_en) {
@@ -412,8 +417,18 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     x_abs = sfpi::setsgn(x, 0);
     a = x_abs;
     sfpi::vFloat x_abs_m1 = x_abs - 1.0f;
+    sfpi::vInt a_exp = sfpi::exexp(a);
 
-    v_if(x_abs_m1 >= 0.0f) { a = _sfpu_reciprocal_gt0_<true>(a); }
+    v_if(x_abs_m1 >= 0.0f) {
+        // if a is not NaN, convert to 0.0, otherwise remains NaN.
+        a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - 1) * 0.0f;
+
+        // atan(x) rounds to pi/2 above 2^26, so skip the reciprocal there.  This
+        // also prevents its integer seed from passing through a NaN bit pattern
+        // for finite values near the top of the fp32 range and for infinity.
+        v_if(a_exp < 26) { a = _sfpu_reciprocal_gt0_<true, true>(x_abs); }
+        v_endif;
+    }
     v_endif;
 
     // Next we compute the minimax approximation for atan(a).
@@ -865,10 +880,14 @@ void sinh_init() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
-    // Initialisation for use of sfpu_reciprocal<false> by sfpu_atan_bf16.
-    sfpu_reciprocal_init<false>();
+    if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vConstIntPrgm0 = RECIPROCAL_GT0_MAGIC_SEED;
+    } else {
+        // Initialisation for use of sfpu_reciprocal<false> by sfpu_atan_bf16.
+        sfpu_reciprocal_init<false>();
+    }
 }
 
 template <bool APPROXIMATION_MODE>

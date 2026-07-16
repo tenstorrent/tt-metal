@@ -247,7 +247,9 @@ ALWI void atan_tile(std::uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atan_tile_init() { MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/))); }
+ALWI void atan_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(atan, sfpu::atan_init, (true /*APPROXIMATION_MODE*/, DST_ACCUM_MODE)));
+}
 
 // clang-format off
 /**
