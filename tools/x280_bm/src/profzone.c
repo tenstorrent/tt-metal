@@ -56,6 +56,12 @@
 #define RES(o) (MBOX_RESULTS + (o))
 #define RES_DONE 0x18
 #define DONE_MAGIC 0x20E50FFEE1ULL
+/* Per-hart boot heartbeat @ RES(0x100 + hartid*8): 1=entered main, 2=passed guards, 3=reached the
+ * work loop. The host pre-zeros these and waits for EVERY hart to reach 3 before trusting the drainer
+ * -- the X280 multi-hart release_reset is intermittently flaky (a hart can fail to start), and a
+ * missing reader/collect/relay silently cripples the pipeline (undrained cores -> workers block ->
+ * trace wedges). Host retries the reset if any hart is missing. */
+#define HART_STAGE(h) RES(0x100 + (uint64_t)(h) * 8)
 
 #define NRISC 5
 #define RING_CAP 512u /* producer L1 ring depth (words) */
@@ -169,8 +175,10 @@ static inline void w_wzw(
 
 int main(uint64_t hartid) {
     if (hartid == 0) {
-        w64(RES(0x30), 0xB007ULL); /* heartbeat: main() entered (hart 0) */
+        w64(RES(0x30), 0xB007ULL); /* heartbeat: main() entered (hart 0) -- kept for the prime check */
     }
+    w64(HART_STAGE(hartid), 1); /* per-hart boot heartbeat: entered main */
+    fence_();
     uint64_t nread = r64(P_NREAD);
     uint64_t nharts = r64(P_NHARTS);
     uint64_t num_cores = r64(P_NUM_CORES);
@@ -197,6 +205,8 @@ int main(uint64_t hartid) {
         }
     }
 
+    w64(HART_STAGE(hartid), 2); /* passed the nharts + LIM-overflow guards */
+    fence_();
     if (hartid < nread) {
         /* ============ READER: L1 [head,tail) -> per-(core,risc) LIM mirror (raw, no reshape) ====== */
         uint64_t q = (num_cores + nread - 1) / nread;
@@ -212,6 +222,8 @@ int main(uint64_t hartid) {
             w64(RES(0x38), 0x5E70ULL); /* setup complete */
         }
 
+        w64(HART_STAGE(hartid), 3); /* reader: setup done, entering drain loop */
+        fence_();
         uint64_t dropped = 0;
         uint64_t scratch = SCRATCH(hartid);
         uint64_t bulk_words = 0, segs = 0;
@@ -311,6 +323,8 @@ int main(uint64_t hartid) {
     if (hartid == nread) {
         /* ==== COLLECT (Inc-2a): round-robin mirrors, RESHAPE each raw marker -> WorkerZoneWire with
          * STRUCTURAL (core,risc) from the mirror index, pack 2/64B page into the single SPSC. ==== */
+        w64(HART_STAGE(hartid), 3); /* collect: entering drain loop */
+        fence_();
         /* per-mirror consumer head (collect owns MHEAD). Local cache avoids re-reading LIM. */
         static uint32_t chead[MAX_CORES * NRISC];
         for (uint64_t i = 0; i < nmirror; i++) {
@@ -440,6 +454,8 @@ int main(uint64_t hartid) {
     }
 
     /* ================= RELAY: single SPSC -> ONE D2H socket FIFO (NOC1) ========================= */
+    w64(HART_STAGE(hartid), 3); /* relay: entering drain loop */
+    fence_();
     uint64_t cfg = r64(P_CONFIG_ADDR);
     uint64_t pcie_x = r64(P_PCIE_X), pcie_y = r64(P_PCIE_Y);
     volatile uint32_t* c = (volatile uint32_t*)cfg;

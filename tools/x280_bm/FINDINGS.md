@@ -731,6 +731,41 @@ kernel and never return to `brisc.cc` to emit a sticky-meta packet at all. Defer
 
 ---
 
+### 22. Intermittent trace-replay HANG — root cause: X280 multi-hart boot is flaky (bh-11, 2026-07-16)
+
+`test_trace_runs.py::test_with_ops` under the X280 RT profiler hangs ~30% of runs (X280 off = 100%
+stable). Found by on-silicon elimination + a host-side liveness probe (reads X280 LIM every 250 ms:
+relay total/loops, single S_PROD/S_CONS, mirror ΣMTAIL/ΣMHEAD, live reader passes, and a **per-hart
+boot stage @ RES(0x100+h*8)**).
+
+**Not** a pipeline/lossless bug. Ruled out: PCIe D2H (relay drain-to-null → same rate), host
+receiver/consumer threads (disabled → same), producer-block-per-se (drop-not-block only MASKS it —
+undrained workers drop instead of blocking, so the trace completes). The probe caught hangs frozen
+from t=0 with e.g. `stage(h0=3 h1=0 h2=0 h3=3)` — **harts 1 (reader-1) and 2 (collect) never entered
+`main()`**. `release_reset()` does not reliably start all 4 harts; the dead set varies run-to-run.
+
+**Mechanism:** a dead drainer hart never drains its worker cores → their Tensix L1 rings fill →
+workers block in `ring_ensure_room` → the trace never completes → host hangs in
+`FDMeshCommandQueue::finish_nolock` (device never posts the trace-completion event). **Compounding
+gap:** `boot_x280_drainer` only verified **hart 0** (`RES(0x30)==0xB007`), so it ran a crippled drainer
+undetected.
+
+**Fix (this commit):** (1) permanent per-hart boot heartbeat — every hart writes stage 1/2/3 to
+`RES(0x100+h*8)`; (2) host waits for **all** `nharts` to reach stage 3, and if any is missing
+re-releases reset (≤3 retries), refusing to run a crippled drainer.
+
+**Validation caveat:** 8/8 clean passes with `allup=1` (0 hangs vs ~30% baseline), but every completed
+run had `boot_retries=0` — the *retry path was not exercised* (no flaky boot happened to occur in the
+runs that finished), so recovery-of-a-flaky-boot is not yet directly demonstrated. **Blocker:** bh-11
+**reboots the host under the X280 workload itself** — reproduced twice with ZERO `tt-smi -r` from us
+(chip stayed primed across host reboots, so no auto-prime either), rebooting mid-run at run 3 and run
+7. That is a separate bh-11 hardware/infra instability under X280 load (not our resets); finishing
+validation needs a BH box that survives the workload. Repeated `tt-smi -r` earlier ADDED churn (and
+the "loses its key / container churn" symptom) but is not the reboot root. See memory
+`x280_trace_hang_multihart_boot`.
+
+---
+
 ## Hardware facts established
 
 - **X280 → host D2H write ceiling ≈ 3.0 GB/s** (1 hart, posted 64 B `vse64`,

@@ -1087,6 +1087,77 @@ void RealtimeProfilerManager::boot_x280_drainer(
                     std::_Exit(primed_ok ? 75 : 1);  // 75=EX_TEMPFAIL: "transient, rerun"; 1=hard failure
                 }
             }
+            // --- All-hart boot verification + retry ----------------------------------------------
+            // hart 0's heartbeat only proves hart 0 started (and the ECC prime took). The X280's
+            // 4-hart release_reset is intermittently flaky: a reader/collect/relay hart can fail to
+            // start, which SILENTLY cripples the drainer -- its cores never drain, workers block on
+            // full rings, and trace replay wedges (host hangs in finish). Verify EVERY hart reached
+            // its work loop (per-hart stage 3 @ RESULTS+0x100+h*8) and, if any is missing, re-release
+            // reset and retry; refuse to run a crippled drainer.
+            if (hb == kX280HbMainMagic) {
+                const uint64_t kHartStageBase = kX280MboxResults + 0x100;
+                constexpr int kX280BootRetries = 3;
+                auto all_harts_ready = [&]() {
+                    for (uint32_t h = 0; h < kX280NHarts; h++) {
+                        if (zx.lim_rd_u64(kHartStageBase + h * 8) < 3) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                auto wait_harts = [&]() {
+                    for (int i = 0; i < 300 && !all_harts_ready(); i++) {
+                        std::this_thread::sleep_for(std::chrono::microseconds(200));
+                    }
+                    return all_harts_ready();
+                };
+                auto stages_str = [&]() {
+                    std::string s;
+                    for (uint32_t h = 0; h < kX280NHarts; h++) {
+                        if (h) {
+                            s += ",";
+                        }
+                        s += std::to_string(zx.lim_rd_u64(kHartStageBase + h * 8));
+                    }
+                    return s;
+                };
+                for (int retry = 0; !wait_harts() && retry < kX280BootRetries; retry++) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: X280 not all harts started (stages [{}] want "
+                        "all>=3) -- re-releasing reset (retry {}/{})",
+                        device_id,
+                        stages_str(),
+                        retry + 1,
+                        kX280BootRetries);
+                    zx.assert_reset();
+                    std::vector<uint8_t> mctl_zero(0x3000, 0), sctl_zero(256, 0), stg_zero(kX280NHarts * 8, 0);
+                    zx.write_block(mctl_zero.data(), (uint32_t)mctl_zero.size(), 0x08018000ull);
+                    zx.write_block(sctl_zero.data(), (uint32_t)sctl_zero.size(), 0x0801C000ull);
+                    zx.write_block(stg_zero.data(), (uint32_t)stg_zero.size(), kHartStageBase);
+                    zx.release_reset();
+                    hb = 0;
+                    for (int i = 0; i < 300 && hb != kX280HbMainMagic; i++) {
+                        hb = zx.lim_rd_u64(dev_state.x280_params_addr + 0x70);
+                        if (hb != kX280HbMainMagic) {
+                            std::this_thread::sleep_for(std::chrono::microseconds(100));
+                        }
+                    }
+                }
+                if (!all_harts_ready()) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: X280 harts still not all up after {} retries "
+                        "(stages [{}]) -- refusing to run a crippled drainer (no X280 capture this run)",
+                        device_id,
+                        kX280BootRetries,
+                        stages_str());
+                    hb = 0;  // force the degraded path below
+                } else {
+                    log_info(
+                        tt::LogMetal, "[Real-time profiler] Device {}: X280 all {} harts up", device_id, kX280NHarts);
+                }
+            }
             if (hb != kX280HbMainMagic) {
                 log_warning(
                     tt::LogMetal,
