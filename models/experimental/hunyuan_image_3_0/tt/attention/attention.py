@@ -292,7 +292,9 @@ class HunyuanTtAttention(LightweightModule):
         # x: [B, S, H]  →  xqkv: [B, S, Q_dim + 2*KV_dim]
         # l1_sharded_linear self-schedules: small-M -> L1 width-sharded, large-M ->
         # DRAM with an explicit 2D-mcast config (ttnn auto mis-schedules these large-M
-        # bf16 x bf8 projections onto 110 cores at ~3% FLOP).
+        # bf16 x bf8 projections onto 110 cores at ~3% FLOP). Width-sharding is the
+        # good decode schedule here (38us @ 32c); plain DRAM auto mis-schedules this
+        # M=32/N=3072 shape to 96c @ 138 GB/s / 3.3% FLOP = 93us (perfar36).
         xqkv = l1_sharded_linear(
             x,
             self.qkv_proj,
@@ -434,6 +436,7 @@ class HunyuanTtAttention(LightweightModule):
             self.o_proj,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
+            allow_width_shard=False,  # decode 32x2048x4096: plain DRAM 38us vs width-shard 75us
         )
         out = to_interleaved_if_sharded(out)
         attn_out.deallocate(True)
