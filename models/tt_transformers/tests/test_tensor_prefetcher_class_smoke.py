@@ -13,7 +13,6 @@ real HF weights through ``MLP``/``Attention``.
 """
 
 import math
-import os
 import zlib
 
 import pytest
@@ -38,15 +37,16 @@ def _require_tensor_prefetcher(device):
 
 @torch.no_grad()
 @pytest.mark.parametrize("recv_per_bank", [4])
-def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
+def test_tensor_prefetcher_class_smoke(device, recv_per_bank, monkeypatch):
     """Drive a single 1D mcast matmul through ``TensorPrefetcher`` end-to-end.
 
     Shape mirrors Llama-3.2-3B FF1: K=3072, N=8192/banks/recv_per_bank.
     HF_MODEL is set programmatically so the divisibility check passes; no weights
     are loaded.
     """
-    # Set HF_MODEL so TensorPrefetcher's support check finds a verified config.
-    os.environ["HF_MODEL"] = "Llama-3.2-3B"
+    # Set HF_MODEL so TensorPrefetcher's support check finds a verified config. monkeypatch
+    # restores the caller's value after the test so later tests aren't affected.
+    monkeypatch.setenv("HF_MODEL", "Llama-3.2-3B")
 
     from models.tt_transformers.tt.prefetcher import make_prefetcher
 
@@ -117,7 +117,8 @@ def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
         hop_cores=ttnn.CoreRangeSet([]),
         num_global_cb_receivers=recv_per_bank,
         untilize_out=False,
-        stream_in1=os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1",
+        # TensorPrefetcher always streams in1, so the matmul must consume the GCB block-by-block.
+        stream_in1=True,
     )
 
     # ---- Construct TensorPrefetcher, drive its lifecycle ----
@@ -129,42 +130,47 @@ def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
     prefetcher.insert_tensor(tt_weight, program_config=program_config)
     prefetcher.init(Mode.DECODE)
 
-    # ---- Matmul consumes the queued weight via global_cb ----
-    output_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M, N // ring_size),
-        core_grid=receiver_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-        dst_full_sync_en=True,
-    )
-
-    def run_matmul():
-        return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
-            tt_act,
-            tt_weight,
-            global_cb=prefetcher.global_cb,
-            program_config=program_config,
-            memory_config=output_mem_config,
-            compute_kernel_config=compute_kernel_config,
-            dtype=ttnn.bfloat16,
+    # init() started the long-running DRISC daemon; guarantee teardown even if any step below
+    # (compile, trace capture/replay, PCC) raises, so a failure can't leave it active for the rest
+    # of the pytest worker and contaminate the shared device.
+    try:
+        # ---- Matmul consumes the queued weight via global_cb ----
+        output_mem_config = ttnn.create_sharded_memory_config(
+            shape=(M, N // ring_size),
+            core_grid=receiver_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=True,
         )
 
-    # Compile once, then verify that the per-op queue request is captured and replayed with its matmul.
-    run_matmul()
-    ttnn.synchronize_device(device)
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    tt_out = run_matmul()
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-    ttnn.release_trace(device, trace_id)
-    prefetcher.teardown()
+        def run_matmul():
+            return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                tt_act,
+                tt_weight,
+                global_cb=prefetcher.global_cb,
+                program_config=program_config,
+                memory_config=output_mem_config,
+                compute_kernel_config=compute_kernel_config,
+                dtype=ttnn.bfloat16,
+            )
+
+        # Compile once, then verify that the per-op queue request is captured and replayed with its matmul.
+        run_matmul()
+        ttnn.synchronize_device(device)
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        tt_out = run_matmul()
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        ttnn.release_trace(device, trace_id)
+    finally:
+        prefetcher.teardown()
 
     out_torch = ttnn.to_torch(tt_out)
     expected = pt_act.float() @ pt_weight.float()

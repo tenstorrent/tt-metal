@@ -111,36 +111,40 @@ def test_mlp_inference_tensor_prefetcher(batch_size, mode, seq_len, mesh_device,
     )
     prefetcher.init(mode)
 
-    torch_input = torch.randn(
-        1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
-    )
-    reference_output = reference_model(torch_input)
+    # In decode, init() started the long-running DRISC daemon; guarantee teardown even if model
+    # execution or result conversion below raises, so a failure can't poison later hardware tests
+    # in this pytest worker with an already-active prefetcher.
+    try:
+        torch_input = torch.randn(
+            1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+        )
+        reference_output = reference_model(torch_input)
 
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, 3) if model_args.is_galaxy else (None, None),
-            mesh_shape=model_args.cluster_shape,
-        ),
-        dtype=ttnn.bfloat8_b,
-        memory_config=model_args.get_mlp_input_mem_config(mode, prefetcher),
-        layout=ttnn.TILE_LAYOUT,
-    )
-    logger.info(f"Run MLP through Tensor Prefetcher: ring={prefetcher.ring_size}")
-    tt_output = tt_model(tt_input, mode)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 3) if model_args.is_galaxy else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
+            dtype=ttnn.bfloat8_b,
+            memory_config=model_args.get_mlp_input_mem_config(mode, prefetcher),
+            layout=ttnn.TILE_LAYOUT,
+        )
+        logger.info(f"Run MLP through Tensor Prefetcher: ring={prefetcher.ring_size}")
+        tt_output = tt_model(tt_input, mode)
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    )
-    tt_output_torch = tt_output_torch[:, :1, :, :]
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        )
+        tt_output_torch = tt_output_torch[:, :1, :, :]
 
-    pcc_required = 0.99
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"PCC: {pcc_message}")
-
-    prefetcher.teardown()
+        pcc_required = 0.99
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+        logger.info(comp_allclose(reference_output, tt_output_torch))
+        logger.info(f"PCC: {pcc_message}")
+    finally:
+        prefetcher.teardown()
     assert passing, f"MLP PCC failed (ring={prefetcher.ring_size}): {pcc_message}"

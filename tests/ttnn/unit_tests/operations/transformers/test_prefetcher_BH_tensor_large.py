@@ -77,11 +77,15 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 @pytest.fixture(autouse=True)
 def _require_tensor_prefetcher(request):
-    """Skip unless programmable DRAM cores are available on this device."""
-    if "mesh_device" in request.fixturenames:
-        return
-    device = request.getfixturevalue("device")
-    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
+    """Skip unless programmable DRAM cores are available on this device.
+
+    Runs the capability check against whichever device fixture the test uses (single-device
+    ``device`` or ``mesh_device``); the runtime rejects some multi-device configs (e.g. harvested
+    DRAM channels), so mesh tests must be skipped there rather than failing at start.
+    """
+    fixture_name = "mesh_device" if "mesh_device" in request.fixturenames else "device"
+    dev = request.getfixturevalue(fixture_name)
+    if not ttnn.experimental.is_tensor_prefetcher_supported(dev):
         pytest.skip(
             "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
         )

@@ -37,6 +37,15 @@ VERIFIED_MODEL_CONFIGS = {
     "Gemma3-27B": {"dim": 4608, "hidden_dim": 24576, "n_heads": 32, "n_kv_heads": 8},
 }
 
+# Models blessed for the DRAM-core *Tensor* Prefetcher. Kept separate from
+# VERIFIED_MODEL_CONFIGS because the two backends are validated independently: a model working
+# on the worker-core prefetcher does not imply the recv-contig Tensor Prefetcher path has been
+# exercised for it. Seed with the shared shapes; prune/extend this to only the models actually
+# validated end-to-end on the Tensor Prefetcher (currently Llama-3.2-3B and Llama-3.1-8B).
+# The per-weight divisibility + streaming-GCB checks in is_tensor_prefetcher_config_supported
+# still gate geometry on top of this list.
+TENSOR_PREFETCHER_VERIFIED_MODEL_CONFIGS = dict(VERIFIED_MODEL_CONFIGS)
+
 
 def uses_tensor_prefetcher(prefetcher) -> bool:
     """Return whether a model backend queues Tensor Prefetcher requests per matmul."""
@@ -122,7 +131,15 @@ def is_tensor_prefetcher_supported(
     if not is_blackhole() or not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
         return False
 
-    from models.tt_transformers.tt.tensor_prefetcher import is_tensor_prefetcher_config_supported
+    # The Tensor Prefetcher's shape math currently assumes a single-row mesh (cluster_shape == (1,
+    # num_devices)): it divides every weight's K/N by the total device count on one axis. A 2-D
+    # mesh (including a Blackhole galaxy) splits K and N across different cluster axes, so the
+    # recv-contig geometry would be wrong until that math is generalized. Reject it here for now so
+    # make_prefetcher falls back to the worker-core Prefetcher rather than mis-sharding.
+    if list(mesh_device.shape)[0] != 1:
+        return False
+
+    from models.tt_transformers.tt.tensor_prefetcher import is_tensor_prefetcher_config_supported, norm_grid_fits
 
     model_name = model_name or os.getenv("HF_MODEL", "")
     num_senders = mesh_device.dram_grid_size().x
@@ -134,6 +151,7 @@ def is_tensor_prefetcher_supported(
             num_senders,
             receivers_per_bank,
         )
+        and norm_grid_fits(mesh_device, receivers_per_bank)
         for receivers_per_bank in receiver_candidates
     )
 
@@ -202,6 +220,19 @@ def resolve_verified_model_cfg(model_name: str) -> Optional[dict]:
         return None
     name = next((m for m in VERIFIED_MODEL_CONFIGS if m in model_name), None)
     return VERIFIED_MODEL_CONFIGS[name] if name is not None else None
+
+
+def resolve_tensor_prefetcher_model_cfg(model_name: str) -> Optional[dict]:
+    """Return the ``TENSOR_PREFETCHER_VERIFIED_MODEL_CONFIGS`` entry matching ``model_name``.
+
+    Tensor-Prefetcher counterpart to :func:`resolve_verified_model_cfg`. Returns ``None`` off
+    Blackhole or when the model is not on the Tensor-Prefetcher-verified list (which is curated
+    separately from the worker-core list — see the constant's docstring).
+    """
+    if not is_blackhole():
+        return None
+    name = next((m for m in TENSOR_PREFETCHER_VERIFIED_MODEL_CONFIGS if m in model_name), None)
+    return TENSOR_PREFETCHER_VERIFIED_MODEL_CONFIGS[name] if name is not None else None
 
 
 def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 16) -> bool:

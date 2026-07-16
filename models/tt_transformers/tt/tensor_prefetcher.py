@@ -41,20 +41,21 @@ def gcb_block_bytes(k_tiles: int, per_core_n_tiles: int, ring_size: int, tile_by
 def is_tensor_prefetcher_config_supported(
     model_name: str, num_devices: int, num_dram_banks: int, recv_per_bank: int
 ) -> bool:
-    """Strict divisibility + GCB-size check for the Tensor Prefetcher path.
+    """Strict divisibility + streaming-GCB-size check for the Tensor Prefetcher path.
 
     The DRAM-core path has the same uniform-receivers requirement as the worker path,
     plus an actual ``n_per_device_tiles % ring_size == 0`` check that the worker-side
-    ``is_prefetcher_supported`` skips. Also enforces ``num_blocks * in1_block_size <=
-    L1_PER_BANK_BUDGET`` (the GCB allocation per receiver). Returns True iff every weight
-    class (FF1/FF3, FF2, QKV, WO) divides cleanly across
-    ``ring_size = num_dram_banks * recv_per_bank`` AND its per-receiver GCB footprint
-    fits worker L1.
+    ``is_prefetcher_supported`` skips. Because the GCB always streams (``stream_in1``), it holds
+    only a partial ring — as many whole receiver blocks as fit in ``STREAMING_GCB_MAX_SIZE``,
+    and ``_build_global_cb`` requires at least two. So the size gate is that a single receiver
+    block is small enough for two to fit in that budget, NOT that the whole ring fits L1.
+    Returns True iff every weight class (FF1/FF3, FF2, QKV, WO) divides cleanly across
+    ``ring_size = num_dram_banks * recv_per_bank`` AND clears that streaming budget.
     """
     # Import here to avoid circular import (this module is imported from prefetcher.py).
-    from models.tt_transformers.tt.prefetcher import BYTES_PER_TILE_BFP8, resolve_verified_model_cfg
+    from models.tt_transformers.tt.prefetcher import BYTES_PER_TILE_BFP8, resolve_tensor_prefetcher_model_cfg
 
-    cfg = resolve_verified_model_cfg(model_name)
+    cfg = resolve_tensor_prefetcher_model_cfg(model_name)
     if cfg is None:
         return False
     dim, hidden_dim, n_heads, n_kv_heads = cfg["dim"], cfg["hidden_dim"], cfg["n_heads"], cfg["n_kv_heads"]
@@ -86,24 +87,20 @@ def is_tensor_prefetcher_config_supported(
         if not _tiles_divide(n):
             return False
 
-    # Per-receiver GCB footprint must fit worker L1. The factory allocates
-    # ``num_blocks * in1_block_size = ring_size * (K_per_shard_tiles * N_per_recv_tiles)
-    # * tile_bytes`` per receiver, where K_per_shard_tiles = K_tiles / ring_size and
-    # N_per_recv_tiles = N_per_device_tiles / ring_size. So the per-receiver footprint
-    # simplifies to ``K_tiles * N_per_device_tiles * tile_bytes / ring_size`` — at small
-    # rings the K_tiles factor dominates and pushes past L1.
-    # The largest is bfloat8_b at 1088 B/tile (shared BYTES_PER_TILE_BFP8); budget ~1.3 MB per
-    # bank to leave headroom for other L1 allocations (matches is_prefetcher_supported).
-    L1_BUDGET = 1300000
+    # Streaming-GCB size gate. The factory streams weights (``stream_in1`` is always enabled), so
+    # per receiver it keeps ``num_blocks * in1_block_size`` where num_blocks = min(ring_size,
+    # STREAMING_GCB_MAX_SIZE // in1_block_size) and one block is
+    # ``(K_tiles/ring_size) * N_per_recv_tiles * tile_bytes`` (see gcb_block_bytes). The window is
+    # therefore capped by STREAMING_GCB_MAX_SIZE regardless of ring, and the only per-config limit
+    # is _build_global_cb's "at least two blocks" requirement: 2 * one_block <=
+    # STREAMING_GCB_MAX_SIZE. The largest tile is bfloat8_b at 1088 B/tile (shared
+    # BYTES_PER_TILE_BFP8).
     # NOTE: this gate assumes a single-row mesh (cluster_shape == (1, num_devices)), the only
-    # topology this path is verified on. There, attention.py allocates WO as
-    # K=dim//cluster_shape[0]=dim, N=dim//cluster_shape[1]=dim//num_devices — i.e. (dim,
-    # wo_in_per_dev). The op_shapes WO entry below uses (wo_in_per_dev, dim); divisibility holds
-    # because BOTH dim and wo_in_per_dev are checked above, and the L1 footprint is symmetric in
-    # K and N (k_tiles * n_total_tiles / ring), so the order is immaterial for this check. A
-    # multi-row mesh (cluster_shape[0] > 1) is not validated here; weight_mem_config's
-    # `n % ring_size == 0` assert and _build_global_cb's K-divisibility assert catch a mismatch
-    # cleanly at allocation time rather than corrupting silently.
+    # topology this path is verified on (make_prefetcher rejects multi-row meshes up front). There,
+    # attention.py allocates WO as K=dim//cluster_shape[0]=dim, N=dim//cluster_shape[1]=dim//
+    # num_devices — i.e. (dim, wo_in_per_dev). The op_shapes WO entry below uses (wo_in_per_dev,
+    # dim); divisibility holds because BOTH dim and wo_in_per_dev are checked above, and one block
+    # is symmetric in K and N (k_tiles * n_total_tiles / ring^2), so the order is immaterial here.
     op_shapes = [
         (dim, n_hidden_per_dev),  # FF1/FF3: K=dim, N=hidden_dim/num_devices
         (n_hidden_per_dev, n_dim_per_dev),  # FF2: K=hidden_dim/num_devices, N=dim
@@ -113,11 +110,37 @@ def is_tensor_prefetcher_config_supported(
     for k_dim, n_dim in op_shapes:
         k_tiles = k_dim // TILE
         n_tiles_per_recv = (n_dim // TILE) // ring_size  # already int-divisible by check above
-        # Per-receiver footprint = num_blocks (=ring_size) * one block, bfloat8_b being the largest.
-        per_recv_bytes = ring_size * gcb_block_bytes(k_tiles, n_tiles_per_recv, ring_size, BYTES_PER_TILE_BFP8)
-        if per_recv_bytes > L1_BUDGET:
+        block_bytes = gcb_block_bytes(k_tiles, n_tiles_per_recv, ring_size, BYTES_PER_TILE_BFP8)
+        if 2 * block_bytes > STREAMING_GCB_MAX_SIZE:
             return False
     return True
+
+
+def _tallest_rectangle_height(grid_x: int, rows_left: int, num_cores: int) -> int:
+    """Largest height ``h`` s.t. ``num_cores`` is an ``h x (num_cores/h)`` rectangle fitting
+    ``rows_left`` rows and ``grid_x`` cols, or ``0`` if none fits. Shared by
+    :func:`norm_grid_fits` and :meth:`TensorPrefetcher.dynamic_worker_core_grid` so the
+    feasibility pre-check and the actual allocation can't disagree."""
+    if rows_left <= 0:
+        return 0
+    return next(
+        (h for h in range(min(rows_left, num_cores), 0, -1) if num_cores % h == 0 and num_cores // h <= grid_x),
+        0,
+    )
+
+
+def norm_grid_fits(mesh_device: "ttnn.MeshDevice", recv_per_bank: int, num_cores: int = 32) -> bool:
+    """Whether a ``num_cores`` decode-norm rectangle fits below a ``recv_per_bank``-row receiver
+    rectangle on this mesh's worker grid.
+
+    ``get_norm_config`` places the decode RMSNorm on ``dynamic_worker_core_grid(32)``, which
+    anchors a solid rectangle in the rows *below* the receiver rectangle. A large ring (e.g.
+    recv_per_bank=8 -> an 8-row receiver rectangle on a 10-row grid) can leave too few rows for
+    it, so ``dynamic_worker_core_grid`` would assert. Gating candidate selection on this lets
+    ``make_prefetcher`` pick a smaller ring (or fall back to the worker prefetcher) instead.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    return _tallest_rectangle_height(grid.x, grid.y - recv_per_bank, num_cores) > 0
 
 
 class TensorPrefetcher(LightweightModule):
@@ -145,17 +168,22 @@ class TensorPrefetcher(LightweightModule):
         self.num_senders: int = mesh_device.dram_grid_size().x
         self.model_name: str = os.getenv("HF_MODEL", "")
         assert self.model_name != "", "HF_MODEL is not set. Tensor Prefetcher must be run with a model."
-        self.dual_senders_per_bank: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_DUAL_SENDERS", "0") == "1"
-        self.stream_in1: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1"
+        # Dual senders per bank and in1 streaming are always on — they are the validated,
+        # highest-throughput configuration and the GCB sizing below assumes streaming.
+        self.dual_senders_per_bank: bool = True
+        self.stream_in1: bool = True
         self.uses_tensor_prefetcher: bool = True
 
         # Pick recv_per_bank. Auto-mode walks 8,4,2,1 (descending) and takes the largest supported.
+        # A candidate must both satisfy the model/GCB config check AND leave room below the
+        # receiver rectangle for the decode-norm grid (norm_grid_fits) — otherwise get_norm_config's
+        # dynamic_worker_core_grid(32) would assert at decode time.
         candidates: List[int] = [num_receiver_cores] if num_receiver_cores is not None else [8, 4, 2, 1]
         picked = None
         for rpb in candidates:
             if is_tensor_prefetcher_config_supported(
                 self.model_name, self.mesh_device.get_num_devices(), self.num_senders, rpb
-            ):
+            ) and norm_grid_fits(self.mesh_device, rpb):
                 picked = rpb
                 break
         assert picked is not None, (
@@ -201,12 +229,13 @@ class TensorPrefetcher(LightweightModule):
         # receiver ring is a small rectangle, so those ops use the model's default placement (the
         # same the no-prefetcher path uses). The worker-core backend sets this True and reserves
         # its worker grid for them. Config functions branch on this instead of the backend type.
+        # NOTE: this co-location split is expected to change in the future (surrounding ops may be
+        # placed on the freed worker grid for the DRAM-core backend too).
         self.colocate_ops: bool = False
 
         logger.info(
             f"[TensorPrefetcher] model={self.model_name} banks={self.num_senders} "
-            f"recv/bank={self.num_receiver_cores} ring={self.ring_size} "
-            f"dual_senders={self.dual_senders_per_bank} stream_in1={self.stream_in1}"
+            f"recv/bank={self.num_receiver_cores} ring={self.ring_size}"
         )
 
     def insert_tensor(self, tensor: ttnn.Tensor, program_config=None) -> None:
@@ -298,8 +327,9 @@ class TensorPrefetcher(LightweightModule):
 
         The model flattens this (via ``to_core_range_set``) into the matmul ``core_grid``; the
         gather_in0 matmul walks that grid in order, so ring core r computes N-cols
-        [r*per_core_N, ...) and must receive shard r. This ring order is intentionally
-        decoupled from ``_bank_to_receivers`` (strided), which only feeds the DRAM-sender GCB.
+        [r*per_core_N, ...) and must receive shard r. This ring-position order is the same order
+        ``_bank_to_receivers`` (contiguous per bank) feeds the DRAM-sender GCB: bank b's arc is
+        ring positions [b*recv_per_bank, (b+1)*recv_per_bank).
 
         ``sender_active``/``receiver_active`` are accepted for parity with the worker-core
         ``Prefetcher.receiver_cores`` signature but are ignored — the DRAM-core path has no
@@ -330,18 +360,21 @@ class TensorPrefetcher(LightweightModule):
     ) -> ttnn.MemoryConfig:
         """Memory config for a prefetched (K, N) weight (uniform with ``Prefetcher.weight_mem_config``).
 
-        Returns the receiver-contiguous DRAM layout this backend requires, except on galaxy/TG
-        meshes (the recv-contig path is not supported there) where it falls back to ``default``.
-        Lets MLP/attention call ``prefetcher.weight_mem_config(...)`` without branching on backend.
+        Always returns the receiver-contiguous DRAM layout this backend requires. ``is_galaxy`` is
+        accepted only for signature parity with ``Prefetcher.weight_mem_config`` and is ignored:
+        this backend is selected only on single-row Blackhole meshes (make_prefetcher rejects
+        galaxy/TG and other multi-row meshes), so there is no galaxy case to fall back for — and a
+        fallback here would be a half-fallback anyway, since the GCB (_build_global_cb) is
+        recv-contig-only. Lets MLP/attention call ``prefetcher.weight_mem_config(...)`` without
+        branching on backend.
 
         The recv-contig layout allocates the weight as an NdShardSpec with ``num_shards =
         ring_size`` (over-subscribed relative to the ``num_senders`` DRAM banks) distributed
-        round-robin, each shard ``(K, N // ring_size)``. Paired with the strided GCB topology,
-        shard r (columns [r*n_per_recv, (r+1)*n_per_recv)) is delivered to ring position r —
-        exactly the weight slice the gather_in0 matmul's ring core r consumes.
+        CONTIGUOUS_1D, each shard ``(K, N // ring_size)``. Paired with the contiguous per-bank GCB
+        topology, shard r (columns [r*n_per_recv, (r+1)*n_per_recv)) is delivered to ring position
+        r — exactly the weight slice the gather_in0 matmul's ring core r consumes.
         """
-        if is_galaxy:
-            return default
+        del is_galaxy
         return recv_contig_mem_config(
             k,
             n,
@@ -367,11 +400,8 @@ class TensorPrefetcher(LightweightModule):
         rows_left = grid_y - self.num_receiver_cores
         row0 = self.num_receiver_cores
         # Tallest rectangle: largest height that divides num_cores, fits the available rows, and
-        # leaves a width that fits the column count.
-        height = next(
-            (h for h in range(min(rows_left, num_cores), 0, -1) if num_cores % h == 0 and num_cores // h <= grid_x),
-            0,
-        )
+        # leaves a width that fits the column count (shared with norm_grid_fits' pre-check).
+        height = _tallest_rectangle_height(grid_x, rows_left, num_cores)
         assert height > 0, (
             f"dynamic_worker_core_grid: cannot fit {num_cores} cores into a rectangle within "
             f"{rows_left} rows x {grid_x} cols below the receiver rectangle "
