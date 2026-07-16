@@ -61,6 +61,7 @@ class UnsafeAllocationTracker:
             raise ValueError("mark_corruptible expected a tensor with a valid device buffer_unique_id")
 
         remove_unsafe_tracked_id(tensor.device(), buf_id)
+        cls._tracebacks.pop(buf_id, None)
         return buf_id
 
     def verify_before_replay(self, trace_id) -> None:
@@ -77,8 +78,6 @@ class UnsafeAllocationTracker:
 
         # get_unsafe_tracked_ids returns dict[int, str] mapping buffer_id -> allocation context
         live_unsafe_map = get_unsafe_tracked_ids(self.mesh_device, trace_id)
-        # Filter out corruptible_allocation_scope entries — those are acknowledged-safe
-        live_unsafe_map = {bid: ctx for bid, ctx in live_unsafe_map.items() if ctx != "corruptible_allocation_scope"}
         if not live_unsafe_map:
             return
 
@@ -92,7 +91,7 @@ class UnsafeAllocationTracker:
         for buf_id in sorted(live_unsafe):
             ctx = live_unsafe_map.get(buf_id, "")
             ctx_str = f" [op: {ctx}]" if ctx else ""
-            parts.append(f"Buffer {buf_id}{ctx_str}")
+            parts.append(f"Buffer {buf_id}{ctx_str}\n")
 
             if self._diagnostics_enabled:
                 tb = self._tracebacks.get(buf_id)

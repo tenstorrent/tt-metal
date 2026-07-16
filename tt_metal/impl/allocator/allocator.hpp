@@ -90,6 +90,9 @@ public:
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
     void clear_unsafe_tracked_ids(std::uint32_t trace_id);
     static std::vector<size_t> drain_pending_traceback_ids();
+    static std::vector<size_t> drain_retired_traceback_ids();
+    static void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
+    static void pop_corruptible_allocation_scope();
 
     // See <tt-metalium/allocation_context.hpp> for the thread-local context stack API.
 
@@ -136,6 +139,7 @@ protected:
 private:
     void verify_safe_allocation(const Buffer* buffer) const;
     void track_buffer_if_unsafe(Buffer* buffer);
+    bool in_corruptible_allocation_scope() const;
 
     mutable std::mutex mutex_;
 

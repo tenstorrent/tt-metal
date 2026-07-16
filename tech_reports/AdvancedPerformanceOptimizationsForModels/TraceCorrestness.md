@@ -30,7 +30,7 @@ This guide is about system 1 - trace capture/replay.
 
 # What does tracing do?
 
-Metal Trace is a performance optimization feature that minimizes host overhead for constructing and dispatching operations. It is especially useful when the time to execute the operation on device is shorter thatn the time needed to dispatch it, which is commonly the case with small tensors and simple operations.
+Metal Trace is a performance optimization feature that minimizes host overhead for constructing and dispatching operations. It is especially useful when the time to execute the operation on device is shorter than the time needed to dispatch it, which is commonly the case with small tensors and simple operations.
 
 # How does it do it?
 
@@ -142,7 +142,7 @@ If there are multiple decision points and capturing traces for all combinations 
 ## Dynamic trace buffer allocation
 
 Usually, the traces are recorded into a pre-allocated trace region, with its size set when opening the device.
-This means you need to appropriately size the buffer to accomodate all traces you plan to capture.
+This means you need to appropriately size the buffer to accommodate all traces you plan to capture.
 
 You can avoid this by passing `trace_region_size=0`. With this set, traces will be saved in dynamically allocated buffers.
 As of July 2026, dynamic trace buffer allocation should be avoided when using multiple traces due to a bug https://github.com/tenstorrent/tt-metal/issues/48869
@@ -151,17 +151,19 @@ As of July 2026, dynamic trace buffer allocation should be avoided when using mu
 
 ```
 class FunGen:
+    @staticmethod
     def fun(x, cond_a, cond_b):
         if cond_a:
-            return op_a1(x)
+            x = op_a1(x)
         else:
-            return op_a2(x)
+            x = op_a2(x)
         if cond_b:
             return op_b1(x)
         else:
             return op_b2(x)
 
-    def __init__(self):
+    def __init__(self, mesh_device):
+        self.mesh_device = mesh_device
         self.trace_inputs = dict()
         self.trace_ids = dict()
         self.trace_outputs = dict()
@@ -170,32 +172,32 @@ class FunGen:
         for cond_a in True, False:
             for cond_b in True, False:
                 x = create_x()
-                fun(x, cond_a, cond_b)
+                self.fun(x, cond_a, cond_b)
         # trace capture
         for cond_a in True, False:
             for cond_b in True, False:
-                trace_key= (cond_a, cond_b)
+                trace_key = (cond_a, cond_b)
                 x = create_x()
                 trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-                out = fun(x, cond_a, cond_b)
+                out = self.fun(x, cond_a, cond_b)
                 ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
                 # These two may be overwritten by executing other traces,
                 # But we always write them before use
                 # and read from them right after executing their trace
-                mark_corruptible(x)
-                mark_corruptible(out)
+                ttnn.mark_corruptible(x)
+                ttnn.mark_corruptible(out)
                 self.trace_inputs[trace_key] = x
                 self.trace_ids[trace_key] = trace_id
                 self.trace_outputs[trace_key] = out
 
-    def traced_fun(x, cond_a, cond_b)
+    def traced_fun(self, x, cond_a, cond_b):
         trace_key = (cond_a, cond_b)
-        trace_input = self.trace_input[trace_key]
-        trace_output = self.trace_output[trace_key]
+        trace_input = self.trace_inputs[trace_key]
+        trace_output = self.trace_outputs[trace_key]
         trace_id = self.trace_ids[trace_key]
-        copy_data(from=x, to=trace_input)
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.copy_host_to_device_tensor(x, trace_input)
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
         # Need to move the output to non-corruptible memory before any other trace is executed
         # This can be a host copy, or a copy to some other safe tensor.
-        result = trace_output.cpu()
+        result = ttnn.from_device(trace_output, blocking=True)
         return result

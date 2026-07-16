@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/allocation_context.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -28,6 +29,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "tt_metal/distributed/trace_allocation_tracker.hpp"
 
 namespace tt::tt_metal {
 
@@ -166,5 +168,48 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {
             mesh_device->allocator(SubDeviceId{0})->get_bank_ids_from_logical_core(BufferType::L1, core)[0];
         EXPECT_EQ(global_bank_id, sub_device_bank_id);
     }
+}
+
+TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocators) {
+    if (!trace_allocation_tracking_enabled()) {
+        GTEST_SKIP() << "requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup";
+    }
+
+    constexpr uint32_t page_size = 32;
+    constexpr uint32_t local_l1_size = 3200;
+    auto mesh_device = devices_[0];
+    CoreRangeSet shard_cores = CoreRange({0, 0}, {0, 0});
+    SubDevice sub_device(std::array{shard_cores});
+    auto manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
+    mesh_device->load_sub_device_manager(manager);
+
+    distributed::ReplicatedBufferConfig replicated_config = {.size = page_size};
+    ShardSpecBuffer shard_spec(shard_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {shard_cores.num_cores(), 1});
+    distributed::DeviceLocalBufferConfig local_config = {
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
+        .bottom_up = false,
+        .sub_device_id = SubDeviceId{0}};
+
+    constexpr distributed::MeshTraceId trace_id{0x1234};
+    distributed::trace_allocation_tracker::mark_allocations_unsafe(mesh_device.get(), trace_id);
+
+    auto tracked = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    auto tracked_id = tracked->get_backing_buffer()->unique_id();
+    EXPECT_TRUE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                    .contains(tracked_id));
+
+    distributed::trace_allocation_tracker::push_corruptible_allocation_scope(mesh_device.get());
+    auto acknowledged = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    distributed::trace_allocation_tracker::pop_corruptible_allocation_scope(mesh_device.get());
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                     .contains(acknowledged->get_backing_buffer()->unique_id()));
+
+    tracked->deallocate();
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                     .contains(tracked_id));
+    distributed::trace_allocation_tracker::clear_unsafe_tracked_ids(mesh_device.get(), trace_id);
+    distributed::trace_allocation_tracker::mark_allocations_safe(mesh_device.get());
 }
 }  // namespace tt::tt_metal

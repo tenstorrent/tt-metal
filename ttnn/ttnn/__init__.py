@@ -152,8 +152,6 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace as _ttnn_execute_trace,
     release_trace,
-    push_allocation_context as _push_allocation_context,
-    pop_allocation_context as _pop_allocation_context,
 )
 
 from ttnn._ttnn.operations.debug import (
@@ -163,15 +161,19 @@ from ttnn._ttnn.operations.debug import (
 from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
 
 if TRACE_ALLOC_TRACKING:
+    from ttnn._ttnn.operations.trace import (
+        pop_corruptible_allocation_scope as _pop_corruptible_allocation_scope,
+        push_corruptible_allocation_scope as _push_corruptible_allocation_scope,
+    )
 
     @contextlib.contextmanager
     def corruptible_allocation_scope(mesh_device):
         """Suppress accounting for intentionally corruptible allocations in this scope."""
-        _push_allocation_context("corruptible_allocation_scope")
+        _push_corruptible_allocation_scope(mesh_device)
         try:
             yield
         finally:
-            _pop_allocation_context()
+            _pop_corruptible_allocation_scope(mesh_device)
 
 else:
 
