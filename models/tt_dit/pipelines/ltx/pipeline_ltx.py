@@ -1814,24 +1814,23 @@ class LTXPipeline:
             mesh_device=self.audio_mesh_device,
             dtype=ttnn.float32,
         )
-        # Capture-once/replay the main vocoder device graph when the pipeline runs traced.
-        # (Previously produced garbage audio: a ttnn trace bakes absolute buffer addresses, and the
-        # vocoder's prep_run alloc/free desynced them from the replay-time allocator state. Fixed in
-        # Vocoder.forward_traced — warm caches on a prior eager decode, then capture with
-        # prep_run=False so capture and every replay share the post-mel-VAE free-list. Gated by the
-        # test_audio_decode_girl conv1d-vs-torch oracle, which now runs under trace.)
-        # Main-vocoder trace defaults ON (wins on small/host-bound meshes — loudbox 2x4: 0.80s
-        # traced). On large/CCL-bound meshes it is net-negative (galaxy 4x8: 1.37s traced vs 1.07s
-        # eager — T-shard=8 AllGather/halo dominates, audio decode does not scale with chips), so
-        # set LTX_VOC_TRACE=0 there.
-        self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
-        # BWE/VAE trace default ON, gated on the transformer trace. At served frame counts
-        # (145f/1088x1920, bh 4x8) traced vocoder+BWE ~0.45s vs eager ~0.85s (full audio decode
-        # 0.50s vs 0.88s), so this is the default so a run can't silently miss it. The old
-        # default-OFF was measured on a pre-optimization audio path (BWE 1.74s traced); replay is
-        # bit-identical either way. LTX_BWE_TRACE=0 / LTX_VAE_TRACE=0 to force eager.
-        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "1") != "0"
-        self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "1") != "0"
+        # Capture-once/replay the audio decode device graphs (mel-VAE, main vocoder, BWE) when
+        # traced. A ttnn trace bakes absolute buffer addresses (prep_run=False), so replay must start
+        # from the same allocator free-list as capture. That holds in the audio-only path, but an E2E
+        # gen captures the video denoise trace and allocates its persistent buffers after the warmup
+        # audio capture, shifting the free-list so the audio replay reads garbage (flat, clipped, zero
+        # voiceband energy). The trace is also net-negative on large meshes (galaxy 4x8: 1.37s traced
+        # vs 1.07s eager) and audio is off the critical path either way, so default it OFF for E2E and
+        # keep it ON only for the isolated audio path (its conv1d-vs-torch oracle gates the traced
+        # decode). LTX_{VOC,BWE,VAE}_TRACE still override the default.
+        _audio_trace_default = "1" if self.audio_only else "0"
+        self.tt_vocoder_with_bwe.use_trace = (
+            self._traced and os.environ.get("LTX_VOC_TRACE", _audio_trace_default) != "0"
+        )
+        self.tt_vocoder_with_bwe.use_trace_bwe = (
+            self._traced and os.environ.get("LTX_BWE_TRACE", _audio_trace_default) != "0"
+        )
+        self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", _audio_trace_default) != "0"
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
