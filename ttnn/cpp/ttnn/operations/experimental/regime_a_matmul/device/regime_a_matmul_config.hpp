@@ -46,11 +46,14 @@ enum RegimeADiag : uint32_t {
     // for G/R rounds (nearest-neighbor, incremental per-round push preserved). Cuts the forwarding
     // dependency depth from G-1 to G/R-1, trading R x in0 DRAM reads. cb0 slot (r*R+i) = shard (rp-r-i*G/R);
     // the in1 reader uses the SAME formula so compute is unchanged. Factory maps these to IN0_REPL=2/4.
-    DIAG_IN0_REPL2 = 1u << 6,  // R=2: 2 seeds, 4 rounds, 6 forwarded shard-equiv (vs 7), depth 3
-    DIAG_IN0_REPL4 = 1u << 7,  // R=4: 4 seeds, 2 rounds, 4 forwarded shard-equiv, depth 1
-    DIAG_IN0_XCHG = 1u << 8,   // eager incremental direct exchange: scatter own shard to the G-1 ahead peers
-                               // with PER-SLOT sems, push each slot as it lands (depth 1 + incremental
-                               // overlap). Ring cb0 layout (slot d = shard rp-d), so in1/compute unchanged.
+    DIAG_IN0_REPL2 = 1u << 6,   // R=2: 2 seeds, 4 rounds, 6 forwarded shard-equiv (vs 7), depth 3
+    DIAG_IN0_REPL4 = 1u << 7,   // R=4: 4 seeds, 2 rounds, 4 forwarded shard-equiv, depth 1
+    DIAG_IN0_XCHG = 1u << 8,    // eager incremental direct exchange: per peer, write-then-signal (NoC
+                                // ordering, NO flush) so each slot is exposed as its own write lands; push
+                                // received slots in compute order. Ring cb0 layout -> in1/compute unchanged.
+    DIAG_IN0_XCHGRR = 1u << 9,  // round-robin direct exchange: round d, write to the d-ahead peer + signal,
+                                // wait own slot d, push it, advance. 1 transfer/core/round (less burst
+                                // congestion than eager's G-1 at once) while keeping incremental push.
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
