@@ -190,3 +190,51 @@
 - Tests added: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/
   test_scaled_dot_product_attention_precision_matrix.py` (the authoritative precision
   characterization) + `precision_matrix_results.md` (per /numeric-formats-metal §10).
+
+## Refinement 3 — Speed up the perf-flagged profile (data-movement) (partial)
+- Date: 2026-07-16
+- What was done: Removed the `double_buffer` anti-pattern from the dataflow
+  kernels. The reader previously issued one `noc_async_read_tile` + one
+  `noc_async_read_barrier` + one `cb_push_back` **per tile**; it now batches a whole
+  KV chunk (K: `Dt·Skv_chunk_t`, V: `Skv_chunk_t·Dt`) and the whole Q chunk behind a
+  **single** barrier, via a `read_tiles<cb, batch>(n, …, page_of)` helper (the writer
+  twin, `write_tiles<cb, batch>`, batches the whole output q-chunk behind one
+  `noc_async_write_barrier`). Batching is gated on a compile-time straddle-safety
+  predicate — `batch_kv = (Skv_t % Skv_chunk_t == 0)`, `batch_q = (Sq_t % Sq_chunk_t
+  == 0)`, `batch_mask = batch_q && batch_kv` — so the multi-page `cb_reserve_back`
+  is always slot-aligned in the `KV_DEPTH`/`OUT_DEPTH`-slot CB ring and the linear
+  write-pointer walk never crosses the buffer wrap. Partial-chunk shapes (the R1b
+  prime-`Skv_t` generality cases) keep the byte-identical per-tile path. All
+  predicates derive from existing compile-time args (no new descriptor arg, no
+  hardcoded block/tile counts). `reader_placement` is already `row_wise=True`
+  (confirmed optimal). The perf-flagged shape (`Sq_t = Skv_t = 296`, chunk 4)
+  satisfies both predicates, so it runs fully batched.
+- Perf measured (Blackhole p150b, 110 cores, 1.35 GHz; device FW duration, warm
+  median of 5, fresh kernel cache): baseline (per-tile) **11.064 ms** → batched
+  **11.007 ms** — **flat (within noise)**. Ablation (`/perf-measure` no-DM: stub
+  every reader NoC transfer, keep CB reserve/push/barrier + address math) measures
+  **11.01 ms, unchanged** → the reader's data movement is entirely hidden behind
+  compute by the existing `KV_DEPTH=2` double-buffer. **The flagged shape is
+  compute-bound, not data-movement-bound** (FPU util ≈ 0.07 vs the 0.35 target); a
+  DM lever cannot move wall-time here. The batching is a correct, non-regressing
+  removal of the flagged anti-pattern and is **kept** (not reverted) — it will
+  surface once compute no longer dominates.
+- Accuracy achieved: PCC ≥ 0.997 on the flagged shape (soft golden gate, held);
+  golden `TOLERANCES` met across the suite (no numeric change — reader/writer only).
+- Golden test progress: **1181 passed / 1088 xfailed** (0 failed, 0 xpass — no
+  SUPPORTED change), identical to R2. Unit suite **55/55** (core + non-aligned
+  batched-path + coarse-chunk per-tile fallback); precision-baseline + debug green;
+  precision-matrix **272 passed / 112 skipped**; new R3 guard set **8/8** (mask
+  none/custom × small/medium × DRAM/L1 output).
+- Issues encountered: the reader/writer batching (R3's named data-movement lever)
+  is correct but off the critical path for the compute-bound flagged shape, so it
+  produced no device-ns win. This is an ablation-proven conclusion, not a first-
+  failure pattern-match. Marked **[~] partial**: correct lever kept; the win is
+  gated on the compute-side work, filed as **Refinement 3a** (converges with R5 —
+  grow matmul output subblocks / coarsen the compute block to lift FPU util, then
+  re-measure the DM batching: if faster compute exposes the reads, tune `KV_DEPTH`/
+  the read-block; else the DM batching is complete as-is).
+- Tests added: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/
+  test_scaled_dot_product_attention_perf.py` — the flagged-shape perf harness
+  (loops the op N times for N profiler rows; asserts the soft PCC≥0.997 gate) plus
+  the R3 guard set (`test_sdpa_guard_set`: none/custom × small/medium × DRAM/L1).

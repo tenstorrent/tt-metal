@@ -11,6 +11,31 @@
 
 namespace {
 constexpr uint32_t cb_out = 16;
+
+// R3 (data-movement, writer twin of the reader batching): drain a block of tiles
+// with ONE barrier instead of one write + barrier + pop per tile. `batch` is the
+// compile-time full-slot predicate (no partial q-chunk), so the multi-page linear
+// read-pointer walk stays contiguous in the OUT_DEPTH-slot ring.
+template <uint32_t cb, bool batch, typename Acc, typename PageFn>
+FORCE_INLINE void write_tiles(uint32_t n, uint32_t tile_bytes, const Acc& acc, PageFn page_of) {
+    if constexpr (batch) {
+        cb_wait_front(cb, n);
+        uint32_t rptr = get_read_ptr(cb);
+        for (uint32_t t = 0; t < n; ++t) {
+            noc_async_write_tile(page_of(t), acc, rptr);
+            rptr += tile_bytes;
+        }
+        noc_async_write_barrier();  // ONE barrier for n writes -> up to n writes in flight
+        cb_pop_front(cb, n);
+    } else {
+        for (uint32_t t = 0; t < n; ++t) {
+            cb_wait_front(cb, 1);
+            noc_async_write_tile(page_of(t), acc, get_read_ptr(cb));
+            noc_async_write_barrier();
+            cb_pop_front(cb, 1);
+        }
+    }
+}
 }  // namespace
 
 void kernel_main() {
@@ -24,6 +49,11 @@ void kernel_main() {
     // sq_valid tile-rows to cb_out, so the writer drains exactly that many.
 
     constexpr auto dst_args = TensorAccessorArgs<6>();
+
+    // R3: batch the q-chunk output writes (one barrier) only when every q-chunk is
+    // a full CB slot (Sq_t divides Sq_chunk_t) — same slot-alignment / no-straddle
+    // condition as the reader. The perf-flagged shape (Sq_t=296, chunk 4) qualifies.
+    constexpr bool batch_q = (Sq_t % Sq_chunk_t) == 0;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_wu = get_arg_val<uint32_t>(1);
@@ -44,15 +74,13 @@ void kernel_main() {
         const uint32_t sq_off = qc * Sq_chunk_t;
         const uint32_t sq_valid = (Sq_chunk_t < Sq_t - sq_off) ? Sq_chunk_t : (Sq_t - sq_off);
 
+        // Output block: (sq_valid x Dt) tiles, row-major (sq, d) — matches the
+        // compute kernel's phase-11 pack order.
         const uint32_t base = (b * H + h) * Sq_t;
-        for (uint32_t sq = 0; sq < sq_valid; ++sq) {
-            const uint32_t sq_g = sq_off + sq;
-            for (uint32_t d = 0; d < Dt; ++d) {
-                cb_wait_front(cb_out, 1);
-                noc_async_write_tile((base + sq_g) * Dt + d, acc, get_read_ptr(cb_out));
-                noc_async_write_barrier();
-                cb_pop_front(cb_out, 1);
-            }
-        }
+        write_tiles<cb_out, batch_q>(sq_valid * Dt, tile_bytes, acc, [&](uint32_t t) {
+            const uint32_t sq_g = sq_off + (t / Dt);
+            const uint32_t d = t % Dt;
+            return (base + sq_g) * Dt + d;
+        });
     }
 }

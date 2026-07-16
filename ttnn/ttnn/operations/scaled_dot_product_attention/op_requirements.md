@@ -230,7 +230,7 @@ reference metric artifact, floored by the **bf16 output** quantization (the regr
 tests hard-code bf16, so R2's float32 path cannot reach them). Not a bug, never green
 in prior phases, outside the registry cartesian (no golden gate).
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile (data-movement)
+### [~] Refinement 3 — Speed up the perf-flagged profile (data-movement)
 
 **Type**: perf
 
@@ -259,6 +259,55 @@ confirm before investing.
 golden suite is green, and no regression across the config-spanning guard set (one
 representative per distinct kernel path × layout × placement — here: mask
 none/custom × a small and a large shape, DRAM and L1 output).
+
+**Landed (R3, partial)**: the double_buffer anti-pattern was removed — the reader
+now batches a whole KV/Q chunk of async reads behind **one** `noc_async_read_barrier`
+(the writer twin batches the whole output chunk behind one `noc_async_write_barrier`),
+via a `read_tiles<cb,batch>` / `write_tiles<cb,batch>` helper. Batching is gated on a
+straddle-safety predicate (`batch_kv = Skv_t % Skv_chunk_t == 0`, `batch_q = Sq_t %
+Sq_chunk_t == 0`) so the multi-page reserve is always slot-aligned in the
+`KV_DEPTH`/`OUT_DEPTH`-slot ring (never crosses the CB wrap); partial-chunk shapes keep
+the byte-identical per-tile path. Predicates derive from existing CT args — no new
+descriptor arg, no hardcoded block/tile literals (DRY). `reader_placement` is already
+`row_wise=True` (confirmed optimal). **But device-ns did NOT improve** (baseline
+11.06 ms → batched 11.01 ms, within noise). **Ablation (`/perf-measure` no-DM: stub
+ALL reader NoC transfers, keep CB reserve/push/barrier)** measures **11.01 ms —
+unchanged** → the reader's data movement is **entirely hidden behind compute** by the
+existing `KV_DEPTH=2` double-buffer. **The flagged shape is compute-bound, not
+data-movement-bound** (current FPU util ≈ 0.07 vs the 0.35 target): reads are off the
+critical path, so a DM lever cannot move wall-time here. The batching is **kept** (a
+correct, non-regressing removal of the flagged anti-pattern that will surface once
+compute no longer dominates), not reverted. Golden **1181 passed / 1088 xfailed**
+(0 fail, 0 xpass — no SUPPORTED change); unit **55/55** (incl. non-aligned batched +
+partial-chunk per-tile fallback); precision-matrix **272/112**; new guard set
+**8/8** (mask none/custom × small/medium × DRAM/L1). The win is gated on the
+compute-side work → **R3a** below (which converges with R5).
+
+### [ ] Refinement 3a — Close the perf win on the compute-bound flagged shape (re-measure DM after compute-side)
+
+**Type**: perf
+
+**Goal** (sharper follow-up from R3's ablation finding): R3 proved — by no-DM
+ablation (stubbing every reader NoC transfer leaves device-ns unchanged at 11.0 ms) —
+that the flagged `1×10×9472×128` shape is **compute-bound**, so R3's (correct, kept)
+reader/writer batching is off the critical path and produced no wall-time win. The
+exact next lever is **compute-side**: grow the QKᵀ/PV matmul output subblocks toward
+the `fp32_dest_acc_en=False` DEST budget (8 bf16 tiles) and/or coarsen `Sq_chunk_t`/
+`Skv_chunk_t` to amortize the ~10 sequential per-chunk helper phases (per-phase
+reconfig/init/fill-drain) over more tiles — i.e. lift FPU util from ≈0.07 toward 0.35.
+This is exactly **R5's** lever class (`matmul_output_subblock`, `compute_block_size`,
+reconfig ablation); R3a is the ordered marker that R5 is the step that closes R3's
+target. **After R5 lands, re-measure the R3 DM batching**: if the faster compute
+exposes the reads (reader becomes the critical path), tune `KV_DEPTH` / the read-block
+size; if reads stay hidden, the R3 DM batching is complete as-is.
+
+**Verifier notes**: no SUPPORTED change (perf). Do R5 first (or fold R5 into this),
+then confirm on the flagged shape that device-ns moves toward the 0.35 util goal with
+the soft `pcc_threshold=0.997` holding and the golden suite green.
+
+**Done when**: measured device-ns improves on the flagged shape via the compute-side
+lever, and the R3 DM batching is confirmed (still hidden → complete; or exposed →
+`KV_DEPTH`/read-block tuned); prior phases green.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode = causal)
 

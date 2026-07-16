@@ -37,6 +37,37 @@ FORCE_INLINE void fill_zeros_tile(uint32_t wptr, uint32_t words) {
     }
 }
 
+// R3 (data-movement): batch a block of async reads then ONE barrier, instead of
+// one read + barrier + push per tile (the double_buffer anti-pattern — the KV CBs
+// are already KV_DEPTH-deep, so the NoC was left latency-bound). `page_of(t)`
+// maps the linear tile index t (0..n-1, in the CB's fill order) to its DRAM page.
+//
+// `batch` is a COMPILE-TIME predicate that is only true when the per-chunk block
+// is exactly one CB slot (no partial chunk on this axis): then every multi-page
+// reserve starts slot-aligned in the KV_DEPTH-slot ring and never straddles the
+// buffer wrap, so the linear write-pointer walk is contiguous. Partial-chunk
+// shapes keep the per-tile path (byte-identical to phase-0; not the perf target).
+template <uint32_t cb, bool batch, typename Acc, typename PageFn>
+FORCE_INLINE void read_tiles(uint32_t n, uint32_t tile_bytes, const Acc& acc, PageFn page_of) {
+    if constexpr (batch) {
+        cb_reserve_back(cb, n);
+        uint32_t wptr = get_write_ptr(cb);
+        for (uint32_t t = 0; t < n; ++t) {
+            noc_async_read_tile(page_of(t), acc, wptr);
+            wptr += tile_bytes;
+        }
+        noc_async_read_barrier();  // ONE barrier for n reads -> up to n reads in flight
+        cb_push_back(cb, n);
+    } else {
+        for (uint32_t t = 0; t < n; ++t) {
+            cb_reserve_back(cb, 1);
+            noc_async_read_tile(page_of(t), acc, get_write_ptr(cb));
+            noc_async_read_barrier();
+            cb_push_back(cb, 1);
+        }
+    }
+}
+
 // Vertical column mask: columns [0, unpad_col) = 0, columns [unpad_col, 32) = -inf.
 // (Face-aware; mirrors the production SDPA fill_vertical_tile_bf16.)
 FORCE_INLINE void fill_vertical_mask_tile(uint32_t wptr, uint32_t unpad_col) {
@@ -99,6 +130,14 @@ void kernel_main() {
     constexpr uint32_t skv_partial = get_compile_time_arg_val(13);  // valid cols in last S_kv tile (0 => aligned)
     constexpr bool has_kv_pad = skv_partial != 0;
 
+    // R3: batch reads per chunk (one barrier) only when every chunk on that axis is
+    // a full CB slot — i.e. the axis tile-count divides the chunk. Then the reserve
+    // is always slot-aligned and the multi-page linear write never straddles the CB
+    // ring wrap. The perf-flagged shape (Sq_t=Skv_t=296, chunk 4) satisfies both.
+    constexpr bool batch_q = (Sq_t % Sq_chunk_t) == 0;
+    constexpr bool batch_kv = (Skv_t % Skv_chunk_t) == 0;
+    constexpr bool batch_mask = batch_q && batch_kv;
+
     constexpr auto q_args = TensorAccessorArgs<14>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -156,17 +195,13 @@ void kernel_main() {
         const uint32_t sq_off = qc * Sq_chunk_t;
         const uint32_t sq_valid = (Sq_chunk_t < Sq_t - sq_off) ? Sq_chunk_t : (Sq_t - sq_off);
 
-        // Q chunk: (sq_valid x Dt) tiles, row-major (sq, d)
+        // Q chunk: (sq_valid x Dt) tiles, row-major (sq, d).
         const uint32_t q_base = (b * H + h) * Sq_t;
-        for (uint32_t sq = 0; sq < sq_valid; ++sq) {
-            const uint32_t sq_g = sq_off + sq;
-            for (uint32_t d = 0; d < Dt; ++d) {
-                cb_reserve_back(cb_q_in, 1);
-                noc_async_read_tile((q_base + sq_g) * Dt + d, q_acc, get_write_ptr(cb_q_in));
-                noc_async_read_barrier();
-                cb_push_back(cb_q_in, 1);
-            }
-        }
+        read_tiles<cb_q_in, batch_q>(sq_valid * Dt, tile_bytes, q_acc, [&](uint32_t t) {
+            const uint32_t sq_g = sq_off + (t / Dt);
+            const uint32_t d = t % Dt;
+            return (q_base + sq_g) * Dt + d;
+        });
 
         const uint32_t kv_base = (b * H_kv + kv_head) * Skv_t;
         const uint32_t mask_base = (b * mask_H + mask_head) * Sq_t;
@@ -183,37 +218,24 @@ void kernel_main() {
             // (outer d, inner skv). The transpose flag flips each 32x32 tile's
             // contents; it does NOT reorder the block indices. DRAM page for K
             // tile (skv, d) is still (kv_base + skv_g)*Dt + d.
-            for (uint32_t d = 0; d < Dt; ++d) {
-                for (uint32_t skv = 0; skv < skv_valid; ++skv) {
-                    const uint32_t skv_g = skv_off + skv;
-                    cb_reserve_back(cb_k_in, 1);
-                    noc_async_read_tile((kv_base + skv_g) * Dt + d, k_acc, get_write_ptr(cb_k_in));
-                    noc_async_read_barrier();
-                    cb_push_back(cb_k_in, 1);
-                }
-            }
-            // V chunk: (skv_valid x Dt) tiles, row-major (skv, d)
-            for (uint32_t skv = 0; skv < skv_valid; ++skv) {
-                const uint32_t skv_g = skv_off + skv;
-                for (uint32_t d = 0; d < Dt; ++d) {
-                    cb_reserve_back(cb_v_in, 1);
-                    noc_async_read_tile((kv_base + skv_g) * Dt + d, v_acc, get_write_ptr(cb_v_in));
-                    noc_async_read_barrier();
-                    cb_push_back(cb_v_in, 1);
-                }
-            }
-            // mask chunk: (sq_valid x skv_valid) tiles, row-major (sq, skv)
+            read_tiles<cb_k_in, batch_kv>(Dt * skv_valid, tile_bytes, k_acc, [&](uint32_t t) {
+                const uint32_t d = t / skv_valid;
+                const uint32_t skv_g = skv_off + (t % skv_valid);
+                return (kv_base + skv_g) * Dt + d;
+            });
+            // V chunk: (skv_valid x Dt) tiles, row-major (skv, d).
+            read_tiles<cb_v_in, batch_kv>(skv_valid * Dt, tile_bytes, v_acc, [&](uint32_t t) {
+                const uint32_t skv_g = skv_off + (t / Dt);
+                const uint32_t d = t % Dt;
+                return (kv_base + skv_g) * Dt + d;
+            });
+            // mask chunk: (sq_valid x skv_valid) tiles, row-major (sq, skv).
             if constexpr (has_mask) {
-                for (uint32_t sq = 0; sq < sq_valid; ++sq) {
-                    const uint32_t sq_g = sq_off + sq;
-                    for (uint32_t skv = 0; skv < skv_valid; ++skv) {
-                        const uint32_t skv_g = skv_off + skv;
-                        cb_reserve_back(cb_mask_in, 1);
-                        noc_async_read_tile((mask_base + sq_g) * Skv_t + skv_g, mask_acc, get_write_ptr(cb_mask_in));
-                        noc_async_read_barrier();
-                        cb_push_back(cb_mask_in, 1);
-                    }
-                }
+                read_tiles<cb_mask_in, batch_mask>(sq_valid * skv_valid, tile_bytes, mask_acc, [&](uint32_t t) {
+                    const uint32_t sq_g = sq_off + (t / skv_valid);
+                    const uint32_t skv_g = skv_off + (t % skv_valid);
+                    return (mask_base + sq_g) * Skv_t + skv_g;
+                });
             }
 
             // KV-padding softmax mask (h_non_aligned): last KV chunk only. Build a
