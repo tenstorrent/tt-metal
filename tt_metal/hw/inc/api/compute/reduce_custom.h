@@ -69,7 +69,7 @@ ALWI void reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape, st
 // num_faces convenience overload: constructs a TensorShape from a flat face count (2 or 4).
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
-    reduce_block_max_row_init<block_ct_dim, respect_trigger>(ckernel::tensor_shape_from_num_faces(num_faces), ocb);
+    reduce_block_max_row_init<block_ct_dim, respect_trigger>(ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
 
 // clang-format off
@@ -127,7 +127,7 @@ template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_
 ALWI void reduce_block_max_row(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t row_start_index, std::uint32_t idst) {
     reduce_block_max_row<block_ct_dim, respect_trigger>(
-        ckernel::tensor_shape_from_num_faces(num_faces), icb, icb_scaler, row_start_index, idst);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), icb, icb_scaler, row_start_index, idst);
 }
 
 #ifdef ARCH_BLACKHOLE
@@ -165,7 +165,7 @@ ALWI void reduce_block_max_row_reinit_short(const ckernel::TensorShape& tensor_s
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_reinit_short(std::uint32_t ocb) {
     reduce_block_max_row_reinit_short<block_ct_dim, respect_trigger>(
-        ckernel::tensor_shape_from_num_faces(num_faces), ocb);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
 #endif
 
@@ -185,7 +185,7 @@ ALWI void reduce_block_max_row_reinit_minimal(const ckernel::TensorShape& tensor
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4>
 ALWI void reduce_block_max_row_reinit_minimal(std::uint32_t ocb) {
     reduce_block_max_row_reinit_minimal<block_ct_dim, respect_trigger>(
-        ckernel::tensor_shape_from_num_faces(num_faces), ocb);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb);
 }
 
 /**
@@ -208,7 +208,7 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
 ALWI void reduce_block_max_row_reinit_minimal_runtime(
     std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
     reduce_block_max_row_reinit_minimal_runtime(
-        ckernel::tensor_shape_from_num_faces(num_faces), ocb, block_ct_dim, respect_trigger);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
 
 /**
@@ -230,7 +230,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(
 ALWI void reduce_block_max_row_reinit_short_runtime(
     std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
     reduce_block_max_row_reinit_short_runtime(
-        ckernel::tensor_shape_from_num_faces(num_faces), ocb, block_ct_dim, respect_trigger);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
 #endif
 
@@ -296,7 +296,7 @@ ALWI void reduce_block_max_row_init_runtime(
 ALWI void reduce_block_max_row_init_runtime(
     std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false, std::uint32_t num_faces = 4) {
     reduce_block_max_row_init_runtime(
-        ckernel::tensor_shape_from_num_faces(num_faces), ocb, block_ct_dim, respect_trigger);
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces), ocb, block_ct_dim, respect_trigger);
 }
 
 ALWI void reduce_block_max_row_runtime(
@@ -322,7 +322,7 @@ ALWI void reduce_block_max_row_runtime(
     bool overlap_first_half = false,
     std::uint32_t num_faces = 4) {
     reduce_block_max_row_runtime(
-        ckernel::tensor_shape_from_num_faces(num_faces),
+        ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces),
         icb,
         icb_scaler,
         row_start_index,

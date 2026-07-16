@@ -25,7 +25,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.num_faces, params.TEST_FACE_R_DIM);
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
@@ -54,7 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.num_faces, params.TEST_FACE_R_DIM);
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_eltwise_binary_init_custom_<ELTWISE_BINARY_OP, BROADCAST_TYPE>(params.num_faces);
