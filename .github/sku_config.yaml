@@ -184,7 +184,7 @@ skus:
       - in-service
     weights-cache-mode: yyz4-mnt-models
 
-  bh_spsg:
+  bh_sc1:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:

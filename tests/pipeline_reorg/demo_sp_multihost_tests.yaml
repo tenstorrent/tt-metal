@@ -7,7 +7,7 @@
 #   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   sp_config: Single pod configuration (spsg, sc4, sc16) to run this test on.
+#   sp_config: Supercluster configuration (sc1, sc4, sc16) to run this test on.
 
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> e2e)
 
@@ -35,11 +35,11 @@
 #       python3 -m pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io_decoder_sweep_chunked_trace.py::test_run_host_io_decoder_sweep_chunked_trace_world_size_4 \
 #       --timeout=1200
 #   skus:
-#     bh_spsg:
+#     bh_sc1:
 #       timeout: 20
 #   owner_id: U0ALAR9B78T # Brayden Zhang
 #   team: scaleout
-#   sp_config: spsg
+#   sp_config: sc1
 
 # ============================================================================
 # BH SC4 Multihost Pipeline Tests (4 connected galaxies)
