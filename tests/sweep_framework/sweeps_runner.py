@@ -1183,6 +1183,17 @@ def run_sweeps(
     job_child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     job_worker = None
     if job_child_mode:
+        # Prime the device-count cache in THIS (main) process before the worker
+        # opens the job device — result export's card-type fallback queries the
+        # count (constructs a cluster), which would collide with the worker's held
+        # device (CHIP_IN_USE) if queried live. No-op when RUNNER_LABEL is set (CI).
+        if not os.environ.get("RUNNER_LABEL"):
+            try:
+                from framework.result_destination import prime_device_count
+
+                prime_device_count()
+            except Exception:
+                pass
         # Enable job-level device reuse in create_mesh_device (inherited by the
         # forked worker). Only vectors sharing a device config reach a given
         # process (two-pass splits by dispatch axis), so the cached device is
