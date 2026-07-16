@@ -156,16 +156,6 @@ MLAQKVAssembleFwDeviceOperation::tensor_return_value_t MLAQKVAssembleFwDeviceOpe
         create_device_tensor(specs[2], device)};
 }
 
-ttsl::hash::hash_t MLAQKVAssembleFwDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<MLAQKVAssembleFwDeviceOperation>(
-        args,
-        tensor_args.kv_up.dtype(),
-        tensor_args.q_pre.logical_shape(),
-        tensor_args.kv_up.logical_shape(),
-        tensor_args.k_pe.logical_shape());
-}
-
 MLAQKVAssembleFwDeviceOperation::program_factory_t MLAQKVAssembleFwDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
     return MLAQKVAssembleFwProgramFactory{};
