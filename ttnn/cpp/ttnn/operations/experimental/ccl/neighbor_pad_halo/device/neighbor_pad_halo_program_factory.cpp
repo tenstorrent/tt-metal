@@ -165,10 +165,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     uint32_t num_links = static_cast<uint32_t>(op.np_num_links);
     uint32_t pad2_num_links = static_cast<uint32_t>(op.np_pad2_num_links);
 
-    // Halo-only op: no conv, so no per-batch progress signalling. progress_t_batch_size == 0 compiles
-    // out every per-batch region-sem path in the NP kernels; H->W ordering is instead an upfront barrier
-    // (the W-reader waits the H-writers' Phase-2 barrier signal — see np_phase2_w_reader).
-    const uint32_t progress_t_batch_size = 0;
+    // H->W ordering is an upfront barrier (the W-reader waits the H-writers' Phase-2 barrier signal —
+    // see np_phase2_w_reader), not per-batch progress signalling.
 
     // H-send bank-major coalescing. The halo-only op's upfront H->W barrier makes the corner-first L1
     // path unnecessary, so an eligible H exchange uses the simpler straight-to-DRAM path
@@ -270,13 +268,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
          np_dims_per_core_group_1,
          np_dims_per_core_group_2] = split_work_to_cores(np_core_grid, outer_dim_size * 2);
 
-    // Inc B: batch-align H partition so each (direction, link) owns whole T-batches (per-(HT/HB,link)
-    // sems need it). Link l owns frames [l*h_dims_per_link, min((l+1)*h_dims_per_link, outer_dim_size)).
-    const uint32_t h_pb = progress_t_batch_size;
-    const uint32_t h_total_batches = (h_pb > 0) ? ((outer_dim_size + h_pb - 1) / h_pb) : 0;
-    const uint32_t h_batches_per_link = (h_total_batches > 0) ? ((h_total_batches + num_links - 1) / num_links) : 0;
-    const uint32_t h_dims_per_link = h_batches_per_link * h_pb;
-
     // L1 scratch CB for NP fabric transfer
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_sticks_to_write_per_packet = 1;
@@ -312,7 +303,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
     uint32_t corner_sticks_per_row = std::min(op.np_pad2_left + op.np_pad2_right, num_sticks_per_halo_dim);
     if (is_2d) {
         uint32_t max_padding = op.np_padding_h;  // symmetric H padding; matches main's max(left,right)
-        uint32_t max_outer_dims_per_core = std::max(np_dims_per_core_group_1, h_dims_per_link);
+        uint32_t max_outer_dims_per_core = np_dims_per_core_group_1;
         uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * corner_sticks_per_row;
         uint32_t recv_buf_size = recv_total_sticks * page_size;
         if (recv_buf_size > 0) {
@@ -379,11 +370,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
         // base+r+8*(N-1) land on bank (base+r)%8 at consecutive page offsets, so N ship as ONE N*page
         // fabric write to get_noc_addr(base+r) — valid for ANY base (the N sticks differ by 8, hence same
         // bank / next offset), and the reader gathers rel=r,r+8,... in the same order the writer sends. So
-        // only pw==1 + halo-only (progress==0) are required; base/row-count alignment is NOT needed.
+        // only pw==1 is required; base/row-count alignment is NOT needed.
         // Zeros only: the coalesced reader/writer don't do replicate's edge-outward slice replication, so
         // replicate stays on the per-stick direct path (matches h_coalesce_n).
-        const bool w_coalesce_ok =
-            (progress_t_batch_size == 0) && (op.np_pad2_left == 1) && (op.np_pad2_right == 1) && is_padding_zeros;
+        const bool w_coalesce_ok = (op.np_pad2_left == 1) && (op.np_pad2_right == 1) && is_padding_zeros;
         if (w_coalesce_ok) {
             w_coalesce_n = max_coalesce_sticks;  // sticks per fabric-max-payload packet
             if (w_coalesce_n < 2) {
@@ -562,11 +552,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                 } else {
                     link_dims_to_read = np_dims_per_core_group_2;
                 }
-                if (h_pb > 0) {
-                    const uint32_t b_start = link * h_dims_per_link;
-                    const uint32_t b_end = std::min((link + 1) * h_dims_per_link, outer_dim_size);
-                    link_dims_to_read = (b_end > b_start) ? (b_end - b_start) : 0u;
-                }
 
                 // Reader runtime args. Padded input: frame base/stride use padded dims (reader_frame_rows *
                 // reader_row_stride), stick_start skips the pH/pW border, row stride is padded W, but the
@@ -675,7 +660,7 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     writer_rt_args[3] = op.np_padding_h;          // output_halo_dim_size (compact)
                     writer_rt_args[8] = num_sticks_per_halo_dim;  // stride = W_dev, not padded W
                 }
-                // No per-batch progress args (progress_t_batch_size == 0, no conv consumer).
+                // No per-batch progress args (no per-batch consumer).
                 SetRuntimeArgs(program, h_writer_kernel_id, {core}, writer_rt_args);
             }
             link_offset_start_id += (link_dims_to_read * num_sticks_per_halo_dim);
@@ -1158,8 +1143,8 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                     op.barrier_semaphore.address(),
                     op.w_neighbor_semaphore.address(),
                 };
-                // No per-batch H-region sems (progress_t_batch_size == 0). H->W ordering is the upfront
-                // barrier the W-reader waits on (op.barrier_semaphore, CRTA[1]). Border fold appends
+                // No per-batch H-region sems. H->W ordering is the upfront barrier the W-reader waits on
+                // (op.barrier_semaphore, CRTA[1]). Border fold appends
                 // [3]=padded_addr, [4]=wleft_base, [5]=wright_base, [6]=np_pad2_right.
                 w_border_common(w_reader_crta);
                 SetCommonRuntimeArgs(program, w_reader_kernel_id, w_reader_crta);
@@ -1195,27 +1180,10 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                  input_halo_dim_size,
                  static_cast<uint32_t>(op.np_padding_h)});  // [4],[5]: W-writer per-batch two-pass reorder dims
 
-            // Per-core W fabric runtime args.
-            // When pipelining (progress_t_batch_size>0; inert here), align each link to whole T-batches
-            // so the per-(region,link) progress sem counts batches 1:1 and the per-batch consumer can map
-            // a batch to its owning link by integer division (no per-link boundary table).
-            const uint32_t w_h_total = input_halo_dim_size + 2 * op.np_padding_h;
-            const uint32_t w_sticks_per_batch = progress_t_batch_size * w_h_total;
-            const uint32_t total_w_batches =
-                w_sticks_per_batch > 0 ? ((w_outer_dim_size + w_sticks_per_batch - 1) / w_sticks_per_batch) : 0;
-            const uint32_t w_batches_per_link =
-                (total_w_batches > 0) ? ((total_w_batches + pad2_num_links - 1) / pad2_num_links) : 0;
+            // Per-core W fabric runtime args. Split this direction's W rows across links evenly.
             for (uint32_t w_link = 0; w_link < pad2_num_links; w_link++) {
-                uint32_t w_link_start, w_link_count;
-                if (progress_t_batch_size > 0) {
-                    const uint32_t b_start = w_link * w_batches_per_link;
-                    const uint32_t b_end = std::min((w_link + 1) * w_batches_per_link, total_w_batches);
-                    w_link_start = std::min(b_start * w_sticks_per_batch, w_outer_dim_size);
-                    w_link_count = std::min(b_end * w_sticks_per_batch, w_outer_dim_size) - w_link_start;
-                } else {
-                    w_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
-                    w_link_count = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
-                }
+                const uint32_t w_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
+                const uint32_t w_link_count = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
 
                 for (uint32_t w_direction = 0; w_direction < 2; w_direction++) {
                     uint32_t w_core_idx = (w_link * 2) + w_direction;
