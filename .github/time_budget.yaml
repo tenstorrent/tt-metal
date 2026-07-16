@@ -170,8 +170,7 @@ shield:
     wh_n300: 150
     wh_n300_perf: 115
     bh_p150: 80
-    bh_p150_perf: 40
-    bh_p150b_civ2: 110
+    bh_p150b_civ2: 150
   e2e_tier3:
     bh_p150b_civ2: 18
   unit:
