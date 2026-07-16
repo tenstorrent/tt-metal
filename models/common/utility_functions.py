@@ -1117,6 +1117,7 @@ def ttl_complex_2_torch_complex(tt_tensor):
 def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h, stride_w, align_c=4):
     assert stride_h == stride_w
     assert filter_pyt_nchw_tensor.shape[2] == filter_pyt_nchw_tensor.shape[3]
+    assert isinstance(align_c, int) and align_c > 0
     # Fold activation for unity stride
     # Pad channel size to align_c. This keeps L1 read addresses aligned; extra channels become
     # zero-valued weights that contribute nothing to the convolution. align_c=4 is the WH/BH default
