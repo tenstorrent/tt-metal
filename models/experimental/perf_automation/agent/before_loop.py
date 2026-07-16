@@ -366,13 +366,17 @@ def before_loop(
     if pcc_abs is not None:
         from .perf_test_gen import generate_perf_test
 
-        perf_node = generate_perf_test(model_root, "main", None, force=True, source_abs=pcc_abs, source_kind="pcc")
+        _task = "main"
+        if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
+            _stem = Path(str(config["pcc_test"]).partition("::")[0]).stem
+            _task = (_stem[5:] if _stem.startswith("test_") else _stem) or "main"
+        perf_node = generate_perf_test(model_root, _task, None, force=True, source_abs=pcc_abs, source_kind="pcc")
         if not perf_node:
             raise RuntimeError("could not auto-generate a perf test from --pcc-test (see messages above)")
         _pp, _, _pf = perf_node.partition("::")
         pathmap["perf_test"] = {"path": _pp, "case": _pf, "note": "auto-gen from --pcc-test"}
         pathmap["perf_tests"] = [pathmap["perf_test"]]
-        pathmap["pipelines"] = [{"task": "main", "perf_test": perf_node, "pcc_test": pcc_override["path"]}]
+        pathmap["pipelines"] = [{"task": _task, "perf_test": perf_node, "pcc_test": pcc_override["path"]}]
         pathmap["is_multimodal"] = False
         print(f"      auto-gen perf from pcc -> {perf_node}", file=sys.stderr, flush=True)
     usage_suffix = record_agent_call(
