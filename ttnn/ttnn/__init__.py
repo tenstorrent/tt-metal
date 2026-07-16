@@ -197,6 +197,7 @@ from ttnn._ttnn.fabric import (
     get_forwarding_link_indices,
     get_all_fabric_mesh_ids,
     get_all_mgd_fabric_types,
+    dump_detailed_fabric_logs,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
