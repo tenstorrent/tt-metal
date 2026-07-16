@@ -156,6 +156,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
             : 0;
     static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
+    static_config_.completion_counter_base = get_dispatch_query_manager_ref().completion_counter_base(cq_id_);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
     static_config_.realtime_profiler_msg_addr =
@@ -298,6 +299,7 @@ void DispatchSKernel::CreateKernel() {
         {"UNICAST_GO_SIGNAL_ADDR", std::to_string(static_config_.unicast_go_signal_addr.value())},
         {"DISTRIBUTED_DISPATCHER", std::to_string(static_config_.distributed_dispatcher.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
+        {"COMPLETION_COUNTER_BASE", std::to_string(static_config_.completion_counter_base.value())},
         {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
         {"MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES",
          std::to_string(static_config_.max_num_go_signal_noc_data_entries.value())},

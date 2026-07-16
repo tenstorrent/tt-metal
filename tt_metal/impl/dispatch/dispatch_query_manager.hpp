@@ -46,6 +46,13 @@ public:
     const std::vector<CoreCoord>& get_logical_dispatch_cores_on_user_chips() const;
     tt_cxy_pair get_dispatch_core(uint8_t cq_id) const;
 
+    // How command queues share a physical dispatch core of core_type (see CommandQueueDispatchLayout).
+    const CommandQueueDispatchLayout& cq_dispatch_layout(CoreType core_type) const;
+
+    // Index of the first worker-completion counter reserved for cq_id's workers, on the dispatch
+    // core type actually hosting dispatch.
+    uint8_t completion_counter_base(uint8_t cq_id) const;
+
 private:
     void reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
 
@@ -54,6 +61,8 @@ private:
     bool dispatch_s_enabled_ = false;
     bool distributed_dispatcher_ = false;
     NOC go_signal_noc_ = NOC::NOC_0;
+    CommandQueueDispatchLayout worker_cq_dispatch_layout_;
+    CommandQueueDispatchLayout eth_cq_dispatch_layout_;
     uint8_t num_hw_cqs_ = 0;
     DispatchCoreConfig dispatch_core_config_;  // The config this object was initialized with, need to store it so we
                                                // know when to reset if it changes.

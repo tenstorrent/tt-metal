@@ -62,6 +62,7 @@ constexpr uintptr_t dev_completion_q_rd_ptr = DEV_COMPLETION_Q_RD_PTR;
 constexpr uintptr_t dev_dispatch_progress_ptr = DEV_DISPATCH_PROGRESS_PTR;
 
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
+constexpr uint32_t completion_counter_base = COMPLETION_COUNTER_BASE;
 
 constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
 constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
@@ -1007,7 +1008,7 @@ uint32_t stream_wrap_ge(uint32_t a, uint32_t b) {
 
 FORCE_INLINE void wait_worker_completion(uint32_t stream, uint32_t wait_count) {
 #ifdef ARCH_QUASAR
-    while (!wrap_ge(*worker_completion_sem_addr(stream, first_stream_used), wait_count)) {
+    while (!wrap_ge(*worker_completion_sem_addr(stream, first_stream_used, completion_counter_base), wait_count)) {
     }
 #else
     while (!stream_wrap_ge(NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
@@ -1161,7 +1162,7 @@ void process_go_signal_mcast_cmd() {
             // greater than the number of cores actually on the chip, we must account for acks
             // from non-existent cores here.
 #ifdef ARCH_QUASAR
-            *worker_completion_sem_addr(stream, first_stream_used) +=
+            *worker_completion_sem_addr(stream, first_stream_used, completion_counter_base) +=
                 (num_virtual_unicast_cores - num_physical_unicast_cores);
 #else
             NOC_STREAM_WRITE_REG(
@@ -1542,7 +1543,7 @@ void kernel_main() {
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         const uint32_t index = i + first_stream_used;
 #ifdef ARCH_QUASAR
-        *worker_completion_sem_addr(index, first_stream_used) = 0;
+        *worker_completion_sem_addr(index, first_stream_used, completion_counter_base) = 0;
 #else
         NOC_STREAM_WRITE_REG(
             index,

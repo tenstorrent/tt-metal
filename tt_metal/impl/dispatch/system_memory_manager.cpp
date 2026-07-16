@@ -225,15 +225,17 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
 
 void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel) {
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    const CoreType core_type =
-        ctx.get_dispatch_core_manager().get_dispatch_core_type();
-    const uint32_t completion_q_rd_ptr = ctx.dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-    const uint32_t prefetch_q_base = ctx.dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::UNRESERVED);
+    const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t cq_start =
-        ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+        ctx.dispatch_mem_map(std::nullopt).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+        // L1 addresses differ per cq_id when this CQ's dispatch kernels share their dispatch core's L1 with another
+        // CQ's
+        const auto& mem_map = ctx.dispatch_mem_map(core_type, cq_id);
+        const uint32_t completion_q_rd_ptr =
+            mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+        const uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+
         tt_cxy_pair prefetcher_core =
             ctx.get_dispatch_core_manager().prefetcher_core(device_id, channel, cq_id);
         auto prefetcher_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
@@ -273,9 +275,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         // PREFETCH_MAX_OUTSTANDING_PCIE_READS to allow us to start writing to issue queue
         // before we reserve space in the prefetch queue
         TT_FATAL(
-            ctx.dispatch_mem_map().max_prefetch_command_size() *
-                    (ctx.dispatch_mem_map().prefetch_q_entries() + 1U +
-                     PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) <=
+            mem_map.max_prefetch_command_size() *
+                    (mem_map.prefetch_q_entries() + 1U + PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) <=
                 this->get_issue_queue_size(cq_id),
             "Issue queue for cq_id {} has size of {} which is too small",
             cq_id,
@@ -283,8 +284,8 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->cq_to_event.push_back(0);
         this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + ctx.dispatch_mem_map().prefetch_q_entries() *
-                                                                   ctx.dispatch_mem_map().prefetch_q_entry_size_bytes();
+        this->prefetch_q_dev_fences[cq_id] =
+            prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
     }
 }
 
@@ -591,7 +592,8 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     const uint32_t push_size_16B = align(push_size_B, alignment) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    uint32_t issue_q_wr_ptr = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+    uint32_t issue_q_wr_ptr =
+        ctx.dispatch_mem_map(cq_id).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
     // Capture before advancing: issue_fifo_wr_ptr points to the slot just written; after the advance below it points to
     // the next slot.
@@ -646,7 +648,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     this->completion_q_windows[cq_id]->write32(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
     auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
     const uint32_t completion_q_rd_ptr =
-        ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+        ctx.dispatch_mem_map(cq_id).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
 
     if (is_dram_backed()) {
         const IDevice* device = ctx.device_manager()->get_active_device(this->device_id);
@@ -680,8 +682,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     }
 
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
+    const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t prefetch_q_rd_ptr =
-        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+        ctx.dispatch_mem_map(core_type, cq_id).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
@@ -721,10 +724,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
     wait_for_fetch_q_space();
     // Wrap FetchQ if possible
-    uint32_t prefetch_q_base =
-        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t prefetch_q_limit = prefetch_q_base + (ctx.dispatch_mem_map().prefetch_q_entries() *
-                                                   ctx.dispatch_mem_map().prefetch_q_entry_size_bytes());
+    const auto& mem_map = ctx.dispatch_mem_map(core_type, cq_id);
+    uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+    uint32_t prefetch_q_limit =
+        prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         wait_for_fetch_q_space();
@@ -828,7 +831,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
         return;
     }
 
-    const DispatchMemMap& dispatch_mem_map = MetalContext::instance(this->context_id).dispatch_mem_map();
+    const DispatchMemMap& dispatch_mem_map = MetalContext::instance(this->context_id).dispatch_mem_map(cq_id);
     const uint32_t max_command_size_B = dispatch_mem_map.max_prefetch_command_size();
     TT_ASSERT(
         command_size_B <= max_command_size_B,

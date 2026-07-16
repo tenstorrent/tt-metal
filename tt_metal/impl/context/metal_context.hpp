@@ -5,10 +5,12 @@
 #pragma once
 
 #include <tt_stl/indestructible.hpp>
+#include <optional>
 #include <vector>
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
+#include <impl/dispatch/dispatch_core_manager.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -96,8 +98,16 @@ public:
     dispatch_core_manager& get_dispatch_core_manager();
     internal::ServiceCoreManager& get_service_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
-    const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
-    const DispatchMemMap& dispatch_mem_map(const CoreType& core_type) const;  // DispatchMemMap for specific core type.
+
+    // Returns the DispatchMemMap
+    // IMPORTANT: cq_id should be std::nullopt only when the caller intends to access properties of DispatchMemMap that
+    // don't vary by CQ. It is the caller's responsibility to ensure that they are only accessing CQ-agnostic properties
+    // when passing std::nullopt.
+    const DispatchMemMap& dispatch_mem_map(
+        std::optional<uint8_t> cq_id) const;  // DispatchMemMap for the core type we're dispatching on
+    const DispatchMemMap& dispatch_mem_map(
+        const CoreType& core_type, std::optional<uint8_t> cq_id) const;  // DispatchMemMap for a specific core type
+
     inspector::Data* get_inspector_data() const {
         return inspector_data_.get();
     }
@@ -250,7 +260,11 @@ private:
     std::unique_ptr<RiscFirmwareInitializer> risc_firmware_initializer_;
     std::unordered_set<InitializerKey> risc_fw_init_done_;
 
-    std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
+    // Indexed by [core_type][cq_id]. Index cq_id > 0 is only populated when multiple CQs share one dispatch core's L1.
+    std::array<
+        std::array<std::unique_ptr<DispatchMemMap>, dispatch_core_manager::MAX_NUM_HW_CQS>,
+        static_cast<size_t>(CoreType::COUNT)>
+        dispatch_mem_map_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread

@@ -213,7 +213,8 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // workload is enqueued.
     auto* mesh_device = mesh_cq.device();
     auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    uint32_t prefetcher_cache_sizeB = MetalContext::instance().dispatch_mem_map(dispatch_core_type).ringbuffer_size();
+    uint32_t prefetcher_cache_sizeB =
+        MetalContext::instance().dispatch_mem_map(dispatch_core_type, std::nullopt).ringbuffer_size();
 
     bool use_prefetcher_cache =
         this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;

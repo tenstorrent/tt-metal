@@ -22,8 +22,9 @@ DispatchMemMap::DispatchMemMap(
     uint32_t num_hw_cqs,
     const Hal& hal,
     bool is_galaxy_cluster,
-    bool are_fd_kernels_on_same_core,
-    const tt::llrt::RunTimeOptions& rtoptions) :
+    const CommandQueueDispatchLayout& cq_layout,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    uint8_t cq_id) :
     settings(DispatchSettings(
         num_hw_cqs,
 
@@ -99,7 +100,9 @@ DispatchMemMap::DispatchMemMap(
             device_cq_addr_sizes_[dev_addr_idx] = sizeof(dispatch_telemetry_types::DispatchTelemetryControl);
         } else if (dev_addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES) {
             device_cq_addr_sizes_[dev_addr_idx] =
-                has_stream_registers_ ? 0 : DispatchSettings::DISPATCH_MESSAGE_ENTRIES * l1_alignment;
+                has_stream_registers_
+                    ? 0
+                    : cq_layout.num_cqs_per_core * DispatchSettings::DISPATCH_MESSAGE_ENTRIES * l1_alignment;
         } else if (
             dev_addr_type == CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS ||
             dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_PROGRESS) {
@@ -132,8 +135,8 @@ DispatchMemMap::DispatchMemMap(
         device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
-    if (are_fd_kernels_on_same_core) {
-        // All FD kernels share one core (Quasar 1CQ), so dispatch_buffer must not alias
+    if (cq_layout.fd_kernels_on_same_core) {
+        // All FD kernels share one core (Quasar), so dispatch_buffer must not alias
         // any of prefetch_q / cmddat_q / scratch_db / ringbuffer. scratch_db and
         // ringbuffer are two views of the same region rooted at scratch_db_base_, so
         // the prefetch footprint ends at scratch_db_base_ + max(scratch_db, ringbuffer).
@@ -156,7 +159,7 @@ DispatchMemMap::DispatchMemMap(
         l1_size);
 
     TT_ASSERT(
-        dispatch_cb_end + (are_fd_kernels_on_same_core ? settings.dispatch_s_buffer_size_ : 0) <= l1_size,
+        dispatch_cb_end + (cq_layout.fd_kernels_on_same_core ? settings.dispatch_s_buffer_size_ : 0) <= l1_size,
         "Dispatch layout overflows L1 (dispatch_cb_end=0x{:X}, l1_size=0x{:X})",
         dispatch_cb_end,
         l1_size);
@@ -180,7 +183,11 @@ DispatchMemMap::DispatchMemMap(
         switch (hal.get_arch()) {
             case tt::ARCH::WORMHOLE_B0: dispatch_s_device_print_l1_cache_size_ = 8 * 1024; break;
             case tt::ARCH::BLACKHOLE:   dispatch_s_device_print_l1_cache_size_ = 64 * 1024; break;
-            case tt::ARCH::QUASAR:      dispatch_s_device_print_l1_cache_size_ = 128 * 1024; break;
+            // With multiple CQs sharing one dispatch core's L1, there isn't enough space left over for the full device
+            // print L1 cache.
+            case tt::ARCH::QUASAR:
+                dispatch_s_device_print_l1_cache_size_ = cq_layout.num_cqs_per_core > 1 ? 32 * 1024 : 128 * 1024;
+                break;
             default:                    dispatch_s_device_print_l1_cache_size_ = 0; break;
         }
     }
@@ -191,6 +198,43 @@ DispatchMemMap::DispatchMemMap(
         dispatch_s_device_print_l1_cache_size_,
         dispatch_s_buffer_end_,
         l1_size);
+
+    // Everything above laid out this core's single CQ address space. If this core has multiple CQs, we offset every
+    // address to avoid overlapping with the other CQs.
+    if (cq_layout.num_cqs_per_core > 1 && cq_id > 0) {
+        const uint32_t cq_zone_stride = align(
+            dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ - l1_base,
+            1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+        const uint32_t cq_zone_offset = cq_id * cq_zone_stride;
+        for (auto dev_addr_idx = 0; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
+            auto dev_addr_type = *enchantum::index_to_enum<CommandQueueDeviceAddrType>(dev_addr_idx);
+            if (dev_addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES ||
+                dev_addr_type == CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT ||
+                dev_addr_type == CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT) {
+                // These addresses are shared between all CQs, so we don't need to offset them.
+                continue;
+            }
+            device_cq_addrs_[dev_addr_idx] += cq_zone_offset;
+        }
+        cmddat_q_base_ += cq_zone_offset;
+        scratch_db_base_ += cq_zone_offset;
+        dispatch_buffer_base_ += cq_zone_offset;
+        dispatch_s_buffer_end_ += cq_zone_offset;
+
+        TT_FATAL(
+            dispatch_s_buffer_end_ <= l1_size,
+            "CQ {} dispatch_s buffer end ({}) extends past L1 end (size {})",
+            cq_id,
+            dispatch_s_buffer_end_,
+            l1_size);
+        TT_FATAL(
+            dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ <= l1_size,
+            "CQ {} DPRINT dispatch L1 region (l1_cache {} bytes after dispatch_s end {}) exceeds L1 size {}.",
+            cq_id,
+            dispatch_s_device_print_l1_cache_size_,
+            dispatch_s_buffer_end_,
+            l1_size);
+    }
 }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }

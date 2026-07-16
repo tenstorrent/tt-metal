@@ -57,7 +57,7 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
         .dispatch_core_type = dispatch_core_config.get_dispatch_core_type(),
         .dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis(),
         .coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled(),
-        .dispatch_message_addr = ctx.dispatch_mem_map().get_dispatch_message_addr_start(),
+        .dispatch_message_addr = ctx.dispatch_mem_map(std::nullopt).get_dispatch_message_addr_start(),
         .max_cbs = hal.get_arch_num_circular_buffers(),
         .num_hw_cqs = num_hw_cqs,
         .routing_fw_enabled = cluster.is_base_routing_fw_enabled(),

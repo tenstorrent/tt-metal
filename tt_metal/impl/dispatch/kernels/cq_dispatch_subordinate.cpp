@@ -46,6 +46,7 @@ constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
 constexpr uint32_t distributed_dispatcher =
     DISTRIBUTED_DISPATCHER;  // dispatch_s and dispatch_d running on different cores
 constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
+constexpr uint32_t completion_counter_base = COMPLETION_COUNTER_BASE;
 constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
 constexpr uint32_t max_num_go_signal_noc_data_entries = MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;
 constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
@@ -256,7 +257,7 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
 #ifdef ARCH_QUASAR
-    volatile uint32_t* worker_sem = worker_completion_sem_addr(wait_stream, first_stream_used);
+    volatile uint32_t* worker_sem = worker_completion_sem_addr(wait_stream, first_stream_used, completion_counter_base);
 #else
     volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
@@ -423,7 +424,7 @@ void process_go_signal_mcast_cmd() {
             // greater than the number of cores actually on the chip, we must account for acks
             // from non-existent cores here.
 #ifdef ARCH_QUASAR
-            *worker_completion_sem_addr(first_stream_used, first_stream_used) +=
+            *worker_completion_sem_addr(first_stream_used, first_stream_used, completion_counter_base) +=
                 (num_virtual_unicast_cores - num_physical_unicast_cores);
 #else
             NOC_STREAM_WRITE_REG(

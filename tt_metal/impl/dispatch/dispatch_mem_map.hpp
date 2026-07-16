@@ -9,6 +9,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include "command_queue_common.hpp"
+#include "dispatch_core_common.hpp"
 #include "dispatch_settings.hpp"
 
 namespace tt::llrt {
@@ -40,8 +41,9 @@ public:
         uint32_t num_hw_cqs,
         const Hal& hal,
         bool is_galaxy_cluster,
-        bool are_fd_kernels_on_same_core,
-        const tt::llrt::RunTimeOptions& rtoptions);
+        const CommandQueueDispatchLayout& cq_layout,
+        const tt::llrt::RunTimeOptions& rtoptions,
+        uint8_t cq_id);
 
     uint32_t prefetch_q_entries() const;
 

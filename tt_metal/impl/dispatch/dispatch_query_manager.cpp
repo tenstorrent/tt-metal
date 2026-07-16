@@ -14,6 +14,7 @@
 #include "context/metal_env_accessor.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -81,6 +82,14 @@ std::vector<CoreCoord> populate_all_logical_dispatch_cores(
     return get_consistent_logical_cores(env, num_hw_cqs, dispatch_core_config);
 }
 
+tt::tt_metal::CommandQueueDispatchLayout generate_cq_dispatch_layout(
+    tt::ARCH arch, tt::CoreType core_type, tt::CoreType dispatch_core_type, uint8_t num_hw_cqs) {
+    if (core_type != dispatch_core_type || arch != tt::ARCH::QUASAR) {
+        return {.fd_kernels_on_same_core = false, .num_cqs_per_core = 1};
+    }
+    return {.fd_kernels_on_same_core = true, .num_cqs_per_core = num_hw_cqs};
+}
+
 }  // namespace
 
 namespace tt::tt_metal {
@@ -100,6 +109,9 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     distributed_dispatcher_ =
         (num_hw_cqs == 1 and dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH);
     go_signal_noc_ = (dispatch_s_enabled_ and arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
+    const CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    worker_cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, CoreType::WORKER, dispatch_core_type, num_hw_cqs);
+    eth_cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, CoreType::ETH, dispatch_core_type, num_hw_cqs);
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
     // Populate dispatch
@@ -127,6 +139,16 @@ tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
         }
     }
     return dispatch_cores_[cq_id];
+}
+
+const CommandQueueDispatchLayout& DispatchQueryManager::cq_dispatch_layout(CoreType core_type) const {
+    return core_type == CoreType::WORKER ? worker_cq_dispatch_layout_ : eth_cq_dispatch_layout_;
+}
+
+uint8_t DispatchQueryManager::completion_counter_base(uint8_t cq_id) const {
+    const CoreType active_dispatch_core_type = get_core_type_from_config(dispatch_core_config_);
+    const uint8_t slot = cq_dispatch_layout(active_dispatch_core_type).num_cqs_per_core > 1 ? cq_id : 0;
+    return slot * DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
 }
 
 DispatchQueryManager::DispatchQueryManager(
