@@ -1063,13 +1063,17 @@ targets:
           - batch_size: 32
             seq_len: 707
             status: active
-            # decode_t/s/u is run-to-run unstable (see issue #46214). Recent
-            # scheduled runs have shifted up (measured 20.6-21.9 across the last
-            # week), so center raised 16.0 -> 20.0 while keeping the wide 0.2
-            # tolerance ([16, 24]) to absorb the run-to-run swing.
+            # decode_t/s/u is run-to-run unstable (see issue #46214) and
+            # bimodal, not a monotonic regression: the last 8 scheduled runs
+            # (07-09..07-16) alternated a ~15 t/s/u low cluster with a ~19-22.7
+            # high cluster (14.98, 22.07, 15.24, 22.70, 15.27, 19.15, 15.25 ...),
+            # so the low cluster kept tripping the old 0.2-tolerance floor of
+            # 16.0. Widen tolerance 0.2 -> 0.3 (band [14.0, 26.0]) to absorb the
+            # machine-variance swing on both sides while still gating a gross
+            # regression; center stays 20.0.
             perf:
               decode_t/s/u: 20.0
-              decode_t_s_u_tolerance: 0.2
+              decode_t_s_u_tolerance: 0.3
               prefill_time_to_first_token: 105
             accuracy: {}
   qwen2.5-vl-32b:
