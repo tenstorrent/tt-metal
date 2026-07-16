@@ -79,42 +79,6 @@ MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
 }
 
-ttsl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "MatmulReduceScatterAsyncDeviceOperation::compute_program_hash is called");
-
-    const ttnn::Tensor& input_tensor = tensor_args.input;
-    const ttnn::Tensor& weight_tensor = tensor_args.weight;
-    const std::optional<ttnn::Tensor>& bias_tensor = tensor_args.bias;
-    const ttnn::Tensor& persistent_intermediate_tensor = tensor_args.persistent_intermediate;
-    const ttnn::Tensor& persistent_output_tensor = tensor_args.persistent_output;
-    return tt::tt_metal::operation::hash_operation<MatmulReduceScatterAsyncDeviceOperation>(
-        args.reduce_scatter_params.dim,
-        args.reduce_scatter_params.num_links,
-        args.reduce_scatter_params.ring_size,
-        args.reduce_scatter_params.output_mem_config,
-        args.reduce_scatter_params.optional_intermediate_mem_config,
-        args.reduce_scatter_params.topology,
-        args.reduce_scatter_params.sub_device_id.has_value(),
-        args.reduce_scatter_params.sub_device_id.has_value()
-            ? tensor_args.input.device()->worker_cores(
-                  tt::tt_metal::HalProgrammableCoreType::TENSIX, args.reduce_scatter_params.sub_device_id.value())
-            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-        args.reduce_scatter_params.cluster_axis,
-        args.reduce_scatter_params.barrier_semaphore.has_value(),
-        args.reduce_scatter_params.using_persistent_buffers,
-        args.reduce_scatter_params.chunks_per_sync,
-        args.reduce_scatter_params.num_workers_per_link,
-        args.reduce_scatter_params.num_buffers_per_channel,
-        args.matmul_struct,
-        args.reduce_scatter_core_grid_offset,
-        input_tensor,
-        weight_tensor,
-        bias_tensor,
-        persistent_intermediate_tensor,
-        persistent_output_tensor);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
