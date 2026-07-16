@@ -83,3 +83,7 @@ MISTRAL_SMALL_24B_CONTEXT_EXPECT_OOM=1 TT_VISIBLE_DEVICES=2,3 pytest -q -s \
 - After the adjacent capacity boundary was measured and documented, a different fresh reviewer, `/root/stage_review_mistral_rereview`, returned `CLEAN-PASS` with no required work. Its explicit graph/path, IR-fidelity, TP-collapse, runtime, correctness, context, documentation, and scope assessments all passed.
 - The post-remediation final serialized correctness run passed all four tests in 26.84 seconds with the real-weight environment enabled. Python compile, JSON parse, `git diff --check`, and the context-contract checker also passed.
 - Local functional-decoder checkpoint: `6154b41e1f85baf4d621eb128bb651eb7f245f8f` (`Add Mistral Small 24B functional decoder from TTNN IR`).
+
+## Multichip provenance
+
+The retro-generated [`multichip_provenance.json`](multichip_provenance.json) records the complete layer-20 sharding prior from the selected prefill and decode IR. The capture uses a `1x4` mesh with TP degree 4 on mesh/cluster axis 1; each path has sum `all_reduce` collectives on that axis after `o_proj` and `down_proj`, with no other collective type in the segmented layer.
