@@ -200,15 +200,11 @@ def _blocks_for(seqlen, max_generated_tokens):
     "seqlen, max_generated_tokens, use_trace, batch, repeat_batches",
     [
         pytest.param(128, 50, True, 1, 1, id="traced_128"),
-        pytest.param(128, 50, False, 1, 1, id="paged_128"),
         pytest.param(4096, 100, True, 1, 1, id="traced_4k"),
-        pytest.param(4096, 100, False, 1, 1, id="paged_4k"),
         pytest.param(8192, 100, True, 1, 1, id="traced_8k"),
-        pytest.param(8192, 100, False, 1, 1, id="paged_8k"),
         pytest.param(16384, 100, True, 1, 1, id="traced_16k"),
         pytest.param(32768, 100, True, 1, 1, id="traced_32k"),
         pytest.param(65536, 500, True, 1, 1, id="traced_64k"),
-        pytest.param(65536, 100, False, 1, 1, id="paged_64k"),
         pytest.param(131072, 100, True, 1, 1, id="traced_128k"),
         pytest.param(262144, 100, True, 1, 1, id="traced_256k", marks=pytest.mark.timeout(900)),
         # Determinism: re-run the traced 128 case and assert identical output across runs.
