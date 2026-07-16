@@ -202,8 +202,15 @@ TopologyMappingResult run_topology_mapping(
 }
 
 // Multi-solution mapping (--all-solutions): enumerate up to max_solutions distinct solutions.
-// max_solutions == 0 means "all up to the solver safety cap"; unique_shapes == true selects
-// --distinct-host-sets (one solution per unique host set).
+// max_solutions == 0 means "all up to the solver safety cap".
+//
+// `unique_shapes` is the SOLVER-level dedup: it collapses solutions whose set of physical graph nodes
+// (for this multi-mesh solve, the physical meshes/sub-meshes used) is identical up to permutation, so the
+// solver does not re-emit automorphic footprints. It is ALWAYS ON by default (see main(): only the hidden
+// --allow-shape-permutations turns it off). Note this is NOT the same as distinct *host* sets: for MGDs
+// whose meshes are smaller than a host (e.g. 8-chip blitz meshes on 128-chip galaxies), two shape-distinct
+// solutions can still occupy the same set of hosts. Host-set dedup (--distinct-host-sets) is applied later,
+// in main(), on the resolved hostnames — see the write loop.
 std::vector<TopologyMappingResult> run_topology_mapping_n(
     const PhysicalSystemDescriptor& psd,
     const PhysicalGroupingDescriptor& pgd,
@@ -214,7 +221,7 @@ std::vector<TopologyMappingResult> run_topology_mapping_n(
     auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
     log_info(
         tt::LogFabric,
-        "Enumerating topology mapping solutions (max_solutions={}, distinct_host_sets={})...",
+        "Enumerating topology mapping solutions (max_solutions={}, unique_shapes={})...",
         max_solutions,
         unique_shapes);
     return map_multi_mesh_to_physical_n(
@@ -459,9 +466,15 @@ struct ProgramArgs {
     std::string mesh_graph_descriptor_path;
     std::optional<std::string> physical_grouping_descriptor_path;
     std::optional<std::string> output_dir;
-    bool all_solutions = false;       // --all-solutions/-a: write one artifact set per solution
-    std::size_t max_solutions = 0;    // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
-    bool distinct_host_sets = false;  // --distinct-host-sets/-d: one solution per unique host set
+    bool all_solutions = false;     // --all-solutions/-a: write one artifact set per solution
+    std::size_t max_solutions = 0;  // --max-solutions/-n: cap (0 = all up to solver cap); implies --all-solutions
+    // --distinct-host-sets/-d: keep only one solution per unique set of HOSTS (post-filter on resolved
+    // hostnames in main(); collapses solutions that occupy the same hosts but wire/assign differently).
+    bool distinct_host_sets = false;
+    // Hidden --allow-shape-permutations: turn OFF the solver's unique_shapes dedup (which is otherwise
+    // always on). When off, the solver may emit multiple automorphic physical footprints (same set of
+    // physical meshes, permuted). Advanced/debug only; not shown in --help.
+    bool allow_shape_permutations = false;
 };
 
 /**
@@ -494,14 +507,23 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         "Maximum number of solutions to enumerate (0 = all up to the solver safety cap). Implies --all-solutions.",
         cxxopts::value<std::size_t>())(
         "d,distinct-host-sets",
-        "Count solutions by the set of hosts used: collapse solutions that occupy the same hosts but differ only "
-        "in connectivity/mapping. Only meaningful with --all-solutions.")("h,help", "Print usage information");
+        "Keep only one solution per unique set of HOSTS: after enumeration, solutions that occupy the same hosts "
+        "(even if they wire/assign the meshes differently) are collapsed to the first. Only meaningful with "
+        "--all-solutions.")("h,help", "Print usage information");
+
+    // Hidden/advanced options (in a separate group so they do NOT appear in --help).
+    options.add_options("hidden")(
+        "allow-shape-permutations",
+        "(advanced) Disable the solver's unique_shapes dedup, which is otherwise always on. When set, the solver "
+        "may enumerate multiple automorphic physical footprints (same set of physical meshes, permuted). Rarely "
+        "needed; mainly for debugging enumeration completeness.");
 
     try {
         const auto result = options.parse(argc, argv);
 
         if (result.contains("help") || argc == 1) {
-            std::cout << options.help() << std::endl;
+            // Only the default (unnamed) group; hidden/advanced options are intentionally omitted.
+            std::cout << options.help({""}) << std::endl;
             exit(0);
         }
 
@@ -531,6 +553,9 @@ ProgramArgs parse_arguments(int argc, char** argv) {
                 log_warning(
                     tt::LogFabric, "--distinct-host-sets has no effect without --all-solutions; ignoring it.");
             }
+        }
+        if (result.contains("allow-shape-permutations")) {
+            args.allow_shape_permutations = true;  // hidden: turns OFF the always-on solver unique_shapes dedup
         }
 
         return args;
@@ -649,16 +674,34 @@ int main(int argc, char** argv) {
                 // --all-solutions: one artifact set per solution in a content-hash subdirectory, plus a
                 // top-level solutions_index.yaml summarizing them all.
                 log_info(tt::LogFabric, "Stage: Enumerating all topology mapping solutions...");
+                // Solver-level unique_shapes dedup is ALWAYS ON (collapses automorphic physical footprints);
+                // only the hidden --allow-shape-permutations turns it off.
+                const bool unique_shapes = !args.allow_shape_permutations;
                 std::vector<TopologyMappingResult> results =
-                    run_topology_mapping_n(psd, pgd, mgd, mgd_path, args.max_solutions, args.distinct_host_sets);
+                    run_topology_mapping_n(psd, pgd, mgd, mgd_path, args.max_solutions, unique_shapes);
                 log_info(tt::LogFabric, "Enumerated {} solution(s)", results.size());
 
                 const std::string enumeration_mode = args.distinct_host_sets ? "distinct-host-sets" : "all";
                 std::vector<SolutionIndexEntry> index_entries;
 
+                // --distinct-host-sets: dedup written solutions by their resolved set of HOSTS. This is coarser
+                // than the solver's unique_shapes (which dedups by physical-mesh footprint): for sub-host meshes,
+                // several shape-distinct solutions can share one host set, and this keeps only the first.
+                std::set<std::set<std::string>> seen_host_sets;
+
                 for (const auto& mapping_result : results) {
                     std::vector<RankBindingConfig> rank_bindings =
                         extract_rank_bindings(psd, mapping_result, mesh_graph);
+
+                    const std::set<std::string> hosts = solution_host_set(rank_bindings);
+                    if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
+                        log_info(
+                            tt::LogFabric,
+                            "--distinct-host-sets: skipping solution on an already-seen host set ({} hosts)",
+                            hosts.size());
+                        continue;
+                    }
+
                     const std::string solution_id = compute_solution_signature_hash(rank_bindings);
                     const std::filesystem::path solution_dir = output_dir / solution_id;
 
@@ -676,7 +719,6 @@ int main(int argc, char** argv) {
                     fsync_path(key_path);
                     fsync_path(meta_path);
 
-                    const auto hosts = solution_host_set(rank_bindings);
                     SolutionIndexEntry entry;
                     entry.id = solution_id;
                     entry.num_ranks = static_cast<int>(rank_bindings.size());

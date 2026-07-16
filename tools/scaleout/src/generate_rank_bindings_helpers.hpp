@@ -161,13 +161,26 @@ inline void write_rankfile(
 // Multi-solution support (see README_generate_rank_bindings_all_solutions.md)
 // -----------------------------------------------------------------------------
 
-// Sorted set of distinct hostnames a solution occupies.
+// Sorted set of distinct hostnames a solution occupies. Hostnames are used verbatim (no cleaning); the set
+// deduplicates, so multiple ranks that share a host collapse to a single entry.
 inline std::set<std::string> solution_host_set(const std::vector<RankBindingConfig>& rank_bindings) {
     std::set<std::string> hosts;
     for (const auto& b : rank_bindings) {
         hosts.insert(b.hostname);
     }
     return hosts;
+}
+
+// Join hosts as a comma-separated list with NO spaces (e.g. "hostA,hostB,hostC").
+inline std::string host_set_csv(const std::vector<std::string>& hosts) {
+    std::string csv;
+    for (const auto& h : hosts) {
+        if (!csv.empty()) {
+            csv += ',';
+        }
+        csv += h;
+    }
+    return csv;
 }
 
 // Canonical, order-independent signature of a solution. Captures both the set of hosts used AND the
@@ -230,11 +243,9 @@ inline void write_solution_meta_yaml(
     emitter << YAML::Key << "mesh_graph_desc_path" << YAML::Value << mesh_graph_desc_path;
     emitter << YAML::Key << "num_ranks" << YAML::Value << static_cast<int>(rank_bindings.size());
     emitter << YAML::Key << "num_hosts" << YAML::Value << static_cast<int>(hosts.size());
-    emitter << YAML::Key << "host_set" << YAML::Value << YAML::BeginSeq;
-    for (const auto& host : hosts) {
-        emitter << host;
-    }
-    emitter << YAML::EndSeq;
+    // Comma-separated host list, no spaces (e.g. "hostA,hostB").
+    emitter << YAML::Key << "host_set" << YAML::Value
+            << host_set_csv(std::vector<std::string>(hosts.begin(), hosts.end()));
     emitter << YAML::EndMap;
 
     std::ofstream out_file(output_file);
@@ -277,11 +288,8 @@ inline void write_solutions_index_yaml(
         emitter << YAML::Key << "dir" << YAML::Value << entry.id;
         emitter << YAML::Key << "num_hosts" << YAML::Value << entry.num_hosts;
         emitter << YAML::Key << "num_ranks" << YAML::Value << entry.num_ranks;
-        emitter << YAML::Key << "host_set" << YAML::Value << YAML::Flow << YAML::BeginSeq;
-        for (const auto& host : entry.host_set) {
-            emitter << host;
-        }
-        emitter << YAML::EndSeq;
+        // Comma-separated host list, no spaces (e.g. "hostA,hostB").
+        emitter << YAML::Key << "host_set" << YAML::Value << host_set_csv(entry.host_set);
         emitter << YAML::Key << "rank_bindings" << YAML::Value << (entry.id + "/rank_bindings.yaml");
         emitter << YAML::Key << "rankfile" << YAML::Value << (entry.id + "/rankfile");
         emitter << YAML::EndMap;
