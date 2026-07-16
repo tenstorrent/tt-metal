@@ -230,6 +230,18 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Janus Pro unit tests: Blackhole only (P150).
+- name: Janus Pro-7B unit tests
+  cmd: |
+    pytest --timeout 600 models/experimental/janus_pro/tests/test_ci_dispatch.py
+  model: janus-pro-7b
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 3
+  owner_id: U0B25UFEEAX # Milos Micic
+  team: shield
+
 # Gemma-4 unit tests: one entry per model variant, multiple SKUs per entry.
 # parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
 # runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
