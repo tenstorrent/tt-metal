@@ -23,7 +23,7 @@ concurrency:
 jobs:
   digest:
     name: "digest · ${{ matrix.name }}"
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
