@@ -66,4 +66,9 @@ void down_links_bh_single_ended_unsafe();
 
 void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset);
 
+// Dump all ethernet peer connections as a JSON object to stdout.
+// Uses the same private UMD cluster as the unsafe down path (no CHIP_IN_USE lock needed).
+// Keys are "chip/channel"; each entry includes local NOC0 coords and remote chip/channel/NOC0 coords.
+void dump_eth_peers_json();
+
 }  // namespace tt::scaleout_tools

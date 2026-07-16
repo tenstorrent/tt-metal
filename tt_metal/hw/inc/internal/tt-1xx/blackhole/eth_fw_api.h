@@ -18,6 +18,9 @@
 // because host translation units (e.g. the HAL) also include this header and lack the ring-buffer
 // include path / build flags.
 #include "api/debug/ring_buffer.h"
+// For eth_enable_packet_mode(), called in the CONFIG-RESTORE block to re-apply full packet-mode
+// config after a retrain. Guarded for the same reason as ring_buffer.h above.
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #endif
 
 #define MEM_SYSENG_ETH_MSG_STATUS_MASK 0xFFFF0000
@@ -587,17 +590,17 @@ static void recover_eth_link_if_down() {
     // clears it to 0. Idempotent -- the (higher-id) end the retrain left untouched just re-writes 1.
     if (restore_config_after_retrain) {
         restore_config_after_retrain = false;
-        *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB98298) = 0x00000001;  // TXQ1 dest MAC LO -> 1
+        // [CONFIG-RESTORE] Re-apply full packet-mode config (MAC_DA_HI/LO, TXQ_CTRL, TXPKT_CFG_SEL,
+        // RXQ_CTRL, TX->RX queue map) in one shot. receiver_txq_id == 1 in the fabric router.
+        eth_enable_packet_mode(1);
         // [CONFIG-RESTORE] Clear disable_remote_drop_notification (TXQ_CTRL bit3) that the retrain sets on
         // the lower-id end -> restore init value 0x1 (packet_resend on, dis_drop off) on both TX queues.
         // Idempotent: the untouched (higher-id) end already reads 0x1 and just re-writes it.
-        *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB90000) =
-            0x00000001;  // TXQ0_CTRL -> resend on, dis_drop off
-        *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB91000) =
-            0x00000001;  // TXQ1_CTRL -> resend on, dis_drop off
-        // [PKTMODE-PROBE] config snapshot temporarily DISABLED -- collecting TX/RX counters instead (the
-        // config snapshots and the TX/RX ring-buffer stream can't share the 32-word ring buffer). The
-        // CONFIG-RESTORE write above stays ACTIVE -- this run measures TX/RX with the fix applied.
+        // *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB90000) =
+        //     0x00000001;  // TXQ0_CTRL -> resend on, dis_drop off
+        // *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB91000) =
+        //     0x00000001;  // TXQ1_CTRL -> resend on, dis_drop off
+        // [PKTMODE-PROBE] RETRAIN snapshot disabled -- back to TX/RX counter mode.
         // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN);
     }
 #endif

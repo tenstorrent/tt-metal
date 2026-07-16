@@ -366,4 +366,41 @@ void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset) {
     }
 }
 
+void dump_eth_peers_json() {
+    // Build a standalone UMD cluster (no CHIP_IN_USE lock) to read the cluster descriptor.
+    tt::umd::Cluster cluster;
+    const auto* cluster_desc = cluster.get_cluster_description();
+    const auto& eth_conns = cluster_desc->get_ethernet_connections();
+
+    // eth_conns: chip_id -> { channel -> (remote_chip, remote_channel) }
+    // Emit as a JSON array; each entry has local and remote chip/channel/NOC0 coords.
+    std::cout << "{\n  \"peers\": [\n";
+    bool first = true;
+    for (const auto& [chip_id, channels] : eth_conns) {
+        const auto& local_soc = cluster.get_soc_descriptor(chip_id);
+        for (const auto& [channel, remote] : channels) {
+            const auto [remote_chip, remote_channel] = remote;
+            const auto& remote_soc = cluster.get_soc_descriptor(remote_chip);
+            // NOC0 is the default and matches the watcher log's core(x,y) output.
+            auto local_core = local_soc.get_eth_core_for_channel(channel);
+            auto remote_core = remote_soc.get_eth_core_for_channel(remote_channel);
+            if (!first) {
+                std::cout << ",\n";
+            }
+            first = false;
+            std::cout << "    {"
+                      << "\"chip\": " << chip_id
+                      << ", \"channel\": " << channel
+                      << ", \"noc_x\": " << local_core.x
+                      << ", \"noc_y\": " << local_core.y
+                      << ", \"remote_chip\": " << remote_chip
+                      << ", \"remote_channel\": " << remote_channel
+                      << ", \"remote_noc_x\": " << remote_core.x
+                      << ", \"remote_noc_y\": " << remote_core.y
+                      << "}";
+        }
+    }
+    std::cout << "\n  ]\n}\n";
+}
+
 }  // namespace tt::scaleout_tools

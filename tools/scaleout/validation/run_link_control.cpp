@@ -76,7 +76,9 @@ void print_usage() {
               << "                                 # (use while a test holds the chip; racy, recovery testing only)\n"
               << "  run_link_control down_single_unsafe\n"
               << "                                 # Like down_unsafe, but downs only ONE end of each link so\n"
-              << "                                 # the partner stays up for recovery's retrain handshake\n";
+              << "                                 # the partner stays up for recovery's retrain handshake\n"
+              << "  run_link_control dump_peers    # Dump all ethernet peer connections as JSON (stdout)\n"
+              << "                                 # Runs without taking the CHIP_IN_USE lock\n";
 }
 
 }  // namespace tt::scaleout_tools
@@ -93,7 +95,7 @@ int main(int argc, char* argv[]) {
         print_usage();
         return 0;
     }
-    if (command != "down" && command != "up" && command != "down_unsafe" && command != "down_single_unsafe") {
+    if (command != "down" && command != "up" && command != "down_unsafe" && command != "down_single_unsafe" && command != "dump_peers") {
         std::cerr << "Unknown command: " << command << "\n";
         print_usage();
         return 1;
@@ -114,6 +116,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Bringing ONE end of each ethernet link DOWN (UNSAFE: bypassing CHIP_IN_USE lock)..." << std::endl;
         down_links_bh_single_ended_unsafe();
         std::cout << "Done. Links will stay down until 'run_link_control up' or a chip reset (tt-smi -r)." << std::endl;
+        return 0;
+    }
+    if (command == "dump_peers") {
+        dump_eth_peers_json();
         return 0;
     }
 
