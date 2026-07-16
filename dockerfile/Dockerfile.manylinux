@@ -81,6 +81,7 @@ RUN dnf install -y \
     bison \
     bzip2 \
     ca-certificates \
+    dpkg \
     expat-devel \
     flex \
     gfortran \
