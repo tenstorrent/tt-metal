@@ -55,18 +55,6 @@ RecvAsyncH2DDeviceOperation::tensor_return_value_t RecvAsyncH2DDeviceOperation::
     return {tensor_args};
 }
 
-ttsl::hash::hash_t RecvAsyncH2DDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "RecvAsyncH2DDeviceOperation::compute_program_hash is called");
-    const ttnn::Tensor& output_tensor = tensor_args;
-    // Hash on the stable, structural properties of the H2D socket exposed via attributes()
-    // along with the output tensor.
-    return tt::tt_metal::operation::hash_operation<RecvAsyncH2DDeviceOperation>(
-        args.h2d_socket->get_config_buffer_address(),
-        static_cast<uint8_t>(args.h2d_socket->get_h2d_mode()),
-        output_tensor);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
