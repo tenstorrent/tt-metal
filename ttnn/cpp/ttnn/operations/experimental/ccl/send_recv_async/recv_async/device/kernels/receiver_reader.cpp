@@ -6,6 +6,8 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 ///////////////////////////////////////////////////
@@ -17,8 +19,10 @@ constexpr uint32_t socket_block_size = get_compile_time_arg_val(2);  // This is 
 constexpr uint32_t socket_page_size = get_compile_time_arg_val(3);
 constexpr bool is_dram = get_compile_time_arg_val(4);
 
-template <uint32_t page_size, uint32_t cb_id, bool is_dram>
+template <uint32_t page_size, bool is_dram>
 FORCE_INLINE void read_data_from_remote_core(
+    Noc& noc_obj,
+    CircularBuffer& cb,
     SocketReceiverInterface& receiver_socket,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     uint32_t bank_id,
@@ -26,12 +30,12 @@ FORCE_INLINE void read_data_from_remote_core(
     uint32_t num_pages_per_block) {
     uint32_t block_size = num_pages_per_block * page_size;
     socket_wait_for_pages(receiver_socket, 1);
-    cb_reserve_back(cb_id, num_pages_per_block);
+    cb.reserve_back(num_pages_per_block);
     auto remote_read_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, receiver_socket.read_ptr);
-    auto l1_write_addr = get_write_ptr(cb_id);
+    auto l1_write_addr = cb.get_write_ptr();
     noc_async_read(remote_read_addr, l1_write_addr, block_size);
-    noc_async_read_barrier();
-    cb_push_back(cb_id, num_pages_per_block);
+    noc_obj.async_read_barrier();
+    cb.push_back(num_pages_per_block);
     socket_pop_pages(receiver_socket, 1);
     fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
 }
@@ -52,11 +56,15 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
+    Noc noc_obj;
+    CircularBuffer cb_fabric_packet_header(fabric_packet_header_cb_id);
+    CircularBuffer cb_scratch_buffer(scratch_buffer_cb_id);
+
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing reads from upstream data cores
     //  - socket_packet_header: Used by socket APIs for control flow
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(cb_fabric_packet_header.get_write_ptr());
     fabric_connection.open();
 
     // Create Socket Interface
@@ -64,13 +72,25 @@ void kernel_main() {
     set_receiver_socket_page_size(receiver_socket, socket_block_size);
 
     for (uint32_t i = 0; i < num_blocks; ++i) {
-        read_data_from_remote_core<socket_page_size, scratch_buffer_cb_id, is_dram>(
-            receiver_socket, fabric_connection, bank_id, socket_packet_header_addr, num_pages_per_block);
+        read_data_from_remote_core<socket_page_size, is_dram>(
+            noc_obj,
+            cb_scratch_buffer,
+            receiver_socket,
+            fabric_connection,
+            bank_id,
+            socket_packet_header_addr,
+            num_pages_per_block);
     }
 
     if (block_remainder_pages > 0) {
-        read_data_from_remote_core<socket_page_size, scratch_buffer_cb_id, is_dram>(
-            receiver_socket, fabric_connection, bank_id, socket_packet_header_addr, block_remainder_pages);
+        read_data_from_remote_core<socket_page_size, is_dram>(
+            noc_obj,
+            cb_scratch_buffer,
+            receiver_socket,
+            fabric_connection,
+            bank_id,
+            socket_packet_header_addr,
+            block_remainder_pages);
     }
     update_socket_config(receiver_socket);
     fabric_connection.close();

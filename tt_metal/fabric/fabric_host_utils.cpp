@@ -11,12 +11,14 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <set>
 #include <vector>
 #include <algorithm>
+#include <cctype>
+#include <cstring>
+#include <stdexcept>
 #include "fabric_context.hpp"
 #include <queue>
 #include <unordered_map>
@@ -26,8 +28,36 @@
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
+
+namespace {
+
+// Mock cluster mapping export uses cluster descriptor filenames (basename). Strip MPI-rank uniquifier
+// suffix appended during PSD discovery when multiple ranks share the same descriptor basename.
+HostName hostname_for_mapping_export(const HostName& hostname) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled()) {
+        return hostname;
+    }
+    constexpr std::string_view cluster_desc_suffix = ".yaml";
+    const auto pos = hostname.rfind(cluster_desc_suffix);
+    if (pos == std::string::npos || pos + cluster_desc_suffix.size() >= hostname.size()) {
+        return hostname;
+    }
+    const std::string tail = hostname.substr(pos + cluster_desc_suffix.size());
+    if (tail.size() <= 1 || tail.front() != '_') {
+        return hostname;
+    }
+    for (char c : tail.substr(1)) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) {
+            return hostname;
+        }
+    }
+    return hostname.substr(0, pos + cluster_desc_suffix.size());
+}
+
+}  // namespace
 
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
@@ -222,8 +252,9 @@ void serialize_asic_to_fabric_node_mapping_to_file(
                 tt::tt_metal::TrayID tray_id = physical_system_descriptor.get_tray_id(asic_id);
                 tt::tt_metal::ASICLocation asic_location = physical_system_descriptor.get_asic_location(asic_id);
 
-                // Get hostname for this fabric node
-                HostName hostname = topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id);
+                // Get hostname for this fabric node (mock: cluster descriptor filename)
+                HostName hostname =
+                    hostname_for_mapping_export(topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id));
 
                 // Add to the mapping structure, indexed by umd_chip_id (physical chip ID)
                 AsicMapping mapping{tray_id, asic_location, fabric_node_id, asic_id};
@@ -322,6 +353,111 @@ void serialize_asic_to_fabric_node_mapping_to_file(
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized ASIC to Fabric node ID mapping to file: {}", output_file_path.string());
+}
+
+namespace {
+
+std::optional<PhysicalGroupingDescriptor> load_pgd_if_regular_file(const std::filesystem::path& path) {
+    if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path)) {
+        log_info(tt::LogFabric, "Loaded physical groupings from: {}", path.string());
+        return PhysicalGroupingDescriptor(path);
+    }
+    return std::nullopt;
+}
+
+std::vector<std::filesystem::path> build_physical_grouping_descriptor_search_paths(
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
+    const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
+    const std::string cluster_name = cluster_name_env != nullptr ? cluster_name_env : "";
+    const char* tt_metal_home_env = std::getenv("TT_METAL_HOME");
+    const std::string tt_metal_home = tt_metal_home_env != nullptr ? tt_metal_home_env : ".";
+
+    std::vector<std::filesystem::path> search_paths;
+    if (!cluster_name.empty()) {
+        search_paths.push_back(
+            std::filesystem::path("/data/scaleout_configs") / cluster_name /
+            (cluster_name + "_physical_grouping_descriptor.textproto"));
+        search_paths.push_back(
+            std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" / "physical_groupings" /
+            (cluster_name + "_physical_grouping_descriptor.textproto"));
+    }
+
+    std::string arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = context.get_cluster();
+    const tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
+    const tt::ARCH arch = cluster.arch();
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
+        arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    } else if (
+        (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY || cluster.is_ubb_galaxy()) &&
+        arch == tt::ARCH::BLACKHOLE) {
+        if (physical_system_descriptor != nullptr && physical_system_descriptor->is_bh_galaxy_rev_c()) {
+            arch_cluster_filename = "wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+        } else {
+            arch_cluster_filename = "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
+        }
+    } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
+        arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
+    }
+
+    search_paths.push_back(
+        std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" / "physical_groupings" /
+        arch_cluster_filename);
+    return search_paths;
+}
+
+}  // namespace
+
+PhysicalGroupingDescriptor find_and_load_physical_grouping_descriptor(
+    const std::optional<std::filesystem::path>& pgd_path,
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
+    if (pgd_path.has_value() && !pgd_path->empty()) {
+        if (auto loaded = load_pgd_if_regular_file(*pgd_path)) {
+            return *loaded;
+        }
+        TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", pgd_path->string());
+    }
+
+    const char* pgd_path_env = std::getenv("TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH");
+    if (pgd_path_env != nullptr && std::strlen(pgd_path_env) > 0) {
+        const std::filesystem::path explicit_path(pgd_path_env);
+        if (auto loaded = load_pgd_if_regular_file(explicit_path)) {
+            return *loaded;
+        }
+        TT_THROW(
+            "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: {}", explicit_path.string());
+    }
+
+    const auto search_paths = build_physical_grouping_descriptor_search_paths(physical_system_descriptor);
+    for (const auto& path : search_paths) {
+        if (auto loaded = load_pgd_if_regular_file(path)) {
+            return *loaded;
+        }
+    }
+
+    const char* cluster_name_env = std::getenv("TT_CLUSTER_NAME");
+    std::string error_msg = "Could not find Physical Grouping Descriptor file. Searched:\n";
+    for (const auto& path : search_paths) {
+        error_msg += "  - " + path.string() + "\n";
+    }
+    if (cluster_name_env != nullptr && cluster_name_env[0] != '\0') {
+        error_msg += std::string("Cluster name from TT_CLUSTER_NAME: ") + cluster_name_env + "\n";
+    } else {
+        error_msg += "TT_CLUSTER_NAME not set\n";
+    }
+    throw std::runtime_error(error_msg);
+}
+
+std::optional<PhysicalGroupingDescriptor> try_find_and_load_physical_grouping_descriptor(
+    const std::optional<std::filesystem::path>& pgd_path,
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) {
+    try {
+        return find_and_load_physical_grouping_descriptor(pgd_path, physical_system_descriptor);
+    } catch (const std::exception& e) {
+        log_debug(tt::LogFabric, "Physical Grouping Descriptor not loaded (soft-skip): {}", e.what());
+        return std::nullopt;
+    }
 }
 
 }  // namespace tt::tt_fabric

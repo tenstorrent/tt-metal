@@ -642,7 +642,7 @@ def test_binary_implicit_broadcast(device, shapes, ttnn_op):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if ttnn_op == ttnn.div:
-        assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
     else:
         assert torch.equal(output_tensor, torch_output_tensor)
 
@@ -754,8 +754,7 @@ def test_binary_div_int32_full_range(input_shapes, device):
     output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=2.0)
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
 
 
 def test_div_int32_optional_output(device):
@@ -772,7 +771,7 @@ def test_div_int32_optional_output(device):
     ttnn.div(input_tensor_a, input_tensor_b, output_tensor=preallocated_tensor)
     output_tensor = ttnn.to_torch(preallocated_tensor)
 
-    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize(
@@ -846,7 +845,7 @@ def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, ro
     if rounding_mode is not None:
         assert_equal(torch_output_tensor, output_tensor)
     else:
-        assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
@@ -900,7 +899,7 @@ def test_div_edge_cases(rounding_mode, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if rounding_mode is None:
-        assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-6, equal_nan=False)
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
     else:
         assert torch.equal(torch_output_tensor, output_tensor)
 
@@ -930,7 +929,92 @@ def test_div_inf_nan_cases(device):
     output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0, allow_nonfinite=True)
+
+
+def test_div_exact_quotient_cases(device):
+    pairs = [
+        (28, 14),
+        (56, 14),
+        (-28, 14),
+        (28, -14),
+        (-56, -14),
+        (100, 10),
+        (144, 12),
+        (1000000, 1000),
+        (2147483646, 2),
+        (-2147483646, 2),
+        (2147483646, -1),
+        (7, 7),
+        (-7, -7),
+    ]
+
+    numerators, denominators = zip(*pairs)
+    torch_input_tensor_a = torch.tensor(numerators, dtype=torch.int32)
+    torch_input_tensor_b = torch.tensor(denominators, dtype=torch.int32)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+# FP32 mantissa precision boundary: Bit-exactness only holds when the operands and the quotient fit within the fp32 mantissa
+# (|value| <= 2**24 = 16777216). div_int32 converts int32 -> fp32 before dividing,
+# so operands above 2**24 are rounded before the reciprocal even runs and the residual step cannot
+# recover the lost bits.
+def test_div_int32_large_magnitude_cases(device):
+    pairs = [
+        (2147483647, 1),  # 2**31 - 1 -> rounds up to 2**31         (2147483648.0)
+        (16777217, 1),  # 2**24 + 1 -> rounds to even 2**24        (16777216.0)
+        (1073741825, 1),  # 2**30 + 1 -> rounds down to 2**30        (1073741824.0)
+        (33554435, 1),  # 2**25 + 3 -> rounds to 2**25 + 4         (33554436.0)
+    ]
+    numerators, denominators = zip(*pairs)
+    torch_input_tensor_a = torch.tensor(numerators, dtype=torch.int32)
+    torch_input_tensor_b = torch.tensor(denominators, dtype=torch.int32)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.div)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # Device still matches the torch fp32 golden bit-exact but the result has lost integer precision above 2**24.
+    assert torch.equal(output_tensor, torch_output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -998,11 +1082,7 @@ def test_binary_divide_int32_full_range(input_shapes, device):
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
 
-    ARCH_NAME = ttnn.get_arch_name()
-    if "blackhole" in ARCH_NAME:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=2.0)
-    elif "wormhole" in ARCH_NAME:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
 
 
 def test_divide_edge_cases(device):
@@ -1074,7 +1154,7 @@ def test_divide_inf_nan_cases(device):
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-10, rtol=1e-5, equal_nan=True)
+    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0, allow_nonfinite=True)
 
 
 def test_binary_scalar_div_int32(device):
@@ -1097,7 +1177,7 @@ def test_binary_scalar_div_int32(device):
     tt_out_trunc = ttnn.to_torch(z_tt_trunc)
     z_torch_trunc = torch.divide(x_torch, y_torch, rounding_mode="trunc")
 
-    assert torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=True)
+    assert_with_ulp(tt_out, z_torch, ulp_threshold=1.0, allow_nonfinite=True)
     assert torch.equal(z_torch_floor, tt_out_floor)
     assert torch.equal(z_torch_trunc, tt_out_trunc)
 

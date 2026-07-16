@@ -14,3 +14,13 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_SRCS
     group_attn_matmul/device/group_attn_matmul_program_factory.cpp
     group_attn_matmul/group_attn_matmul.cpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/experimental/matmul/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_EXPERIMENTAL_MATMUL_NANOBIND_SRCS
+    attn_matmul/attn_matmul_nanobind.cpp
+    group_attn_matmul/group_attn_matmul_nanobind.cpp
+)

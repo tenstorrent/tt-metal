@@ -35,6 +35,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -1019,7 +1020,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .tensor_bindings = make_reader_tensor_bindings(false),
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(mesh_device->arch()),
     };
 
     std::optional<KernelSpec> reader1;
@@ -1032,7 +1033,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .tensor_bindings = make_reader_tensor_bindings(true),
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            .hw_config = ttnn::create_writer_datamovement_config(mesh_device->arch()),
         };
     }
 
@@ -1180,12 +1181,13 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
-    ComputeHardwareConfig compute_hw{
-        .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-        .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
-        .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
-        .math_approx_mode = false,
-    };
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
+        device_arch,
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = get_math_fidelity(device_compute_kernel_config),
+            .math_approx_mode = false,
+            .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+            .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
 
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
@@ -1247,23 +1249,43 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
         uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
 
-        KernelRunArgs::RuntimeArgValues reader_vals = {{"core_nhw_index", core_nhw_index}};
-        KernelRunArgs::RuntimeArgValues compute_vals = {{"out_nhw_this_core", out_nhw_this_core}};
+        KernelRunArgs::RuntimeArgValues& reader0_rtas = reader0_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& reader1_rtas = reader1_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
+        reader0_rtas["core_nhw_index"][node] = core_nhw_index;
+        compute_rtas["out_nhw_this_core"][node] = out_nhw_this_core;
+        if (reader1.has_value()) {
+            reader1_rtas["core_nhw_index"][node] = core_nhw_index;
+        }
         if (return_indices) {
             const uint32_t start_index = core_starting_indices[core_i];
             const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
             const uint32_t start_row = start_mod_batch / in_w_padded;
             const uint32_t start_col = start_mod_batch % in_w_padded;
-            reader_vals["start_row"] = start_row;
-            reader_vals["start_col"] = start_col;
-            compute_vals["start_row"] = start_row;
-            compute_vals["start_col"] = start_col;
+            AddRuntimeArgsForNode(
+                reader0_rtas,
+                node,
+                {
+                    {"start_row", start_row},
+                    {"start_col", start_col},
+                });
+            AddRuntimeArgsForNode(
+                compute_rtas,
+                node,
+                {
+                    {"start_row", start_row},
+                    {"start_col", start_col},
+                });
+            if (reader1.has_value()) {
+                AddRuntimeArgsForNode(
+                    reader1_rtas,
+                    node,
+                    {
+                        {"start_row", start_row},
+                        {"start_col", start_col},
+                    });
+            }
         }
-        reader0_run.runtime_arg_values.push_back({node, reader_vals});
-        if (reader1.has_value()) {
-            reader1_run.runtime_arg_values.push_back({node, reader_vals});
-        }
-        compute_run.runtime_arg_values.push_back({node, compute_vals});
     }
 
     ProgramRunArgs run_args;

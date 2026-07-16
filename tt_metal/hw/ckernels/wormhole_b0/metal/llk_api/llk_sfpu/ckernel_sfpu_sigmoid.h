@@ -27,7 +27,7 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
         exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
     }
 
-    sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
+    sfpi::vFloat denominator = 1.0f + exp_neg_x;
 
     sfpi::vFloat result;
     if constexpr (is_fp32_acc_to_dest_mode) {

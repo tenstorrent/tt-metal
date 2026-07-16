@@ -40,9 +40,13 @@ PREFILL_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_CHUNK_SIZE", "8192"))
 PREFILL_SLIDING_CHUNK_SIZE = int(os.environ.get("GEMMA4_PREFILL_SLIDING_CHUNK_SIZE", "30720"))
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights):
-    """Fused QKV matmul (no bias for Gemma4)."""
-    return ttnn.linear(hidden_states, weights.wqkv)
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None):
+    """Fused QKV matmul (no bias for Gemma4).
+
+    ``memory_config`` lets the packed-verify decode keep the projection output
+    resident on L1; ``None`` keeps the op default (DRAM) for existing callers.
+    """
+    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
@@ -69,11 +73,19 @@ def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_
     )
 
 
-def split_qkv_heads_prefill(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
+def split_qkv_heads_prefill(
+    xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+):
     """
     Split fused QKV into separate head tensors for prefill mode.
     When TP > 1, uses local head counts (global / tp).
     When kv_replicated (num_kv_heads < TP), each device has 1 KV head (GQA-assigned).
+
+    ``memory_config`` defaults to DRAM (true prefill: seq_len can be thousands of
+    tokens and would not fit L1). The packed-verify decode caller overrides it to
+    L1 so the split output — and the downstream activation stream — stays
+    resident on L1 (the op only emits sharded output for sharded input, so an L1
+    interleaved input yields L1 interleaved output).
     """
     num_local_heads = config.num_attention_heads // tp
     num_local_kv_heads = 1 if kv_replicated else config.num_key_value_heads // tp
@@ -82,16 +94,20 @@ def split_qkv_heads_prefill(xqkv_fused, config, is_global: bool, tp: int = 1, kv
         num_heads=num_local_heads,
         num_kv_heads=num_local_kv_heads,
         transpose_k_heads=False,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
 
 
-def apply_per_head_norm(tensor, weight, eps, with_scale=True):
+def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None):
     """
     Apply RMSNorm per-head on the head_dim dimension.
 
     Input: [1, num_heads, S, head_dim] or batched prefill [B, num_heads, S, head_dim]
     Process: reshape to [1, 1, num_heads*S, head_dim] (or B*num_heads*S for batch) -> rms_norm -> reshape back
+
+    ``memory_config`` is forwarded to ``rms_norm``; pass L1 to keep the normed
+    activation resident on L1 (packed-verify decode path). ``None`` keeps the
+    op's default (follows the input's layout).
     """
     orig_shape = tensor.shape
     head_dim = orig_shape[-1]
@@ -103,14 +119,14 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True):
         seq_or_batch = orig_shape[2]
         flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
     if with_scale and weight is not None:
-        normed = ttnn.rms_norm(flat, weight=weight, epsilon=eps)
+        normed = ttnn.rms_norm(flat, weight=weight, epsilon=eps, memory_config=memory_config)
     else:
-        normed = ttnn.rms_norm(flat, epsilon=eps)
+        normed = ttnn.rms_norm(flat, epsilon=eps, memory_config=memory_config)
 
     return ttnn.reshape(normed, orig_shape)
 
 
-def apply_rope(tensor, cos_cache, sin_cache, token_index=None):
+def apply_rope(tensor, cos_cache, sin_cache, token_index=None, memory_config=None):
     """
     Apply HF-style rotary position embedding.
 
@@ -123,13 +139,15 @@ def apply_rope(tensor, cos_cache, sin_cache, token_index=None):
         sin_cache: [1, 1, max_seq_len, head_dim] - full sin cache
         token_index: int or None. If int (decode), slices into cache at that position.
                      If None (prefill), applies to full sequence.
+        memory_config: forwarded to the rotary op; the packed-verify decode passes
+                     L1 to keep the rotated tensor resident on L1.
 
     Note: rotary_embedding pads dim 2 to TILE_HEIGHT (32) in decode mode.
     We reshape+slice to restore the original logical shape, following the
     tt_transformers _hf_rope_decode pattern.
     """
     orig_shape = tensor.shape
-    result = ttnn.experimental.rotary_embedding(tensor, cos_cache, sin_cache, token_index)
+    result = ttnn.experimental.rotary_embedding(tensor, cos_cache, sin_cache, token_index, memory_config=memory_config)
 
     # In decode mode (token_index provided), dim 2 gets padded to 32.
     # Reshape to indicate logical vs padded size, then slice back.
@@ -207,7 +225,7 @@ def prefill_sdpa_program_config(head_dim, seq_len):
     )
 
 
-def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0):
+def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0, base_offset=0):
     """Chunked causal prefill SDPA over a paged KV cache.
 
     Splits the Q sequence into chunks of ``PREFILL_CHUNK_SIZE`` (<=32768) and runs
@@ -222,8 +240,13 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
         page_table: int32 [batch, num_pages] (row ``user_id`` is this user's blocks).
         user_id: which page_table row maps this user's logical->physical blocks.
         head_dim: layer head_dim (512 for global layers; sizes the SDPA grid).
-    Returns:
-        [1, num_local_heads, seq_len, head_dim] attention output (TILE layout).
+        base_offset: absolute position (in the full sequence) of ``tt_q``'s first
+            row. Non-zero for generator-level multi-chunk prefill: chunk N's Q sits
+            at ``N*chunk_size`` and must attend the full prior prefix already in the
+            paged cache. Added to each internal Q-chunk offset so the op's causal
+            mask covers ``[0, base_offset + local_end)``. Must be a multiple of the
+            program's ``q_chunk_size`` (128); generator chunk sizes are >=128 powers
+            of two so this holds.
     """
     seq_len = tt_q.shape[-2]
     nh = tt_q.shape[1]
@@ -238,6 +261,16 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
         q_chunk_size=128,
         k_chunk_size=128,
         exp_approx_mode=False,
+    )
+    # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
+    # Matches the non-chunked prefill SDPA so long-context (>32768) prefill keeps
+    # the same accumulation precision as the short-seq path.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        tt_q.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
     )
 
     # Page table row for this user: [1, num_pages], int32, ROW_MAJOR.
@@ -266,9 +299,10 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
             k_cache,
             v_cache,
             user_pt,
-            chunk_start_idx=start,
+            chunk_start_idx=base_offset + start,
             scale=scale,
             program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
         )
         q_chunk.deallocate(True)
         if pad:
@@ -316,6 +350,15 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     # older key is harmless — sliding_window_size masks it out.
     hist = ((sliding_window + 31) // 32) * 32
     stride = PREFILL_SLIDING_CHUNK_SIZE
+    # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed,
+    # matching the non-chunked prefill SDPA on the long-context (>32768) path.
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        tt_q.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
     outs = []
     start = 0
@@ -333,6 +376,7 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
             is_causal=True,
             scale=scale,
             sliding_window_size=sliding_window,
+            compute_kernel_config=compute_kernel_config,
         )
         q_slice.deallocate(True)
         k_slice.deallocate(True)

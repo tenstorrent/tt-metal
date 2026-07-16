@@ -3,6 +3,13 @@ include(sources.cmake)
 add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
+# emule: append_fabric_connection_rt_args records each worker's fwd/bwd connection->neighbor for the
+# software-emulation teleport's 1D dst resolution (the firmware connection table emule skips). The define
+# is PRIVATE on the tt_metal target, which doesn't reach this OBJECT lib, so set it here too.
+if(TT_METAL_USE_EMULE)
+    target_compile_definitions(fabric PRIVATE TT_METAL_USE_EMULE=1)
+endif()
+
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(fabric)
 

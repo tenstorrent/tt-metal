@@ -212,7 +212,7 @@ def test_conv1d_mamba(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override",
     (
-        (1, 32, 3, 32, 3, 1, 1, 1, True, None),
+        # (1, 32, 3, 32, 3, 1, 1, 1, True, None),  # workaround for https://github.com/tenstorrent/tt-metal/issues/49393
         (1, 128, 32, 1024, 5, 1, 2, 1, True, None),
         (1, 512, 32, 5120, 3, 1, 1, 1, True, None),
         (1, 64, 64, 2560, 3, 1, 1, 32, True, None),

@@ -12,6 +12,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -296,7 +297,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                  {"start_id", "num_sticks_per_core", "num_sticks_per_core_read", "num_read_per_barrier"},
              .common_runtime_arg_names =
                  {"addr_offset", "padded_stick_size", "unpadded_stick_size", "stick_size_offset", "misalignment"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
         .advanced_options = {.num_runtime_varargs = num_dims, .num_common_runtime_varargs = 2 * num_dims},
     };
 
@@ -319,35 +320,39 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                   "num_read_per_barrier",
                   "start_id",
                   "page_size_override"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // --- Per-core runtime args ---
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     AdvancedKernelRunArgs reader_run_advanced;
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
         const auto& core = all_cores_vec[i];
-        reader_node_args.push_back(
-            {.node = core,
-             .args = {
-                 {"start_id", rt.start_id[i]},
-                 {"num_sticks_per_core", rt.num_sticks_per_core[i]},
-                 {"num_sticks_per_core_read", rt.num_sticks_per_core_read[i]},
-                 {"num_read_per_barrier", rt.num_read_per_barrier[i]}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"start_id", rt.start_id[i]},
+                {"num_sticks_per_core", rt.num_sticks_per_core[i]},
+                {"num_sticks_per_core_read", rt.num_sticks_per_core_read[i]},
+                {"num_read_per_barrier", rt.num_read_per_barrier[i]},
+            });
         reader_run_advanced.runtime_varargs.emplace(core, rt.id_per_dim[i]);
 
-        writer_node_args.push_back(
-            {.node = core,
-             .args = {
-                 {"stick_size", rt.unpadded_row_size_bytes},
-                 {"stick_size_offset", rt.unpadded_row_size_bytes_offset},
-                 {"num_sticks_per_core", rt.num_sticks_per_core[i]},
-                 {"num_sticks_per_core_read", rt.num_sticks_per_core_read[i]},
-                 {"num_read_per_barrier", rt.num_read_per_barrier[i]},
-                 {"start_id", rt.num_sticks_written[i]},
-                 {"page_size_override", rt.writer_page_size}}});
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"stick_size", rt.unpadded_row_size_bytes},
+                {"stick_size_offset", rt.unpadded_row_size_bytes_offset},
+                {"num_sticks_per_core", rt.num_sticks_per_core[i]},
+                {"num_sticks_per_core_read", rt.num_sticks_per_core_read[i]},
+                {"num_read_per_barrier", rt.num_read_per_barrier[i]},
+                {"start_id", rt.num_sticks_written[i]},
+                {"page_size_override", rt.writer_page_size},
+            });
     }
 
     // --- TensorParameters ---
