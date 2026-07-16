@@ -29,8 +29,38 @@ struct AllGatherMatmulAsyncParams {
     /* Fusion params */
     CoreCoord all_gather_core_grid_offset;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("matmul_struct", "all_gather_core_grid_offset");
-    auto attribute_values() const { return std::forward_as_tuple(this->matmul, this->all_gather_core_grid_offset); }
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "topology",
+        "cluster_axis",
+        "barrier_semaphore_present",
+        "using_persistent_buffers",
+        "chunks_per_sync",
+        "num_workers_per_link",
+        "num_buffers_per_channel",
+        "sub_device_id",
+        "matmul",
+        "all_gather_core_grid_offset");
+    auto attribute_values() const {
+        return std::make_tuple(
+            all_gather_async_attributes.dim,
+            all_gather_async_attributes.num_links,
+            all_gather_async_attributes.ring_size,
+            std::cref(all_gather_async_attributes.output_mem_config),
+            all_gather_async_attributes.topology,
+            std::cref(all_gather_async_attributes.cluster_axis),
+            all_gather_async_attributes.barrier_semaphore.has_value(),
+            all_gather_async_attributes.using_persistent_buffers,
+            std::cref(all_gather_async_attributes.chunks_per_sync),
+            std::cref(all_gather_async_attributes.num_workers_per_link),
+            std::cref(all_gather_async_attributes.num_buffers_per_channel),
+            all_gather_async_attributes.sub_device_id,
+            std::cref(matmul),
+            std::cref(all_gather_core_grid_offset));
+    }
 };
 
 struct AllGatherMatmulAsyncInputs {
