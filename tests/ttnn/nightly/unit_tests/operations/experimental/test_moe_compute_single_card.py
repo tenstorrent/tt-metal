@@ -625,20 +625,11 @@ def _run_moe_compute_single_card_test(
 
 
 # DeepSeek-shaped workload mirrored on a single WH card so kernels see the same dims.
-#
-# device_params: must match the 6U test environment.
-#   - dispatch_core_axis=COL: reserves a *column* (not a row) for fast-dispatch cores.
-#     The MoE op hardcodes tilize cores at logical (5,8)(5,9)(6,8)(6,9) and a combine
-#     bounding box up to y=7. With ROW-axis dispatch, one row gets eaten from the top
-#     of the compute grid (logical y range becomes 0..8 on unharvested WH, 0..7 on a
-#     harvested n150_L), and (6,9)/(5,9) fall out of range. COL-axis matches the 6U
-#     test setup and keeps all 10 functional rows (logical y=0..9) available.
-#
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "trace_region_size": 500000,
         }
     ],
