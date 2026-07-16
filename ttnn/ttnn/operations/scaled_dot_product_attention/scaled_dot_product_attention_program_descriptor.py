@@ -75,26 +75,29 @@ def _chunk_size(axis_t, target):
     return 1
 
 
-def _working_set_bytes(sq_chunk_t, skv_chunk_t, dt, kv_depth, out_depth, has_mask):
+def _working_set_bytes(sq_chunk_t, skv_chunk_t, dt, kv_depth, out_depth, has_mask, in_bytes, out_bytes, interm_bytes):
+    """Per-core L1 working set. R2: input/output tile bytes follow the tensor dtype
+    (fp32 doubles vs bf16, bf8b halves) and the softmax intermediates
+    (cb_scores/cb_exp) follow `interm_bytes` (fp32 under fp32-DEST accumulation)."""
     bf16 = ttnn.tile_size(ttnn.bfloat16)
     fp32 = ttnn.tile_size(ttnn.float32)
     total = 0
-    total += sq_chunk_t * dt * bf16  # q_in
-    total += skv_chunk_t * dt * kv_depth * bf16  # k_in
-    total += skv_chunk_t * dt * kv_depth * bf16  # v_in
+    total += sq_chunk_t * dt * in_bytes  # q_in
+    total += skv_chunk_t * dt * kv_depth * in_bytes  # k_in
+    total += skv_chunk_t * dt * kv_depth * in_bytes  # v_in
     if has_mask:
-        total += sq_chunk_t * skv_chunk_t * kv_depth * bf16  # mask_in
-    total += 2 * bf16  # scaler + scale
-    total += sq_chunk_t * dt * bf16  # q_scaled
-    total += sq_chunk_t * skv_chunk_t * bf16  # scores
-    total += sq_chunk_t * skv_chunk_t * bf16  # exp
-    total += sq_chunk_t * dt * out_depth * bf16  # out
+        total += sq_chunk_t * skv_chunk_t * kv_depth * in_bytes  # mask_in
+    total += 2 * bf16  # scaler + scale (always bf16, reader-filled)
+    total += sq_chunk_t * dt * bf16  # q_scaled (bf16 regardless of input dtype)
+    total += sq_chunk_t * skv_chunk_t * interm_bytes  # scores
+    total += sq_chunk_t * skv_chunk_t * interm_bytes  # exp
+    total += sq_chunk_t * dt * out_depth * out_bytes  # out
     total += (sq_chunk_t * 5) * fp32  # row_max, row_sum, corr, m_new, sum_chunk
     total += (sq_chunk_t * dt * 2) * fp32  # pv, out_accum
     return total
 
 
-def _fit_l1(sq_t, skv_t, dt, has_mask):
+def _fit_l1(sq_t, skv_t, dt, has_mask, in_bytes, out_bytes, interm_bytes):
     """Compute the three block knobs once; shrink Skv_chunk_t -> KV_DEPTH -> Sq_chunk_t
     until the working set fits L1."""
     sq_target = 4
@@ -104,7 +107,9 @@ def _fit_l1(sq_t, skv_t, dt, has_mask):
     while True:
         sq_chunk_t = _chunk_size(sq_t, sq_target)
         skv_chunk_t = _chunk_size(skv_t, skv_target)
-        need = _working_set_bytes(sq_chunk_t, skv_chunk_t, dt, kv_depth, out_depth, has_mask)
+        need = _working_set_bytes(
+            sq_chunk_t, skv_chunk_t, dt, kv_depth, out_depth, has_mask, in_bytes, out_bytes, interm_bytes
+        )
         if need <= L1_BUDGET:
             break
         if skv_target > 1:
@@ -153,13 +158,24 @@ def create_program_descriptor(
     skv_partial = S_kv % TILE_DIM
     has_kv_pad = skv_partial != 0
 
-    Sq_chunk_t, Skv_chunk_t, KV_DEPTH, OUT_DEPTH = _fit_l1(Sq_t, Skv_t, Dt, has_mask)
+    # R2: precision surface. Input/output CB tile bytes follow the tensor dtype;
+    # the softmax intermediates (cb_scores/cb_exp) are fp32 under fp32-DEST
+    # accumulation (the precision lever that pushes adversarial distributions back
+    # under tolerance — verification_report.md), else bf16 so the perf-flagged
+    # bf16 + 16-bit-DEST regime stays byte-identical. Never bf8b: block-float
+    # intermediates would compound quantization through the online softmax.
+    fp32_dest = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
+    in_bytes = ttnn.tile_size(query.dtype)
+    out_bytes = ttnn.tile_size(output_tensor.dtype)
+    interm_format = ttnn.float32 if fp32_dest else ttnn.bfloat16
+    interm_bytes = ttnn.tile_size(interm_format)
+
+    Sq_chunk_t, Skv_chunk_t, KV_DEPTH, OUT_DEPTH = _fit_l1(Sq_t, Skv_t, Dt, has_mask, in_bytes, out_bytes, interm_bytes)
 
     n_q_chunks = _ceil_div(Sq_t, Sq_chunk_t)
     n_kv_chunks = _ceil_div(Skv_t, Skv_chunk_t)
     total_work = B * H * n_q_chunks
 
-    fp32_dest = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
     # DEST tile budget: fp32 accumulation halves the 8-tile bf16 budget. The matmul
     # N-subblock decomposition (out_subblock_w <= dest_limit) is derived on-device
     # (R1b) so the partial last chunk's runtime N re-derives cleanly — single source
@@ -192,8 +208,12 @@ def create_program_descriptor(
         _cb(CB_SUM_CHUNK, fp32, Sq_chunk_t, ttnn.float32, all_cores),
         _cb(CB_OUT, out_page, Sq_chunk_t * Dt * OUT_DEPTH, output_tensor.dtype, all_cores),
         _cb(CB_Q_SCALED, bf16, Sq_chunk_t * Dt, ttnn.bfloat16, all_cores),
-        _cb(CB_SCORES, bf16, Sq_chunk_t * Skv_chunk_t, ttnn.bfloat16, all_cores),
-        _cb(CB_EXP, bf16, Sq_chunk_t * Skv_chunk_t, ttnn.bfloat16, all_cores),
+        # cb_scores / cb_exp: fp32 under fp32-DEST accumulation (softmax precision),
+        # bf16 otherwise. Consumed by FPU ops (add/reduce/sub/matmul) so they are
+        # NOT UnpackToDestFp32-tagged — the L1 format alone lifts the intermediate
+        # from bf16 (7-bit) to fp32 (unpacks to TF32, 10-bit) through the pipeline.
+        _cb(CB_SCORES, interm_bytes, Sq_chunk_t * Skv_chunk_t, interm_format, all_cores),
+        _cb(CB_EXP, interm_bytes, Sq_chunk_t * Skv_chunk_t, interm_format, all_cores),
         _cb(CB_ROW_MAX, fp32, Sq_chunk_t, ttnn.float32, all_cores),
         _cb(CB_ROW_SUM, fp32, Sq_chunk_t, ttnn.float32, all_cores),
         _cb(CB_PV, fp32, Sq_chunk_t * Dt, ttnn.float32, all_cores),
@@ -292,9 +312,13 @@ def create_program_descriptor(
         compile_time_args=compute_ct,
         runtime_args=compute_rt,
         config=ttnn.ComputeConfigDescriptor(
+            # R2: full compute-config surface threaded from the caller's config. The
+            # defaults reproduce default_compute_kernel_config() (HiFi4 + fp32 DEST +
+            # no approx + half-sync) so callers passing nothing see identical results.
             math_fidelity=getattr(compute_kernel_config, "math_fidelity", ttnn.MathFidelity.HiFi4),
             fp32_dest_acc_en=fp32_dest,
             math_approx_mode=bool(getattr(compute_kernel_config, "math_approx_mode", False)),
+            dst_full_sync_en=bool(getattr(compute_kernel_config, "dst_full_sync_en", False)),
         ),
     )
 

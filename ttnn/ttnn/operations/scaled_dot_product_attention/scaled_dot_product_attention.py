@@ -84,8 +84,15 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED — Phase-0 claim (what the kernel actually handles now).
 # ---------------------------------------------------------------------------
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "fp32_dest_acc_en": [True],
+    # R2: full float precision surface. float32 + bfloat8_b ride the same helper
+    # pipeline as bf16 (helpers carry data-format reconfig); input/output CB
+    # formats derive from the tensor dtype in the descriptor, and the softmax
+    # intermediates (cb_scores/cb_exp) are promoted to fp32 under fp32-DEST
+    # accumulation (bf16 otherwise, keeping the perf regime byte-identical).
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    # R2: expose the 16-bit-DEST accumulation regime (the perf-flagged shape pins
+    # fp32_dest_acc_en=False). {float32, False} is refused in EXCLUSIONS below.
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT],
     # R1: non-tile-aligned shapes handled natively in the kernel. w_non_aligned
     # (D%32≠0) rides the input tile zero-padding through the QKᵀ contraction and
@@ -100,10 +107,26 @@ SUPPORTED = {
 
 
 # ---------------------------------------------------------------------------
-# 3. EXCLUSIONS — Phase-0: none. (Refinements arm {dtype:float32,
-#    fp32_dest_acc_en:False} and {mask_mode:causal, attention_kind:cross}.)
+# 3. EXCLUSIONS — R2 arms the maxed-input + non-maxed-accumulation corner.
+#    (R4 will arm {mask_mode:causal, attention_kind:cross}.)
 # ---------------------------------------------------------------------------
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # R2: float32 input with 16-bit DEST accumulation. A maxed-precision input fed
+    # through a non-maxed accumulator is lossy for no benefit — refuse it, honoring
+    # the caller's fp32_dest_acc_en=False rather than silently forcing True. The
+    # golden TOLERANCES map omits this exact combo for the same reason.
+    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # R2: bfloat8_b on non-tile-aligned shapes — the canonical /numeric-formats-metal
+    # block-float × partial-tile incompatibility. When S_kv is not a multiple of 32
+    # the softmax reduce spans an additive-−∞ KV-padding mask; feeding that boundary
+    # through bfloat8_b's shared-exponent blocks corrupts the padded columns'
+    # contribution catastrophically (measured PCC ≈ 0.2–0.5 across the non-aligned
+    # golden cells — not a near-miss). The failure tracks the S_kv%32≠0 path, which
+    # appears under BOTH alignment tags, so both are refused. bf8b + tile_aligned is
+    # fully supported; bf16 / float32 on non-aligned shapes (R1) are unaffected.
+    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
+]
 
 
 # ---------------------------------------------------------------------------
