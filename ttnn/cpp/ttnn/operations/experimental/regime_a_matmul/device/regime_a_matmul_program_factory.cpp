@@ -118,12 +118,15 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     // Placement/work/reduction are unchanged; only the ring visiting order (which core seeds which in0 shard,
     // the forward route, and the in1 rotated read) changes — correct for ANY permutation. Emits a RINGCOST
     // line per group (bank/greedy/opt max+total edge cost) for the report. No effect on the public path.
-    const bool ring_bank = (diag & RegimeADiag::DIAG_RING_BANK) != 0u;      // diagnostic: keep bank order [0..7]
-    const bool ring_greedy = (diag & RegimeADiag::DIAG_RING_GREEDY) != 0u;  // diagnostic: greedy
-    if (!ring_bank) {  // DEFAULT = opt (exhaustive); greedy if selected
+    const bool ring_bank = (diag & RegimeADiag::DIAG_RING_BANK) != 0u;        // diagnostic: bank order [0..7]
+    const bool ring_greedy = (diag & RegimeADiag::DIAG_RING_GREEDY) != 0u;    // diagnostic: greedy (mm==0)
+    const bool ring_opt_mm0 = (diag & RegimeADiag::DIAG_RING_OPT_MM0) != 0u;  // diagnostic: opt scored on mm==0 only
+    if (!ring_bank) {  // DEFAULT = opt scored across ALL Sm mm-rings; greedy / mm0-opt if selected
         namespace expdev = tt::tt_metal::experimental::Device;
         const uint32_t preaders = geo.num_cores / 8u;
-        auto cost = [](const std::array<uint32_t, 8>& ord, const uint32_t d[8][8]) -> std::pair<uint32_t, uint32_t> {
+        // directed route cost of one 8-core cycle over a single ring's hop matrix: (max edge, total hops).
+        auto ring_cost = [](const std::array<uint32_t, 8>& ord,
+                            const std::array<std::array<uint32_t, 8>, 8>& d) -> std::pair<uint32_t, uint32_t> {
             uint32_t mx = 0, tot = 0;
             for (uint32_t p = 0; p < 8u; ++p) {
                 const uint32_t e = d[ord[p]][ord[(p + 1u) % 8u]];
@@ -132,29 +135,42 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
             }
             return {mx, tot};
         };
-        // M-split (Sm>1): slices differing only in mm share a (kk,nn) group of Sm CONTIGUOUS slice indices
-        // [base, base+Sm). Their in1 slaves receive in1 in the mm==0 READER's shard order, while their in0
-        // rings are separate — so the whole group MUST use the SAME ring permutation (reader/slave ring_pos
-        // must agree per bank) or the in0/in1 pairing corrupts. Compute the order once from the mm==0 slice
-        // (base) and apply it to all Sm slices. For Sm==1 this is one order per slice, as before.
+        // M-split (Sm>1): slices differing only in mm form a (kk,nn) group of Sm CONTIGUOUS slice indices
+        // [base, base+Sm), all sharing the same writer NoC. Their in1 slaves receive in1 in the mm==0 READER's
+        // shard order while their in0 rings are separate physical cores, so the WHOLE group MUST use the SAME
+        // permutation (reader/slave ring_pos must agree per bank) or the in0/in1 pairing corrupts.
+        // OBJECTIVE (default): lexicographic over the Sm physical mm-rings — (1) minimize the worst directed
+        // edge across ALL rings, (2) then the summed hops across ALL edges AND rings. This accounts for the
+        // slaves' routes, not just the reader's. DIAG_RING_OPT_MM0 reverts to scoring only the mm==0 ring.
         for (uint32_t base = 0; base < preaders; base += Sm) {
-            const uint32_t j = base;  // mm==0 reader slice defines the group's order
-            // Ring members = cores {b*preaders + j : b in 0..7}; shared slice j => shared noc. Writer NoC is
-            // opposite the reader's: noc==0 -> reader NOC0 / writer NOC1; noc==1 -> writer NOC0.
-            const NOC wnoc = (P.cores[j].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
-            auto lc = [&](uint32_t b) {
-                const auto& c = P.cores[b * preaders + j].coord;
-                return CoreCoord{c.x, c.y};
-            };
-            uint32_t d[8][8];
-            for (uint32_t a = 0; a < 8u; ++a) {
-                for (uint32_t b = 0; b < 8u; ++b) {
-                    d[a][b] = (a == b) ? 0u : expdev::get_worker_noc_hop_distance(device, lc(a), lc(b), wnoc);
+            // shared writer NoC (opposite the reader's): noc==0 -> writer NOC1; noc==1 -> writer NOC0.
+            const NOC wnoc = (P.cores[base].noc == 0u) ? NOC::NOC_1 : NOC::NOC_0;
+            // one 8x8 hop matrix per mm-ring (same wnoc, different physical cores).
+            std::vector<std::array<std::array<uint32_t, 8>, 8>> dm(Sm);
+            for (uint32_t mm = 0; mm < Sm; ++mm) {
+                auto lc = [&](uint32_t b) {
+                    const auto& c = P.cores[b * preaders + base + mm].coord;
+                    return CoreCoord{c.x, c.y};
+                };
+                for (uint32_t a = 0; a < 8u; ++a) {
+                    for (uint32_t b = 0; b < 8u; ++b) {
+                        dm[mm][a][b] = (a == b) ? 0u : expdev::get_worker_noc_hop_distance(device, lc(a), lc(b), wnoc);
+                    }
                 }
             }
-            // bank order [0..7]
-            std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
-            // greedy nearest-neighbour (directed, writer NoC), start at bank 0
+            // aggregate route cost of a candidate across all Sm mm-rings: (worst edge over rings, summed hops).
+            auto agg_cost = [&](const std::array<uint32_t, 8>& ord) -> std::pair<uint32_t, uint32_t> {
+                uint32_t amax = 0, atot = 0;
+                for (uint32_t mm = 0; mm < Sm; ++mm) {
+                    const auto [m, t] = ring_cost(ord, dm[mm]);
+                    amax = std::max(amax, m);
+                    atot += t;
+                }
+                return {amax, atot};
+            };
+
+            const std::array<uint32_t, 8> bank = {0, 1, 2, 3, 4, 5, 6, 7};
+            // greedy nearest-neighbour on the mm==0 ring (heuristic diagnostic), start at bank 0.
             std::array<uint32_t, 8> greedy{};
             {
                 std::array<bool, 8> vis{};
@@ -163,8 +179,8 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                 for (uint32_t pos = 1; pos < 8u; ++pos) {
                     uint32_t best = 0, bestd = 0xffffffffu;
                     for (uint32_t c = 0; c < 8u; ++c) {
-                        if (!vis[c] && d[greedy[pos - 1]][c] < bestd) {
-                            bestd = d[greedy[pos - 1]][c];
+                        if (!vis[c] && dm[0][greedy[pos - 1]][c] < bestd) {
+                            bestd = dm[0][greedy[pos - 1]][c];
                             best = c;
                         }
                     }
@@ -172,30 +188,36 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                     vis[best] = true;
                 }
             }
-            // exhaustive: fix bank 0 at pos 0, permute the other 7 (5040); min (max_edge, total). Directed edge
-            // costs on the writer NoC => a permutation and its reverse are both in the set (both orientations).
-            std::array<uint32_t, 8> opt = bank;
+            // exhaustive: fix bank 0 at pos 0, permute the other 7 (5040 cycles; directed => both orientations).
+            // Track BOTH objectives in one pass: opt_mm0 = min(max,total) on the mm==0 ring; opt_agg =
+            // min(worst-edge-over-rings, summed-hops-over-rings).
+            std::array<uint32_t, 8> opt_mm0 = bank, opt_agg = bank;
             {
                 std::array<uint32_t, 7> tail = {1, 2, 3, 4, 5, 6, 7};
-                uint32_t best_mx = 0xffffffffu, best_tot = 0xffffffffu;
+                uint32_t bm0 = 0xffffffffu, bt0 = 0xffffffffu, bma = 0xffffffffu, bta = 0xffffffffu;
                 do {
                     std::array<uint32_t, 8> cand{};
                     cand[0] = 0;
                     for (uint32_t t = 0; t < 7u; ++t) {
                         cand[t + 1u] = tail[t];
                     }
-                    auto [mx, tot] = cost(cand, d);
-                    if (mx < best_mx || (mx == best_mx && tot < best_tot)) {
-                        best_mx = mx;
-                        best_tot = tot;
-                        opt = cand;
+                    const auto [m0, t0] = ring_cost(cand, dm[0]);
+                    if (m0 < bm0 || (m0 == bm0 && t0 < bt0)) {
+                        bm0 = m0;
+                        bt0 = t0;
+                        opt_mm0 = cand;
+                    }
+                    const auto [ma, ta] = agg_cost(cand);
+                    if (ma < bma || (ma == bma && ta < bta)) {
+                        bma = ma;
+                        bta = ta;
+                        opt_agg = cand;
                     }
                 } while (std::next_permutation(tail.begin(), tail.end()));
             }
-            const auto cb = cost(bank, d), cg = cost(greedy, d), co = cost(opt, d);
-            const std::array<uint32_t, 8>& sel = ring_greedy ? greedy : opt;  // default = opt
-            // apply the selected order to ALL Sm slices of this (kk,nn) group (same permutation => reader/slave
-            // ring_pos agree per bank, preserving in0/in1 pairing under M-split).
+            const std::array<uint32_t, 8>& sel = ring_greedy ? greedy : (ring_opt_mm0 ? opt_mm0 : opt_agg);
+            // apply the selected order to ALL Sm slices of this group (same permutation => reader/slave ring_pos
+            // agree per bank, preserving in0/in1 pairing under M-split).
             for (uint32_t mm = 0; mm < Sm; ++mm) {
                 const uint32_t jj = base + mm;
                 for (uint32_t pos = 0; pos < 8u; ++pos) {
@@ -205,8 +227,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                     P.cores[ci].ring_prev_idx = sel[(pos + 7u) % 8u] * preaders + jj;
                 }
             }
-            // RINGCOST diagnostic line (route costs for bank/greedy/opt). Emitted only when TT_MM_RINGCOST is
-            // set (the perf harness sets it) so the production default path stays silent on compile.
+            // RINGCOST diagnostic (route costs, gated behind TT_MM_RINGCOST so the production path is silent on
+            // compile). Reports each candidate's GROUP-AGGREGATE cost (worst edge over the Sm rings; summed hops
+            // over all rings) PLUS the selected order's PER-RING (max,total) breakdown so the report can
+            // distinguish per-ring from aggregated-across-rings costs. The harness further aggregates across
+            // the (kk,nn) groups of the whole op.
             if (std::getenv("TT_MM_RINGCOST") != nullptr) {
                 auto join = [](const std::array<uint32_t, 8>& o) {
                     std::string s;
@@ -215,21 +240,32 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
                     }
                     return s;
                 };
+                const auto ab = agg_cost(bank), ag = agg_cost(greedy), a0 = agg_cost(opt_mm0), aa = agg_cost(opt_agg);
+                std::string perring;
+                for (uint32_t mm = 0; mm < Sm; ++mm) {
+                    const auto [m, t] = ring_cost(sel, dm[mm]);
+                    perring += "(" + std::to_string(m) + ":" + std::to_string(t) + ")";
+                }
                 fmt::print(
-                    "RINGCOST group={} wnoc={} sel={} bank[{}]max={}tot={} greedy[{}]max={}tot={} "
-                    "opt[{}]max={}tot={}\n",
-                    j,
+                    "RINGCOST group={} Sm={} wnoc={} sel={} bank[{}]aggmax={}aggtot={} greedy[{}]aggmax={}aggtot={} "
+                    "mm0[{}]aggmax={}aggtot={} agg[{}]aggmax={}aggtot={} sel_perring={}\n",
+                    base,
+                    Sm,
                     (wnoc == NOC::NOC_0 ? 0 : 1),
-                    (ring_greedy ? "greedy" : "opt"),
+                    (ring_greedy ? "greedy" : (ring_opt_mm0 ? "mm0" : "agg")),
                     join(bank),
-                    cb.first,
-                    cb.second,
+                    ab.first,
+                    ab.second,
                     join(greedy),
-                    cg.first,
-                    cg.second,
-                    join(opt),
-                    co.first,
-                    co.second);
+                    ag.first,
+                    ag.second,
+                    join(opt_mm0),
+                    a0.first,
+                    a0.second,
+                    join(opt_agg),
+                    aa.first,
+                    aa.second,
+                    perring);
             }
         }
     }
