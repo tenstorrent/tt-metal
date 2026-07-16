@@ -41,12 +41,6 @@ void RollDeviceOperation::validate_on_program_cache_hit(
     validate_roll(operation_attributes, tensor_args);
 }
 
-ttsl::hash::hash_t RollDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& args) {
-    return tt::tt_metal::operation::hash_operation<RollDeviceOperation>(
-        attrs.shift, attrs.dim, args.input.memory_config(), args.input.dtype(), args.input.layout());
-}
-
 RollDeviceOperation::spec_return_value_t RollDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -75,7 +69,7 @@ RollDeviceOperation::tensor_return_value_t roll_sharded(
     using OperationType = RollDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.shift = shift, .dim = dim, .output_mem_config = output_mem_config},
-        OperationType::tensor_args_t{.input = input});
+        OperationType::tensor_args_t{input});
 }
 
 }  // namespace ttnn::prim
