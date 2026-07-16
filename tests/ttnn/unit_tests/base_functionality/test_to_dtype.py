@@ -31,7 +31,8 @@ def get_types_from_binding_framwork():
             dtype
             for _, dtype in ttnn.DataType._member_map_.items()
             # skipping FP8_E4M3 for now, until it is fully supported in tt-metal
-            if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3
+            # skipping INT8: it exists as a storage-only dtype for the quantization ops.
+            if dtype != ttnn.DataType.INVALID and dtype != ttnn.DataType.FP8_E4M3 and dtype != ttnn.DataType.INT8
         ]
         FLOAT_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if is_ttnn_float_type(dtype)]
     else:
