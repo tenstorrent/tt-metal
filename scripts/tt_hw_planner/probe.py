@@ -146,6 +146,9 @@ class ModelProbe:
     flags: List[str] = field(default_factory=list)
     raw_config: dict = field(default_factory=dict)
 
+    is_composite: bool = False
+    submodels: List[str] = field(default_factory=list)
+
 
 def _classify_category(pipeline_tag: Optional[str], tags: List[str], library: Optional[str]) -> str:
     if pipeline_tag and pipeline_tag in PIPELINE_CATEGORY:
@@ -167,6 +170,25 @@ def _classify_category(pipeline_tag: Optional[str], tags: List[str], library: Op
     if "transformers" in lib:
         return "LLM"
     return "Unknown"
+
+
+def _detect_composite(siblings, raw_config) -> Tuple[bool, List[str]]:
+    """Detect a composite / multi-submodel repo from the file list + root config,
+    with no weight download (fixes-plan Point 3).
+
+    A composite is a container of ordinary models: >=2 subfolders that each carry
+    their own ``config.json``, OR a repo that cannot load as one model
+    (``model_index.json`` present with no root ``model_type``). Returns
+    ``(is_composite, submodels)``. Standard single-root models (Nemotron/Qwen/XTTS)
+    -> ``(False, [])``.
+    """
+    files = [getattr(s, "rfilename", "") for s in (siblings or [])]
+    fileset = set(files)
+    subdirs = {f.split("/")[0] for f in files if "/" in f}
+    submodels = sorted(d for d in subdirs if f"{d}/config.json" in fileset)
+    root_type = bool((raw_config or {}).get("model_type"))
+    is_composite = len(submodels) >= 2 or ("model_index.json" in fileset and not root_type)
+    return is_composite, submodels
 
 
 def _sum_weight_files(siblings) -> Tuple[int, int]:
@@ -409,6 +431,12 @@ def probe_model(model_id: str) -> ModelProbe:
         return probe
 
     probe.raw_config = cfg
+    probe.is_composite, probe.submodels = _detect_composite(info.siblings, cfg)
+    if probe.is_composite:
+        _sm = ", ".join(probe.submodels) or "model_index.json (no root model_type)"
+        probe.flags.append(
+            f"composite repo — {len(probe.submodels)} submodel(s) [{_sm}]; bring up per subfolder, not one root model"
+        )
 
     model_type_category = _category_from_model_type(str(cfg.get("model_type", "")))
     if model_type_category and probe.category in {"LLM", "VLM"} and model_type_category != probe.category:
