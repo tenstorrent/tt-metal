@@ -206,7 +206,22 @@ _orig_close_mesh_device = ttnn.close_mesh_device
 
 
 def _job_device_enabled() -> bool:
-    return os.environ.get("TTNN_SWEEP_JOB_DEVICE") == "1"
+    """Job-level device reuse is opt-in (TTNN_SWEEP_JOB_DEVICE=1) AND restricted to
+    Galaxy (>8 devices). The per-module device reopen it avoids only force-reinits
+    dispatch (and wedges a core) on Galaxy; single-host (N150/N300/T3K) has no such
+    issue AND has modules that take a SINGLE-device path (ttnn.open_device, e.g.
+    clamp/fast_reduce_nc when get_mesh_shape() returns None on 1 chip) that would
+    collide with a held cached mesh device. Gating to Galaxy keeps every single-host
+    lane on the original per-module behavior. TTNN_SWEEP_JOB_DEVICE_FORCE=1 bypasses
+    the device-count gate (for validation on smaller clusters)."""
+    if os.environ.get("TTNN_SWEEP_JOB_DEVICE") != "1":
+        return False
+    if os.environ.get("TTNN_SWEEP_JOB_DEVICE_FORCE") == "1":
+        return True
+    try:
+        return ttnn.get_num_devices() > 8
+    except Exception:
+        return False
 
 
 def _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth):

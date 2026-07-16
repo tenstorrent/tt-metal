@@ -211,6 +211,26 @@ def get_devices(test_module):
         return default_device()
 
 
+def _is_galaxy_job() -> bool:
+    """Whether this job runs on Galaxy — the only place the per-module device
+    reopen force-reinitializes dispatch and wedges a core, so the only place the
+    persistent worker + job-device reuse is enabled. In CI RUNNER_LABEL identifies
+    the box (topology-6u / g0*glx* = Galaxy) without a device query; locally fall
+    back to the device count (>8). TTNN_SWEEP_JOB_DEVICE_FORCE=1 forces it on
+    (validation on smaller clusters)."""
+    if os.environ.get("TTNN_SWEEP_JOB_DEVICE_FORCE") == "1":
+        return True
+    rl = os.environ.get("RUNNER_LABEL", "").lower()
+    if rl:
+        return "6u" in rl or "galaxy" in rl or "glx" in rl
+    try:
+        import ttnn
+
+        return ttnn.get_num_devices() > 8
+    except Exception:
+        return False
+
+
 def get_hostname():
     return subprocess.check_output(["uname", "-n"]).decode("ascii").strip()
 
@@ -1026,7 +1046,16 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
     if owns_worker:
         if p is not None:
-            p.join()
+            # The worker (run) is persistent and only exits on _WORKER_CLOSE — send it
+            # so p.join() doesn't block forever (it no longer self-exits on an idle queue).
+            try:
+                if p.is_alive():
+                    input_queue.put(_WORKER_CLOSE)
+                    p.join(timeout=30)
+            except Exception:
+                pass
+            if p.is_alive():
+                _kill_child(p, timeout_before_rejoin)
         # Cleanup main process context (close device)
         if main_proc_context is not None:
             try:
@@ -1176,13 +1205,17 @@ def run_sweeps(
 
     module_pbar = pbar_manager.counter(total=len(module_names), desc="Modules", leave=False)
 
-    # One persistent worker for the whole job (child_mode only). It spans every
-    # module so the job-level device cache (below) reuses ONE open device across
-    # modules that share a config — the fix for the per-module device reopen that
-    # force-reinitializes dispatch on Galaxy. Debug modes keep per-suite workers.
+    # One persistent worker for the whole job spans every module so the job-level
+    # device cache reuses ONE open device across modules that share a config — the
+    # fix for the per-module device reopen that force-reinitializes dispatch on
+    # Galaxy. Gated to Galaxy: single-host (N150/N300/T3K) has no reopen-wedge, and
+    # has modules that take a single-device path (ttnn.open_device) that would
+    # collide with a held mesh device — so single-host keeps the ORIGINAL
+    # per-module-child model (job_worker=None -> execute_suite owns_worker path).
+    # Debug modes (dry_run/vector_id/main_proc_verbose) also keep per-suite workers.
     job_child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     job_worker = None
-    if job_child_mode:
+    if job_child_mode and _is_galaxy_job():
         # Prime the device-count cache in THIS (main) process before the worker
         # opens the job device — result export's card-type fallback queries the
         # count (constructs a cluster), which would collide with the worker's held
