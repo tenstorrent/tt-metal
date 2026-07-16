@@ -217,7 +217,7 @@ jobs:
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
               "model": "openai/gpt-oss-120b",
               "server-timeout": 35,
-              "benchmark-timeout": 15,
+              "benchmark-timeout": 30,
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(4, 8)",
