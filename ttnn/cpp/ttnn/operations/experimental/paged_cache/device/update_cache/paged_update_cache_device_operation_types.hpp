@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <set>
+#include <tuple>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -46,6 +47,23 @@ struct PagedUpdateCacheParams {
     // and the kernel can't address it. Paged-mode only (validated in
     // validate_on_program_cache_miss).
     const std::optional<uint32_t> cache_position_modulo;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "compute_kernel_config",
+        "share_cache",
+        "mesh_coords",
+        "block_size_override",
+        "num_kv_heads_override",
+        "cache_position_modulo");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(compute_kernel_config),
+            share_cache,
+            mesh_coords,
+            block_size_override,
+            num_kv_heads_override,
+            cache_position_modulo);
+    }
 };
 
 struct PagedUpdateCacheInputs {

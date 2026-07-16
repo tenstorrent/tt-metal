@@ -30,7 +30,7 @@ bool enable_fp32_dest(const tt_metal::IDevice* device, const ttnn::DeviceCompute
 }
 
 // Per-worker-core cache-write offsets derived from `update_idxs`. These values are excluded from the
-// program hash (PagedUpdateCacheDeviceOperation::compute_program_hash) yet baked into runtime args, so
+// program hash (update_idxs excluded via attribute_names) yet baked into runtime args, so
 // they must be re-patched on every cache hit via get_dynamic_runtime_args. This helper is the single
 // source of truth for the formulas — both create_descriptor (cache miss) and get_dynamic_runtime_args
 // (cache hit) call it, so the two paths cannot drift. Returns empty when an index tensor is used: in
