@@ -1166,3 +1166,24 @@ rejects every valid change.
 **Installed:** `vbench==0.1.5`, `decord==0.6.0`. ⚠️ **`pip install vbench` pins `transformers==4.33.2`, which
 DELETES `transformers.models.gemma3` and breaks the pipeline.** Re-pin `transformers==5.10.2` after any
 vbench install, and re-verify `from transformers.models.gemma3 import Gemma3ForCausalLM`.
+
+## Batch X — WARM per-op block re-profile (answers the KEY FINDING's OPEN Q: is the cold 11.57ms/56.3% CCL-matmul FW fabric-setup-inflated?)
+The only per-op S2 block ranking on record (PROGRESS §"KEY MEASURED FINDING", job 001940-36) is a **COLD,
+num_layers=1, non-traced** capture — 20.56ms/block cold: CCL-collective matmul 11.57ms/56.3%, RingJoint SDPA
+6.13ms/29.8%, adaLN 1.79ms, reshape/RoPE 1.06ms. Line 41 flags the open question directly: *"needs WARM/TRACED
+profile: is cold CCL FW inflated by fabric setup?"* The whole-pipeline env-flag TRACED profile is now DEAD (jobs
+764+775 both stall entering the gen#1 replay — the profiler recompiles the traced replay; 3 fails total). So the
+WARM per-op **block** profile is the in-budget instrument that answers it — `test_ltx_transformer_block` runs
+`LTX_PROFILE_ITERS` warm program-cache-hit iterations + `ttnn.ReadDeviceProfiler` (`test_transformer_ltx.py:938`),
+NO metal-trace capture/replay, so it sidesteps the recompile bug. Video path uses random scaled weights (:716, no
+22B ckpt → runs on THIS box) and is PCC-gated (:762). Env `opt/env_block_prof.yaml`
+(`TT_METAL_DEVICE_PROFILER=1`+`CPP_POST_PROCESS=1`+`PROGRAM_SUPPORT_COUNT=3000`, `LTX_PROFILE_ITERS=3`).
+**⚠️ CAVEAT:** this is the VIDEO-only block (has_audio=False) — no audio-self RingJointSDPA, no v2a/a2v cross —
+so its SDPA bucket is the video subset of the cold AV capture. Valid for the CCL-matmul warm-vs-cold question
+(same SP AllGatherMatmul + MatmulReduceScatter ops); the audio/cross buckets need the AV path (absent-ckpt-blocked
+on this box, per Batch D).
+- [~] **stage_2 video block, warm per-op device FW** — job **781** (`ring_bh_4x8sp1tp0`, num_links=2, vN=38760),
+  env `opt/env_block_prof.yaml`. HARVEST from raw `2026-07-16_061422_781.log`: `PYTEST_EXIT=0`+`1 passed`+`WARM_FWD_MS=`
+  + `CPP_CSV_ROWS`/`OPS_CSV ROWS`>1 ⇒ WIN. Then rank ops by device FW from `opt/block_prof_s2.csv`/`_ops.csv`, compare
+  the warm CCL-matmul FW to the cold 11.57ms (is fabric setup inflating cold?), and enumerate the next CCL-matmul
+  config batch against the WARM dominant op. If timeout/collect-0/PCC-fail → read `opt/block_prof_s2.log` tail.

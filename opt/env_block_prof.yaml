@@ -1,0 +1,9 @@
+TT_METAL_HOME: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip
+PYTHONPATH: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/ttnn:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/tools
+TT_DIT_CACHE_DIR: /home/smarton/.cache/tt-dit-ltxrt
+TT_METAL_CACHE: /home/smarton/.cache/tt-metal-cache-ltxrt
+TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
+LTX_PROFILE_ITERS: "3"
+TT_METAL_DEVICE_PROFILER: "1"
+TT_METAL_PROFILER_CPP_POST_PROCESS: "1"
+TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: "3000"
