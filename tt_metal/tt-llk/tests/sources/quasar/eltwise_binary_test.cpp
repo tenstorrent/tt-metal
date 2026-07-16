@@ -79,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR);
+            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * INPUT_TILE_CNT);
         }
         else
         {
@@ -124,9 +124,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid so
-        // pack does not stall waiting for math. Dest-dvalid has no producer backpressure.
-        if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+        // Only the end-to-end path has an active math→pack consumer.
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
@@ -220,7 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // and skipping set_up alone leaves a prior FPU→PACK wait that stalls PACR ~10k cyc/iter.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
         else

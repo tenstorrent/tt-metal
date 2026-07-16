@@ -46,14 +46,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if (unpack_to_dest)
+        if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
             _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
         }
-        else
+        else if constexpr (unpack_to_dest)
         {
-            set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
         }
 
         const auto tensor_shape = tensor_shape_from_face_dims(TEST_FACE_R_DIM, TEST_FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
@@ -104,13 +104,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            if constexpr (unpack_to_dest)
+            if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR * TILE_CNT);
-            }
-            else
-            {
-                _perf_unpack_loop_set_valid<false, true>(LOOP_FACTOR * TILE_CNT);
+                const std::uint32_t dvalids_per_tile =
+                    (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : static_cast<std::uint32_t>(num_faces_r_dim_A * num_faces_c_dim_A);
+                _perf_unpack_loop_set_valid<false, true>(LOOP_FACTOR * TILE_CNT * dvalids_per_tile);
             }
         }
         else if constexpr (unpack_to_dest)
@@ -171,7 +169,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             ZONE_SCOPED("INIT")
             // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
-            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
                 set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
             }
@@ -193,7 +191,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
             {
-                _perf_math_loop_clear_valid<false, true>(LOOP_FACTOR * num_blocks * tiles_in_block * num_faces);
+                const std::uint32_t dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
+                _perf_math_loop_clear_valid<false, true>(LOOP_FACTOR * num_blocks * tiles_in_block * dvalids_per_tile);
             }
             else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
             {
@@ -259,10 +258,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if (unpack_to_dest)
             {

@@ -46,8 +46,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        // Setup sync for unpack
-        set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
         // src A input configuration
         tdma_descriptor_t tdma_desc_src_a;
@@ -125,7 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // PACK_ISOLATE measures pack alone (WH/BH style): skip FPU→PACK dest-dvalid.
-        if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
@@ -208,10 +206,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            auto cfg = (std::uint32_t volatile *)TENSIX_CFG_BASE;
+            auto cfg                                    = (std::uint32_t volatile*)TENSIX_CFG_BASE;
             cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
         }
-        else
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
@@ -242,8 +240,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_pack_matmul_(0, 0);
-                // Drain packer without dest-dvalid section_done (PACK_ISOLATE clears wait_mask).
-                TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::PACK);
             }
         }
         else

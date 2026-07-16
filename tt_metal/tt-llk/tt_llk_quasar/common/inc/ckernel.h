@@ -100,22 +100,10 @@ inline void reg_write(std::uint32_t addr, std::uint32_t data)
 
 inline std::uint64_t read_wall_clock()
 {
-    // Fence before sampling: after TDMA/pack traffic, an unfenced read of
-    // WALL_CLOCK_* on Quasar emu has been observed to return 0, which the
-    // profiler records as ZONE_END timestamp 0 and yields huge negative durations.
-    asm volatile("fence" ::: "memory");
     volatile t6_debug_regs_t *t6dbg = RISCV_DEBUG_REGS;
     std::uint32_t timestamp_low     = t6dbg->WALL_CLOCK_0;
     std::uint32_t timestamp_high    = t6dbg->WALL_CLOCK_1_AT;
-    std::uint64_t ts = (static_cast<std::uint64_t>(timestamp_high) << 32) | timestamp_low;
-    if (ts == 0)
-    {
-        asm volatile("fence" ::: "memory");
-        timestamp_low  = t6dbg->WALL_CLOCK_0;
-        timestamp_high = t6dbg->WALL_CLOCK_1_AT;
-        ts             = (static_cast<std::uint64_t>(timestamp_high) << 32) | timestamp_low;
-    }
-    return ts;
+    return (static_cast<std::uint64_t>(timestamp_high) << 32) | timestamp_low;
 }
 
 //

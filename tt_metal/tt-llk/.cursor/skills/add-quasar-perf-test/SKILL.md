@@ -40,8 +40,9 @@ For `tests/sources/quasar/<op>_quasar_test.cpp`:
 - Read `LOOP_FACTOR` from runtime parameters and use it in the tile loop.
 - Branch by `PERF_RUN_TYPE` inside each TRISC section.
 - In inactive isolate paths, either no-op or call the matching perf mock so the other active thread can complete handshakes.
-- For `PACK_ISOLATE` and `L1_CONGESTION`, drain the packer each iteration when pack emits work:
-  ` _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();`
+- For `PACK_ISOLATE` and `L1_CONGESTION`, run pack independently without
+  waiting for math and without destination section-done; clear the persistent
+  pack wait mask when required.
 - Keep `PROFILER_SYNC()` at the end of each profiled zone.
 
 Use the current matmul branch as the reference implementation:
@@ -49,6 +50,9 @@ Use the current matmul branch as the reference implementation:
 - `tests/python_tests/quasar/perf_matmul_quasar.py`
 - `tests/python_tests/quasar/test_matmul_quasar.py`
 - `tests/sources/quasar/matmul_quasar_test.cpp`
+
+For exact dvalid accounting, sticky-state diagnosis, 32-bit datacopy, and
+unpack-to-dest behavior, use the `update-quasar-perf-run-types` skill.
 
 ## Validation
 
