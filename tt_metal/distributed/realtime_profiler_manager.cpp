@@ -63,7 +63,6 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 
-#include <umd/device/warm_reset.hpp>
 #include <tt-metalium/experimental/realtime_profiler_packets.hpp>
 #include "hostdevcommon/profiler_common.h"
 #include "jit_build/build_env_manager.hpp"
@@ -880,8 +879,9 @@ void RealtimeProfilerManager::boot_x280_drainer(
         auto& x280_cluster = MetalContext::instance(context_id_).get_cluster();
         const auto& soc = x280_cluster.get_soc_desc(device_id);
         std::string x280_fw = BuildEnvManager::get_instance(context_id_).get_x280_firmware_path(device_id);
+        std::string x280_idle_fw = BuildEnvManager::get_instance(context_id_).get_x280_idle_firmware_path(device_id);
         if (x280_cluster.arch() == tt::ARCH::BLACKHOLE && !soc.get_cores(CoreType::L2CPU, CoordSystem::NOC0).empty() &&
-            !x280_fw.empty()) {
+            !x280_fw.empty() && !x280_idle_fw.empty()) {
             constexpr int kL2CpuIndex = 0;  // tile (8,3) — proven single-chip path
             constexpr int kX280PllMhz = 1000;
             // X280 LIM socket md: parked in the gap between MIRRORCTL (0x08018000..~0x0801B000, sized
@@ -903,6 +903,12 @@ void RealtimeProfilerManager::boot_x280_drainer(
                 bin.push_back(0);
             }
             TT_FATAL(!bin.empty(), "X280 drainer firmware {} is empty", x280_fw);
+            std::ifstream fidle(x280_idle_fw, std::ios::binary);
+            std::vector<uint8_t> idle_bin((std::istreambuf_iterator<char>(fidle)), std::istreambuf_iterator<char>());
+            while (idle_bin.size() % 4 != 0) {
+                idle_bin.push_back(0);
+            }
+            TT_FATAL(!idle_bin.empty(), "X280 idle firmware {} is empty", x280_idle_fw);
 
             const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
             CoreCoord grid = mesh_device->compute_with_storage_grid_size();
@@ -951,8 +957,13 @@ void RealtimeProfilerManager::boot_x280_drainer(
             dev_state.x280_driver =
                 std::make_unique<profiler::X280Driver>(x280_cluster, static_cast<int>(device_id), kL2CpuIndex);
             auto& zx = *dev_state.x280_driver;
-            zx.assert_reset();
-            zx.load_lim(bin);
+            // Reset-once: boot the resident idle FW, or confirm it is already up. This is the ONLY
+            // place the X280 reset is touched -- the drainer is handed off via an indirect JUMP
+            // below, never by re-releasing reset (which intermittently half-boots the X280 and
+            // wedges the ARC -> the VM-freeze churn). Idempotent across runs within one chip reset.
+            bool x280_half_broken = false;
+            const bool x280_idle_ok =
+                zx.ensure_idle(idle_bin, kX280PllMhz, std::chrono::milliseconds(3000), x280_half_broken);
             zx.write_block(coord_buf.data(), (uint32_t)coord_buf.size(), kX280MboxCoords);
 
             // The socket's sender is the X280 L2CPU; its sender_socket_md lands in the X280 LIM.
@@ -999,104 +1010,44 @@ void RealtimeProfilerManager::boot_x280_drainer(
             }
             dev_state.x280_params_addr = kX280MboxParams;
 
-            zx.set_reset_vectors(profiler::X280_LIM_BASE);
-            zx.set_pll(kX280PllMhz);
-            zx.release_reset();
-
-            // Fast-fail liveness check: poll profzone's main()-entry heartbeat (RES @ params+0x70)
-            // for a few ms. If the core never writes it, the X280 isn't executing — on a fresh board
-            // this is almost always because the L3 LIM ECC was never primed, so profzone's stores
-            // fault silently.
+            // Hand off to the drainer (active FW) via indirect JUMP -- NO reset, NO PLL touch. The
+            // drainer is written to 0x08001000 and the idle FW JUMPs all 4 harts into it. hb becomes
+            // the legacy main-entry magic iff the drainer stamped RUNNING (i.e. the JUMP landed).
             constexpr uint64_t kX280HbMainMagic = 0xB007ULL;
             uint64_t hb = 0;
-            for (int i = 0; i < 300 && hb != kX280HbMainMagic; i++) {
-                hb = zx.lim_rd_u64(dev_state.x280_params_addr + 0x70);
-                if (hb != kX280HbMainMagic) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(100));
-                }
-            }
-            // --- Auto-recover an unprimed X280 (ON by default) ---
-            // The usual reason for a dead X280 on a fresh/cold-booted board is that its L3 LIM ECC was
-            // never primed, so the drainer FW's stores fault. By default (opt out with
-            // TT_METAL_X280_NO_AUTOPRIME) we prime the ECC and warm-reset the chip to activate it
-            // (WayEnable is increase-only, so ONLY an ASIC/warm reset clears it). The warm reset
-            // re-enumerates the PCIe device, so metal cannot continue in-process; we prime, reset, and
-            // EXIT with an actionable message — the NEXT run boots cleanly. A /tmp marker guards
-            // against a reset loop. TT_METAL_X280_FORCE_PRIME forces the path once even on a healthy
-            // board, to exercise the prime+reset mechanics.
-            {
-                auto truthy = [](const char* s) {
-                    return s && (s[0] == '1' || s[0] == 't' || s[0] == 'T' || s[0] == 'y' || s[0] == 'Y');
-                };
-                const bool force = truthy(std::getenv("TT_METAL_X280_FORCE_PRIME"));
-                const bool autoprime = !truthy(std::getenv("TT_METAL_X280_NO_AUTOPRIME")) || force;
-                const std::string marker = "/tmp/tt_x280_autoprime_dev" + std::to_string(device_id);
-                const bool already_tried = std::ifstream(marker).good();
-                if ((hb != kX280HbMainMagic || force) && autoprime && !already_tried) {
+            if (x280_idle_ok) {
+                if (zx.handoff_to_active_fw(bin, std::chrono::milliseconds(3000))) {
+                    hb = kX280HbMainMagic;  // drainer JUMP landed + RUNNING
+                } else {
                     log_warning(
                         tt::LogMetal,
-                        "[Real-time profiler] Device {}: X280 unprimed (heartbeat=0x{:x}){}; auto-priming L3 "
-                        "LIM ECC and warm-resetting the chip. This run will EXIT — rerun afterwards.",
-                        device_id,
-                        hb,
-                        force ? " [forced]" : "");
-                    bool primed_ok = false;
-                    std::string fail_reason;
-                    try {
-                        {
-                            std::ofstream(marker).put('1');
-                        }  // loop guard: record that we tried this cycle
-                        zx.assert_reset();
-                        zx.prime_lim_ecc();
-                        primed_ok = tt::umd::WarmReset::warm_reset_chip_id({static_cast<int>(device_id)});
-                        if (!primed_ok) {
-                            fail_reason = "warm_reset returned false";
-                        }
-                    } catch (const std::exception& e) {
-                        fail_reason = e.what();
-                    }
-                    // The warm reset re-enumerates the chip out from under metal, so we hard-exit here —
-                    // which skips buffered-log flushing. Print the outcome DIRECTLY to stderr so the
-                    // RERUN instruction is guaranteed visible regardless of the logger's buffering.
-                    std::fflush(stdout);
-                    if (primed_ok) {
-                        std::fprintf(
-                            stderr,
-                            "\n"
-                            "================================================================================\n"
-                            "  X280 (device %d): L3 LIM ECC was unprimed -> auto-primed + chip warm-reset.\n"
-                            "  This is a one-time-per-cold-power-cycle step. The chip has been reset, so\n"
-                            "  this run is stopping now.  >>> RERUN your program <<<  and the X280\n"
-                            "  kernel-zone profiler will start normally.\n"
-                            "================================================================================\n\n",
-                            static_cast<int>(device_id));
-                    } else {
-                        std::fprintf(
-                            stderr,
-                            "\n"
-                            "================================================================================\n"
-                            "  X280 (device %d): auto-prime/warm-reset FAILED (%s).\n"
-                            "  The chip may be in an undefined state -- run `tt-smi -r %d` manually, then\n"
-                            "  rerun. (Set TT_METAL_X280_NO_AUTOPRIME=1 to disable this auto-recovery.)\n"
-                            "================================================================================\n\n",
-                            static_cast<int>(device_id),
-                            fail_reason.c_str(),
-                            static_cast<int>(device_id));
-                    }
-                    std::fflush(stderr);
-                    std::_Exit(primed_ok ? 75 : 1);  // 75=EX_TEMPFAIL: "transient, rerun"; 1=hard failure
+                        "[Real-time profiler] Device {}: X280 idle FW is up but the drainer JUMP did not "
+                        "reach RUNNING within 3s -- continuing without X280 kernel-zone capture.",
+                        device_id);
                 }
+            } else if (x280_half_broken) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: X280 L2CPU is out of reset but its resident idle FW is "
+                    "not heartbeating -- unrecoverable in software (metal must NOT re-assert reset on a "
+                    "running L2CPU; that is the reservation-churn trigger). Run `tt-smi -r {}` then rerun. "
+                    "Continuing WITHOUT X280 kernel-zone capture.",
+                    device_id,
+                    device_id);
             }
+            // else (idle FW never heartbeat): the L3 LIM ECC is almost certainly unprimed -- the
+            // degraded path below tells the user to run the standalone prime script. Priming is a
+            // SEPARATE, EXPLICIT step; metal never primes/warm-resets in-process (that re-enumerates
+            // PCIe and churns the reservation).
             // --- All-hart boot verification + retry ----------------------------------------------
             // hart 0's heartbeat only proves hart 0 started (and the ECC prime took). The X280's
             // 4-hart release_reset is intermittently flaky: a reader/collect/relay hart can fail to
             // start, which SILENTLY cripples the drainer -- its cores never drain, workers block on
             // full rings, and trace replay wedges (host hangs in finish). Verify EVERY hart reached
-            // its work loop (per-hart stage 3 @ RESULTS+0x100+h*8) and, if any is missing, re-release
-            // reset and retry; refuse to run a crippled drainer.
+            // its work loop (per-hart stage 3 @ RESULTS+0x100+h*8). If any is missing we do NOT reset to
+            // retry (that churns the reservation -- see below); we degrade to no-X280-capture for the run.
             if (hb == kX280HbMainMagic) {
                 const uint64_t kHartStageBase = kX280MboxResults + 0x100;
-                constexpr int kX280BootRetries = 3;
                 auto all_harts_ready = [&]() {
                     for (uint32_t h = 0; h < kX280NHarts; h++) {
                         if (zx.lim_rd_u64(kHartStageBase + h * 8) < 3) {
@@ -1121,36 +1072,30 @@ void RealtimeProfilerManager::boot_x280_drainer(
                     }
                     return s;
                 };
-                for (int retry = 0; !wait_harts() && retry < kX280BootRetries; retry++) {
+                // Always record the FIRST-ATTEMPT per-hart stages (before any retry) so we can tabulate
+                // which harts are flaky and how often, across every boot -- clean or not.
+                const bool first_ok = wait_harts();
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: X280-BOOT-STAGES first-attempt [{}] -> {}",
+                    device_id,
+                    stages_str(),
+                    first_ok ? "all-up" : "INCOMPLETE");
+                // We deliberately do NOT reset-and-retry a flaky boot. On a partial boot (e.g. [3,3,0,3])
+                // some drainer harts -- readers/relay -- have already reached their work loops and are
+                // actively driving NoC reads + D2H PCIe traffic; asserting + RE-RELEASING reset on that
+                // LIVE L2CPU intermittently wedges the device hard enough that IRD recreates the
+                // reservation container (SSH-key loss). That reset-retry -- not the auto-prime, not the
+                // workload drain -- is the confirmed churn source. A crippled drainer is handled safely
+                // by the degraded path below: hb=0 parks the X280 and broadcasts PROFILER_TERMINATE so
+                // producers never block on a full ring -> no trace hang, just no X280 capture this run.
+                if (!first_ok) {
                     log_warning(
                         tt::LogMetal,
                         "[Real-time profiler] Device {}: X280 not all harts started (stages [{}] want "
-                        "all>=3) -- re-releasing reset (retry {}/{})",
+                        "all>=3) -- NOT retrying (reset-retry churns the reservation); running WITHOUT "
+                        "X280 kernel-zone capture this run",
                         device_id,
-                        stages_str(),
-                        retry + 1,
-                        kX280BootRetries);
-                    zx.assert_reset();
-                    std::vector<uint8_t> mctl_zero(0x3000, 0), sctl_zero(256, 0), stg_zero(kX280NHarts * 8, 0);
-                    zx.write_block(mctl_zero.data(), (uint32_t)mctl_zero.size(), 0x08018000ull);
-                    zx.write_block(sctl_zero.data(), (uint32_t)sctl_zero.size(), 0x0801C000ull);
-                    zx.write_block(stg_zero.data(), (uint32_t)stg_zero.size(), kHartStageBase);
-                    zx.release_reset();
-                    hb = 0;
-                    for (int i = 0; i < 300 && hb != kX280HbMainMagic; i++) {
-                        hb = zx.lim_rd_u64(dev_state.x280_params_addr + 0x70);
-                        if (hb != kX280HbMainMagic) {
-                            std::this_thread::sleep_for(std::chrono::microseconds(100));
-                        }
-                    }
-                }
-                if (!all_harts_ready()) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[Real-time profiler] Device {}: X280 harts still not all up after {} retries "
-                        "(stages [{}]) -- refusing to run a crippled drainer (no X280 capture this run)",
-                        device_id,
-                        kX280BootRetries,
                         stages_str());
                     hb = 0;  // force the degraded path below
                 } else {
@@ -1162,15 +1107,19 @@ void RealtimeProfilerManager::boot_x280_drainer(
                 log_warning(
                     tt::LogMetal,
                     "[Real-time profiler] Device {}: X280 drainer FW did not start (l2cpu {}, "
-                    "heartbeat=0x{:x}). The L2CPU's L3 LIM ECC is likely not primed — but auto-prime was "
-                    "either disabled (TT_METAL_X280_NO_AUTOPRIME) or already attempted this power cycle "
-                    "without success (the X280 may be faulty; a manual `tt-smi -r` is advised). Continuing "
-                    "without X280 kernel-zone capture (the DRAM-based device profiler covers kernel zones "
-                    "as a fallback while TT_METAL_DEVICE_PROFILER is set).",
+                    "heartbeat=0x{:x}). The L2CPU's L3 LIM ECC is almost certainly not primed. Metal does "
+                    "NOT prime in-process (priming warm-resets the chip and re-enumerates PCIe). To enable "
+                    "X280 kernel-zone capture, run the standalone prime script ONCE per cold power cycle "
+                    "(it primes the ECC and activates it via an ASIC reset):  "
+                    "tt_metal/programming_examples/profiler/test_x280_profcons/prime_x280_ecc.sh  then "
+                    "rerun. Continuing WITHOUT X280 kernel-zone "
+                    "capture (the DRAM-based device profiler covers kernel zones as a fallback while "
+                    "TT_METAL_DEVICE_PROFILER is set).",
                     device_id,
                     kL2CpuIndex,
                     hb);
-                zx.assert_reset();
+                // Do NOT assert_reset here: the resident idle FW must stay up so a later run can retry
+                // the JUMP handoff, and re-asserting reset on a running L2CPU is the churn/wedge trigger.
                 dev_state.x280_socket.reset();
                 dev_state.x280_driver.reset();
                 dev_state.x280_active = false;
@@ -1193,8 +1142,6 @@ void RealtimeProfilerManager::boot_x280_drainer(
                 // the pointer would dangle at a moved-from stack object, whose moved-from unordered_map
                 // reads as garbage/zero bucket_count in run_consumer (SIGFPE on `% 0`, or SIGSEGV once
                 // the frame is reused). x280_dev_ is set post-loop, once devices_ is fully built + stable.
-                // Clear the auto-prime loop guard: a clean boot means the prime (if any) took.
-                std::remove(("/tmp/tt_x280_autoprime_dev" + std::to_string(device_id)).c_str());
                 log_info(
                     tt::LogMetal,
                     "[Real-time profiler] Device {}: booted X280 kernel-zone drainer (l2cpu {}, "
@@ -2045,11 +1992,21 @@ void RealtimeProfilerManager::shutdown() {
                         segs ? bulk_words / segs : 0,
                         lap_dropped);
                 }
-                dev_state.x280_driver->assert_reset();
+                // Do NOT assert_reset: the drainer, on P_STOP, jumps back to the resident idle FW
+                // (which stays up for the next run). Wait for that return instead of parking via
+                // reset -- re-asserting reset on a running L2CPU is the churn/wedge trigger, and it
+                // would tear down the idle FW we want to keep resident across runs.
+                if (!dev_state.x280_driver->wait_active_fw_returned(std::chrono::milliseconds(2000))) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: X280 drainer did not return to the idle FW within "
+                        "2s of P_STOP; leaving the L2CPU as-is (next run's ensure_idle will re-check).",
+                        dev_state.chip_id);
+                }
             } catch (const std::exception& e) {
                 log_warning(
                     tt::LogMetal,
-                    "[Real-time profiler] Failed to reset X280 on device {}: {}",
+                    "[Real-time profiler] Failed to quiesce X280 on device {}: {}",
                     dev_state.chip_id,
                     e.what());
             }

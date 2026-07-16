@@ -41,6 +41,7 @@
 #include <stdint.h>
 
 #include "noc.h"
+#include "x280_boot.h"
 
 #define MBOX_PARAMS 0x08011000UL
 #define MBOX_RESULTS 0x08011040UL
@@ -173,9 +174,37 @@ static inline void w_wzw(
     w32(dst + 24, time_lo);
 }
 
+/* ---- boot-handoff: return to the resident idle FW instead of parking in wfi ----
+ * profzone is now an ACTIVE FW: the idle FW (x280_boot.h) JUMPed all 4 harts into
+ * _start; on shutdown they must jump BACK to the idle FW so the next run can be
+ * handed off without ever touching reset. */
+static inline void cpu_pause(void) {
+    __asm__ volatile(".word 0x0100000F" ::: "memory"); /* Zihintpause: quiescent spin */
+}
+static inline __attribute__((noreturn)) void x280_jump(uint64_t entry) {
+    /* fence.i: the L2CPU is never reset across handoffs, so its I-cache still holds
+     * the idle FW's bytes; harmless here (idle code is unchanged) but kept for symmetry. */
+    __asm__ volatile("fence ow, ow\n fence.i\n jr %0\n" : : "r"(entry) : "memory");
+    __builtin_unreachable();
+}
+/* Helper harts (reader-1, collect, relay, or any hart beyond nharts) re-enter the
+ * idle FW without touching the boot phase. */
+static inline __attribute__((noreturn)) void helper_to_idle_fw(void) { x280_jump(X280_IDLE_FW_LOAD_ADDR); }
+/* Hart 0 (reader-0) is the return coordinator: the idle FW's hart-0 _start re-arms
+ * the heartbeat/mailboxes for the next handoff, so hart 0 MUST be the one to
+ * re-enter idle -- but only AFTER the relay has flushed the whole pipeline
+ * (DONE_MAGIC), so a fresh JUMP can't be accepted mid-drain. */
+static inline __attribute__((noreturn)) void return_to_idle_fw(void) {
+    *(volatile uint64_t*)X280_BOOT_PHASE_ADDR = X280_BOOT_PHASE_RETURNED_TO_IDLE;
+    __asm__ volatile("fence ow, ow");
+    x280_jump(X280_IDLE_FW_LOAD_ADDR);
+}
+
 int main(uint64_t hartid) {
     if (hartid == 0) {
         w64(RES(0x30), 0xB007ULL); /* heartbeat: main() entered (hart 0) -- kept for the prime check */
+        /* tell the host + idle FW the JUMP landed and the active FW is running */
+        *(volatile uint64_t*)X280_BOOT_PHASE_ADDR = X280_BOOT_PHASE_RUNNING_ACTIVE_FW;
     }
     w64(HART_STAGE(hartid), 1); /* per-hart boot heartbeat: entered main */
     fence_();
@@ -191,18 +220,15 @@ int main(uint64_t hartid) {
     uint64_t single_store = MIRROR_BASE + nmirror * MIRROR_STRIDE;
 
     if (hartid >= nharts) {
-        for (;;) {
-            __asm__ volatile("wfi");
-        }
+        helper_to_idle_fw(); /* not used this run (hartid>=1 here) -- return to idle */
     }
     /* LIM overflow guard: too many cores would run the mirrors + single ring past LIM end. */
     if (num_cores > MAX_CORES || single_store + (uint64_t)SINGLE_NREC * PAGE > LIM_END) {
         if (hartid == 0) {
             w64(RES(0x40), 0xBAD00000ULL | num_cores); /* signal misconfig; host sees no DONE_MAGIC */
+            return_to_idle_fw();                       /* re-arm idle so the host isn't stuck (no pipeline ran) */
         }
-        for (;;) {
-            __asm__ volatile("wfi");
-        }
+        helper_to_idle_fw();
     }
 
     w64(HART_STAGE(hartid), 2); /* passed the nharts + LIM-overflow guards */
@@ -315,9 +341,15 @@ int main(uint64_t hartid) {
         w64(RES(0x90 + hartid * 8), passes);
         w64(RES(0xA0 + hartid * 8), polls);
         w64(READER_DONE(hartid), 1); /* tell the collect hart this reader is finished */
-        for (;;) {
-            __asm__ volatile("wfi");
+        if (hartid == 0) {
+            /* coordinator: wait for the relay to flush the whole pipeline (DONE_MAGIC written
+             * last) before re-arming idle, so a fresh JUMP can't be accepted mid-drain. */
+            while (r64(RES(0x18)) != DONE_MAGIC) {
+                cpu_pause();
+            }
+            return_to_idle_fw();
         }
+        helper_to_idle_fw();
     }
 
     if (hartid == nread) {
@@ -448,9 +480,7 @@ int main(uint64_t hartid) {
         w64(COLLECT_STATS + 32, cyc_copy);         /* copy time */
         fence_();                                  /* stats visible to the relay before the done flag */
         w64(COLLECT_DONE, 1);
-        for (;;) {
-            __asm__ volatile("wfi");
-        }
+        helper_to_idle_fw(); /* collect done -- return to the resident idle FW */
     }
 
     /* ================= RELAY: single SPSC -> ONE D2H socket FIFO (NOC1) ========================= */
@@ -566,8 +596,6 @@ relay_done:
     w64(RES(0xE0), r64(COLLECT_STATS + 24));  /* collect empty-spin */
     w64(RES(0xE8), r64(COLLECT_STATS + 32));  /* collect copy */
     w64(RES(0x18), DONE_MAGIC);               /* written LAST: host waits on it before reading results */
-    for (;;) {
-        __asm__ volatile("wfi");
-    }
-    return 0;
+    helper_to_idle_fw();                      /* relay done -- return to the resident idle FW */
+    return 0;                                 /* unreachable (helper_to_idle_fw is noreturn) */
 }

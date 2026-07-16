@@ -102,6 +102,10 @@ public:
     // or "" if gated off / not yet built. Used by RealtimeProfilerManager to boot the X280.
     std::string get_x280_firmware_path(ChipId device_id);
 
+    // Path to the resident X280 idle firmware (firmware-lim-idle.bin), or "" if gated off / not
+    // yet built. Loaded ONCE per chip reset at 0x08000000; the drainer is handed off via JUMP.
+    std::string get_x280_idle_firmware_path(ChipId device_id);
+
     // Get the path to a kernel binary for loading/linking from the provided binary root.
     std::string get_kernel_binary_path(
         ChipId device_id,

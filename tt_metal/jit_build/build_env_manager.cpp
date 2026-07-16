@@ -380,10 +380,17 @@ static std::string maybe_build_x280_firmware(ChipId device_id, const std::string
     // profzone: drains the per-RISC SPSC zone rings, PAIRS start/end markers per (core,risc)
     // on-device, and pushes complete device-zone pages through a D2H socket. This is the drainer
     // RealtimeProfilerManager boots so kernel zones flow to Tracy (and producers never block).
-    const std::string bin = out + "/profzone.bin";
+    // Two firmwares now: a tiny resident IDLE FW that owns the low 4 KiB of LIM and is booted
+    // ONCE per chip reset (the reset vector points at it), and the ACTIVE FW (the drainer,
+    // profzone) that the host hands off to via an indirect JUMP without ever re-touching reset.
+    // This is what stops the per-run release_reset that intermittently half-boots the X280 and
+    // wedges the ARC (see tools/x280_bm/include/x280_boot.h).
+    const std::string bin = out + "/profzone.bin";                // active FW (drainer) @ 0x08001000
+    const std::string idle_bin = out + "/firmware-lim-idle.bin";  // resident idle FW  @ 0x08000000
 
-    if (std::filesystem::exists(bin) && !mctx.rtoptions().get_force_jit_compile()) {
-        return bin;  // cached
+    if (std::filesystem::exists(bin) && std::filesystem::exists(idle_bin) &&
+        !mctx.rtoptions().get_force_jit_compile()) {
+        return bin;  // both cached
     }
 
     const std::string arch = "-march=rv64gc -mabi=lp64d";
@@ -392,6 +399,7 @@ static std::string maybe_build_x280_firmware(ChipId device_id, const std::string
         "-mcmodel=medany -O2 -g -Wall -I" +
         x + "/include -fno-tree-loop-distribute-patterns";
     const std::string entry_o = out + "/entry.o", prof_o = out + "/profzone.o", elf = out + "/profzone.elf";
+    const std::string idle_o = out + "/lim_idle.o", idle_elf = out + "/firmware-lim-idle.elf";
     const std::string log = out + "/build.log";
     auto run = [&](const std::string& cmd) {
         TT_FATAL(
@@ -400,12 +408,19 @@ static std::string maybe_build_x280_firmware(ChipId device_id, const std::string
             log,
             cmd);
     };
+    // Shared boot stub (per-hart sp + bss + call main). Linked into BOTH firmwares.
     run(cc + " " + arch + " -nostdlib -c -o " + entry_o + " " + x + "/boot/entry.S");
+    // Active FW = drainer, linked at 0x08001000 (x280-lim.ld).
     run(cc + " " + vec + " -c -o " + prof_o + " " + x + "/src/profzone.c");
     run(cc + " -nostdlib -T " + x + "/ld/x280-lim.ld " + arch + " -o " + elf + " " + entry_o + " " + prof_o);
     run(objcopy + " -O binary " + elf + " " + bin);
     TT_FATAL(std::filesystem::exists(bin), "X280 firmware build produced no binary at {}", bin);
-    log_info(tt::LogBuildKernels, "Built X280 drainer firmware: {}", bin);
+    // Resident idle FW, linked at 0x08000000 (x280-lim-idle.ld). Shares entry.o.
+    run(cc + " " + vec + " -c -o " + idle_o + " " + x + "/src/lim_idle.c");
+    run(cc + " -nostdlib -T " + x + "/ld/x280-lim-idle.ld " + arch + " -o " + idle_elf + " " + entry_o + " " + idle_o);
+    run(objcopy + " -O binary " + idle_elf + " " + idle_bin);
+    TT_FATAL(std::filesystem::exists(idle_bin), "X280 idle firmware build produced no binary at {}", idle_bin);
+    log_info(tt::LogBuildKernels, "Built X280 firmware: idle={} drainer={}", idle_bin, bin);
     return bin;
 }
 
@@ -429,6 +444,14 @@ std::string BuildEnvManager::get_x280_firmware_path(ChipId device_id) {
     // or has not been built yet. RealtimeProfilerManager uses this to load + boot the X280.
     const auto& build_env = get_device_build_env(device_id);
     std::string bin = build_env.build_env.get_firmware_binary_root() + "/x280/profzone.bin";
+    return std::filesystem::exists(bin) ? bin : std::string{};
+}
+
+std::string BuildEnvManager::get_x280_idle_firmware_path(ChipId device_id) {
+    // Path the resident X280 idle firmware (firmware-lim-idle.bin) was built to. Loaded ONCE per
+    // chip reset at 0x08000000; the drainer is then handed off via JUMP. "" if gated off / unbuilt.
+    const auto& build_env = get_device_build_env(device_id);
+    std::string bin = build_env.build_env.get_firmware_binary_root() + "/x280/firmware-lim-idle.bin";
     return std::filesystem::exists(bin) ? bin : std::string{};
 }
 

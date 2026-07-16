@@ -37,6 +37,25 @@ inline constexpr uint64_t X280_PLL4_BASE = 0x80020500ULL;
 inline constexpr uint64_t X280_PLL_CNTL_1 = X280_PLL4_BASE + 0x4;
 inline constexpr uint64_t X280_PLL_CNTL_5 = X280_PLL4_BASE + 0x14;
 
+// --- Idle-FW + active-FW boot-handoff ABI. MUST match tools/x280_bm/include/x280_boot.h. ---
+// The X280 can be released from reset only ONCE per chip reset; we boot a resident idle FW at
+// 0x08000000 once, then hand off the drainer at 0x08001000 via an indirect JUMP through these
+// LIM mailboxes -- never touching reset per run (which is what half-boots + wedges the ARC).
+inline constexpr uint64_t X280_IDLE_FW_LOAD = 0x08000000ULL;
+inline constexpr uint64_t X280_ACTIVE_FW_LOAD = 0x08001000ULL;
+inline constexpr uint64_t X280_BOOT_HS_BASE = 0x08016000ULL;  // clear of reader scratch + MIRRORCTL
+inline constexpr uint64_t X280_IDLE_HEARTBEAT_ADDR = X280_BOOT_HS_BASE + 0x00;
+inline constexpr uint64_t X280_BOOT_CMD_ADDR = X280_BOOT_HS_BASE + 0x40;
+inline constexpr uint64_t X280_BOOT_ENTRY_ADDR = X280_BOOT_HS_BASE + 0x80;
+inline constexpr uint64_t X280_BOOT_PHASE_ADDR = X280_BOOT_HS_BASE + 0xC0;
+inline constexpr uint64_t X280_BOOT_HART_WAKE_BASE = X280_BOOT_HS_BASE + 0x100;
+inline constexpr uint64_t X280_IDLE_HEARTBEAT_VALUE = 0x1D1E0BEEFC0FFEE7ULL;
+inline constexpr uint64_t X280_BOOT_CMD_NONE = 0x0ULL;
+inline constexpr uint64_t X280_BOOT_CMD_JUMP = 0x4A554D50ULL;  // "JUMP"
+inline constexpr uint64_t X280_BOOT_PHASE_IDLE = 0x1D1E0001ULL;
+inline constexpr uint64_t X280_BOOT_PHASE_RUNNING = 0x7E570001ULL;
+inline constexpr uint64_t X280_BOOT_PHASE_RETURNED = 0x1D1E0002ULL;
+
 inline constexpr int X280_NRISC = 5;                  // Tensix RISCs per core feeding the SPSC rings
 inline constexpr uint32_t X280_PROF_CTRL_WORDS = 32;  // profiler control_vector length (words)
 
@@ -171,10 +190,93 @@ public:
         }
     }
 
+    // ---- Reset-once + resident idle-FW + JUMP handoff (see tools/x280_bm/include/x280_boot.h) ----
+    bool reset_released() const { return (reg_rd(arc_, X280_L2CPU_RESET_REG) & (1u << (l2cpu_ + 4))) != 0; }
+    void load_lim_at(const std::vector<uint8_t>& bin, uint64_t addr) const {
+        cluster_.write_core(bin.data(), static_cast<uint32_t>(bin.size()), l2_, addr);
+    }
+    bool is_idle_running() const {
+        // Heartbeat (armed last by the idle FW) AND phase==IDLE => fully armed, ready for handoff.
+        if (lim_rd_u64(X280_IDLE_HEARTBEAT_ADDR) != X280_IDLE_HEARTBEAT_VALUE) {
+            return false;
+        }
+        return lim_rd_u64(X280_BOOT_PHASE_ADDR) == X280_BOOT_PHASE_IDLE;
+    }
+
+    // Ensure the resident idle FW is alive. Idempotent within one chip reset.
+    //   returns true                    -> idle FW running, ready for handoff.
+    //   returns false, half_broken=true -> L2CPU out of reset but NOT heartbeating; unrecoverable
+    //                                      without `tt-smi -r` (we must NOT re-assert reset on a
+    //                                      running L2CPU -- that is the churn/wedge trigger).
+    //   returns false, half_broken=false-> boot attempted, no heartbeat within timeout (LIM ECC
+    //                                      almost certainly unprimed -> caller degrades).
+    bool ensure_idle(
+        const std::vector<uint8_t>& idle_bin, int pll_mhz, std::chrono::milliseconds timeout, bool& half_broken) {
+        half_broken = false;
+        if (reset_released()) {
+            if (is_idle_running()) {
+                return true;  // already booted this chip-reset -> no-op
+            }
+            half_broken = true;  // released but dead -> caller must tt-smi -r
+            return false;
+        }
+        assert_reset();
+        load_lim_at(idle_bin, X280_IDLE_FW_LOAD);
+        set_reset_vectors(X280_IDLE_FW_LOAD);
+        // Arm the handshake mailboxes to a known state before release.
+        lim_wr_u64(X280_IDLE_HEARTBEAT_ADDR, 0);
+        lim_wr_u64(X280_BOOT_CMD_ADDR, X280_BOOT_CMD_NONE);
+        lim_wr_u64(X280_BOOT_ENTRY_ADDR, 0);
+        lim_wr_u64(X280_BOOT_PHASE_ADDR, 0);
+        for (int h = 1; h < 4; h++) {
+            lim_wr_u64(X280_BOOT_HART_WAKE_BASE + static_cast<uint64_t>(h) * 0x40, 0);
+        }
+        set_pll(200);
+        release_reset();  // the ONE and only reset release per chip reset
+        set_pll(pll_mhz);
+        return poll_u64(X280_IDLE_HEARTBEAT_ADDR, X280_IDLE_HEARTBEAT_VALUE, timeout);
+    }
+
+    // Hand off from the idle FW to a freshly-loaded active FW (the drainer) via indirect JUMP.
+    // No reset, no PLL touch. Returns true once the active FW stamps RUNNING.
+    bool handoff_to_active_fw(const std::vector<uint8_t>& active_bin, std::chrono::milliseconds timeout) {
+        load_lim_at(active_bin, X280_ACTIVE_FW_LOAD);
+        lim_wr_u64(X280_BOOT_PHASE_ADDR, 0);                    // clear stale phase
+        lim_wr_u64(X280_BOOT_ENTRY_ADDR, X280_ACTIVE_FW_LOAD);  // publish entry, THEN cmd (order matters)
+        lim_wr_u64(X280_BOOT_CMD_ADDR, X280_BOOT_CMD_JUMP);
+        return poll_u64(X280_BOOT_PHASE_ADDR, X280_BOOT_PHASE_RUNNING, timeout);
+    }
+
+    // Wait for the active FW to hand control back to the idle FW (RETURNED, or idle re-armed).
+    bool wait_active_fw_returned(std::chrono::milliseconds timeout) const {
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            uint64_t ph = lim_rd_u64(X280_BOOT_PHASE_ADDR);
+            if (ph == X280_BOOT_PHASE_RETURNED) {
+                return true;
+            }
+            if (ph == X280_BOOT_PHASE_IDLE && lim_rd_u64(X280_IDLE_HEARTBEAT_ADDR) == X280_IDLE_HEARTBEAT_VALUE) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return false;
+    }
+
     tt_cxy_pair l2() const { return l2_; }
     tt_cxy_pair arc() const { return arc_; }
 
 private:
+    bool poll_u64(uint64_t addr, uint64_t want, std::chrono::milliseconds timeout) const {
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        do {
+            if (lim_rd_u64(addr) == want) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        } while (std::chrono::steady_clock::now() < deadline);
+        return lim_rd_u64(addr) == want;
+    }
     tt_cxy_pair virt(CoreCoord phys) const {
         CoreCoord v = cluster_.get_virtual_coordinate_from_physical_coordinates(chip_, phys);
         return tt_cxy_pair(chip_, v);

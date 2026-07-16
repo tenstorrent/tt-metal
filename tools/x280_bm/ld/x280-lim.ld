@@ -1,26 +1,30 @@
 /*
- * x280-lim.ld - Linker script for the LIM-resident single-hart heartbeat FW.
+ * x280-lim.ld - Linker script for the LIM-resident drainer FW (now the
+ *               "active FW" in the idle-FW + JUMP-handoff scheme).
  *
- * Link / load / entry base = LIM_BASE = 0x08000000 (L3 LIM SRAM, available
- * at reset with WayEnable=0). This matches the host loader, which NOC-writes
- * the .bin to 0x08000000 and sets the reset vector to 0x08000000.
+ * Link / load base = LIM_BASE = 0x08001000. The lowest 4 KiB of LIM
+ * (0x08000000..0x08000FFF) is owned by the resident idle FW (ld/x280-lim-idle.ld);
+ * the reset vector points there, and this drainer is loaded at 0x08001000 and
+ * reached by an indirect JUMP from the idle FW -- so its .text.start (_start)
+ * is at 0x08001000, NOT 0x08000000. See tools/x280_bm/include/x280_boot.h.
  *
- * We bound the linker-managed region to the low 64 KiB of LIM so the
- * heartbeat counter the FW publishes (HB_COUNTER_ADDR = 0x08010000, just
- * above this region) is guaranteed clear of .text/.data/.bss/stack. The
- * X280's full 1.875 MiB LIM is larger; we only manage what the FW needs.
+ * The managed region still ends at 0x08010000 (top unchanged), so the HB
+ * counter (0x08010000) and the mailboxes/mirrors above are untouched -- only
+ * the base moved up one 4 KiB page. Actual code+data+bss is ~5.5 KiB, so the
+ * ~60 KiB region (minus the 32 KiB stack reservation) is far more than enough.
  *
  * Memory map:
- *   [0x08000000, 0x0800FFE0)  .text/.rodata/.data/.bss + stack (grows down)
+ *   [0x08000000, 0x08001000)  resident idle FW (separate linker)
+ *   [0x08001000, 0x0800FFE0)  .text/.rodata/.data/.bss + stack (grows down)
  *   [0x0800FFE0, 0x08010000)  trap-diag block (mcause/mepc/mtval, 32 B)
  *    0x08010000               HB_COUNTER_ADDR (FW heartbeat counter, free SRAM)
  */
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
-LIM_BASE   = 0x08000000;
-LIM_LEN    = 0x00010000;   /* 64 KiB managed region */
-STACK_SIZE = 0x00008000;   /* 32 KiB per-hart */
+LIM_BASE   = 0x08001000;
+LIM_LEN    = 0x0000F000;   /* 60 KiB managed region (idle FW owns the low 4 KiB) */
+STACK_SIZE = 0x00008000;   /* 32 KiB per-hart reservation (real stacks use 4x4 KiB) */
 
 /* Trap-diag block: last 32 B of the managed region, fixed absolute address
  * so the host can read mcause/mepc/mtval at a known offset. */
