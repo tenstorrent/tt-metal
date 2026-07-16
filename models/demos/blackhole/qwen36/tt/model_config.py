@@ -48,7 +48,19 @@ class Qwen36ModelArgs(ModelArgs):
         )
         self.rope_head_dim = int(self.head_dim * self.partial_rotary_factor)
 
-        # DeltaNet params (not in base ModelArgs).
+        # M-RoPE (multimodal rotary). The 3 sections (T, H, W) sum to rope_head_dim // 2 and drive
+        # the interleaved-mrope cos/sin (modeling_qwen3_5.Qwen3_5RotaryEmbedding). For the "default"
+        # rope type Qwen3.5 uses, attention_scaling is 1.0 (so text cos/sin are unchanged). The
+        # spatial_merge_size + image/video token ids let the model derive the 3D position ids on
+        # host from input_ids + image_grid_thw (no dependency on mm_token_type_ids from the caller).
+        self.mrope_section = rope_params.get("mrope_section", [11, 11, 10])
+        self.rope_attention_scaling = 1.0
+        vision_config = getattr(self.hf_config, "vision_config", None)
+        self.spatial_merge_size = getattr(vision_config, "spatial_merge_size", 2)
+        self.image_token_id = getattr(self.hf_config, "image_token_id", None)
+        self.video_token_id = getattr(self.hf_config, "video_token_id", None)
+
+        # DeltaNet-specific parameters (base does not know about these)
         self.linear_num_key_heads = getattr(text_config, "linear_num_key_heads", 16)
         self.linear_num_value_heads = getattr(text_config, "linear_num_value_heads", 32)
         self.linear_key_head_dim = getattr(text_config, "linear_key_head_dim", 128)
