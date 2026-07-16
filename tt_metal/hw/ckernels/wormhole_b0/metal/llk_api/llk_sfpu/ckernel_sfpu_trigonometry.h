@@ -860,10 +860,7 @@ void sinh_init() {
 }
 
 template <bool APPROXIMATION_MODE>
-void atan_init() {
-    // Initialisation for use of sfpu_reciprocal<false>.
-    sfpu_reciprocal_init<false>();
-}
+void atan_init() {}
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat _sfpu_sine_maclaurin_series_(sfpi::vFloat val) {
