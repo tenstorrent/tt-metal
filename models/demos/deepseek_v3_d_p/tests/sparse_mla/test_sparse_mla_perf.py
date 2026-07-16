@@ -31,10 +31,11 @@ datamover off); the test gates on ``ttnn.device.IsProgramRealtimeProfilerActive(
 Tracy subprocess, signposts, and ops-CSV re-parse — the same swap PR #49840 made for the sparse-MLA
 CCL benchmarks (LoudBox: ~11× faster wall-clock). Two semantic notes versus the Tracy harness:
 
-  * Reporting unit is the device **program** (one ``runtime_id`` per op dispatch), NOT Tracy's
-    ``OP CODE``. A record carries only kernel-source paths, so the ``OP CODE`` column here holds a
-    best-effort label derived from the kernel path (``.../operations/<name>/...``); it groups by op
-    kind but is kernel-derived, not Tracy's op code.
+  * Reporting unit is the device **program** (one ``runtime_id`` per op dispatch). A record carries only
+    kernel-source paths, so the ``OP CODE`` column is mapped from those paths to a tracy-style op code
+    (``_op_code``: a priority table over the operations dir, verified against the tracy op-code
+    counts/durations). One program = one op code, matching Tracy's op names — not per-instance identical
+    to a tracy op struct, but the same code space the report/graph pipeline consumes.
   * Multi-chip collapse takes the **max** ``duration_ns`` across chips for every program (the slowest
     chip gates that program's critical path). Tracy used max for compute and avg for collectives, so
     collective-heavy numbers can differ a few percent (see PR #49840 deltas). Both express the same
@@ -100,6 +101,7 @@ context (no manual rope bump).
 """
 
 import copy
+import csv
 import datetime
 import json
 import os
@@ -155,6 +157,11 @@ PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
 # default covers a many-program forward across up to 32 chips; each forward is profiled as its own
 # (volume-bounded) region so this is a safety ceiling, not the expected wait.
 RT_RECORD_TIMEOUT_S = float(os.environ.get("DS_PERF_RT_TIMEOUT", 30.0))
+
+# When set, also write an execution-ordered per-call CSV (the RT analog of tracy's ops_perf_results):
+# one device-collapsed row per program per forward, ordered by start tick — the input a per-call graph
+# attribution (parse_percall) needs. Off by default (the summary CSVs are the normal output).
+RT_OPS_DUMP = os.environ.get("DS_PERF_RT_OPS_DUMP", "") not in ("", "0", "false")
 
 
 def _subdir(variant: str, mode: str) -> str:
@@ -421,11 +428,90 @@ def _op_label(kernel_sources) -> str:
     return "+".join(sorted(basenames)) if basenames else "unknown"
 
 
+# kernel-path substring -> tracy-style OP CODE, in PRIORITY order (first match wins). Ordering resolves
+# programs whose kernel set spans dirs: the op-defining kernel must precede its helpers/epilogue —
+# untilize_with_unpadding before untilize, tilize_with_val_padding before tilize, typecast before copy,
+# the indexer rope (rotary_embedding_indexed) before its shared llama rope kernel, and every real op
+# before the trailing eltwise/unary epilogue. Codes chosen to match the tracy device-op names so the
+# existing per-call graph attribution (parse_percall + its alias sets) consumes this dump unchanged.
+# Verified against the tracy op-code counts/durations for deepseek_v32 warm/sparse.
+_OP_CODE_RULES = (
+    # ring_mla (dense) fuses a ring all-gather with the joint-SDPA compute; its compute kernel lives under
+    # transformer/sdpa/ (ring_joint_sdpa.cpp), so it must be matched BEFORE the generic sparse-SDPA rule.
+    ("/ring_joint_sdpa", "RingJointSDPA"),
+    ("/ring_attention_all_gather", "RingJointSDPA"),
+    ("/transformer/sdpa/", "SDPA"),
+    ("/indexer_score/", "IndexerScore"),
+    ("/topk_large_indices/", "TopkLargeIndices"),
+    ("/ccl/all_gather_async/", "AllGatherAsync"),
+    ("/ccl/reduce_scatter_minimal_async/", "ReduceScatterMinimalAsync"),
+    ("/ccl/broadcast/", "AllBroadcast"),
+    ("/nlp_create_qkv_heads", "NlpCreateHeads"),
+    ("/nlp_concat_heads", "NlpConcatHeads"),
+    ("/rotary_embedding_indexed/", "RotaryEmbeddingIndexed"),
+    ("/rotary_embedding_llama/", "RotaryEmbeddingLlama"),
+    ("/update_padded_kv_cache/", "UpdateCache"),
+    ("/fast_reduce_nc/", "FastReduceNC"),
+    ("/matmul/", "Matmul"),
+    ("/layernorm/", "LayerNorm"),
+    ("/untilize_with_unpadding/", "UntilizeWithUnpadding"),
+    ("/tilize_with_val_padding/", "TilizeWithValPadding"),
+    ("/untilize/", "Untilize"),
+    ("/tilize/", "Tilize"),
+    ("/concat/", "Concat"),
+    ("/permute/", "Permute"),
+    ("/slice/", "Slice"),
+    ("/fill_pad/", "FillPad"),
+    ("/typecast/", "Typecast"),
+    ("/copy/", "Copy"),
+    ("/binary", "BinaryNg"),
+    ("/unary", "UnaryEltwise"),
+)
+
+
+def _op_code(kernel_sources) -> str:
+    """Translate a program's kernel-source paths to a tracy-style OP CODE (one program = one op), so the
+    per-call dump — and the summary table — carry op identity the tracy graph pipeline already understands.
+    Priority match over _OP_CODE_RULES (op-defining kernel wins over helpers/epilogue); falls back to the
+    coarse operations-dir label for any op not in the table."""
+    paths = "\n".join(src.replace("\\", "/") for src in kernel_sources)
+    for needle, code in _OP_CODE_RULES:
+        if needle in paths:
+            return code
+    return _op_label(kernel_sources)
+
+
+def _write_ops_dump(out_dir: str, name_root: str, forwards: list) -> str:
+    """Execution-ordered per-call CSV — the RT analog of tracy's ops_perf_results. One device-collapsed
+    row per program (duration = max across chips) per forward, in program order (the per_program dict is
+    keyed by first arrival, which equals device execution order — see _profile_forward). Also carries the
+    raw kernel_sources so the op-code translation can be authored/verified from real data."""
+    path = os.path.join(out_dir, f"{name_root}_ops.csv")
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["forward", "seq", "runtime_id", "OP CODE", "DEVICE KERNEL DURATION [ns]", "kernel_sources"])
+        for forward_index, per_program in enumerate(forwards):
+            for seq, (runtime_id, info) in enumerate(per_program.items()):
+                w.writerow(
+                    [
+                        forward_index,
+                        seq,
+                        runtime_id,
+                        _op_code(info["kernel_sources"]),
+                        f"{info['duration_ns']:.3f}",
+                        "|".join(info["kernel_sources"]),
+                    ]
+                )
+    return path
+
+
 def _profile_forward(mesh_device, run_fn) -> dict:
     """Profile one region and collapse the device dimension: return {runtime_id -> {"duration_ns",
     "kernel_sources"}} where duration_ns is the MAX across chips for that program (slowest chip = that
     program's critical path). Mirrors PR #49840's _profile_programs. runtime_id 0 is the profiler's
-    sentinel and is skipped."""
+    sentinel and is skipped. The dict preserves first-arrival order, which equals device execution
+    (dispatch) order — the profiler delivers records in program order; verified equal to the device
+    start-tick order across every case/forward — so callers get the ops in program order for free."""
     _, records = profile_realtime_program(
         mesh_device, run_fn, collect_all=True, record_timeout_seconds=RT_RECORD_TIMEOUT_S
     )
@@ -436,8 +522,10 @@ def _profile_forward(mesh_device, run_fn) -> dict:
             continue
         duration_ns = float(record["duration_ns"])
         current = per_program.get(runtime_id)
-        if current is None or duration_ns > current["duration_ns"]:
+        if current is None:
             per_program[runtime_id] = {"duration_ns": duration_ns, "kernel_sources": record["kernel_sources"]}
+        else:
+            current["duration_ns"] = max(current["duration_ns"], duration_ns)
     assert per_program, "real-time profiler returned no valid program records for the measured forward"
     return per_program
 
@@ -445,7 +533,7 @@ def _profile_forward(mesh_device, run_fn) -> dict:
 def _programs_to_frame(per_program: dict, dur_col: str) -> pd.DataFrame:
     """One row per device program: (OP CODE label, critical-path duration)."""
     return pd.DataFrame(
-        [{"OP CODE": _op_label(info["kernel_sources"]), dur_col: info["duration_ns"]} for info in per_program.values()]
+        [{"OP CODE": _op_code(info["kernel_sources"]), dur_col: info["duration_ns"]} for info in per_program.values()]
     )
 
 
@@ -628,7 +716,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, config_only
             f"critical-path device-kernel time over the {'prefill' if is_cold else 'chunk'} "
             f"(realtime profiler; per-program max across chips): "
             f"{total_ns/1e6:.3f} ms across {int(by_op['count'].sum())} device programs",
-            "(OP CODE = kernel-derived op label; see module docstring)",
+            "(OP CODE = tracy-style op code mapped from kernel sources; see module docstring)",
             header,
             "-" * len(header),
             *rows,
@@ -641,6 +729,10 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, config_only
     csv_out = _scenario_csv(out_dir, scenario, variant.name, attn_mode)
     by_op.reset_index().to_csv(csv_out, index=False)
     logger.info(f"per-op CSV written to {os.path.abspath(csv_out)}")
+
+    if RT_OPS_DUMP:
+        ops_csv = _write_ops_dump(out_dir, os.path.splitext(os.path.basename(csv_out))[0], forwards)
+        logger.info(f"per-call ops dump written to {os.path.abspath(ops_csv)}")
 
     # Provenance: drop run_manifest_<scenario>.json next to the summary CSV so every dump self-documents
     # the commit, command, and device/mesh/fabric that produced it (config and per-op measurements are
