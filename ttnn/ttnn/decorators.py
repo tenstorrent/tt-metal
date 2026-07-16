@@ -523,13 +523,17 @@ if TRACE_ALLOC_DIAGNOSTICS:
 
     def _drain_traceback_ids(source="op_end", op_name=None):
         """Drain allocation IDs and capture their Python call stacks."""
-        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids
+        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids, drain_retired_traceback_ids
+        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
 
         pending = drain_pending_traceback_ids()
+        retired = set(drain_retired_traceback_ids())
+        for buf_id in retired:
+            UnsafeAllocationTracker._tracebacks.pop(buf_id, None)
+        pending = [buf_id for buf_id in pending if buf_id not in retired]
         if not pending:
             return
         import traceback as _tb
-        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
 
         # Drop the tracker wrapper frames so the traceback ends at the model call site.
         stack = "".join(_tb.format_stack()[:-2])
@@ -721,6 +725,8 @@ if TRACE_ALLOC_TRACKING:
 
         @wraps(_untracked_fast_operation_call)
         def _tracked_fast_operation_call(self, *function_args, **function_kwargs):
+            if self._requires_slow_runtime():
+                return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
             _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
             push_allocation_context(self.python_fully_qualified_name)
             try:
@@ -734,6 +740,8 @@ if TRACE_ALLOC_TRACKING:
 
         @wraps(_untracked_fast_operation_call)
         def _tracked_fast_operation_call(self, *function_args, **function_kwargs):
+            if self._requires_slow_runtime():
+                return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
             push_allocation_context(self.python_fully_qualified_name)
             try:
                 return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
@@ -1034,6 +1042,35 @@ class Operation:
         return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)
+
+
+if TRACE_ALLOC_TRACKING:
+    _untracked_operation_call = Operation.__call__
+
+    if TRACE_ALLOC_DIAGNOSTICS:
+
+        @wraps(_untracked_operation_call)
+        def _tracked_operation_call(self, *function_args, **function_kwargs):
+            _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
+            push_allocation_context(self.python_fully_qualified_name)
+            try:
+                result = _untracked_operation_call(self, *function_args, **function_kwargs)
+                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                return result
+            finally:
+                pop_allocation_context()
+
+    else:
+
+        @wraps(_untracked_operation_call)
+        def _tracked_operation_call(self, *function_args, **function_kwargs):
+            push_allocation_context(self.python_fully_qualified_name)
+            try:
+                return _untracked_operation_call(self, *function_args, **function_kwargs)
+            finally:
+                pop_allocation_context()
+
+    Operation.__call__ = _tracked_operation_call
 
 
 class RegisteredOperations:

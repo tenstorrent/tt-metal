@@ -60,6 +60,7 @@ class FabricNodeId;
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
+class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
@@ -189,6 +190,7 @@ private:
     // Validates that the sub_device_manager_tracker_ is initialized before accessing it.
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
+    std::vector<AllocatorImpl*> trace_allocators() const;
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
@@ -231,6 +233,9 @@ public:
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
     void clear_unsafe_tracked_ids(const MeshTraceId& trace_id);
     static std::vector<size_t> drain_pending_traceback_ids();
+    static std::vector<size_t> drain_retired_traceback_ids();
+    void push_corruptible_allocation_scope();
+    void pop_corruptible_allocation_scope();
 
     // IDevice interface implementation
     tt::ARCH arch() const override;

@@ -2,11 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import typing
-import pytest
-import ttnn
+import gc
 import tempfile
+import typing
+
+import pytest
+import torch
+import ttnn
+from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_slow_dispatch
@@ -159,7 +162,7 @@ def test_single_device_multi_trace(device, shape, blocking):
 @skip_for_slow_dispatch()
 @pytest.mark.skipif(not ttnn.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup")
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
-def test_trace_allocation_tracking_is_per_trace(device):
+def test_trace_allocation_tracking_is_per_trace(device, expect_error):
     shape = (1, 1, 32, 32)
     trace_input = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
 
@@ -191,7 +194,7 @@ def test_trace_allocation_tracking_is_per_trace(device):
         ttnn.execute_trace(device, trace_b, cq_id=0, blocking=True)
 
         # The same allocation happened after trace_a was captured and must still be rejected for trace_a.
-        with pytest.raises(RuntimeError, match=rf"Buffer {allocation_between_captures_id}\b"):
+        with expect_error(RuntimeError, rf"Buffer {allocation_between_captures_id}\b"):
             ttnn.execute_trace(device, trace_a, cq_id=0, blocking=True)
     finally:
         ttnn.release_trace(device, trace_a)
@@ -200,3 +203,63 @@ def test_trace_allocation_tracking_is_per_trace(device):
     # Keep captured tensors alive through both checks.
     assert trace_a_output.is_allocated()
     assert trace_b_output.is_allocated()
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(not ttnn.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_error):
+    shape = (1, 1, 32, 32)
+    trace_input = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+    warmup_output = ttnn.neg(trace_input)
+    del warmup_output
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    trace_output = ttnn.neg(trace_input)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    try:
+        marked = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        marked_id = marked.buffer_unique_id()
+        assert marked_id in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        assert ttnn.mark_corruptible(marked) == marked_id
+        assert marked_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+
+        with ttnn.corruptible_allocation_scope(device):
+            scoped = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        assert scoped.buffer_unique_id() not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+
+        temporary = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        temporary_id = temporary.buffer_unique_id()
+        assert temporary_id in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        del temporary
+        gc.collect()
+        assert temporary_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+
+        # All three allowed cases remain safe to replay while the acknowledged tensors are still alive.
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+
+        fast_runtime_mode = ttnn.CONFIG.enable_fast_runtime_mode
+        try:
+            ttnn.CONFIG.enable_fast_runtime_mode = False
+            unsafe_a = ttnn.neg(trace_input)
+        finally:
+            ttnn.CONFIG.enable_fast_runtime_mode = fast_runtime_mode
+        unsafe_map = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        assert unsafe_map[unsafe_a.buffer_unique_id()].startswith("ttnn.")
+        if TRACE_ALLOC_DIAGNOSTICS:
+            from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+            assert temporary_id not in UnsafeAllocationTracker._tracebacks
+
+        unsafe_b = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+        with expect_error(RuntimeError, "Found 2 device buffer") as error:
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert f"Buffer {unsafe_a.buffer_unique_id()}" in str(error.value)
+        assert f"Buffer {unsafe_b.buffer_unique_id()}" in str(error.value)
+        assert f"Buffer {unsafe_a.buffer_unique_id()}Buffer" not in str(error.value)
+        assert f"Buffer {unsafe_b.buffer_unique_id()}Buffer" not in str(error.value)
+    finally:
+        ttnn.release_trace(device, trace_id)
+
+    assert trace_output.is_allocated()
