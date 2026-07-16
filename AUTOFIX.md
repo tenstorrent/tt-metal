@@ -1,6 +1,52 @@
 # AutoFix Report
 
 ## Starting Evidence
+- The original compact-ragged candidate changed canonical committed agreement from
+  seed-0 `0.99609375` to `0.89453125` and seed-1 `0.9140625` to `0.90625`.
+- Its metadata kernel was elementwise exact, but a one-layer MoE comparison was only
+  PCC `0.99924`, max-abs `0.0127`.
+- `AUTOTRIAGE.md` describes an already-fixed NoC alignment hang and is not the
+  numerical diagnosis. A fresh `AUTODEBUG.md` was requested for independent review.
+
+## Hypothesis Experiments
+- Hypothesis: compact router/packing drops or misweights routes.
+  Experiment: compare device slot-token, inverse map, scaled weights, sparsity, and
+  overflow mappings against a host oracle.
+  Result: all tensors elementwise exact; no drops.
+  Verdict: refuted.
+
+- Hypothesis: compact expert matmul geometry changes BF16 accumulation.
+  Experiment: hold real weights/input fixed and sweep C=32 gate/up/down K blocks
+  against C=256 output rows.
+  Result: prior `(22,2)` geometry was inexact; `(8,2)` was elementwise exact and
+  retained ~2 ms component latency.
+  Verdict: verified.
+  Fix: use reduction-compatible K-block 8 for gate/up and 2 for down in both primary
+  and overflow expert paths.
+
+- Hypothesis: `fast_reduce_nc` changes the combine reduction.
+  Experiment: hold C=256 expert output fixed and compare dense combine matmul with
+  `embedding + fast_reduce_nc`.
+  Result: PCC `0.999993`, max-abs `0.00146484375`, not elementwise exact; the
+  difference was enough to bifurcate the diffusion trajectory.
+  Verdict: verified.
+  Fix: build the baseline dense combine directly from compact columns/weights,
+  scatter compact expert tiles to `[E*C,H]`, and reuse the original combine matmul.
+  The fast-reduce form remains diagnostic only.
+
+## Final Status
+- Fixed: reduced 1L/2-step trajectory is exact across all six fields.
+- Fixed: full traced @12/@48 committed SHA matches baseline exactly.
+- Fixed: strict HF committed agreement restored to seed-0 `0.99609375` and seed-1
+  `0.9140625`.
+- Performance retained: fixed @48 12.941→13.559 tok/s (+4.8%), 18.8 ms saved per
+  denoise step. The inexact fast-reduce ceiling remains +38.6%.
+- Remaining limitation: a faster compact combine must reproduce the baseline fused
+  BF16 multiply-accumulate contract; simple fast-reduce or compact-K matmul variants
+  do not.
+# AutoFix Report
+
+## Starting Evidence
 - Issue: #48291, QB2 TP=4 DiffusionGemma decision fidelity.
 - Seeded eight-step dense-MoE baseline: committed agreement `0.92578125`.
 - Exact-input controls show continuous prefill/denoise drift plus discrete MoE routing amplification.

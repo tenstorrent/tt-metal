@@ -45,7 +45,15 @@ from models.experimental.diffusion_gemma.tt.generate import decode_generation, t
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.experimental.diffusion_gemma.doc.optimize_perf.sweep_serving import _release_controller
 
-BASE_ENV = {"DG_SPARSE_MOE": "1", "DG_DEDUP_ARGMAX": "1", "DG_SPARSE_MOE_TUNED": "1", "DG_DENOISE_TRACED": "1"}
+BASE_ENV = {
+    "DG_SPARSE_MOE": "1",
+    "DG_DEDUP_ARGMAX": "1",
+    "DG_SPARSE_MOE_TUNED": "1",
+    "DG_DENOISE_TRACED": "1",
+    # This benchmark ranks fixed denoise budgets; the production default now
+    # enables early halt, which previously made "@48" rows execute ~9 steps.
+    "DG_DENOISE_EARLY_HALT": "0",
+}
 EXPECTED_TRACE_REGION_SIZE = 10 * 1024**3
 CANONICAL_PROMPT = "Explain what a diffusion language model is in one sentence."
 LEVER_ENV = {
@@ -61,6 +69,34 @@ LEVER_ENV = {
     "fused2": {"DG_MOE_DISPATCH_FUSED2": "1"},
     "frozen": {"DG_DENOISE_FROZEN_PREFIX": "1"},
     "frozen_fused2": {"DG_DENOISE_FROZEN_PREFIX": "1", "DG_MOE_DISPATCH_FUSED2": "1"},
+    "compact": {"DG_DENOISE_COMPACT_RAGGED": "1", "DG_COMPACT_SEGMENT_ROWS": "32"},
+    "compact_fast": {
+        "DG_DENOISE_COMPACT_RAGGED": "1",
+        "DG_COMPACT_SEGMENT_ROWS": "32",
+        "DG_COMPACT_COMBINE": "fast_reduce",
+    },
+    "compact_exact": {
+        "DG_DENOISE_COMPACT_RAGGED": "1",
+        "DG_COMPACT_SEGMENT_ROWS": "32",
+        "DG_COMPACT_COMBINE": "dense_compat",
+    },
+    "frozen_compact": {
+        "DG_DENOISE_FROZEN_PREFIX": "1",
+        "DG_DENOISE_COMPACT_RAGGED": "1",
+        "DG_COMPACT_SEGMENT_ROWS": "32",
+    },
+    "frozen_compact_fast": {
+        "DG_DENOISE_FROZEN_PREFIX": "1",
+        "DG_DENOISE_COMPACT_RAGGED": "1",
+        "DG_COMPACT_SEGMENT_ROWS": "32",
+        "DG_COMPACT_COMBINE": "fast_reduce",
+    },
+    "frozen_compact_exact": {
+        "DG_DENOISE_FROZEN_PREFIX": "1",
+        "DG_DENOISE_COMPACT_RAGGED": "1",
+        "DG_COMPACT_SEGMENT_ROWS": "32",
+        "DG_COMPACT_COMBINE": "dense_compat",
+    },
 }
 # flags we toggle across levers — cleared before applying each lever so configs don't leak
 _TOGGLE = (
@@ -69,6 +105,10 @@ _TOGGLE = (
     "DG_SELFCOND_LOGITS_L1",
     "DG_MOE_DISPATCH_FUSED2",
     "DG_DENOISE_FROZEN_PREFIX",
+    "DG_DENOISE_COMPACT_RAGGED",
+    "DG_COMPACT_SEGMENT_ROWS",
+    "DG_COMPACT_COMBINE",
+    "DG_COMPACT_PRIMARY_TUNED",
 )
 
 

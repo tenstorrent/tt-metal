@@ -471,3 +471,74 @@ MoE (roofline), terminal, or serving glue. Remaining DG-local per-step levers ar
 attention+CCL cost needs multi-week upstream fused kernels (fused gather-experts-combine, fused
 matmul+CCL) — not DG-local and not a gemma4 edit. The biggest practical serving lever is early-halt
 (fewer steps; already default-on, fires ~9–17/48 on convergent real content).
+
+## 2026-07-16 — effective-capacity correction + trace-safe compact ragged denoise MoE
+
+The July-15 attribution above had a capacity mismatch.  The measured layer forward used the
+zero-drop production default `capacity=canvas_length=256`, but its isolated `moe_layer` call
+hard-coded `capacity=32`.  That old micro dropped 41–84% of routes on concentrated real routing and
+triggered a different tuned geometry.  Same-process QB2 measurement with the effective capacity
+fixed gives **9.11–9.21 ms/MoE layer**, not 2.63 ms.  The profiler now resolves
+`DG_SPARSE_MOE_CAPACITY` exactly like production, records max expert load/drop count, asserts zero
+drops, and separately times the selected router+MoE block.
+
+A new opt-in `DG_DENOISE_COMPACT_RAGGED=1` path removes the dense routing scatter, second top-k,
+`[S,E*C]` dispatch matrices, and uniform `E*C=32768` expert rows.  A DG-local generic-op kernel
+packs compact top-k metadata on device into fixed buffers: 128 primary 32-row expert segments plus
+64 fixed overflow segments.  The primary bank reuses the existing C=32 roofline-tuned batched
+matmuls; overflow uses the ragged-prefill sparse-matmul contract; combine reuses
+`embedding + fast_reduce_nc`.  There is no host metadata/readback and the operation graph/buffers
+are static under trace.
+
+Evidence on QB2 TP=4:
+
+- metadata kernel: watcher-clean and elementwise exact for slot-token, inverse-map, scaled route
+  weights, and segment sparsity;
+- reduced full denoise trajectory: watcher-clean for two steps through attention, compact MoE,
+  terminal, and commit;
+- selected router+MoE component: **9.63 → 5.62 ms/layer (-41.7%)**;
+- full 30L traced, frozen prefix, fixed @12: **5.6844 → 4.3903 s/block**,
+  **45.035 → 58.311 tok/s (+29.5%)**;
+- full 30L traced, frozen prefix, fixed @48: **19.7898 → 14.2743 s/block**,
+  **12.936 → 17.934 tok/s (+38.6%)**; the block delta is **114.9 ms/denoise step**;
+- trace replay is healthy through three 48-step blocks.
+
+The candidate remains **opt-in**.  It changes matmul/reduction geometry, so committed SHA differs.
+The canonical full-30L 8-step HF gate observed committed match **0.90625** and failed the unchanged
+strict `>0.95` production gate (which is already documented as mis-specified relative to the
+intrinsic bf16 floor, but has not received owner sign-off).  Output remained coherent in the traced
+A/B.  Do not default-enable until the gate policy is resolved or a numerically identical compact
+expert kernel lands.
+
+### 2026-07-16 follow-up — compact fidelity repaired
+
+Focused A/B localized the regression to two BF16 reduction changes:
+
+1. compact primary expert gate/up used K-block 22, while K-block 8 plus down
+   K-block 2 reproduces the zero-drop C=256 expert rows elementwise;
+2. `fast_reduce_nc` rounds each route contribution before summation, while the
+   baseline combine matmul fuses multiply-accumulate.
+
+The selected compact mode now uses reduction-compatible expert geometry and a
+parallel compact-to-dense compatibility boundary.  Two small device kernels
+build only the baseline combine matrix (without dense router/dispatch) and
+scatter compact expert tiles into the baseline `[E*C,H]` layout; the existing
+combine matmul then retains its exact accumulation contract.
+
+Correctness:
+
+- reduced 1L/2-step dense-vs-compact trajectory: all six fields exactly 1.0;
+- full traced @12 and @48: committed SHA is identical to baseline
+  (`4660b41d83efb4a4` / `304e8023feff5100`);
+- canonical strict 8-step HF committed agreement is restored to the exact
+  pre-change values: seed 0 **0.99609375**, seed 1 **0.9140625**.
+
+Performance of the exact mode:
+
+- fixed @12: 5.7309→5.5579 s/block, 44.670→46.061 tok/s (**+3.1%**);
+- fixed @48: 19.7827→18.8807 s/block, 12.941→13.559 tok/s (**+4.8%**),
+  saving **18.8 ms/denoise step**.
+
+`DG_DENOISE_COMPACT_RAGGED=1` remains opt-in, but now defaults internally to
+the exact `dense_compat` combine.  `DG_COMPACT_COMBINE=fast_reduce` retains the
+decision-inexact +38.6% speed ceiling for kernel-development experiments only.

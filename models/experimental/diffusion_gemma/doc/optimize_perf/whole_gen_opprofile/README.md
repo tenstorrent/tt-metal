@@ -91,6 +91,30 @@ Real-weights full MoE forward (`verify_opt004_fullmoe.py`, 2L): **untuned 10.06 
 Actionable: consider making `DG_SPARSE_MOE_TUNED=1` the default (3.47× MoE, PCC 0.99967, trace-safe) so
 runs that forget the flag don't silently take the 13×-slower path.
 
+## CORRECTION 3 (2026-07-16) — the 2.63 ms MoE micro used the wrong capacity
+
+The later July-15 per-component profile repeated a different mismatch: the real denoise layer used
+the zero-drop production default `capacity=256`, while `prof_step_breakdown.py` hard-coded
+`capacity=32` only for its isolated MoE row.  Capacity 32 is not a valid production comparator:
+real routing can load one expert with 156–256 canvas tokens, so it silently drops 41–84% of routed
+assignments.
+
+With the profiler fixed to the effective capacity and a route-drop assertion, the zero-drop MoE
+measures **9.11–9.21 ms/layer**, approximately 61% of the contemporaneous 14.8 ms layer, rather
+than 2.63 ms / 18%.  Therefore the statement that the residual 11.8 ms was attention+CCL is
+withdrawn.  The largest recovered surface is the `E*C=32768` uniform-capacity machinery.
+
+The opt-in trace-safe compact-ragged implementation reduces the selected router+MoE component
+**9.63→5.62 ms/layer** and the full 30L traced fixed-48 block **19.7898→14.2743 s**
+(12.936→17.934 tok/s, +38.6%).  It remains off by default because its changed expert matmul
+geometry produces a different committed trajectory and the unchanged strict HF gate is red.
+
+Follow-up numerical localization found reduction-compatible expert K blocks and restored the
+baseline combine matmul contract.  The exact compact mode reproduces baseline committed SHA and
+the pre-change seed-0/1 committed agreements, while retaining a smaller fixed-48 gain:
+**19.7827→18.8807 s/block**, **12.941→13.559 tok/s (+4.8%)**.  The +38.6% fast-reduce mode is now
+diagnostic only.
+
 ## Method — reduced-layer 2-point fit (why not a single 30-layer capture)
 
 The on-device profiler op buffer (`PROGRAM_SUPPORT_COUNT`, default 1000 → ~3.3k ops captured)

@@ -366,13 +366,41 @@ def _denoise_router_forward(router, hidden_states):
     return dense_routing
 
 
+def _denoise_router_compact_forward(router, hidden_states):
+    """Router forward that preserves compact top-k metadata for ragged MoE."""
+    from models.experimental.diffusion_gemma.tt.sparse_moe import RaggedRouting
+
+    normed = _chunked_norm_forward(router.norm, hidden_states)
+    scaled = ttnn.mul(normed, router.scale)
+    normed.deallocate(True)
+    scaled = ttnn.mul(scaled, router.scalar_root_size)
+    expert_scores = ttnn.linear(scaled, router.proj_weight)
+    scaled.deallocate(True)
+    router_probs = ttnn.softmax(expert_scores, dim=-1)
+    expert_scores.deallocate(True)
+    top_k_values, top_k_indices = ttnn.topk(router_probs, k=router.top_k, dim=-1)
+    router_probs.deallocate(True)
+    top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
+    normalized_values = ttnn.div(top_k_values, top_k_sum)
+    top_k_values.deallocate(True)
+    top_k_sum.deallocate(True)
+    return RaggedRouting(normalized_values, top_k_indices, router.per_expert_scale)
+
+
 def _denoise_moe_forward(moe, router_input, expert_input):
-    dense_routing = _denoise_router_forward(moe.router, router_input)
     # True-sparse token-gather MoE (~13x cheaper than the dense-128 path). Opt-in via env while
     # PCC / traced-t/s is validated; default flips once verified. See tt/sparse_moe.py.
     if os.environ.get("DG_SPARSE_MOE", "0") == "1":
-        from models.experimental.diffusion_gemma.tt.sparse_moe import sparse_experts_forward
+        from models.experimental.diffusion_gemma.tt.sparse_moe import (
+            compact_ragged_denoise_enabled,
+            compact_ragged_denoise_forward,
+            sparse_experts_forward,
+        )
 
+        if compact_ragged_denoise_enabled():
+            routing = _denoise_router_compact_forward(moe.router, router_input)
+            return compact_ragged_denoise_forward(moe.experts, expert_input, routing)
+        dense_routing = _denoise_router_forward(moe.router, router_input)
         # Capacity must be zero-drop for diffusion correctness: real routing is highly
         # concentrated (measured max expert load 156-256 for a 256-token canvas), so the
         # old default of 32 silently discarded 41-84% of active routes per layer.
@@ -380,6 +408,7 @@ def _denoise_moe_forward(moe, router_input, expert_input):
         out = sparse_experts_forward(moe.experts, expert_input, dense_routing, capacity=capacity)
         dense_routing.deallocate(True)
         return out
+    dense_routing = _denoise_router_forward(moe.router, router_input)
     with use_tanh_expert_activations():
         return moe.experts(expert_input, dense_routing)
 

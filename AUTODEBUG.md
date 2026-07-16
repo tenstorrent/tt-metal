@@ -1,397 +1,405 @@
-# AutoDebug: remaining DiffusionGemma #48291 strict-gate failures
+# AutoDebug: compact ragged denoise MoE correctness regression
 
-Date: 2026-07-15
+Date: 2026-07-16
 
-Scope: fresh source/evidence-only investigation after the retained
-`gelu_pytorch_tanh` fix. No TT hardware was used. Only this report was
-overwritten. No shared Gemma-4 edit is proposed.
+Scope: inspection-only comparison of the current uncommitted
+DiffusionGemma-local compact-ragged denoise MoE against the production
+zero-drop `capacity=256` sparse path. No TT hardware reproduction was attempted
+and no implementation file was changed.
 
 ## Executive finding
 
-The earliest remaining trajectory split is not Gumbel, renoise, or the entropy
-kernel. It is a different **entropy ranking produced by different model-logit
-probability mass at step 0**:
+The compact metadata/router path is not the leading suspect. For the production
+shape `(S,E,K,R)=(256,128,8,32)`, its primary/overflow map is a zero-drop
+bijection, its expert-ID sort is the order required by the later 8-way reduce,
+and the recorded device check says slot tokens, inverse slots, scaled route
+weights, and segment sparsity were elementwise exact.
+
+The earliest likely numerical divergence is the **first expert gate/up
+projection**:
+
+- the `capacity=256` baseline has no tuned config and TTNN auto-selects a
+  batched-matmul K block of one tile;
+- compact primary segments force the `capacity=32` tuned configs
+  (`gate/up in0_block_w=22`, `down=2`);
+- compact overflow segments use sparse-matmul configs
+  (`gate/up in0_block_w=44`, `down=3`).
+
+Thus the compact path changes projection program, K blocking, BF16
+spill/packing cadence, and for overflow rows even the matmul factory before
+combine. This is the first operation with a code-proven different
+floating-point reduction after the mathematically exact gather, and it is
+consistent with the measured one-layer `PCC≈0.999241`, `max_abs≈0.0127`.
+
+The second strong suspect is combine. Baseline performs one
+`comb @ down_flat` matmul over `E*C=32768` columns. Compact first materializes
+each weighted contribution in BF16 and then performs an 8-way
+`fast_reduce_nc`. Expert-ID ordering is correct, but product rounding and the
+reduction tree are not the same as the baseline matmul.
+
+Nothing inspected establishes that either delta alone causes the full
+`seed0 0.99609375 -> 0.89453125` trajectory change. Diffusion feedback can
+amplify either small local delta. The focused A/Bs below separate them without
+rerunning broad precision sweeps.
+
+## Direct observations
+
+1. The compared production path is zero-drop:
+   `sparse_experts_forward(..., capacity=256)` creates `E*C=32768` expert rows.
+   Since each token can route to an expert at most once, no expert can receive
+   more than `S=256` assignments.
+2. The compact path creates 192 fixed 32-row segments: 128 primary
+   one-per-expert segments and 64 overflow/dummy segments.
+3. The supplied device evidence reports:
+   - compact metadata elementwise exact for slot token, inverse token slot,
+     scaled route weight, and sparsity;
+   - a two-step reduced full trajectory watcher-clean;
+   - three 48-step trace replays healthy;
+   - one-layer compact-vs-capacity output `PCC≈0.999241`,
+     `max_abs≈0.0127`.
+4. The strict committed comparisons are trajectory metrics, not local
+   equivalence metrics:
+   - capacity baseline: seed 0 `0.99609375`, seed 1 `0.9140625`;
+   - compact: seed 0 `0.89453125`, seed 1 `0.90625`.
+   Seed 1 was already below the unchanged `>0.95` gate, but compact also causes
+   a large seed-0 regression and therefore cannot be defaulted on the present
+   evidence.
+5. Existing ragged-prefill bit-identity does not clear this denoise candidate.
+   Ragged prefill compares against the shared dense prefill path, where both
+   sides use explicit BF16 weighting plus `fast_reduce_nc`. Its expert calls use
+   a different HiFi4/`packer_l1_acc=False` policy from this denoise comparison.
+   The denoise comparator here is the HiFi2/`packer_l1_acc=True` capacity path's
+   one-hot gather, batched expert matmuls, and matmul combine.
+
+## Operation-by-operation comparison
+
+### 1. Router through normalized top-k
+
+The two denoise router functions execute the same operations:
+
+`chunked RMSNorm -> scale -> hidden_size**-0.5 -> linear -> softmax -> topk ->
+sum-normalize`.
+
+The compact path returns the normalized top-k values and indices before the
+dense scatter. The baseline scatters the same values to `[S,E]`, multiplies by
+the BF16 per-expert scale, and later runs a second top-k in
+`build_capacity_dispatch`.
+
+Verdict: **equivalent for the observed checkpoint/run, low suspicion**.
+
+- Compact metadata sorts IDs and applies
+  `BF16(normalized_value * per_expert_scale)` in the custom kernel.
+- Baseline applies the same BF16 scale after scatter.
+- The second baseline top-k can reorder the eight routes by scaled weight, but
+  it does not define combine order: it scatters each route into the fixed
+  expert-major column `expert*C + slot`. The baseline matmul therefore reduces
+  in expert-column order.
+- Compact explicitly sorts each token's eight `(expert,value)` pairs by expert
+  ID before writing both `token_slot` and `route_weight`, so the pairs remain
+  aligned and `fast_reduce_nc` receives expert-major order.
+- The recorded elementwise route-weight/metadata check is direct evidence that
+  scale conversion and ordering matched on the real device run.
+
+Remaining condition: the baseline second top-k preserves the original route set
+only when all eight scaled route weights remain above the zero-filled dense
+entries. The current code does not assert positive/nonzero per-expert scales.
+The elementwise real-checkpoint check rules this out for the reported run, but a
+generic regression should assert the invariant.
+
+### 2. Primary and overflow packing
+
+For each expert, the custom kernel assigns rank in token order:
+
+- ranks `0..31` -> primary segment `expert`, same row as rank;
+- rank `>=32` -> that expert's contiguous overflow segment and row
+  `rank % 32`;
+- `token_slot[k,token]` points back to that exact packed row.
 
-- seed 0: HF accepts only position 187; TT accepts only position 217. At both
-  positions, both sides have the same sampled token and clean argmax (`1`).
-- seed 1: HF initially accepts positions `{188, 200, 249}`; TT accepts
-  `{174, 192}`. Again, the differing accepted positions are selected by entropy,
-  not by Gumbel disagreement.
-- exact Torch entropy from the same TT logits preserves the wrong seed-0 minimum
-  and changes the next-step TT count only `158 -> 153`, still far from HF's
-  `96`.
+This matches the capacity path's exclusive token-order slot, modulo changing
+the physical row stride from 256 to compact 32-row segments. Top-k IDs are
+unique, so each routed pair has one rank and one packed row.
 
-The strongest **new, still-unadjudicated source mismatch** upstream of that
-ranking is the routed-expert weight boundary:
+Verdict: **correct for `(256,128,8,32)`, low suspicion**.
 
-**HF keeps normalized top-8 route weights FP32, multiplies each complete expert
-output by its FP32 weight, and only then casts the weighted contribution to the
-BF16 destination. TT and every existing "exact HF route" control round the
-route weights to BF16 before the sparse combine.**
+A device-free simulation checked 100 random routing matrices and proved every
+inverse slot selected the expected `(token,expert)` pair. An adversarial
+feasible distribution over nine experts has counts
+`[248,225,225,225,225,225,225,225,225]`, requiring the maximum 63 overflow
+segments, or 191 total; the fixed allocation of 192 is sufficient.
 
-This is distinct from the refuted router-ID replacement, BF16 expert-order
-fold, and all-reduce-before-combine experiments. Those controls retained BF16
-route values. It is also consistent with the residual
-`expert_ff=0.9997175` / `post_ff=0.9998566` after tanh plus exact routing.
-It is source-proven as a precision/order mismatch and medium confidence as the
-remaining step-0 entropy-mass contributor. It needs the focused local
-discriminator below before any production code or eight-step run.
+The kernel comment's unrounded expression
+`E + floor((S*K-E)/32) = 188` is not itself a mathematical upper bound because
+each partially filled overflow segment incurs a ceiling. Rounding that value to
+192 happens to cover the true production maximum of 191. This comment/formula
+should not be generalized without a proof or explicit target-shape guard.
 
-A second definite mismatch exists in Gumbel application: TT uploads FP32
-Gumbel noise but silently writes `BF16(logits/T + noise)` because `ttnn.add`
-inherits the BF16 left operand's dtype. The replay oracle adds in FP32. This can
-explain sampled-token differences and later seed dependence, but it cannot
-explain the first accept/canvas split, so it is secondary.
+### 3. Gather
 
-## Direct evidence: where the trajectory first diverges
+Baseline gathers with `disp.T @ hidden`; compact gathers with
+`ttnn.embedding(slot_token, hidden_flat)`.
 
-### Seed 0
-
-From `/tmp/dg48291_tanh_default_seed0.pt` and terminal `178413.txt`:
-
-- step-0 argmax agreement: `0.9453125`;
-- step-0 sampled agreement: `0.94921875`;
-- step-0 canvas agreement: `0.9921875` (exactly two differing positions);
-- HF/TT accept counts: `1 / 1`, but accept IoU is `0`;
-- HF minimum: position 187, entropy `0.15822087`;
-- TT minimum: position 217, entropy `0.12792969`;
-- at positions 187 and 217, HF and TT both sample token `1` and both clean
-  argmax to token `1`.
-
-Thus the two initial canvas differences are exclusively:
-
-1. HF keeps sampled token `1` at 187 while TT renoises it.
-2. TT keeps sampled token `1` at 217 while HF renoises it.
-
-No step-0 Gumbel disagreement is accepted by either side. At step 1, none of
-the 11 sampled-token differences is accepted by either side either; the
-`96 vs 158` accept-count difference alone creates all 62 canvas differences.
-
-### Seed 1
+Verdict: **different implementation but unlikely to be the observed source**.
+For every referenced row, the baseline dot product contains exactly one
+`1 * hidden[token]` and only zero products, while embedding copies the same BF16
+row. Padding rows differ operationally—compact copies token 0 while capacity
+dispatch has zero rows—but expert FFNs are row-local and no compact
+`token_slot` references padding. A direct stage dump has not yet proved the
+active gathered rows bit-identical, so this belongs in the first hardware
+probe.
 
-From `/tmp/dg48291_tanh_seed1.pt` and terminal `178410.txt`:
+### 4. Expert gate/up/GeGLU/down
 
-- HF's first entropy values begin at `0.04830, 0.05114, 0.05423`; the exclusive
-  prefix accepts three positions under budget `0.1`.
-- TT's first values begin at `0.09863, 0.10449`; the exclusive prefix accepts
-  two positions.
-- none of the 16 step-0 sampled differences occurs at a position accepted by
-  either side.
-
-Gumbel differences become trajectory-relevant later: seed 1 has sampled
-differences on 3 jointly accepted positions at step 3, 15 at step 4, and all
-22 divergent positions once both sides accept the full canvas. That makes the
-Gumbel dtype bug a plausible amplifier, not the initial cause.
+Baseline `capacity=256` does not enter the `C == DEFAULT_CAPACITY` tuned branch.
+Its batched expert calls pass `program_config=None`. TTNN's auto config for a
+batched second operand chooses `k_tiles_per_core=1`.
 
-### What the exact-host entropy control proves
+Compact does three different things:
 
-Terminal `178414.txt` recomputes exact Torch entropy from the live TT logits:
-
-- committed agreement stays `0.99609375`;
-- seed-0 step-0 TT still accepts position 217, not HF position 187;
-- step-1 count is `153`, versus default TT `158` and HF `96`;
-- entropy PCC still collapses at step 4 (`0.17004`).
+- primary rows always call `build_tuned_configs` when `segment_rows == 32`,
+  irrespective of `DG_SPARSE_MOE_TUNED`;
+- for `(H,I)=(2816,192)`, those configs select gate/up K block 22 and down K
+  block 2;
+- overflow rows use `sparse_matmul` with K blocks 44 (gate/up) and 3 (down).
 
-Therefore the device entropy formula contributes a small boundary movement but
-does not create the wrong probability mass. The first causal input is already
-the TT logit vector.
+Verdict: **highest-confidence local source and earliest likely divergence**.
+The mathematical FFN is the same, but the K accumulation/spill/pack sequence is
+not. The primary/overflow boundary also means two tokens routed to the same
+expert can use different numerical kernels solely because one is rank 31 and
+the other rank 32.
 
-## H1 — FP32 route values are rounded before the expert contribution
+The lower-level factories make this more than a geometry-only concern. With
+the active default `packer_l1_acc=True`, the regular batched-matmul factory
+enables BF16 L1 accumulation when it has more than two K blocks. Baseline
+gate/up therefore uses 88 one-tile blocks and baseline down uses six; compact
+primary uses four gate/up blocks and three down blocks. The sparse overflow
+factory enables the same BF16 spill mode for more than one block, and its
+gate/up and down each use two blocks. The paths therefore round partial sums at
+different boundaries.
 
-Confidence:
+Compute-config handling has a separate discrepancy. With default
+`DG_SPARSE_EXPERT_FP32_FULL_SYNC=0`, both paths use the same HiFi2/BF16 policy.
+If the Blackhole full-DST diagnostic is enabled, the baseline wraps its expert
+config with `expert_compute_kernel_config`, while compact bypasses that helper
+for both primary and overflow. That option mismatch is definite but does not
+explain the reported default run.
 
-- very high that the HF/TT precision-order mismatch exists;
-- medium that it accounts for material step-0 entropy-rank drift;
-- unproven as an eight-step repair.
+### 5. Combine and TP all-reduce
 
-### HF contract
+Baseline:
 
-Installed Transformers
-`modeling_diffusion_gemma.py:510-525` computes router softmax and normalized
-top-k weights in FP32. In the expert loop, lines 561-565 perform:
+`out = matmul(comb[B,S,E*C], down_flat[B,E*C,H], HiFi2)`
 
-1. BF16 expert gate/up/down;
-2. multiply the expert output by the FP32 route weight;
-3. cast that weighted contribution to the BF16 destination;
-4. `index_add_` in ascending expert-ID loop order.
+Compact:
 
-The FP32 route value survives until after multiplication.
+`selected = embedding(token_slot, packed_down)`
 
-### TT contract
+`weighted = BF16(selected * route_weight)`
 
-`tt/denoise_forward.py:336-365` computes the dense route tensor through TTNN
-softmax/top-k/div/scatter and returns the normal BF16 tensor.
-`tt/sparse_moe.py:142` defines the combine mask as BF16, and
-`tt/sparse_moe.py:1256-1270` applies those BF16 route values inside the sparse
-combine matmul before the TP all-reduce.
+`out = fast_reduce_nc(weighted, expert-ID-sorted K dimension)`
 
-The replay controls also erase the HF value precision:
+Both then call the same TP `ccl_allreduce`.
 
-- live HF routing is explicitly converted with
-  `dense_host.to(torch.bfloat16)` at
-  `demo/replay_hf_tt.py:792-803`;
-- captured exact HF routing is uploaded with `dtype=ttnn.bfloat16` at
-  `demo/replay_hf_tt.py:806-817`.
+Verdict: **mathematically equivalent, numerically non-equivalent, second
+strongest suspect**.
 
-Consequently, "exact HF routing" currently means exact IDs and
-BF16-rounded values, not HF's FP32-weight-before-BF16-contribution contract.
+Sorting by expert ID fixes the known route-order hazard, but it does not make
+the two reductions bit-identical:
 
-### Why prior controls do not refute H1
+- compact inserts a BF16 materialization after each multiply;
+- `fast_reduce_nc` adds eight contiguous BF16 contributions in its own
+  destination-register loop;
+- baseline matmul traverses 1024 K tiles, mostly zeros, in four-tile blocks and
+  uses its own BF16 L1-accumulation spill cadence. It does not materialize the
+  same eight weighted BF16 tensors or use the same reduction tree.
 
-- Exact HF routers on live TT hidden changed IDs and used BF16 route values.
-- Exact KV plus all HF routers also used BF16 route values.
-- The HF expert-ID-order host fold used the same BF16 route values; its
-  `0.9977631 -> 0.9977694` result only refutes reduction order at that dtype.
-- The all-reduce-before-route-combine experiment moved the operation boundary
-  but still used BF16 route values.
-- Full-DST experts improve expert matmul accumulation but do not restore the
-  missing FP32 route value.
-- Exact host entropy and exact soft embedding occur downstream of the already
-  changed model logits.
+The TP all-reduce is downstream-identical, so it cannot be the first
+compact-vs-capacity divergence when fed the same pre-reduce tensor.
 
-### Why H1 fits the observed failure shape
+### 6. Dummy overflow segments, aliases, and lifetimes
 
-The mismatch is continuous and applies to eight routed contributions per token
-in every MoE layer. It can therefore:
+Unused overflow segments map to expert 0 and gather token 0, so they compute
+nonzero dummy expert outputs. This is intentional only if no inverse slot can
+reference them. The packing proof and recorded metadata check establish that
+condition for the production shape.
 
-1. perturb step-0 non-top probability mass without requiring a route-ID flip;
-2. change the rank of the lowest canvas entropies while preserving most
-   argmaxes;
-3. cross the exclusive-prefix budget at very different counts (`96 vs 158`);
-4. create two early canvas differences that are amplified by later
-   self-conditioning and routing;
-5. vary strongly with the seed because the initial canvas changes every route
-   weight and every near-boundary entropy row.
+Verdict: **not a credible numerical cause of the reported one-layer delta**.
+Changing dummy values cannot affect output without a bad `token_slot`, and that
+would produce assignment-level corruption rather than the observed
+high-correlation continuous error.
 
-It also targets the remaining local witness after tanh and exact routes:
-`expert_ff=0.9997175`, `post_ff=0.9998566`.
+There are still lifetime/test gaps:
 
-## H2 — FP32 injected Gumbel noise is rounded into a BF16 perturbed tensor
+- `grouped_input` is a reshape alias of `gathered` but is not explicitly
+  deallocated;
+- `primary_down`/`overflow_down` remain live aliases while their reshaped
+  `*_flat` tensors are deallocated;
+- optional output handles (`gate_output`, `up_output`, `down_output`) are not
+  explicitly reconciled with the returned tensor handles;
+- the scale cache is keyed by Python `id(scale)` and can return stale data if a
+  model is destroyed/rebuilt on the same mesh and an object ID is reused.
 
-Confidence:
+These are ownership/hygiene risks. Healthy repeated trace replay and watcher
+results argue against them as the current correctness cause, but an allocator
+stress test should clear them before default-on.
 
-- source-proven mismatch;
-- high confidence contributor to sampled-token disagreement;
-- low confidence as the dominant strict-gate cause because it does not create
-  the first accept split.
+## Ranked focused hardware A/B experiments
 
-`tt/generate.py:154-165` uploads the replay noise as `ttnn.float32`.
-`tt/sampling.py:103-107` temperature-scales the BF16 logits, producing a BF16
-left operand. `tt/sampling.py:174-182` then calls:
+### E1 — stage-wise expert-kernel parity (run first)
 
-`ttnn.add(z, noise)`
+Use one captured layer input and one captured routing result. Build both packed
+representations once, then compare active rows before combine:
 
-without an output dtype. The binary implementation at
-`ttnn/cpp/ttnn/operations/eltwise/binary/binary.cpp:504-570` permits mixed
-float inputs but defaults the output to `lhs.dtype()`. Its dtype-policy comment
-at `binary_op_dtype_policy.hpp:50-57` only guarantees FP32 destination compute,
-not FP32 packed output.
+1. baseline `capacity=256` gathered rows;
+2. compact embedding-gathered rows;
+3. gate outputs;
+4. up outputs;
+5. GeGLU outputs;
+6. down outputs.
 
-The effective TT operation is therefore:
+For each compact active row, compare with baseline row
+`expert*256 + token_rank`. Split compact rows into primary and overflow.
 
-`BF16(BF16(logits / T) + FP32(gumbel))`
+Then run the same 32 active rows and expert weights through:
 
-while `reference/sampling.py:92-95` performs FP32
-`logits / T + gumbel` before argmax.
+- baseline auto batched matmul (`in0_block_w=1`);
+- compact primary configs (`22/2`);
+- compact overflow sparse configs (`44/3`).
 
-The saved SHA-256 hashes prove identical host noise tensors, but not identical
-effective perturbed logits.
+Promotion/refutation:
 
-## H3 — clean argmax is taken from raw logits, unlike actual HF generation
+- If gathered active rows differ, stop at gather.
+- If gather is exact and gate/up first differ, H1 is proven.
+- If forcing compact active rows through the baseline expert programs restores
+  the baseline down rows and materially restores one-layer output, expert
+  geometry is causal.
+- Do not use `DG_SPARSE_MOE_TUNED=0` as the discriminator: compact currently
+  ignores that selector for its primary config.
 
-Confidence: source-proven semantic drift; likely small; not an entropy cause.
+### E2 — combine-only discriminator
 
-Actual HF generation computes
-`new_argmax_canvas = argmax(processed_logits)` at
-`generation_diffusion_gemma.py:1039-1047`.
+Freeze one set of expert `down` rows; do not rerun routing or experts.
 
-The local oracle instead uses raw logits at
-`reference/sampling.py:244-248`, and TT uses raw logits at
-`tt/denoise_loop.py:117-120`. Positive temperature scaling is
-order-preserving in exact arithmetic, but the TT implementation itself notes
-that BF16 temperature scaling can merge adjacent values into a tie
-(`tt/denoise_loop.py:92-103`).
+1. Place those identical rows into a capacity-256 `down_flat` and apply the
+   baseline `comb @ down_flat`.
+2. Select the same rows through compact `token_slot`, multiply by the same
+   route weights, and run `fast_reduce_nc`.
 
-This should be measured, not assumed harmless. It cannot explain the step-0
-entropy-rank split, but it can change a near-tie commit or stability decision.
+Compare bit match, PCC, max absolute error, and the final one-layer output after
+the same all-reduce. This independently measures combine without expert noise.
 
-## H4 — the replay entropy oracle is mathematically, not numerically, HF-exact
+If needed, split it again:
 
-Confidence: definite oracle/test gap; unknown production effect.
+- compare baseline matmul to a host FP32 sum;
+- compare explicit BF16 weighted products followed by expert-ID left fold to
+  `fast_reduce_nc`;
+- compare sorted and original top-k order to verify that current sorting is the
+  correct branch.
 
-Actual HF acceptance uses
-`torch.distributions.Categorical(logits=processed_logits).entropy()` at
-`generation_diffusion_gemma.py:433-440`.
-The replay uses `F.log_softmax` followed by `-(p * logp).sum()` at
-`reference/sampling.py:117-124`.
+### E3 — router/scale/second-top-k equivalence
 
-`tests/test_real_transformers_parity.py:40-55` checks only the final mask on
-small random `[1,64,128]` logits. It does not compare entropy values or cover
-262144-way, softcapped, highly peaked rows near the `0.1` cumulative budget.
-This cannot explain HF-vs-TT differences when both replay sides use the same
-local formula, but it can make the strict oracle differ from released HF at the
-exact boundary being debugged.
+Capture the router's normalized top-k tensors once and feed the same tensors to
+both metadata builders. Download only compact metadata and the baseline
+second-top-k result.
 
-## Source audit: no new ordering bug found elsewhere
+For every token assert:
 
-The following paths match the intended algorithm:
+- identical set of eight expert IDs;
+- exact BF16 scaled weight per expert;
+- compact `(token_slot,route_weight)` pairs remain aligned after ID sort;
+- all scaled active weights are nonzero and greater than dense zero entries.
 
-- temperature schedule: HF reverse `N..1` and both local loops produce
-  `0.8 -> 0.45` for the eight-step gate;
-- entropy acceptance: ascending sort, exclusive prefix
-  `(cumsum - entropy) <= 0.1`, then scatter back;
-- renoise: sampled token where accepted, injected random token where rejected;
-- self-conditioning: the retained code temperature-processes the previous
-  logits before the soft embedding, and the exact-live-TT-logit host control
-  already refutes the soft-embedding kernel as the isolated cause;
-- commit: the final clean argmax, not the noisy sampled canvas.
+This should refute router suspicion quickly. If it fails, the first failed
+token supplies a concrete scale/tie reproducer.
 
-No evidence supports relaxing the gate or starting another broad FP32 sweep.
+### E4 — adversarial packing and dummy-segment poison
 
-## Ranked smallest discriminators
+Run metadata-only cases for:
 
-### E1 — preserve HF FP32 route values at layer 18
+- all tokens selecting the same eight experts (maximum concentration);
+- the feasible 191-segment nine-expert distribution above;
+- random real-shape routes.
 
-Run this first. Use the existing one-step
-`teacher-force-all-layer-inputs + inject-hf-prompt-kv + tanh + exact layer-18
-route IDs` setup.
+Assert a zero-drop inverse bijection and correct expert for every referenced
+row. Poison all unreferenced rows/dummy segment outputs with large finite
+sentinels (or NaNs if the kernels safely propagate them) and verify the combine
+output is unchanged. This independently refutes both packing and dummy-read
+hypotheses.
 
-At `demo/replay_hf_tt.py:327-340`, retain compact FP32
-`top_k_weights` and `top_k_indices`; do not densify-and-upload the values as
-BF16. At `tt/sparse_moe.py:1243-1270`, capture the same TT expert down
-partials before the current BF16 combine and reconstruct two host branches from
-identical expert outputs:
+### E5 — alias/lifetime and repeated-trace stress
 
-1. current control: BF16 route value, current BF16 contribution fold;
-2. HF boundary: sum TP partials for each selected expert, multiply by the
-   retained FP32 route value, cast each contribution to BF16, then
-   `index_add_` in ascending expert ID.
+After E1–E4:
 
-Compare both with the captured HF `expert_ff` and `post_ff`.
+- run many eager calls and capture/replay cycles while recording allocator
+  high-water marks and output digests;
+- compare current alias handling with an instrumented branch that explicitly
+  releases reshape sources in the same style as `sparse_experts_forward`;
+- enable watcher and vary allocator pressure between calls.
 
-Promotion criterion before any trajectory run:
+A stable digest with bounded memory demotes the ownership concerns to cleanup.
+Any output dependence on allocator pressure promotes a lifetime bug.
 
-- improve beyond tanh+exact-route `expert_ff=0.9997175`;
-- improve beyond `post_ff=0.9998566`;
-- reduce max absolute error;
-- on a one-step terminal capture, move the lowest-entropy positions/ranks
-  toward HF rather than merely changing global PCC.
+### E6 — only after local isolation, rerun trajectories
 
-If branch metrics do not improve, refute H1. If they do, run a step-0
-no-injection discriminator that preserves current route IDs and changes only
-route-value precision. Only then run seeds 0 and 1 for eight steps.
+Apply one isolated experimental change at a time:
 
-### E2 — same-TT-logit Gumbel dtype ledger
+1. baseline expert programs with compact metadata/combine;
+2. baseline combine with compact metadata/experts;
+3. both baseline expert programs and baseline combine.
 
-Capture one full TT raw-logit tensor and reuse it; do not rerun the backbone.
-For each position compare:
+Run a one-layer exact-input check first, then one denoise step, then the two
+eight-step seeds. Do not infer causality from committed agreement alone; require
+the local stage expected by E1/E2 to move toward baseline.
 
-1. current device `argmax(ttnn.add(BF16(logits/T), FP32(noise)))`;
-2. host FP32 `argmax(tt_logits.float()/T + exact_noise)`;
-3. device with `logits/T` explicitly typecast to FP32 before the add and an
-   asserted FP32 output.
+## Other potential issues and test gaps
 
-The decisive result is current-vs-host sampled agreement on the same logits.
-If the explicit FP32 device path matches host, H2 is proven operationally.
-Then test a Gumbel-only A/B; do not combine it with FP32 entropy or terminal
-changes. Expect no step-0 accept-mask change.
+1. `compact_ragged_max_segments` can return fewer than `num_experts` for
+   generic shapes where `S*K < E` (for example `S=32,E=128,K=1`). The kernel
+   unconditionally reserves one primary segment per expert, so the function is
+   only safe under a stronger shape contract than its API states.
+2. The unit tests added with this change cover path selection and one segment
+   count. They do not exercise the custom kernel, metadata bijection, route
+   scale/order, primary/overflow boundary, combine parity, or tensor lifetime.
+3. Compact primary configuration ignores `DG_SPARSE_MOE_TUNED`; compact expert
+   calls also ignore `DG_SPARSE_EXPERT_FP32_FULL_SYNC`. Selector behavior should
+   be explicit even if the final optimized path intentionally fixes a config.
+4. Early `return` from the custom kernel on segment overflow leaves output
+   buffers partially/uninitialized rather than surfacing an error. The target
+   shape is covered, but unsupported shapes can fail silently.
 
-### E3 — raw versus processed clean argmax
+## Post-draft claim review
 
-On the same captured HF and TT logits, count positions where:
+The headline was rechecked against the lowered code before finalizing:
 
-`argmax(raw_logits) != argmax(the actual temperature-scaled tensor)`
+- expert weight shapes are `[1,E,H,I]` / `[1,E,I,H]`, so TTNN does take the
+  batched-second-operand auto branch that selects `k_tiles_per_core=1`;
+- regular and sparse matmul factories confirm the different
+  `packer_l1_acc` thresholds and BF16 intermediate format used above;
+- the binary op defaults `weighted` to the BF16 left operand's dtype;
+- `fast_reduce_nc` iterates the eight inputs into one destination accumulator
+  in input order, making the compact expert-ID sort relevant and sufficient for
+  pair order, but not equivalent to the capacity matmul;
+- the 100-random-case packing simulation and feasible 191-segment construction
+  were rerun successfully;
+- Python syntax compilation passed for both inspected Python implementation
+  files, and `git diff --check` passed.
 
-Record tie values and token IDs. If the count is zero at every active step,
-demote H3. If nonzero, make both the replay oracle and TT commit/stability path
-consume the already-processed tensor, matching
-`generation_diffusion_gemma.py:1047`.
-
-### E4 — production-shape Categorical entropy parity
-
-For the same captured logits, compare:
-
-1. actual HF `Categorical(logits=processed).entropy()`;
-2. local `S.token_entropy(raw, temperature=T)`;
-3. their sorted order, exclusive prefixes, accept counts, and masks.
-
-This is a CPU-only post-processing check once logits are saved. Add a
-production-vocab regression only if it exposes a difference. Do not reinterpret
-an oracle correction as permission to weaken the existing fidelity thresholds.
-
-## Ranked hypotheses
-
-1. **FP32 route-weight boundary lost before expert contribution (H1)** —
-   strongest untested upstream explanation of step-0 entropy-mass drift.
-2. **BF16-packed mixed-dtype Gumbel perturbation (H2)** — definite sampled-path
-   bug and plausible later amplifier, not the initial cause.
-3. **Raw rather than processed clean argmax (H3)** — definite semantic drift,
-   likely limited to near ties.
-4. **Categorical-vs-log-softmax entropy oracle drift (H4)** — important test
-   gap, not an explanation for the same-formula HF/TT logit gap.
-
-## Do not repeat
-
-- FP32 entropy-only or full post-LM-head FP32 terminal changes;
-- exact host entropy from already-diverged TT logits as a proposed fix;
-- exact HF self-conditioning signal as causal evidence;
-- exact soft embedding from live TT logits;
-- router replacement that changes route IDs;
-- BF16 HF expert-order folding;
-- all-reduce-before-combine with BF16 route values;
-- broad attention, norm, CCL, expert, or residual precision sweeps;
-- any edit under `models/demos/gemma4/`.
+The first draft incorrectly suggested ragged prefill used matched expert
+matmul geometry; source inspection showed that its K blocks also differ. The
+report now relies on the material distinction that ragged prefill uses the
+HiFi4/`packer_l1_acc=False` policy and shares the explicit
+multiply-plus-`fast_reduce_nc` combine with its dense comparator. The local
+pytest checks could not be executed because `pytest` is not installed in the
+available Python environment; no dependency was installed for this
+inspection-only run.
 
 ## Bottom line
 
-The tanh-GELU fix removed a real repeated activation error. The remaining
-strict failure begins earlier than the visible entropy collapse: different
-step-0 logit probability mass changes which positions enter the accepted
-canvas. The smallest untested source mismatch capable of producing that shape
-is the FP32 HF route value being rounded to BF16 before TT expert weighting.
-Adjudicate that local boundary first. Separately, fix or refute the proven
-BF16-packed Gumbel addition and raw-argmax semantics with same-logit
-discriminators, not another full-trajectory precision sweep.
+Do not default the compact path yet. The code supports a narrower diagnosis
+than “compact ragged is numerically different”: routing and packing are
+substantially cleared, while the first expert projection and the final combine
+both intentionally change floating-point execution.
 
-## Post-report adjudication
-
-- FP32 route-weight-before-BF16-contribution changed tanh+exact-route layer-18
-  expert FF PCC only `0.9997175 -> 0.9997222`; post-FF slightly regressed
-  `0.9998566 -> 0.9998558`, with unchanged max error. H1 is refuted.
-- FP32-packed Gumbel addition slightly changed sampled agreement but left
-  seed-1 committed and entropy metrics unchanged. H2 is not causal for the
-  strict failure and the high-memory diagnostic was removed.
-- Processed-logit clean argmax was bit-identical on seed 1. H3 is demoted.
-- Exact host entropy from live TT logits already established that the entropy
-  arithmetic/oracle is not the probability-mass source. H4 does not provide a
-  model fix.
-
-## Terminal finding: bf16-floor self-consistency control
-
-The decisive control was never run before: compare the SAME HF model in fp32 vs
-bf16 with identical seeded 8-step injected noise (zero TT kernels;
-`doc/decision_fidelity/measure_bf16_floor.py`). It isolates the intrinsic
-sensitivity of the block-diffusion trajectory to a bf16-scale logit perturbation.
-
-- fp32-vs-bf16 committed match: seed 0 `0.86328125`, seed 1 `0.91406250` — both
-  BELOW the `0.95` gate. The block-diffusion loop commits the clean argmax with
-  no temperature cushion, so bf16 rounding alone bifurcates the trajectory into a
-  different but equally valid paraphrase. No bf16 implementation can match the
-  fp32 ideal to `0.95`, because the reference cannot match itself in fp32.
-- fp32-vs-bf16 per-step entropy PCC collapses and goes negative at converged
-  steps (seed 0 steps 5–7 ≈ `-0.004`, entropy std `≈0.007`, max |Δ| `≈1e-4`).
-  The strict per-step entropy-PCC bar is ill-conditioned (near-constant vector),
-  proven against the reference vs itself. Replaced by the variance-gated
-  `sound_entropy_step_fidelity` (CPU-tested).
-- TT is at or better than the floor: `HF-fp32 vs TT` committed = seed 0 `0.863`
-  (== the bf16 floor), seed 1 `0.980` (better than the current `HF-bf16 vs TT`
-  gate value `0.914`). The gate scores TT against a bf16 reference that is itself
-  a chaotic draw.
-- All three trajectories decode to coherent, correct definitions on both seeds;
-  committed-match "misses" are valid-paraphrase / token-alignment artifacts.
-
-Conclusion: the remaining strict-gate failure is a gate mis-specification and an
-intrinsic bf16 diffusion-trajectory chaos floor, not a TT defect. This eliminates
-the entire class of TT-side precision fixes (they cannot beat a floor the fp32
-reference itself hits). Decision + recommendation live in
-`models/experimental/diffusion_gemma/doc/decision_fidelity/README.md`.
+Run E1 and E2 on the same captured layer. They will identify whether the
+one-layer `0.999241/0.0127` delta begins in expert K-blocking or appears only in
+the BF16 weighted `fast_reduce_nc` combine. Only then is an eight-step replay
+informative.

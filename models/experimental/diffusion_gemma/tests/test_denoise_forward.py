@@ -485,6 +485,40 @@ def test_denoise_sparse_moe_defaults_to_zero_drop_canvas_capacity(monkeypatch):
     assert dense_routing.deallocated is True
 
 
+def test_denoise_compact_ragged_skips_dense_router_and_capacity(monkeypatch):
+    from models.experimental.diffusion_gemma.tt import sparse_moe
+
+    monkeypatch.setenv("DG_SPARSE_MOE", "1")
+    monkeypatch.setenv("DG_DENOISE_COMPACT_RAGGED", "1")
+    routing = object()
+    calls = []
+    monkeypatch.setattr(DF, "_denoise_router_compact_forward", lambda router, hidden: routing)
+    monkeypatch.setattr(
+        DF,
+        "_denoise_router_forward",
+        lambda *args: (_ for _ in ()).throw(AssertionError("dense router must not run")),
+    )
+
+    def fake_compact(experts, hidden, got_routing):
+        calls.append((experts, hidden, got_routing))
+        return "compact-output"
+
+    monkeypatch.setattr(sparse_moe, "compact_ragged_denoise_forward", fake_compact)
+    experts = object()
+    moe = SimpleNamespace(router=object(), experts=experts)
+    expert_input = _FakeTensor([1, 1, 256, 2816])
+
+    assert DF._denoise_moe_forward(moe, _FakeTensor([1, 1, 256, 2816]), expert_input) == "compact-output"
+    assert calls == [(experts, expert_input, routing)]
+
+
+def test_compact_ragged_segment_bound_is_static_and_tile_aligned():
+    from models.experimental.diffusion_gemma.tt.sparse_moe import compact_ragged_max_segments
+
+    assert compact_ragged_max_segments(256, 128, 8) == 192
+    assert compact_ragged_max_segments(32, 8, 8) % 32 == 0
+
+
 def test_sparse_experts_opt_into_blackhole_fp32_full_dst_accumulation(monkeypatch):
     from models.experimental.diffusion_gemma.tt import sparse_moe
 

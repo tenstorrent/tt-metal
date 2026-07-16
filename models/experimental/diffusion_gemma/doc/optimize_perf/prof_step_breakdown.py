@@ -13,6 +13,10 @@ are reported at their true value; the layer-loop (attn+MoE) is reported per-laye
 reduced L used here. Async-pipelined timing (warm + iters + one sync) = device compute,
 which is what a trace replay pays.
 
+The MoE rows use the same effective capacity as production (zero-drop canvas
+capacity by default), assert that no routed assignment is dropped, and report
+both the experts-only micro and the selected router+MoE implementation.
+
     DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 DG_DEDUP_ARGMAX=1 DG_CKPT=... \
       python -u models/experimental/diffusion_gemma/doc/optimize_perf/prof_step_breakdown.py --num-layers 2 --iters 15
 
@@ -211,11 +215,43 @@ def run(num_layers, canvas_length, iters, prompt, max_seq_len):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
 
+            # Match the measured denoise path exactly.  The production default is
+            # zero-drop capacity == canvas length; the old hard-coded capacity=32
+            # micro silently measured the pre-#48291 drop-route path instead.
+            moe_capacity = int(os.environ.get("DG_SPARSE_MOE_CAPACITY", str(canvas_length)))
+            routing_host = ttnn.to_torch(ttnn.get_device_tensors(dense_routing)[0])[0, 0]
+            expert_load = (routing_host != 0).sum(dim=0)
+            dropped_routes = torch.clamp(expert_load - moe_capacity, min=0)
+            max_expert_load = int(expert_load.max().item())
+            route_drop_count = int(dropped_routes.sum().item())
+            res["moe_capacity"] = moe_capacity
+            res["moe_max_expert_load"] = max_expert_load
+            res["moe_route_drop_count"] = route_drop_count
+            if route_drop_count != 0:
+                raise AssertionError(
+                    "profiler configuration drops routed assignments: "
+                    f"capacity={moe_capacity}, max_expert_load={max_expert_load}, "
+                    f"dropped_routes={route_drop_count}"
+                )
+
             def moe_layer():
-                out = sparse_experts_forward(moe.experts, xin, dense_routing, capacity=32)
+                out = sparse_experts_forward(moe.experts, xin, dense_routing, capacity=moe_capacity)
                 out.deallocate(True)
 
             res["moe_layer_ms"] = _time(moe_layer, iters, mesh)
+
+            # Measure the selected production MoE block too: router + the
+            # active dense-capacity or compact-ragged expert path.  Fresh clones
+            # are required because compact metadata owns its top-k tensors.
+            def moe_block():
+                router_input = ttnn.clone(ri)
+                expert_input = ttnn.clone(xin)
+                out = DF._denoise_moe_forward(moe, router_input, expert_input)
+                out.deallocate(True)
+                router_input.deallocate(True)
+                expert_input.deallocate(True)
+
+            res["moe_block_ms"] = _time(moe_block, iters, mesh)
             ri.deallocate(True)
             dense_routing.deallocate(True)
             xin.deallocate(True)

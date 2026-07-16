@@ -662,6 +662,482 @@ class RaggedRouting:
     per_expert_scale: object | None
 
 
+@dataclass
+class CompactRaggedMetadata:
+    """Fixed-shape device metadata consumed by the traced denoise MoE."""
+
+    slot_token: object
+    token_slot: object
+    route_weight: object
+    sparsity: object
+    dense_segment_map: object
+    dense_column: object
+    max_segments: int
+    segment_rows: int
+
+
+_COMPACT_RAGGED_KERNEL = "models/experimental/diffusion_gemma/tt/kernels/compact_ragged_dispatch.cpp"
+_COMPACT_DOWN_TO_DENSE_KERNEL = "models/experimental/diffusion_gemma/tt/kernels/compact_down_to_dense.cpp"
+_COMPACT_DENSE_COMBINE_KERNEL = "models/experimental/diffusion_gemma/tt/kernels/compact_dense_combine.cpp"
+_COMPACT_RAGGED_PLAN_CACHE = {}
+_COMPACT_RAGGED_SCALE_CACHE = {}
+_COMPACT_DOWN_TO_DENSE_PLAN_CACHE = {}
+
+
+def compact_ragged_denoise_enabled():
+    """Trace-safe zero-drop ragged denoise MoE selector."""
+    return os.environ.get("DG_DENOISE_COMPACT_RAGGED", "0").lower() not in ("0", "false", "no", "off")
+
+
+def compact_ragged_segment_rows():
+    rows = int(os.environ.get("DG_COMPACT_SEGMENT_ROWS", str(TILE)))
+    if rows < TILE or rows % TILE != 0:
+        raise ValueError(f"DG_COMPACT_SEGMENT_ROWS must be a positive multiple of {TILE}, got {rows}")
+    return rows
+
+
+def compact_ragged_max_segments(sequence_length, num_experts, top_k, segment_rows=TILE):
+    """Return a static upper bound for 32-row expert segments."""
+    assignments = sequence_length * top_k
+    active = min(num_experts, assignments)
+    if segment_rows >= sequence_length:
+        bound = active
+    else:
+        bound = active + (assignments - active) // segment_rows
+    return _round_up(bound, TILE)
+
+
+def _compact_scale_row_major(mesh, scale, num_experts):
+    key = (id(mesh), id(scale), num_experts)
+    cached = _COMPACT_RAGGED_SCALE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if scale is None:
+        cached = ttnn.ones(
+            [1, 1, 1, num_experts],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+        )
+    else:
+        cached = ttnn.to_layout(scale, ttnn.ROW_MAJOR_LAYOUT)
+    _COMPACT_RAGGED_SCALE_CACHE[key] = cached
+    return cached
+
+
+def _compact_ragged_plan(mesh, sequence_length, num_experts, top_k):
+    segment_rows = compact_ragged_segment_rows()
+    max_segments = compact_ragged_max_segments(sequence_length, num_experts, top_k, segment_rows)
+    key = (id(mesh), sequence_length, num_experts, top_k, segment_rows, max_segments)
+    cached = _COMPACT_RAGGED_PLAN_CACHE.get(key)
+    if cached is not None:
+        return cached
+    core = ttnn.CoreCoord(0, 0)
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+    cached = {
+        "core": core,
+        "core_set": core_set,
+        "segment_rows": segment_rows,
+        "max_segments": max_segments,
+        "max_rows": max_segments * segment_rows,
+        "indices_read": top_k * 4,
+        "values_read": top_k * 2,
+        "scale_read": num_experts * 2,
+        "indices_cb_page": _round_up(top_k * 4 + 63, 64),
+        "values_cb_page": _round_up(top_k * 2 + 63, 64),
+        "scale_cb_page": _round_up(num_experts * 2 + 63, 64),
+        "slot_token_write": segment_rows * 4,
+        "slot_token_cb_page": _round_up(segment_rows * 4 + 63, 64),
+        "token_slot_write": sequence_length * 4,
+        "token_slot_cb_page": _round_up(sequence_length * 4 + 63, 64),
+        "route_weight_write": sequence_length * 2,
+        "route_weight_cb_page": _round_up(sequence_length * 2 + 63, 64),
+        "sparsity_write": num_experts * 2,
+        "sparsity_cb_page": _round_up(num_experts * 2 + 63, 64),
+        "dense_tile_rows": num_experts * (sequence_length // TILE),
+        "dense_map_write": num_experts * (sequence_length // TILE) * 4,
+        "dense_map_cb_page": _round_up(num_experts * (sequence_length // TILE) * 4 + 63, 64),
+    }
+    _COMPACT_RAGGED_PLAN_CACHE[key] = cached
+    return cached
+
+
+def _build_compact_ragged_program(
+    plan,
+    indices_rm,
+    values_rm,
+    scale_rm,
+    slot_token,
+    token_slot,
+    route_weight,
+    sparsity,
+    dense_segment_map,
+    dense_column,
+    sequence_length,
+    num_experts,
+    top_k,
+):
+    core_set = plan["core_set"]
+
+    def cb(index, dtype, page_size, total_size=None):
+        return ttnn.CBDescriptor(
+            total_size=page_size if total_size is None else total_size,
+            core_ranges=core_set,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_size)],
+        )
+
+    cbs = [
+        cb(0, ttnn.uint32, plan["indices_cb_page"], sequence_length * plan["indices_cb_page"]),
+        cb(1, ttnn.bfloat16, plan["values_cb_page"], sequence_length * plan["values_cb_page"]),
+        cb(2, ttnn.bfloat16, plan["scale_cb_page"]),
+        cb(
+            3,
+            ttnn.uint32,
+            plan["slot_token_cb_page"],
+            plan["max_segments"] * plan["slot_token_cb_page"],
+        ),
+        cb(4, ttnn.uint32, plan["token_slot_cb_page"], top_k * plan["token_slot_cb_page"]),
+        cb(5, ttnn.bfloat16, plan["route_weight_cb_page"], top_k * plan["route_weight_cb_page"]),
+        cb(6, ttnn.bfloat16, plan["sparsity_cb_page"]),
+        cb(7, ttnn.uint32, plan["dense_map_cb_page"]),
+        cb(8, ttnn.uint32, plan["token_slot_cb_page"], top_k * plan["token_slot_cb_page"]),
+    ]
+    compile_args = [
+        sequence_length,
+        num_experts,
+        top_k,
+        plan["max_segments"],
+        plan["segment_rows"],
+        plan["indices_read"],
+        plan["values_read"],
+        plan["scale_read"],
+        plan["slot_token_write"],
+        plan["token_slot_write"],
+        plan["route_weight_write"],
+        plan["sparsity_write"],
+        plan["indices_cb_page"],
+        plan["values_cb_page"],
+        plan["slot_token_cb_page"],
+        plan["token_slot_cb_page"],
+        plan["route_weight_cb_page"],
+        plan["sparsity_cb_page"],
+        plan["dense_map_write"],
+        plan["dense_map_cb_page"],
+    ]
+    for tensor in (
+        indices_rm,
+        values_rm,
+        scale_rm,
+        slot_token,
+        token_slot,
+        route_weight,
+        sparsity,
+        dense_segment_map,
+        dense_column,
+    ):
+        compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+
+    runtime_args = ttnn.RuntimeArgs()
+    core = plan["core"]
+    runtime_args[core.x][core.y] = [
+        indices_rm.buffer_address(),
+        values_rm.buffer_address(),
+        scale_rm.buffer_address(),
+        slot_token.buffer_address(),
+        token_slot.buffer_address(),
+        route_weight.buffer_address(),
+        sparsity.buffer_address(),
+        dense_segment_map.buffer_address(),
+        dense_column.buffer_address(),
+    ]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=_COMPACT_RAGGED_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_set,
+        compile_time_args=compile_args,
+        runtime_args=runtime_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs)
+
+
+def _compact_ragged_metadata(routing, num_experts):
+    """Build fixed-shape compact assignment metadata entirely on device."""
+    values = routing.values
+    indices = routing.indices
+    mesh = values.device()
+    sequence_length = values.shape[2]
+    top_k = values.shape[3]
+    plan = _compact_ragged_plan(mesh, sequence_length, num_experts, top_k)
+
+    indices_u32 = ttnn.typecast(indices, ttnn.uint32)
+    indices_rm = ttnn.to_layout(indices_u32, ttnn.ROW_MAJOR_LAYOUT)
+    values_rm = ttnn.to_layout(values, ttnn.ROW_MAJOR_LAYOUT)
+    scale_rm = _compact_scale_row_major(mesh, routing.per_expert_scale, num_experts)
+    slot_token = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([plan["max_segments"], plan["segment_rows"]]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    token_slot = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([top_k, sequence_length]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    route_weight = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([top_k, sequence_length]),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sparsity = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, plan["max_segments"], num_experts]),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    dense_segment_map = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, plan["dense_tile_rows"]]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    dense_column = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([top_k, sequence_length]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    program = _build_compact_ragged_program(
+        plan,
+        indices_rm,
+        values_rm,
+        scale_rm,
+        slot_token,
+        token_slot,
+        route_weight,
+        sparsity,
+        dense_segment_map,
+        dense_column,
+        sequence_length,
+        num_experts,
+        top_k,
+    )
+    ttnn.generic_op(
+        [
+            indices_rm,
+            values_rm,
+            scale_rm,
+            slot_token,
+            token_slot,
+            route_weight,
+            sparsity,
+            dense_segment_map,
+            dense_column,
+        ],
+        program,
+    )
+    for tensor in (values, indices, indices_u32, indices_rm, values_rm):
+        tensor.deallocate(True)
+    return CompactRaggedMetadata(
+        slot_token=slot_token,
+        token_slot=token_slot,
+        route_weight=route_weight,
+        sparsity=sparsity,
+        dense_segment_map=dense_segment_map,
+        dense_column=dense_column,
+        max_segments=plan["max_segments"],
+        segment_rows=plan["segment_rows"],
+    )
+
+
+def _compact_down_to_dense_plan(mesh, num_experts, sequence_length, hidden_size):
+    key = (id(mesh), num_experts, sequence_length, hidden_size)
+    cached = _COMPACT_DOWN_TO_DENSE_PLAN_CACHE.get(key)
+    if cached is not None:
+        return cached
+    grid = mesh.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    cores = ttnn.corerange_to_cores(all_cores, row_wise=True)
+    hidden_tiles = hidden_size // TILE
+    total_tiles = num_experts * (sequence_length // TILE) * hidden_tiles
+    tiles_per_core = (total_tiles + len(cores) - 1) // len(cores)
+    work = []
+    start = 0
+    for core in cores:
+        end = min(total_tiles, start + tiles_per_core)
+        if start < end:
+            work.append((core, start, end))
+        start = end
+    cached = {
+        "core_set": ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, _, _ in work]),
+        "work": work,
+        "hidden_tiles": hidden_tiles,
+        "tile_bytes": TILE * TILE * 2,
+    }
+    _COMPACT_DOWN_TO_DENSE_PLAN_CACHE[key] = cached
+    return cached
+
+
+def _build_compact_dense_combine(dense_column, route_weight, num_experts):
+    mesh = dense_column.device()
+    top_k = dense_column.shape[0]
+    sequence_length = dense_column.shape[1]
+    output_rm = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, sequence_length, num_experts * sequence_length]),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    grid = mesh.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    cores = ttnn.corerange_to_cores(all_cores, row_wise=True)
+    tokens_per_core = (sequence_length + len(cores) - 1) // len(cores)
+    work = []
+    start = 0
+    for core in cores:
+        end = min(sequence_length, start + tokens_per_core)
+        if start < end:
+            work.append((core, start, end))
+        start = end
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, _, _ in work])
+    column_read = sequence_length * 4
+    weight_read = sequence_length * 2
+    output_write = num_experts * sequence_length * 2
+    column_page = _round_up(column_read + 63, 64)
+    weight_page = _round_up(weight_read + 63, 64)
+    output_page = _round_up(output_write + 63, 64)
+
+    def cb(index, dtype, page):
+        return ttnn.CBDescriptor(
+            total_size=page,
+            core_ranges=core_set,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)],
+        )
+
+    compile_args = [
+        sequence_length,
+        num_experts,
+        top_k,
+        column_read,
+        weight_read,
+        output_write,
+        column_page,
+        weight_page,
+    ]
+    for tensor in (dense_column, route_weight, output_rm):
+        compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    runtime_args = ttnn.RuntimeArgs()
+    for core, start, end in work:
+        runtime_args[core.x][core.y] = [
+            dense_column.buffer_address(),
+            route_weight.buffer_address(),
+            output_rm.buffer_address(),
+            start,
+            end,
+        ]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=_COMPACT_DENSE_COMBINE_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_set,
+        compile_time_args=compile_args,
+        runtime_args=runtime_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op(
+        [dense_column, route_weight, output_rm],
+        ttnn.ProgramDescriptor(
+            kernels=[kernel],
+            semaphores=[],
+            cbs=[
+                ttnn.CBDescriptor(
+                    total_size=top_k * column_page,
+                    core_ranges=core_set,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.uint32, page_size=column_page)
+                    ],
+                ),
+                ttnn.CBDescriptor(
+                    total_size=top_k * weight_page,
+                    core_ranges=core_set,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(buffer_index=1, data_format=ttnn.bfloat16, page_size=weight_page)
+                    ],
+                ),
+                cb(2, ttnn.bfloat16, output_page),
+            ],
+        ),
+    )
+    output = ttnn.to_layout(output_rm, ttnn.TILE_LAYOUT)
+    output_rm.deallocate(True)
+    return output
+
+
+def _scatter_compact_down_to_dense(packed_down, dense_segment_map, num_experts, sequence_length, hidden_size):
+    mesh = packed_down.device()
+    plan = _compact_down_to_dense_plan(mesh, num_experts, sequence_length, hidden_size)
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, num_experts * sequence_length, hidden_size]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        mesh,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    map_bytes = num_experts * (sequence_length // TILE) * 4
+    map_page = _round_up(map_bytes + 63, 64)
+    tile_page = _round_up(plan["tile_bytes"] + 63, 64)
+
+    def cb(index, dtype, page_size):
+        return ttnn.CBDescriptor(
+            total_size=page_size,
+            core_ranges=plan["core_set"],
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page_size)],
+        )
+
+    compile_args = [plan["hidden_tiles"], plan["tile_bytes"], map_bytes, map_page]
+    for tensor in (dense_segment_map, packed_down, output):
+        compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    runtime_args = ttnn.RuntimeArgs()
+    for core, start, end in plan["work"]:
+        runtime_args[core.x][core.y] = [
+            dense_segment_map.buffer_address(),
+            packed_down.buffer_address(),
+            output.buffer_address(),
+            start,
+            end,
+        ]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=_COMPACT_DOWN_TO_DENSE_KERNEL,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=plan["core_set"],
+        compile_time_args=compile_args,
+        runtime_args=runtime_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    ttnn.generic_op(
+        [dense_segment_map, packed_down, output],
+        ttnn.ProgramDescriptor(
+            kernels=[kernel],
+            semaphores=[],
+            cbs=[
+                cb(0, ttnn.uint32, map_page),
+                cb(1, ttnn.bfloat16, tile_page),
+                cb(2, ttnn.bfloat16, tile_page),
+            ],
+        ),
+    )
+    return output
+
+
 _ROUTER_SCALE_HOST_CACHE = {}
 
 
@@ -682,6 +1158,256 @@ def ragged_router_forward(router, hidden_states):
     top_k_values.deallocate(True)
     top_k_sum.deallocate(True)
     return RaggedRouting(normalized_values, top_k_indices, router.per_expert_scale)
+
+
+def _compact_primary_program_configs(mesh, m_blocks, intermediate_tiles, hidden_tiles):
+    """C=32 geometry that is elementwise exact to the C=256 dense expert path.
+
+    A real-weight sweep found the reduction-compatible K blocks to be 8 for
+    gate/up and 2 for down.  The prior OPT-004 gate/up block 22 changes BF16
+    accumulation order and is the main compact-path fidelity regression.
+    """
+    gx, gy = _device_grid(mesh)
+    gate_sh, gate_sw = _pick_out_subblock(m_blocks, intermediate_tiles)
+    down_sh, down_sw = _pick_out_subblock(m_blocks, hidden_tiles)
+    return {
+        "gate_up": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=8,
+            out_subblock_h=gate_sh,
+            out_subblock_w=gate_sw,
+            per_core_M=m_blocks,
+            per_core_N=intermediate_tiles,
+        ),
+        "down": ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=2,
+            out_subblock_h=down_sh,
+            out_subblock_w=down_sw,
+            per_core_M=m_blocks,
+            per_core_N=hidden_tiles,
+        ),
+    }
+
+
+def _compact_overflow_program_config(m_blocks, output_width):
+    """Sparse overflow geometry with the same K reduction blocks as dense C=256."""
+    if output_width == 192:
+        grid_x, grid_y, block_w, per_core_n = 6, 1, 8, 1
+    elif output_width == 2816:
+        grid_x, grid_y, block_w, per_core_n = 11, 4, 2, 2
+    else:
+        raise ValueError(f"unsupported compact overflow output width: {output_width}")
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=m_blocks,
+        out_block_w=per_core_n,
+        per_core_M=m_blocks,
+        per_core_N=per_core_n,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def compact_ragged_denoise_forward(experts, hidden_states, routing, compute_kernel_config=None):
+    """Static-shape, zero-drop ragged MoE for the traced denoise canvas."""
+    weights = experts.weights
+    config = experts.config
+    mesh_config = experts.mesh_config
+    ccl_manager = experts.ccl_manager
+    mesh = hidden_states.device()
+    sequence_length = hidden_states.shape[2]
+    num_experts = config.num_experts
+    hidden_size = config.hidden_size
+    intermediate = weights.intermediate_size_per_device
+    top_k = config.top_k
+    if tuple(routing.values.shape) != (1, 1, sequence_length, top_k):
+        raise ValueError(
+            f"compact denoise routing shape {routing.values.shape} does not match "
+            f"(1, 1, {sequence_length}, {top_k})"
+        )
+
+    # Dense-compatible combine is the selected compact mode: it preserves the
+    # baseline BF16 matmul reduction and therefore the committed trajectory.
+    # ``fast_reduce`` remains a diagnostic speed ceiling but is decision-inexact.
+    combine_mode = os.environ.get("DG_COMPACT_COMBINE", "dense_compat").lower()
+    dense_comb = None
+    metadata = _compact_ragged_metadata(routing, num_experts)
+    if combine_mode == "dense_compat":
+        dense_comb = _build_compact_dense_combine(metadata.dense_column, metadata.route_weight, num_experts)
+    max_segments = metadata.max_segments
+    segment_rows = metadata.segment_rows
+    max_rows = max_segments * segment_rows
+    kernel_config = compute_kernel_config or default_sparse_moe_compute_kernel_config()
+    hidden_flat = ttnn.reshape(hidden_states, (sequence_length, hidden_size))
+    gathered = ttnn.embedding(
+        metadata.slot_token,
+        hidden_flat,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    grouped_input = ttnn.reshape(gathered, (1, max_segments, segment_rows, hidden_size))
+    primary_input = ttnn.slice(
+        grouped_input,
+        [0, 0, 0, 0],
+        [1, num_experts, segment_rows, hidden_size],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    primary_configs = (
+        _compact_primary_program_configs(
+            mesh,
+            segment_rows // TILE,
+            intermediate // TILE,
+            hidden_size // TILE,
+        )
+        if segment_rows == DEFAULT_CAPACITY
+        and os.environ.get("DG_COMPACT_PRIMARY_TUNED", "1").lower() not in ("0", "false", "no", "off")
+        else None
+    )
+    primary_down = _batched_experts(
+        primary_input,
+        weights,
+        kernel_config,
+        program_configs=primary_configs,
+    )
+    primary_flat = ttnn.reshape(primary_down, (num_experts * segment_rows, hidden_size))
+
+    overflow_segments = max_segments - num_experts
+    overflow_tensors = []
+    if overflow_segments > 0:
+        overflow_input = ttnn.slice(
+            grouped_input,
+            [0, num_experts, 0, 0],
+            [1, max_segments, segment_rows, hidden_size],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        overflow_sparsity = ttnn.slice(
+            metadata.sparsity,
+            [0, 0, num_experts, 0],
+            [1, 1, max_segments, num_experts],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        gate_output = ttnn.empty(
+            [1, overflow_segments, segment_rows, intermediate],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+        )
+        up_output = ttnn.empty(
+            [1, overflow_segments, segment_rows, intermediate],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+        )
+        common = {
+            "sparsity": overflow_sparsity,
+            "nnz": overflow_segments,
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "compute_kernel_config": kernel_config,
+            "dtype": ttnn.bfloat16,
+        }
+        gate = ttnn.sparse_matmul(
+            overflow_input,
+            weights.gate_proj,
+            program_config=_compact_overflow_program_config(segment_rows // TILE, intermediate),
+            optional_output_tensor=gate_output,
+            **common,
+        )
+        up = ttnn.sparse_matmul(
+            overflow_input,
+            weights.up_proj,
+            program_config=_compact_overflow_program_config(segment_rows // TILE, intermediate),
+            optional_output_tensor=up_output,
+            **common,
+        )
+        overflow_down_input = apply_geglu(gate, up)
+        gate.deallocate(True)
+        up.deallocate(True)
+        down_output = ttnn.empty(
+            [1, overflow_segments, segment_rows, hidden_size],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+        )
+        overflow_down = ttnn.sparse_matmul(
+            overflow_down_input,
+            weights.down_proj,
+            program_config=_compact_overflow_program_config(segment_rows // TILE, hidden_size),
+            optional_output_tensor=down_output,
+            **common,
+        )
+        overflow_flat = ttnn.reshape(overflow_down, (overflow_segments * segment_rows, hidden_size))
+        packed_down = ttnn.concat([primary_flat, overflow_flat], dim=0)
+        overflow_tensors = [overflow_input, overflow_sparsity, overflow_down_input, overflow_flat]
+    else:
+        packed_down = primary_flat
+
+    combine_tensors = []
+    if combine_mode == "dense_compat":
+        dense_down = _scatter_compact_down_to_dense(
+            packed_down,
+            metadata.dense_segment_map,
+            num_experts,
+            sequence_length,
+            hidden_size,
+        )
+        out = ttnn.matmul(dense_comb, dense_down, compute_kernel_config=kernel_config)
+        combine_tensors = [dense_comb, dense_down]
+    elif combine_mode == "matmul":
+        token_slot = ttnn.permute(metadata.token_slot, (1, 0))
+        selected = ttnn.embedding(
+            token_slot,
+            packed_down,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        selected = ttnn.reshape(selected, (1, sequence_length, top_k, hidden_size))
+        route_weight = ttnn.permute(metadata.route_weight, (1, 0))
+        route_weight = ttnn.reshape(route_weight, (1, sequence_length, 1, top_k))
+        route_weight_tile = ttnn.to_layout(route_weight, ttnn.TILE_LAYOUT)
+        out = ttnn.matmul(route_weight_tile, selected, compute_kernel_config=kernel_config)
+        out = ttnn.reshape(out, (1, 1, sequence_length, hidden_size))
+        combine_tensors = [token_slot, selected, route_weight, route_weight_tile]
+    elif combine_mode == "fast_reduce":
+        selected = ttnn.embedding(
+            metadata.token_slot,
+            packed_down,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        selected = ttnn.reshape(selected, (1, top_k, sequence_length, hidden_size))
+        route_weight = ttnn.reshape(metadata.route_weight, (1, 1, top_k, sequence_length))
+        route_weight = ttnn.permute(route_weight, (0, 2, 3, 1))
+        weighted = ttnn.mul(selected, route_weight)
+        out = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(weighted, dims=[1]))
+        out = ttnn.reshape(out, (1, 1, sequence_length, hidden_size))
+        combine_tensors = [selected, route_weight, weighted]
+    else:
+        raise ValueError(f"unsupported DG_COMPACT_COMBINE mode: {combine_mode}")
+
+    for tensor in (
+        metadata.slot_token,
+        metadata.token_slot,
+        metadata.route_weight,
+        metadata.sparsity,
+        metadata.dense_segment_map,
+        metadata.dense_column,
+        gathered,
+        primary_input,
+        *combine_tensors,
+        *overflow_tensors,
+    ):
+        tensor.deallocate(True)
+    if packed_down is not primary_flat:
+        packed_down.deallocate(True)
+    primary_flat.deallocate(True)
+    if mesh_config is not None and mesh_config.tp > 1:
+        out = ccl_allreduce(out, mesh_config, ccl_manager)
+    return out
 
 
 try:
