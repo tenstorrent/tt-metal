@@ -1182,8 +1182,18 @@ NO metal-trace capture/replay, so it sidesteps the recompile bug. Video path use
 so its SDPA bucket is the video subset of the cold AV capture. Valid for the CCL-matmul warm-vs-cold question
 (same SP AllGatherMatmul + MatmulReduceScatter ops); the audio/cross buckets need the AV path (absent-ckpt-blocked
 on this box, per Batch D).
-- [~] **stage_2 video block, warm per-op device FW** — job **781** (`ring_bh_4x8sp1tp0`, num_links=2, vN=38760),
-  env `opt/env_block_prof.yaml`. HARVEST from raw `2026-07-16_061422_781.log`: `PYTEST_EXIT=0`+`1 passed`+`WARM_FWD_MS=`
-  + `CPP_CSV_ROWS`/`OPS_CSV ROWS`>1 ⇒ WIN. Then rank ops by device FW from `opt/block_prof_s2.csv`/`_ops.csv`, compare
-  the warm CCL-matmul FW to the cold 11.57ms (is fabric setup inflating cold?), and enumerate the next CCL-matmul
-  config batch against the WARM dominant op. If timeout/collect-0/PCC-fail → read `opt/block_prof_s2.log` tail.
+- [x] **stage_2 video block, warm per-op device FW (env-var profiler)** — job **781** (`ring_bh_4x8sp1tp0`,
+  num_links=2, vN=38760), env `opt/env_block_prof.yaml`. **HARNESS VALIDATED: `1 passed`, WARM (iters=3), PASSED PCC,
+  106s in-budget** — the first working in-budget per-op BLOCK instrument. Profiler live (`ENABLE_TRACY=ON`,
+  `-DPROFILE_KERNEL=1`), wrote `cpp_device_perf_report.csv` (6561 rows, per-program DEVICE FW ns). **BUT `OP NAME`
+  col EMPTY ⇒ no op-family bucketing.** Root cause (source-verified `ttnn/api/tools/profiler/op_profiler.hpp:154-186`):
+  op names are emitted only under `TTNN_OP_PROFILER` AND delivered via `tracy_message()` → **op names require tracy;
+  the env-var-only cpp CSV can NEVER carry them.** No timing banked (per-device FW sums un-interpretable: iter0 6.2ms
+  vs warm 27-30ms/dev, and sum ≠ critical path). ⇒ re-run under tracy (below).
+- [~] **stage_2 video block, WARM op-NAMED per-op FW (tracy)** — job **785**, env `opt/env_block_tracy.yaml`:
+  `python -m tracy -p -r -m pytest 'test_transformer_ltx.py::test_ltx_transformer_block[blackhole-ckpt_fast-pcc-video-stage_2-ring_bh_4x8sp1tp0]'`
+  + `TTNN_OP_PROFILER=1`, `LTX_PROFILE_ITERS=3`. HARVEST from raw `2026-07-16_062803_785.log`: `TRACY_EXIT=0`+`1 passed`+
+  `OPS_CSV=…ROWS>1` ⇒ WIN. Rank ops by device FW from `opt/block_tracy_s2_ops.csv` (filter warm invocations by GLOBAL
+  CALL COUNT), bucket AllGatherMatmul/MatmulReduceScatter/RingJointSDPA/addcmul, compare warm CCL-matmul FW to cold
+  11.57ms, enumerate the next CCL-matmul config batch against the WARM dominant op. If timeout / `NO_OPS_CSV` →
+  read `opt/block_tracy_s2.log` tail (cold-recompile? tracy `-k` join? bracket-glob?).
