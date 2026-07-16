@@ -1,0 +1,29 @@
+TT_METAL_HOME: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip
+PYTHONPATH: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/ttnn:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/tools
+TT_DIT_CACHE_DIR: /home/smarton/.cache/tt-dit-ltxrt
+TT_METAL_CACHE: /home/smarton/.cache/tt-metal-cache-ltxrt
+LTX_CHECKPOINT: /home/kevinmi/.cache/huggingface/hub/models--Lightricks--LTX-2.3/snapshots/76730e634e70a28f4e8d51f5e29c08e40e2d8e74/ltx-2.3-22b-distilled-1.1.safetensors
+GEMMA_PATH: /home/kevinmi/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/68f7ee4fbd59087436ada77ed2d62f373fdd4482/
+TT_METAL_DEVICE_PROFILER: "1"
+TT_METAL_PROFILER_CPP_POST_PROCESS: "1"
+TT_METAL_PROFILER_TRACE_TRACKING: "1"
+TTNN_OP_PROFILER: "1"
+TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: "20000"
+LTX_QUALITY: high
+HEIGHT: "1088"
+WIDTH: "1920"
+# 25 (latent_frames=4, same ≤20 sigma-schedule branch as the shipping 145f) shrinks S2
+# ~5x so BOTH gens finish under the 600s cap — job 764 at 145f timed out entering gen#1's
+# traced replay before teardown could dump the CSV. This is the first scale small enough
+# to reach a clean profiler dump; the per-op collective STRUCTURE we need is frame-count-
+# independent even though the a+bN fit's absolute N is not.
+NUM_FRAMES: "25"
+LTX_TRACED: "1"
+LTX_PROFILE_FLUSH: "1"
+LTX_PROFILE_DENOISE_ONLY: "1"
+NO_PROMPT: "1"
+SEED: "10"
+RUN_VBENCH: "0"
+RUN_CLIP: "0"
+LTX_TIME_STAGES: "1"
+TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
