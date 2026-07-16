@@ -535,27 +535,29 @@ def test_pipeline_distilled_i2v(
     i2v = tmp_path / "i2v.mp4"
     _gen(i2v, kf_images, gen_seed=_KF_SEED)
 
-    def _luma(path, frame=0):
+    def _luma(path, frame=0, scale=False):
+        # A conditioning image is whatever the user uploaded, so it is almost never the render's
+        # raster; the pipeline resizes it on the way in. Scale the reference the same way here or the
+        # comparison silently lines up unrelated pixels and reads ~0 for a pin that took perfectly.
+        vf = f"select=eq(n\\,{frame})" + (f",scale={width}:{height}" if scale else "")
         raw = subprocess.run(
             # fmt: off
-            [_ffmpeg(), "-v", "error", "-i", path, "-vf", f"select=eq(n\\,{frame})",
+            [_ffmpeg(), "-v", "error", "-i", path, "-vf", vf,
              "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
             # fmt: on
             capture_output=True,
         ).stdout
-        return torch.from_numpy(
-            np.asarray(Image.open(__import__("io").BytesIO(raw)).convert("L")).astype("float32")
-        ).flatten()
+        return torch.from_numpy(np.asarray(Image.open(__import__("io").BytesIO(raw)).convert("L")).astype("float32"))
 
     def _pcc(a, b):
-        n = min(a.numel(), b.numel())
-        return torch.corrcoef(torch.stack([a[:n], b[:n]]))[0, 1].item()
+        assert a.shape == b.shape, f"comparing mismatched rasters {tuple(a.shape)} vs {tuple(b.shape)}"
+        return torch.corrcoef(torch.stack([a.flatten(), b.flatten()]))[0, 1].item()
 
     # (a) every pin took. A pin is a VAE roundtrip + CRF away from its reference, so never identity;
     # what marks one that took is correlating with ITS OWN reference far above an unconditioned gen.
     # Score each separately — a frame-0-only check stayed green right through the interior-keyframe
     # scramble that reached users.
-    refs = {idx: _luma(png) for png, idx, _, _ in kf_images}
+    refs = {idx: _luma(png, scale=True) for png, idx, _, _ in kf_images}
     pccs = {idx: _pcc(ref, _luma(str(i2v), idx)) for idx, ref in refs.items()}
     for idx, p in sorted(pccs.items()):
         print(f"\nI2V_E2E pin f{idx}: PCC-vs-own-reference={p:.4f}", flush=True)
@@ -565,7 +567,7 @@ def test_pipeline_distilled_i2v(
     # metrics sit at ~1.0x — fringe alone once scored a destroyed clip clean. Ratio against the
     # clip's own clean frames: healthy ~1.0-1.15x, checkerboard ~2.9x.
     def _sharpness(frame):
-        f = _luma(str(i2v), frame).reshape(height, width)
+        f = _luma(str(i2v), frame)
         return float(np.abs(4.0 * f[1:-1, 1:-1] - f[:-2, 1:-1] - f[2:, 1:-1] - f[1:-1, :-2] - f[1:-1, 2:]).mean())
 
     clean = [i for i in (20, 40, 100, 120) if i < num_frames and i not in refs]
@@ -1488,6 +1490,9 @@ def _matrix_checkpoint(model):
 @pytest.mark.skipif(
     os.environ.get("LTX_MATRIX", "0") not in ("1", "true", "True"), reason="manual sweep: set LTX_MATRIX=1"
 )
+# A cell is two full renders on top of a 22B load, and the first one on a build_key also pays the
+# cold JIT compile — several times pytest.ini's 300s blanket, which kills it mid-conv3d.
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
@@ -1499,24 +1504,31 @@ def _matrix_checkpoint(model):
 def test_ltx_matrix_cell(
     mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
 ):
-    """One matrix cell: render t2v AND i2v on one (model, tier, resolution) and gate both.
+    """One matrix cell: ONE mode (t2v or i2v) on one (model, tier, resolution).
 
     The cell is the env the server would serve with — LTX_MATRIX_MODEL picks the checkpoint,
     LTX_QUALITY the tier (conftest has already expanded it into quant + sigmas), LTX_MATRIX_RES the
-    resolution — so a green cell means that served config renders, not that some neighbouring
-    config does.
+    resolution, LTX_MATRIX_MODE the leg — so a green cell means that served config renders, not that
+    some neighbouring config does.
 
-    t2v gates on the clip being real (a traced replay of a never-captured trace decodes to a uniform
-    grey field that every correlation metric happily calls fine, so per-frame variance is the check).
-    i2v replays the served 3-pin conditioning and gates that every pin took and none decoded to
-    high-frequency garbage.
+    One mode per process mirrors how these are actually served, and that is load-bearing rather than
+    tidy: a keyframe job is served by its own worker whose warmup captures traces at the keyframe
+    schedule and sequence length. Rendering t2v and then a keyframe i2v in one traced process is a
+    configuration nothing serves — the i2v encode evicts the DiT that the t2v traces were captured
+    against, and the replay decodes to a uniform grey field.
+
+    t2v gates on the clip being real (that same grey field correlates fine with anything, so
+    per-frame variance is the only honest check). i2v replays the served 3-pin conditioning and gates
+    that every pin took and none decoded to high-frequency garbage.
     """
     import subprocess
 
     from PIL import Image
 
     model = os.environ.get("LTX_MATRIX_MODEL", "ltx")
+    mode = os.environ.get("LTX_MATRIX_MODE", "t2v").strip().lower()
     res = os.environ.get("LTX_MATRIX_RES", "1080p")
+    assert mode in ("t2v", "i2v"), f"LTX_MATRIX_MODE={mode!r}; choose t2v or i2v"
     tier = os.environ.get("LTX_QUALITY", "high").strip().lower() or "high"
     assert model in _MATRIX_MODELS, f"LTX_MATRIX_MODEL={model!r}; choose {sorted(_MATRIX_MODELS)}"
     assert res in _MATRIX_RESOLUTIONS, f"LTX_MATRIX_RES={res!r}; choose {sorted(_MATRIX_RESOLUTIONS)}"
@@ -1528,7 +1540,7 @@ def test_ltx_matrix_cell(
     num_frames = int(os.environ.get("NUM_FRAMES", "145"))
     traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
     seed = int(os.environ.get("SEED", "11"))
-    cell = f"{model}/{tier}/{res}"
+    cell = f"{model}/{tier}/{res}/{mode}"
 
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -1551,20 +1563,14 @@ def test_ltx_matrix_cell(
     if int(ttnn.distributed_context_get_rank()) != 0:
         return
 
-    def _frames(path, count=8):
+    def _luma(path, frame, scale=False):
+        # A conditioning image is whatever the user uploaded, so it is almost never the render's
+        # raster; the pipeline resizes it on the way in. Scale the reference the same way here or the
+        # comparison silently lines up unrelated pixels and reads ~0 for a pin that took perfectly.
+        vf = f"select=eq(n\\,{frame})" + (f",scale={width}:{height}" if scale else "")
         raw = subprocess.run(
             # fmt: off
-            [_ffmpeg(), "-v", "error", "-i", path, "-vf", f"select='not(mod(n\\,{max(1, num_frames // count)}))'",
-             "-vsync", "0", "-f", "image2pipe", "-vcodec", "png", "-"],
-            # fmt: on
-            capture_output=True,
-        ).stdout
-        return raw
-
-    def _luma(path, frame):
-        raw = subprocess.run(
-            # fmt: off
-            [_ffmpeg(), "-v", "error", "-i", path, "-vf", f"select=eq(n\\,{frame})",
+            [_ffmpeg(), "-v", "error", "-i", path, "-vf", vf,
              "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
             # fmt: on
             capture_output=True,
@@ -1572,19 +1578,24 @@ def test_ltx_matrix_cell(
         return np.asarray(Image.open(__import__("io").BytesIO(raw)).convert("L")).astype("float32")
 
     # --- t2v ---
-    t2v = tmp_path / "t2v.mp4"
-    pipeline.generate(
-        DEFAULT_LTX_PROMPT,
-        output_path=str(t2v),
-        images=None,
-        num_frames=num_frames,
-        height=height,
-        width=width,
-        seed=seed,
-    )
-    assert t2v.exists() and t2v.stat().st_size > 0, f"{cell}: t2v produced no file"
-    stds = [float(_luma(str(t2v), f).std()) for f in (0, num_frames // 2, num_frames - 1)]
-    print(f"\nMATRIX {cell} t2v: per-frame std={['%.1f' % s for s in stds]}", flush=True)
+    if mode == "t2v":
+        t2v = tmp_path / "t2v.mp4"
+        pipeline.generate(
+            DEFAULT_LTX_PROMPT,
+            output_path=str(t2v),
+            images=None,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            seed=seed,
+        )
+        assert t2v.exists() and t2v.stat().st_size > 0, f"{cell}: t2v produced no file"
+        stds = [float(_luma(str(t2v), f).std()) for f in (0, num_frames // 2, num_frames - 1)]
+        print(f"\nMATRIX {cell} t2v: per-frame std={['%.1f' % s for s in stds]}", flush=True)
+        if traced:
+            pipeline.release_traces()
+        assert min(stds) > 5.0, f"{cell}: t2v is a flat/blank field (per-frame std={stds}) — nothing was rendered"
+        return
 
     # --- i2v: the served 3-pin conditioning ---
     kf_images = _kf_gen_images(num_frames)
@@ -1603,11 +1614,10 @@ def test_ltx_matrix_cell(
     assert i2v.exists() and i2v.stat().st_size > 0, f"{cell}: i2v produced no file"
 
     def _pcc(a, b):
-        a, b = a.flatten(), b.flatten()
-        n = min(a.size, b.size)
-        return float(np.corrcoef(a[:n], b[:n])[0, 1])
+        assert a.shape == b.shape, f"comparing mismatched rasters {a.shape} vs {b.shape}"
+        return float(np.corrcoef(a.flatten(), b.flatten())[0, 1])
 
-    refs = {idx: _luma(png, 0) for png, idx, _, _ in kf_images}
+    refs = {idx: _luma(png, 0, scale=True) for png, idx, _, _ in kf_images}
     pccs = {idx: _pcc(ref, _luma(str(i2v), idx)) for idx, ref in refs.items()}
 
     def _sharpness(frame):
@@ -1616,6 +1626,7 @@ def test_ltx_matrix_cell(
 
     clean = [i for i in (20, 40, 100, 120) if i < num_frames and i not in refs]
     base_sharp = float(np.mean([_sharpness(i) for i in clean]))
+    assert base_sharp > 0.0, f"{cell}: i2v is a flat/blank field — nothing was rendered"
     pin_sharp = {idx: _sharpness(idx) / base_sharp for idx in refs}
     for idx in sorted(refs):
         print(f"MATRIX {cell} i2v pin f{idx}: PCC={pccs[idx]:.4f} structure={pin_sharp[idx]:.2f}x", flush=True)
@@ -1623,9 +1634,6 @@ def test_ltx_matrix_cell(
     if traced:
         pipeline.release_traces()
 
-    # A grey clip is the signature of a replayed-but-never-captured trace; it correlates fine with
-    # anything, so variance is what catches it.
-    assert min(stds) > 5.0, f"{cell}: t2v is a flat/blank field (per-frame std={stds}) — nothing was rendered"
     for idx in sorted(pccs):
         assert pccs[idx] > 0.85, f"{cell}: i2v pin f{idx} did not take (PCC={pccs[idx]:.4f})"
     for idx in sorted(pin_sharp):
