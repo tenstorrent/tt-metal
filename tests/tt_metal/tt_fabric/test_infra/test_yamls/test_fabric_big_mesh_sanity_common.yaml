@@ -59,7 +59,6 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 25
 
   - name: "MeshUnicastRandomPairing"
     fabric_setup:
