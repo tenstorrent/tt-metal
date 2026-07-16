@@ -109,7 +109,8 @@ TEST_F(RegimeADiagFixture, Run) {
     // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
     if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
-        mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144) {
+        mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 || mask == 524288 ||
+        mask == 1048576) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -447,6 +448,93 @@ TEST_F(RegimeADiagFixture, RingOrderCorrectness) {
                                     << " PCC too low (" << p << ")";
                 if (ab >= 0.0) {
                     EXPECT_EQ(ab, 0.0) << tag << " != bank order (case=" << c.label << " pass=" << pass << ")";
+                }
+            }
+        }
+    }
+}
+
+// M-split worker PLACEMENT: current (default) vs readers_first (1<<19) vs in1_near (1<<20). Placement changes
+// only worker coordinates (logical indices/ownership/forward pairing unchanged). It recomputes the PARETO
+// ring order on the new coords, which for Sm>1 can change the K-shard accumulation order -> a benign bf16
+// OUTPUT-ULP rounding difference (PCC still 0.99999, ~one ULP at the output magnitude) — NOT bit-identical in
+// general. So: require PCC >= 0.999 for every case; additionally require BIT-IDENTICAL only for the Sm=1
+// no-op (placement is a true no-op there — catches accidental changes). Random BF16 vs CPU f32 golden,
+// fresh AND cached.
+TEST_F(RegimeADiagFixture, PlacementCorrectness) {
+    struct Case {
+        const char* label;
+        uint32_t M, K, N, Ns, Pk, Sm, kb, nsb;
+    };
+    const std::vector<Case> cases = {
+        {"sm2_primary", 256, 2048, 1024, 1, 4, 2, 2, 2},
+        {"sm2_wide", 128, 6144, 4608, 1, 6, 2, 2, 1},
+        {"sm3", 256, 2048, 1024, 1, 1, 3, 2, 2},
+        {"sm4", 256, 2048, 1024, 1, 1, 4, 2, 2},
+        {"sm4_wide", 256, 6144, 4608, 1, 3, 4, 2, 1},
+        {"sm1_noop", 256, 6144, 768, 1, 12, 1, 2, 1},  // Sm=1: placement is a no-op
+    };
+    const std::vector<std::pair<uint32_t, const char*>> masks = {
+        {0u, "current"}, {524288u, "readers_first"}, {1048576u, "in1_near"}};
+    auto* device = device_;
+
+    for (const auto& c : cases) {
+        const uint32_t M = c.M, K = c.K, N = c.N;
+        std::mt19937 rng(5150);
+        std::normal_distribution<float> dist(0.0f, 1.0f);
+        std::vector<bfloat16> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
+        std::vector<float> af(a.size()), bf(b.size());
+        for (size_t i = 0; i < a.size(); ++i) {
+            a[i] = bfloat16(dist(rng));
+            af[i] = static_cast<float>(a[i]);
+        }
+        for (size_t i = 0; i < b.size(); ++i) {
+            b[i] = bfloat16(dist(rng));
+            bf[i] = static_cast<float>(b[i]);
+        }
+        std::vector<float> golden(static_cast<size_t>(M) * N, 0.0f);
+        for (uint32_t i = 0; i < M; ++i) {
+            for (uint32_t kk = 0; kk < K; ++kk) {
+                const float aik = af[static_cast<size_t>(i) * K + kk];
+                const float* brow = &bf[static_cast<size_t>(kk) * N];
+                float* crow = &golden[static_cast<size_t>(i) * N];
+                for (uint32_t j = 0; j < N; ++j) {
+                    crow[j] += aik * brow[j];
+                }
+            }
+        }
+        const MemoryConfig il{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        const TensorLayout lay(DataType::BFLOAT16, PageConfig(Layout::TILE), il);
+        Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
+        const MemoryConfig wcfg = ttnn::experimental::prim::create_regime_a_weight_memory_config(
+            ttnn::Shape({K, N}), DataType::BFLOAT16, device);
+        Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
+        const ttnn::experimental::prim::RegimeAMatmulConfig cfg{
+            .k_slices = c.Pk, .n_slices = c.Ns, .m_slices = c.Sm, .k_block_tiles = c.kb, .n_subblock_tiles = c.nsb};
+
+        std::vector<float> cur_out;
+        for (const auto& [mask, tag] : masks) {
+            for (int pass = 0; pass < 2; ++pass) {
+                Tensor out =
+                    ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
+                const std::vector<float> got = out.to_vector<float>();
+                const double p = pcc(got, golden);
+                double ab = -1.0;
+                if (mask == 0u && pass == 0) {
+                    cur_out = got;
+                } else {
+                    ab = 0.0;
+                    for (size_t i = 0; i < got.size(); ++i) {
+                        ab = std::max(ab, std::abs(static_cast<double>(got[i]) - cur_out[i]));
+                    }
+                }
+                fmt::print("DIAGPLACE case={} {} pass={} pcc={:.5f} ab_maxdiff={:.6f}\n", c.label, tag, pass, p, ab);
+                EXPECT_GT(p, 0.999) << "placement case=" << c.label << " " << tag << " pass=" << pass;
+                // Sm=1: placement is a true no-op -> must be bit-identical (catches accidental coord changes).
+                // Sm>1: PARETO ring recompute on new coords can perturb accumulation rounding (bf16 ULP), so
+                // only PCC is required (bit-identity checked separately by RingOrderCorrectness on fixed coords).
+                if (ab >= 0.0 && c.Sm == 1u) {
+                    EXPECT_EQ(ab, 0.0) << tag << " != current (Sm=1 no-op; case=" << c.label << " pass=" << pass << ")";
                 }
             }
         }

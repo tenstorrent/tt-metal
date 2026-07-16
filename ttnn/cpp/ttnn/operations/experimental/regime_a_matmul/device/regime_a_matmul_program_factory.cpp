@@ -112,6 +112,127 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["DIAG_BARRIER_DRAIN"] = "1";  // A/B baseline: OLD per-block phase-2 completion barrier
     }
 
+    // ---- M-split worker PLACEMENT diagnostics (Sm>1; DEFAULT = the planner's CURRENT placement) ----
+    // Overrides only P.cores[i].coord (logical indices / ownership / the factory reader->i+s & slave->i-mm arg
+    // math are unchanged). Runs BEFORE the ring reorder below so PARETO recomputes on the new coords.
+    // READERS_FIRST: place every mm==0 DRAM reader (same bank targets / NoC / logical-Manhattan spiral) before
+    // any slave. IN1_NEAR (implies readers-first): place each slave at the free worker minimizing the directed
+    // reader->slave hop distance on the group's in1-reader NoC. Emits PLACECOST (gated by TT_MM_PLACECOST).
+    const bool place_readers_first = (diag & RegimeADiag::DIAG_PLACE_READERS_FIRST) != 0u;
+    const bool place_in1_near = (diag & RegimeADiag::DIAG_PLACE_IN1_NEAR) != 0u;
+    if ((place_readers_first || place_in1_near) && Sm > 1u) {
+        namespace expd = tt::tt_metal::experimental::Device;
+        const uint32_t preaders = geo.num_cores / 8u;
+        const CoreCoord grid = device->compute_with_storage_grid_size();
+        const auto opt0 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
+        const auto opt1 = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1);
+        std::set<std::pair<uint32_t, uint32_t>> used;
+        auto bank_tgt = [&](uint32_t b, uint32_t noc) { return noc ? opt1[b] : opt0[b]; };
+        // logical-Manhattan spiral over the compute grid (mirrors the planner's find_near).
+        auto find_near = [&](CoreCoord t) -> CoreCoord {
+            for (int d = 0; d < (int)(grid.x + grid.y); ++d) {
+                for (int dx = -d; dx <= d; ++dx) {
+                    const int rem = d - (dx < 0 ? -dx : dx);
+                    for (int sgn = 0; sgn <= 1; ++sgn) {
+                        const int dy = sgn ? -rem : rem;
+                        const int x = (int)t.x + dx, y = (int)t.y + dy;
+                        if (x < 0 || y < 0 || (uint32_t)x >= grid.x || (uint32_t)y >= grid.y) {
+                            continue;
+                        }
+                        const auto key = std::make_pair((uint32_t)x, (uint32_t)y);
+                        if (used.count(key)) {
+                            continue;
+                        }
+                        used.insert(key);
+                        return CoreCoord{(uint32_t)x, (uint32_t)y};
+                    }
+                }
+            }
+            return CoreCoord{t.x, t.y};
+        };
+        auto set_coord = [&](uint32_t i, CoreCoord c) {
+            P.cores[i].coord.x = c.x;
+            P.cores[i].coord.y = c.y;
+        };
+        // pass 1: every mm==0 reader around its bank target (readers-first).
+        for (uint32_t b = 0; b < 8u; ++b) {
+            for (uint32_t p = 0; p < preaders; ++p) {
+                const uint32_t i = b * preaders + p;
+                if (P.cores[i].mm == 0u) {
+                    set_coord(i, find_near(bank_tgt(b, P.cores[i].noc)));
+                }
+            }
+        }
+        // pass 2: slaves — IN1_NEAR minimizes directed reader->slave hop on the reader NoC; else bank spiral.
+        for (uint32_t b = 0; b < 8u; ++b) {
+            for (uint32_t p = 0; p < preaders; ++p) {
+                const uint32_t i = b * preaders + p;
+                if (P.cores[i].mm == 0u) {
+                    continue;
+                }
+                if (place_in1_near) {
+                    const uint32_t ri = i - P.cores[i].mm;  // this group's reader (contiguous index)
+                    const CoreCoord rc{P.cores[ri].coord.x, P.cores[ri].coord.y};
+                    const NOC rnoc = P.cores[i].noc ? NOC::NOC_1 : NOC::NOC_0;
+                    CoreCoord best{};
+                    uint32_t bestd = 0xffffffffu;
+                    bool found = false;
+                    for (uint32_t y = 0; y < grid.y; ++y) {
+                        for (uint32_t x = 0; x < grid.x; ++x) {
+                            if (used.count(std::make_pair(x, y))) {
+                                continue;
+                            }
+                            const uint32_t dd = expd::get_worker_noc_hop_distance(device, rc, CoreCoord{x, y}, rnoc);
+                            if (!found || dd < bestd) {
+                                bestd = dd;
+                                best = CoreCoord{x, y};
+                                found = true;
+                            }
+                        }
+                    }
+                    used.insert(std::make_pair(best.x, best.y));
+                    set_coord(i, best);
+                } else {
+                    set_coord(i, find_near(bank_tgt(b, P.cores[i].noc)));
+                }
+            }
+        }
+        // PLACECOST: per group, reader's dist from its bank target + directed reader->slave hops (in1 NoC).
+        if (std::getenv("TT_MM_PLACECOST") != nullptr) {
+            for (uint32_t b = 0; b < 8u; ++b) {
+                for (uint32_t p = 0; p < preaders; ++p) {
+                    const uint32_t i = b * preaders + p;
+                    if (P.cores[i].mm != 0u) {
+                        continue;
+                    }
+                    const CoreCoord rc{P.cores[i].coord.x, P.cores[i].coord.y};
+                    const NOC rnoc = P.cores[i].noc ? NOC::NOC_1 : NOC::NOC_0;
+                    const CoreCoord tgt = bank_tgt(b, P.cores[i].noc);
+                    std::string fwd;
+                    uint32_t maxf = 0;
+                    for (uint32_t s = 1; s < Sm; ++s) {
+                        const CoreCoord sc{P.cores[i + s].coord.x, P.cores[i + s].coord.y};
+                        const uint32_t dd = expd::get_worker_noc_hop_distance(device, rc, sc, rnoc);
+                        fwd += std::to_string(dd) + (s + 1 < Sm ? "," : "");
+                        maxf = std::max(maxf, dd);
+                    }
+                    fmt::print(
+                        "PLACECOST b={} p={} noc={} reader=({},{}) tgt=({},{}) rdr2tgt={} fwd=[{}] maxfwd={}\n",
+                        b,
+                        p,
+                        P.cores[i].noc,
+                        rc.x,
+                        rc.y,
+                        tgt.x,
+                        tgt.y,
+                        expd::get_worker_noc_hop_distance(device, tgt, rc, rnoc),
+                        fwd,
+                        maxf);
+                }
+            }
+        }
+    }
+
     // ---- Physical-topology-aware in0 ring ordering (test-only; DEFAULT = bank order [0..7]) ----
     // Overrides ring_pos/ring_next_idx/ring_prev_idx per ring group using the group's WRITER NoC authoritative
     // hop distance (get_worker_noc_hop_distance, logical->physical + directed torus routing w/ wraparound).
