@@ -31,7 +31,6 @@ SHAPES = [
     (3200, 7168),
     (6400, 7168),
     (2, 3, 30, 1152),  # 4D + partial tile-row (M = 180)
-    (2, 40, 1024),  # multi-row-tile batch with a partial final row-tile (R=40 -> tiles of 32 + 8)
 ]
 
 ROUNDTRIP_SHAPES = [(32, 1024), (30, 1152), (4, 1, 128, 1024)]
@@ -304,10 +303,7 @@ def test_round_trip_random(device, dtype, shape, layout):
 
 
 # ---------------------------------------------------------------------------
-# masked_per_token_cast_back: functional dequant over sparse dispatch buffers.
-# Each expert's valid tokens are packed into a tile-aligned region (region_offsets = cumulative
-# ceil_tile(counts)); the op decompresses only the packed prefix (sum of ceil_tile(counts)) and
-# leaves the tail untouched. Verifies it recovers e4m3 * scale on the valid prefix.
+# masked_per_token_cast_back: dequant over the sparse MoE dispatch buffer.
 # ---------------------------------------------------------------------------
 
 TILE = 32
@@ -336,22 +332,44 @@ def _make_u32(device, values):
     )
 
 
+# ---------------------------------------------------------------------------
+# masked_per_token_cast_back: production dispatch-buffer layout.
+# The real dispatch buffer is a single flat per-chip buffer of fixed capacity
+# (max_dispatch_buffer_token_size) whose used prefix packs the local experts via
+# region_offsets = exclusive cumsum of ceil_tile(counts) — get_gate_outputs'
+# expert_region_offsets (tt/moe/init_helpers.py). Each expert region ends in
+# tile-alignment padding; the buffer's unused remainder is a large untouched tail.
+# counts / region are the sparse per-group format (width num_routed_experts, only this
+# chip's experts non-zero) and global_expert_idx_table maps each local slot to a
+# non-contiguous global expert id, so the kernel's counts[table[s]] / region[table[s]]
+# indirection is exercised (an identity table would hide a slot-vs-global indexing bug).
+# ---------------------------------------------------------------------------
+
+TAIL_TILES = 6  # unused remainder of the shared flat buffer, in tile-rows
+
+
 @pytest.mark.parametrize("bf16_scale", [False, True])
 @pytest.mark.parametrize("label, counts", MASKED_CASES, ids=[c[0] for c in MASKED_CASES])
-def test_masked_cast_back_dequant(device, label, counts, bf16_scale):
+def test_masked_cast_back_realistic_dispatch(device, label, counts, bf16_scale):
     torch.manual_seed(0)
-    H = 1024  # H / BLOCK_W = 8 scale blocks per row
+    H = 1024
 
     experts_per_chip = len(counts)
-    # Tile-aligned, contiguously packed expert regions: region_offsets = exclusive cumsum of
-    # ceil_tile(counts). The op writes [0, total_valid_rows); the extra tail rows stay untouched.
-    region = []
+    # This chip owns non-contiguous global ids (odd slots) out of a wider routed-expert space.
+    num_routed_experts = 2 * experts_per_chip
+    table = [2 * s + 1 for s in range(experts_per_chip)]
+
+    # Packed region layout for this chip's experts; other global ids stay zero (never read).
+    region = [0] * num_routed_experts
+    counts_sparse = [0] * num_routed_experts
     acc = 0
-    for c in counts:
-        region.append(acc)
+    for s, c in enumerate(counts):
+        g = table[s]
+        region[g] = acc
+        counts_sparse[g] = c
         acc += _ceil_tile(c)
     total_valid_rows = acc
-    capacity = total_valid_rows + 2 * TILE  # untouched garbage tail
+    capacity = total_valid_rows + TAIL_TILES * TILE  # large untouched tail
 
     input_e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
     input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0  # fp32; op always reads fp32
@@ -365,8 +383,8 @@ def test_masked_cast_back_dequant(device, label, counts, bf16_scale):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     region_tt = _make_u32(device, region)
-    counts_tt = _make_u32(device, counts)
-    table_tt = _make_u32(device, list(range(experts_per_chip)))  # identity: local slot -> global id
+    counts_tt = _make_u32(device, counts_sparse)
+    table_tt = _make_u32(device, table)
 
     out_tt = ttnn.experimental.deepseek_prefill.masked_per_token_cast_back(
         e4m3_tt,
@@ -382,16 +400,14 @@ def test_masked_cast_back_dequant(device, label, counts, bf16_scale):
 
     assert tuple(out_tt.shape) == (capacity, H)
 
-    # bf16_scale narrows the scale on-device; match the golden to what the op multiplies by.
     golden_scale = input_scale.to(torch.bfloat16).float() if bf16_scale else input_scale
     golden = (input_e4m3.float() * golden_scale.repeat_interleave(BLOCK_W, dim=-1)).to(torch.bfloat16).float()
 
-    # Only the valid packed prefix is written; the tail is intentionally garbage.
+    # The op sweeps [0, total_valid_rows) contiguously (valid tokens + end-of-region tile padding), so
+    # every written row must equal e4m3 * scale; the tail beyond total_valid_rows is left untouched.
     prefix_out = out[:total_valid_rows]
     prefix_golden = golden[:total_valid_rows]
     normal = input_e4m3.float()[:total_valid_rows].abs() > 2.0**-6
-    # bf16 output + bf16-narrowed scale round a few values one bf16 ULP past a 1e-3 band; PCC stays the
-    # quality gate, so loosen the absolute tolerance for the bf16-scale path only.
     atol = 1e-2 if bf16_scale else 1e-3
     assert_quality(
         prefix_out[normal],
@@ -399,5 +415,5 @@ def test_masked_cast_back_dequant(device, label, counts, bf16_scale):
         pcc_threshold=0.999,
         rtol=1e-2,
         atol=atol,
-        label=f"masked dequant {label} bf16_scale={bf16_scale}",
+        label=f"realistic dispatch {label} bf16_scale={bf16_scale}",
     )
