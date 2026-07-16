@@ -78,6 +78,11 @@ enum RegimeADiag : uint32_t {
     // (bit 1<<14 is free — was grouped-K; see GROUPED_K_REPORT.md.)
     DIAG_RING_BANK = 1u << 12,
     DIAG_RING_GREEDY = 1u << 13,
+    // A/B diagnostic for the ring OPT objective under M-split (Sm>1). DEFAULT opt scores each candidate
+    // permutation ACROSS ALL Sm physical mm-rings of the (kk,nn) group (worst directed edge over all rings,
+    // then summed hops over all rings). This bit reverts to the OLD objective: score only the mm==0 ring and
+    // apply that permutation to the group (slaves' routes ignored). Identical for Sm==1. No effect with BANK.
+    DIAG_RING_OPT_MM0 = 1u << 14,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
