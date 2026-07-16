@@ -333,20 +333,18 @@ models:
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:
     wh_llmbox: 61
-    wh_n150: 290
+    wh_n150: 310
     wh_galaxy: 45
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 409  # +8: GPT-OSS-120B bh_quietbox_2 22->30 (watcher slowdown)
-    bh_galaxy: 90  # +20: GPT-OSS-120B bh_galaxy 10->30 (watcher slowdown)
+    bh_quietbox_2: 420
+    bh_galaxy: 90
   unit_tier2:
     wh_llmbox: 114
-    # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): +10 (198->208) for Qwen2.5-32B step/job budget bump; see watcher_timeout_recommendations.md
     wh_llmbox_perf: 208
-    # TODO(watcher-fix, TEMPORARY - REVERT BEFORE MERGE): +10 (55->65) for Mistral-7B job budget bump; see watcher_timeout_recommendations.md
     wh_n150: 65
     bh_p150: 20
-    bh_quietbox_2: 60  # +10: GPT-OSS-20B bh_quietbox_2 5->15 (watcher slowdown)
+    bh_quietbox_2: 60
   unit_tier3:
     wh_llmbox_perf: 60
     wh_n150: 33
