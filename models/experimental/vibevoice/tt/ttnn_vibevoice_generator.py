@@ -12,10 +12,12 @@ Pipeline (aligned with reference):
 
 import os
 import time
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+import numpy as np
 import torch
 import ttnn
 
@@ -159,6 +161,102 @@ def _condition_from_hidden(last_hidden: ttnn.Tensor) -> ttnn.Tensor:
         [1, 1, h + 1, last_hidden.shape[-1]],
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+class _LoopBreaker:
+    """Detect a sustained acoustic repeat-loop in the streamed audio and break it by
+    re-drawing that frame's diffusion init noise (+ clamp the clipping the escape causes).
+
+    Long-context bf16 numerical drift in the ~40k-step AR feedback loop can tip the
+    trajectory into a degenerate attractor where the same short phrase is re-synthesised
+    for minutes (the fp32 reference, per-step error ~1e-7, never does this).  The loop is
+    NOT a raw-waveform repeat — each frame is acoustically distinct — but the CONTENT
+    recurs, so we detect it from a per-frame log-spectral envelope: a high correlation at
+    a phrase-scale lag (>= ``_MINLAG`` frames), sustained across a trailing window.
+
+    Thresholds are calibrated on the eager 89-min render (``4p_climate_100min``): clean
+    multi-speaker speech peaks at ~0.32 window-fraction (self-similarity sits at lag 1,
+    excluded), the min-78..83 loop holds ~0.37-0.5 at lag ~15 (the 2 s phrase).  With
+    ``_ON=0.40`` the detector never fires on clean audio, so on a clean render it is a
+    no-op and output stays byte-identical.
+
+    Intervention: on the frames of a detected loop, re-draw that frame's diffusion init
+    noise from a frame-local RNG.  (Perturbing the loop-carried *hidden* directly was tried
+    and was worse — the kick compounds through the on-device hidden-carry and drove the
+    trajectory into worse loops + energy collapse; the noise re-draw is the gentler,
+    better-behaved lever.)  It does not fully prevent the loop but shortens it and recovers
+    ~4 min earlier.  The forced escape can briefly over-drive the diffusion into clipping,
+    so the emitted audio is clamped to [-1, 1] during the loop episode + a recovery tail
+    (never on clean audio, whose legitimate peaks can exceed 1.0).  Frame-local RNG →
+    deterministic; the global draw order is untouched, so non-loop frames are unchanged.
+    """
+
+    _NB = 32  # log-spectral-envelope bins
+    _MINLAG, _LMAX = 6, 24  # phrase-scale lag search (0.8 s .. 3.2 s @ 7.5 fps)
+    _RMS_FLOOR, _TAU = 0.02, 0.92
+    _W, _ON, _OFF = 90, 0.40, 0.18  # trailing window (frames); on/off fraction (hysteresis)
+    _CLAMP_HOLD = 450  # clamp this many frames (~60 s) after an episode (recovery tail)
+
+    def __init__(self, seed: int = 0x100B):
+        self._seed = seed
+        self._win = None
+        self._edges = None
+        self._vecs: deque = deque(maxlen=self._LMAX)  # recent normalised envelopes (past frames)
+        self._rmss: deque = deque(maxlen=self._LMAX)
+        self._flags: deque = deque(maxlen=self._W)  # recent repeat-ish flags (0/1)
+        self._flagsum = 0
+        self.active = False
+        self._clamp_hold = 0
+
+    def _feat(self, chunk_1d: torch.Tensor):
+        x = chunk_1d.detach().to(torch.float32).numpy()
+        if self._win is None or len(self._win) != len(x):
+            self._win = np.hanning(len(x))
+            nfreq = len(x) // 2 + 1
+            self._edges = np.logspace(np.log10(4), np.log10(nfreq - 1), self._NB + 1).astype(int)
+        rms = float(np.sqrt(np.mean(x**2))) if len(x) else 0.0
+        mag = np.abs(np.fft.rfft(x * self._win))
+        env = np.array([np.log1p(mag[self._edges[b] : self._edges[b + 1] + 1].mean()) for b in range(self._NB)])
+        env -= env.mean()
+        env /= np.sqrt((env**2).sum()) + 1e-9
+        return env, rms
+
+    def update(self, chunk_1d: torch.Tensor) -> None:
+        """Feed one diffusion frame's audio; refresh ``active`` for the NEXT frame."""
+        v, rms = self._feat(chunk_1d)
+        repeatish = False
+        if rms >= self._RMS_FLOOR and len(self._vecs) >= self._MINLAG:
+            best = 0.0
+            for lag in range(self._MINLAG, min(self._LMAX, len(self._vecs)) + 1):
+                if self._rmss[-lag] >= self._RMS_FLOOR:
+                    best = max(best, float(v @ self._vecs[-lag]))
+            repeatish = best >= self._TAU
+        self._vecs.append(v)
+        self._rmss.append(rms)
+        flag = 1 if repeatish else 0
+        if len(self._flags) == self._W:
+            self._flagsum -= self._flags[0]
+        self._flags.append(flag)
+        self._flagsum += flag
+        frac = self._flagsum / len(self._flags)
+        if not self.active and frac >= self._ON:
+            self.active = True
+        elif self.active and frac <= self._OFF:
+            self.active = False
+        if self.active:
+            self._clamp_hold = self._CLAMP_HOLD
+        elif self._clamp_hold > 0:
+            self._clamp_hold -= 1
+
+    def clamp_now(self) -> bool:
+        """Clamp emitted audio during an episode + its recovery tail (never on clean audio)."""
+        return self.active or self._clamp_hold > 0
+
+    def perturb(self, noise_2x: torch.Tensor, frame_idx: int) -> torch.Tensor:
+        """Fresh diffusion-init noise from a frame-local RNG (reproducible; leaves the global
+        draw order / other frames' noise untouched, so non-loop frames stay unchanged)."""
+        g = torch.Generator().manual_seed(self._seed + int(frame_idx))
+        return torch.randn(*noise_2x.shape, generator=g, dtype=torch.float32).to(noise_2x.dtype)
 
 
 class TTVibeVoiceGenerator:
@@ -1085,6 +1183,12 @@ class TTVibeVoiceGenerator:
         if self.ref_inference is None:
             diffusion_noise = torch.randn(max_steps, 2, 1, 1, 64, dtype=torch.float32, generator=rng).to(torch.bfloat16)
 
+        # Anti-repetition loop-break (VV_LOOPBREAK, default on): watch the streamed audio for a
+        # sustained content-repeat loop (long-context bf16-drift failure); on the loop frames re-draw
+        # that frame's diffusion init noise to break out, and clamp the emitted audio to [-1, 1] over
+        # the episode.  A no-op on clean audio (never fires) — see _LoopBreaker.
+        loopbreaker = _LoopBreaker() if os.environ.get("VV_LOOPBREAK", "1") != "0" else None
+
         diffusion_frames = 0
         # Steady-state decode timing (cf. tt_transformers/llama demos): time ONLY the fused-frame
         # trace-replay frames — warmup and capture frames are not timed.
@@ -1111,13 +1215,21 @@ class TTVibeVoiceGenerator:
                 _frame_t0 = time.perf_counter() if _sf_replay else None
                 diffusion_frames += 1
                 noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
+                # Loop-break: on the frames of a detected loop, re-draw the diffusion init noise.
+                if loopbreaker is not None and loopbreaker.active and noise_2x is not None:
+                    noise_2x = loopbreaker.perturb(noise_2x, diffusion_frames)
                 start_pos = prefill_len + step
                 with prof.section("segment_frame"):
                     audio_chunk, logits = self._run_segment_frame_traced(
                         seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg
                     )
                 neg_prev_diffusion_token = current_token
-                _emit_audio(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))  # syncs frame
+                _frame_audio = ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)  # syncs frame
+                if loopbreaker is not None:
+                    loopbreaker.update(_frame_audio)  # detect on the raw (unclamped) audio
+                    if loopbreaker.clamp_now():
+                        _frame_audio = _frame_audio.clamp(-1.0, 1.0)
+                _emit_audio(_frame_audio)
                 with prof.section("token_constraint"):
                     logits = ttnn.add(
                         logits, self._token_constraint_mask(logits.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1148,6 +1260,8 @@ class TTVibeVoiceGenerator:
 
                 with prof.section("diffusion (CFG x num_steps)"):
                     noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
+                    if loopbreaker is not None and loopbreaker.active and noise_2x is not None:
+                        noise_2x = loopbreaker.perturb(noise_2x, diffusion_frames)
                     speech_latent = self._run_speech_diffusion(
                         cond_pos, cond_neg, latent_size=64, noise_2x=noise_2x, rng=rng
                     )
@@ -1161,6 +1275,10 @@ class TTVibeVoiceGenerator:
                         if isinstance(audio_chunk, torch.Tensor)
                         else ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)
                     )
+                    if loopbreaker is not None:
+                        loopbreaker.update(_chunk)  # detect on the raw (unclamped) audio
+                        if loopbreaker.clamp_now():
+                            _chunk = _chunk.clamp(-1.0, 1.0)
                     _emit_audio(_chunk)
                 chunk_samples = _chunk.numel()
                 _vv_debug(
