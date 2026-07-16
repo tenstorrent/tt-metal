@@ -62,7 +62,6 @@ struct SparseSDPAMsaOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     // Per-device causal start: chunk_start_idx + rank*S along cluster_axis (rank from the coordinate; 0 on a
     // single device or when non-causal). Shared by create_descriptor (miss-bake) and get_dynamic_runtime_args
