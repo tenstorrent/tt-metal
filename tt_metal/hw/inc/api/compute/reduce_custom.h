@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
@@ -56,8 +57,8 @@ namespace ckernel {
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim, bool respect_trigger = false>
-ALWI void reduce_block_max_row_init(uint32_t ocb) {
+template <std::uint32_t block_ct_dim, bool respect_trigger = false>
+ALWI void reduce_block_max_row_init(std::uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
     MATH((llk_math_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE>()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
@@ -101,8 +102,9 @@ ALWI void reduce_block_max_row_init(uint32_t ocb) {
  * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim, bool respect_trigger = false>
-ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst) {
+template <std::uint32_t block_ct_dim, bool respect_trigger = false>
+ALWI void reduce_block_max_row(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t row_start_index, std::uint32_t idst) {
     UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim, respect_trigger>(icb, icb_scaler, row_start_index)));
     MATH((llk_math_reduce_block_max_row<block_ct_dim, DST_ACCUM_MODE>(idst)));
 }
@@ -130,10 +132,10 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
  * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <uint32_t block_ct_dim, bool respect_trigger = false>
-ALWI void reduce_block_max_row_reinit_short(uint32_t ocb) {
+template <std::uint32_t block_ct_dim, bool respect_trigger = false>
+ALWI void reduce_block_max_row_reinit_short(std::uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
-    MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim>()));
+    MATH((llk_math_reduce_block_max_row_reinit_with_mop<block_ct_dim, DST_ACCUM_MODE>()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 #endif
@@ -143,10 +145,10 @@ ALWI void reduce_block_max_row_reinit_short(uint32_t ocb) {
  * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
  * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
  */
-template <uint32_t block_ct_dim, bool respect_trigger = false>
-ALWI void reduce_block_max_row_reinit_minimal(uint32_t ocb) {
+template <std::uint32_t block_ct_dim, bool respect_trigger = false>
+ALWI void reduce_block_max_row_reinit_minimal(std::uint32_t ocb) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim, DST_ACCUM_MODE, respect_trigger>()));
-    MATH((llk_math_reduce_block_max_row_reinit_minimal()));
+    MATH((llk_math_reduce_block_max_row_reinit_minimal<DST_ACCUM_MODE>()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
@@ -156,9 +158,9 @@ ALWI void reduce_block_max_row_reinit_minimal(uint32_t ocb) {
  * from the previous reduce.
  */
 ALWI void reduce_block_max_row_reinit_minimal_runtime(
-    uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false) {
+    std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
-    MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
+    MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime<DST_ACCUM_MODE>()));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
@@ -166,7 +168,8 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(
  * Short reinit (runtime variant): Reprograms reduce MOP and restores addrmods.
  * Used when reduce follows custom SDPA sub path with runtime block_ct_dim.
  */
-ALWI void reduce_block_max_row_reinit_short_runtime(uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false) {
+ALWI void reduce_block_max_row_reinit_short_runtime(
+    std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
     MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
@@ -206,7 +209,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(uint32_t ocb, uint32_t block
  */
 // clang-format on
 template <bool respect_trigger = false>
-ALWI void reduce_block_max_row_uninit(uint32_t icb) {
+ALWI void reduce_block_max_row_uninit(std::uint32_t icb) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit()));
 #else
@@ -220,17 +223,18 @@ ALWI void reduce_block_max_row_uninit(uint32_t icb) {
 }
 
 // Runtime variants - block_ct_dim and respect_trigger are runtime parameters.
-ALWI void reduce_block_max_row_init_runtime(uint32_t ocb, uint32_t block_ct_dim, bool respect_trigger = false) {
+ALWI void reduce_block_max_row_init_runtime(
+    std::uint32_t ocb, std::uint32_t block_ct_dim, bool respect_trigger = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
     MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim)));
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_ROW, PackMode::Default>(ocb)));
 }
 
 ALWI void reduce_block_max_row_runtime(
-    uint32_t icb,
-    uint32_t icb_scaler,
-    uint32_t row_start_index,
-    uint32_t idst,
+    std::uint32_t icb,
+    std::uint32_t icb_scaler,
+    std::uint32_t row_start_index,
+    std::uint32_t idst,
     bool respect_trigger = false,
     bool overlap_first_half = false) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
@@ -239,7 +243,7 @@ ALWI void reduce_block_max_row_runtime(
 }
 
 ALWI void reduce_block_max_row_uninit_runtime(
-    uint32_t icb, bool respect_trigger = false, bool overlap_first_half = false) {
+    std::uint32_t icb, bool respect_trigger = false, bool overlap_first_half = false) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit()));
 #else

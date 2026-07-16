@@ -201,6 +201,37 @@ inline void _llk_math_reduce_block_max_row_mop_reprogram_only_()
 }
 
 /**
+ * Minimal reinit for block-based reduce_max_row (addrmods only), re-establishing the fp32 ALU src
+ * zero-flag baseline on the math thread. See _llk_math_reduce_block_max_row_init_ for the full init.
+ */
+template <bool is_fp32_dest_acc_en = false>
+inline void _llk_math_reduce_block_max_row_reinit_minimal_()
+{
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // Disable the ALU src zero-flag (denormal flush) so the fp32 hi16/lo16 MOVB2D packing works.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
+    reduce_max_row_configure_addrmod_reinit_minimal();
+}
+
+/**
+ * Reinit for block-based reduce_max_row that also reprograms the reduce MOP, re-establishing the
+ * fp32 ALU src zero-flag baseline on the math thread. See _llk_math_reduce_block_max_row_init_.
+ */
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+inline void _llk_math_reduce_block_max_row_reinit_with_mop_()
+{
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // Disable the ALU src zero-flag (denormal flush) so the fp32 hi16/lo16 MOVB2D packing works.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
+    reduce_max_row_configure_addrmod();
+    _llk_math_reduce_block_max_row_mop_reprogram_only_<block_ct_dim>();
+}
+
+/**
  * Initializes block-based reduce_max_row operation for processing multiple tiles.
  *
  * This function works with the following assumptions:
@@ -218,6 +249,11 @@ inline void _llk_math_reduce_block_max_row_mop_reprogram_only_()
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void _llk_math_reduce_block_max_row_init_()
 {
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        // Disable the ALU src zero-flag (denormal flush) so the fp32 hi16/lo16 MOVB2D packing works.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+    }
     reduce_max_row_configure_addrmod();
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
