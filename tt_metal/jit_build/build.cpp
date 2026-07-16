@@ -515,8 +515,8 @@ void JitBuildState::write_build_state_hash(const string& out_dir) const {
 }
 
 bool JitBuildState::warmed_elf_reusable(std::string_view kernel_name) const {
-    // TT_METAL_FORCE_JIT_COMPILE bypasses all reuse. Checked here so both reuse paths -- the local
-    // build fast path and the remote submit gate (remote_kernel_cached) -- honor it from one place.
+    // TT_METAL_FORCE_JIT_COMPILE bypasses all reuse; both the local fast path and the remote gate
+    // (remote_kernel_cached) consult this predicate, so both recompile when it is set.
     if (env_.get_rtoptions().get_force_jit_compile()) {
         return false;
     }
@@ -800,7 +800,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     // every target has a matching recipe and a valid sidecar, reuse the ELFs directly -- no object is
     // needed. Ordinary local builds never write the sidecar, so this stays inert for them.
     // Firmware never uses the warmed-ELF reuse path; force-recompile is handled inside
-    // warmed_elf_reusable (the single source of truth shared with the remote reuse gate).
+    // warmed_elf_reusable, which both reuse paths call.
     if (!this->is_fw_) {
         const bool all_reusable = std::all_of(link_targets.begin(), link_targets.end(), [&](const auto* target) {
             return target->warmed_elf_reusable(kernel_name);

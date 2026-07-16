@@ -186,7 +186,7 @@ public:
     // to date, so compile+link (local build) or the remote round-trip can be skipped and the cached
     // ELF loaded directly. Validates only this build state's single ELF; callers loop over a kernel's
     // per-processor build states. Ordinary local builds never write the sidecar, so this returns
-    // false for them. Single source of truth shared by the local and remote reuse paths.
+    // false for them.
     bool warmed_elf_reusable(std::string_view kernel_name) const;
 
     // Write the preprocess-and-ship reuse cache (FULL_DEPHASH_SUFFIX sidecar + ".build_state") for

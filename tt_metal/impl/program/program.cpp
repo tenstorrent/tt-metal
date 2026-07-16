@@ -247,9 +247,9 @@ KernelCompileDescriptor build_kernel_descriptor(
     // Preprocess-and-ship (TT_METAL_JIT_PREPROCESS=1): run each source through the preprocessor (-E)
     // on the client and ship the self-contained .ii (headers/defines inlined). The server then
     // compiles the .ii with no include tree, no defines, and no source file on its filesystem --
-    // only the toolchain. Reuses the generated_files content channel (written into the per-kernel
-    // cache dir on the server), so no RPC/server change is required: the .ii is referenced as a
-    // sibling of the target output dir ("../<name>").
+    // only the toolchain. The .ii travels over the generated_files content channel, is written into
+    // the per-kernel cache dir on the server, and is referenced as a sibling of the target output
+    // dir ("../<name>").
     if (preprocess_and_ship) {
         for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
             auto& target = desc.request.targets[t];
