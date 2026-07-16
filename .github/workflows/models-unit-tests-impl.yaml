@@ -240,6 +240,9 @@ jobs:
       TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
+      # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
+      # downloaded. Requires the token's HF account to have accepted the model's license.
+      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
