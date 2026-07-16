@@ -24,9 +24,7 @@ using namespace ckernel;
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
-static constexpr bool IS_REDUCE_ROW             = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW);
-static constexpr bool IS_FULL_TILE_REDUCE_ROW   = IS_REDUCE_ROW && (POOL_TYPE != ckernel::PoolType::MAX);
-static constexpr std::uint32_t DVALIDS_PER_TILE = IS_FULL_TILE_REDUCE_ROW ? 1 : TILE_NUM_FACES;
+static constexpr std::uint32_t DVALIDS_PER_TILE = 1;
 
 #ifdef LLK_TRISC_UNPACK
 
