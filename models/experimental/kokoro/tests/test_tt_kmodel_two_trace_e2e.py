@@ -31,11 +31,15 @@ from models.experimental.kokoro.tt.tt_kmodel import KokoroConfig, TTKModel, prep
 
 _TRACE_REGION_SIZE = 1_200_000_000
 _L1_SMALL_SIZE = 98304
+# ~499 phonemes as a SINGLE KPipeline chunk (verified via KPipeline af_heart): stays under the
+# PLBERT context cap (512 - 2 BOS/EOS = 510 phonemes max), so the whole passage is one forward.
 _TEXT = (
-    "The early morning train moved slowly across the valley while a thin layer of mist covered the "
-    "distant hills and the small villages beside the river. Farmers were already working in the "
-    "fields, preparing the soil for another season of planting, and children walked along narrow "
-    "roads toward their schools with bags over their shoulders."
+    "The early morning train moved slowly across the wide green valley while a thin layer of silver "
+    "mist covered the distant hills and the small quiet villages beside the winding river. Farmers "
+    "were already working in the fields, carefully preparing the dark soil for another season of "
+    "planting, and children walked along the narrow country roads toward their schools with heavy "
+    "bags over their shoulders, laughing softly as the cool autumn breeze carried the gentle sound "
+    "of church bells across the calm and shining water."
 )
 
 
