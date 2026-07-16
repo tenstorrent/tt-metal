@@ -75,7 +75,8 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
+    // W front-pad offset: input_tensor_start is [N, C, H, W];
+    uint32_t W_padding_front_bytes = input_tensor_start[3] * input_tensor.element_size();
 
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
