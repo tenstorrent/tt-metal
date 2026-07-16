@@ -31,10 +31,14 @@ Each test file has variants per mesh size — `test_*_8x4`, `test_*_16x4`,
 
 ## 2. Prerequisites
 
-### 2.1 Build
+### 2.1 Build (bare-metal mode only)
 
 Standard `./build_metal.sh` is sufficient (no `--build-tt-train`
 needed for these tests). Existing build directory works.
+
+When using `--image <docker-image>`, no local build is required — tests
+run inside the Docker container. Only a tt-metal checkout (for `mpi-docker`
+and launcher scripts) is needed.
 
 ### 2.2 Cluster
 
@@ -63,10 +67,24 @@ Passwordless SSH from the launching host to every host in `HOSTS`.
 
 ---
 
+### 2.4 Docker mode prerequisites
+
+When using `--image`, the launching host needs:
+
+- Docker installed on all target hosts
+- Passwordless SSH between hosts (same as bare-metal)
+- The Docker image pulled on each host (or `docker pull` access)
+- `mpi-docker` script (comes with the tt-metal checkout at
+  `tools/scaleout/exabox/mpi-docker`)
+
+No `python_env`, no `tt-run`, no local build required.
+
+---
+
 ## 3. The single rule
 
-**One `tt-run` invocation at a time.** Wait for completion before launching
-the next one. Two concurrent `tt-run`s collide on chip locks.
+**One `tt-run` / `mpi-docker` invocation at a time.** Wait for completion
+before launching the next one. Two concurrent runs collide on chip locks.
 
 ---
 
@@ -83,11 +101,19 @@ Wallclock ≈ 60 s. Defaults to QUAD_BH host list — override with
 `MESH_DEVICE=...` and/or `HOSTS=...` for other configs. Use
 `--help` for full usage.
 
-### QUAD_BH (4 hosts — default)
+### QUAD_BH (4 hosts — default, bare-metal)
 
 ```bash
 cd $TT_METAL_HOME
 bash tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/scripts/run_multi_host_ccl_tests.sh
+```
+
+### QUAD_BH with Docker (no local build needed)
+
+```bash
+cd $TT_METAL_HOME
+bash tests/.../multi_host/scripts/run_multi_host_ccl_tests.sh \
+  --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:latest
 ```
 
 ### DUAL_BH (2 hosts)
@@ -97,11 +123,27 @@ MESH_DEVICE=DUAL_BH HOSTS="hostA,hostB" \
   bash tests/.../multi_host/scripts/run_multi_host_ccl_tests.sh
 ```
 
+### DUAL_BH with Docker
+
+```bash
+MESH_DEVICE=DUAL_BH HOSTS="hostA,hostB" \
+  bash tests/.../multi_host/scripts/run_multi_host_ccl_tests.sh \
+  --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:latest
+```
+
 ### SINGLE_BH (1 host, no MPI)
 
 ```bash
 MESH_DEVICE=SINGLE_BH \
   bash tests/.../multi_host/scripts/run_multi_host_ccl_tests.sh
+```
+
+### SINGLE_BH with Docker
+
+```bash
+MESH_DEVICE=SINGLE_BH \
+  bash tests/.../multi_host/scripts/run_multi_host_ccl_tests.sh \
+  --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:latest
 ```
 
 ### Run a single test
@@ -146,6 +188,27 @@ source python_env/bin/activate
 MESH_DEVICE=SINGLE_BH pytest --timeout=240 -v -k _8x4 \
   tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/
 ```
+
+---
+
+## 5b. Manual Docker invocation (bypass the wrapper)
+
+### QUAD_BH via mpi-docker
+
+```bash
+cd $TT_METAL_HOME
+./tools/scaleout/exabox/mpi-docker \
+  --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:latest \
+  --empty-entrypoint \
+  --host bh-glx-b06u02,bh-glx-b06u08,bh-glx-b07u02,bh-glx-b07u08 \
+  -x TT_MESH_ID=0 \
+  -x TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto \
+  -x MESH_DEVICE=QUAD_BH \
+  bash -c 'cd "$TT_METAL_HOME" && pytest --timeout=240 -v -k _32x4 \
+    tests/ttnn/unit_tests/operations/ccl/blackhole_CI/exabox/multi_host/'
+```
+
+Substitute the appropriate MGD path and host list for DUAL_BH.
 
 ---
 
