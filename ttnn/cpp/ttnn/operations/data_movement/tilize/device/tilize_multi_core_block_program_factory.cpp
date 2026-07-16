@@ -153,6 +153,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
 
     const TileDescriptor tile_descriptor(operation_attributes.tile);
 
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
+
     ProgramDescriptor desc;
 
     if (!core_range.empty()) {
