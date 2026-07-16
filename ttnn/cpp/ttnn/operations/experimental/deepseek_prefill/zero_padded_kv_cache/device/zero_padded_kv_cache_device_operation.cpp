@@ -154,23 +154,6 @@ ZeroPaddedKvCacheDeviceOperation::tensor_return_value_t ZeroPaddedKvCacheDeviceO
     return tensor_args.cache;  // in-place
 }
 
-ttsl::hash::hash_t ZeroPaddedKvCacheDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // slot_idx and valid_global are per-call scalars (patched, NOT hashed). layer_idx, num_layers,
-    // cluster_axis, chunk_size_global and pad_align are structural (hashed). Hash the full cache shape.
-    const auto& cache = tensor_args.cache;
-    return tt::tt_metal::operation::hash_operation<ZeroPaddedKvCacheDeviceOperation>(
-        args.layer_idx,
-        args.num_layers,
-        args.cluster_axis,
-        args.chunk_size_global,
-        args.pad_align,
-        cache.dtype(),
-        cache.layout(),
-        cache.memory_config(),
-        cache.padded_shape());
-}
-
 tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
@@ -346,6 +329,10 @@ ttnn::Tensor zero_padded_kv_cache(
         .layer_idx = layer_idx,
         .num_layers = num_layers,
         .cluster_axis = cluster_axis,
+        .cache_dtype = cache.dtype(),
+        .cache_layout = cache.layout(),
+        .cache_memory_config = cache.memory_config(),
+        .cache_padded_shape = cache.padded_shape(),
     };
     auto tensor_args = OperationType::tensor_args_t{.cache = cache};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
