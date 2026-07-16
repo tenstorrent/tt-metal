@@ -49,9 +49,6 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTran
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import comp_pcc
 
-# This test drives the full 61-layer chunked-prefill path over many chunks/iterations, so the model
-# stack's per-layer DEBUG loguru output (rms_norm/moe/expert forwards) balloons the CI log to ~300k+
-# lines. Raise the loguru sink to INFO so DEBUG is dropped while INFO/WARNING/etc. still print.
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 
