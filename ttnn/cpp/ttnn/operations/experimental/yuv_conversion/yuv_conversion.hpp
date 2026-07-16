@@ -20,8 +20,6 @@ namespace ttnn::experimental {
 //
 // coefficients: caller-supplied 3×4 matrix mapping RGB ∈ [-1,1] → YUV ∈ [0,255].
 //               The default (BT.601) is available as yuv_bt601_coefficients().
-//               Coefficients are packed to bf16 on device, so the result is not
-//               bit-exact (~1 LSB on Y, ~2 LSB on chroma).
 // memory_config: output memory config; defaults to the input's. Must be
 //                interleaved — sharded output is not supported.
 std::tuple<Tensor, Tensor, Tensor> yuv_conversion(

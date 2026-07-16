@@ -69,11 +69,6 @@ Convert a CHWT bfloat16 tensor (C=3, values in [-1, 1]) to YUV 4:2:0 uint8.
 Returns a tuple of three row-major uint8 tensors:
   (Y, U, V)  with shapes (1,H,W,T), (1,H/2,W/2,T), (1,H/2,W/2,T).
 
-The coefficients are packed to bfloat16 before being applied on device, so
-the conversion is not bit-exact: expect up to ~1 LSB of error on Y and ~2 LSB
-on the chroma planes (whose 2x2 average compounds the rounding).  This is
-within normal tolerance for uint8 video output.
-
 Args:
     input: CHWT bfloat16 tensor on device, C=3.  Must be interleaved.
     coefficients: YUVCoefficients with per-channel [wR, wG, wB, offset] rows.
