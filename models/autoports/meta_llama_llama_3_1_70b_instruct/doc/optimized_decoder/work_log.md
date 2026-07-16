@@ -286,4 +286,4 @@ python -m tracy -r -p -v --check-exit-code \
 
 Independent `$stage-review`: **clean-pass**. The final rereview found no required work after the precision-locked geometry sweep, cache-policy adjudication, decode-only packed gate/up comparison, machine-readable candidate evidence, advisor-provenance freeze, and batch-1 primary-target reproduction. The full verdict and anomaly ledger are retained in `STAGE_REVIEW.md`.
 
-Stage-owned local commit SHA(s): pending. No push will be performed.
+Stage implementation and evidence commit: `35ccb90250cab6c538413f239245212335840c63` (`Optimize Llama 3.1 70B decoder`). This work-log SHA update is a follow-up local metadata commit. No push was performed.
