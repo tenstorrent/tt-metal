@@ -324,13 +324,8 @@ ALWI void tilize_block(
             UNPACK((llk_unpack_tilize_block_to_dest(icb, input_tile_index, c * chunk, 0 /*dest slot*/)));
             UNPACK((llk_unpack_dest_dvalid_section_done<DST_SYNC_MODE>()));  // whole chunk valid for PACK
             for (uint32_t j = 0; j < chunk; j++) {
-                // DEBUG (tilize-to-DEST layout, PCC~0): DEST slot j -> out tile (oti + c*chunk + j). Remove after fix.
-                PACK(DPRINT(
-                    "TZPK c={} j={} dslot={} oidx={}\n",
-                    (uint32_t)c,
-                    (uint32_t)j,
-                    (uint32_t)j,
-                    (uint32_t)(output_tile_index + c * chunk + j)));
+                // TZPK dslot->oidx mapping (j->j) CONFIRMED correct via dprint_utd2; probe removed (it fired mid
+                // DEST-dvalid handshake and hung the pipeline). Re-add outside the section if needed.
                 PACK((llk_pack<true /*out_of_order*/>(j /*DEST slot*/, ocb, output_tile_index + c * chunk + j)));
             }
             PACK((llk_pack_dest_dvalid_section_done<DST_SYNC_MODE, DST_ACCUM_MODE>()));  // clear dvalid, free DEST
