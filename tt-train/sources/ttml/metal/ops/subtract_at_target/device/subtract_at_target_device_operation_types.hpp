@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -23,6 +24,11 @@ struct SubtractAtTargetParams {
     uint32_t local_V{0U};
     std::optional<uint32_t> cluster_axis{};
     float subtract_value{1.0F};
+
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const {
+        return std::forward_as_tuple();
+    }
 };
 
 struct SubtractAtTargetInputs {
@@ -30,6 +36,11 @@ struct SubtractAtTargetInputs {
     const ttnn::Tensor& target;  // [N, S]              ROW_MAJOR UINT32  (global indices)
 
     std::optional<ttnn::Tensor> preallocated_output;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_dtype", "input_logical_shape");
+    auto attribute_values() const {
+        return std::make_tuple(input.dtype(), std::cref(input.logical_shape()));
+    }
 };
 
 using operation_attributes_t = SubtractAtTargetParams;

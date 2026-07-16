@@ -88,14 +88,6 @@ SubtractAtTargetDeviceOperation::tensor_return_value_t SubtractAtTargetDeviceOpe
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t SubtractAtTargetDeviceOperation::compute_program_hash(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // first_v / local_V / cluster_axis / subtract_value only affect runtime args (they're patched
-    // by override_runtime_arguments per coord); they don't change the compiled kernel binary.
-    return tt::tt_metal::operation::hash_operation<SubtractAtTargetDeviceOperation>(
-        tensor_args.input.dtype(), tensor_args.input.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::subtract_at_target::device
 
 namespace ttnn::prim {
