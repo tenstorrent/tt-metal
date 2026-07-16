@@ -61,21 +61,32 @@ class Workload:
 
 @dataclass(frozen=True)
 class CCLTraffic:
-    """Analytic ring all-gather fabric roofline for one collective."""
+    """Topology-aware all-gather fabric roofline for one collective (ring or line)."""
 
     # Bytes that traverse the fabric along the longest single dependency chain (one chip's shard forwarded
     # to each of the other participants): local_input_bytes * (participants - 1). This sets the op's
-    # latency, so it is what the theoretical time and measured bandwidth are computed against.
+    # latency, so it is what the theoretical time and measured bandwidth are computed against. It is the
+    # same for ring and line — the busiest link carries all (participants - 1) remote shards either way;
+    # only how many fabric directions sustain that traffic differs (see sustained_directions).
     critical_path_bytes: float
     # Bytes moved across the whole mesh, summed over every chip: critical_path_bytes * num_devices. An
     # aggregate-traffic figure for context (total fabric work), NOT a latency term.
     total_network_bytes: float
     link_gigabits_per_second_per_direction: float
     num_links: int
+    topology: object  # ttnn.Topology; picks how many fabric directions the all-gather can sustain.
+
+    @property
+    def sustained_directions(self) -> int:
+        # A ring all-gather forwards shards both ways around the loop at once, sustaining both fabric
+        # directions (x2 the per-direction link bandwidth). A line has no wrap-around: the busy edge link
+        # carries all (participants - 1) shards in a single direction, so only x1 is sustainable. Production
+        # and every proxy here run Linear (mla.py:259); Ring is kept for a future ring-enabled path.
+        return 2 if self.topology == ttnn.Topology.Ring else 1
 
     @property
     def roofline_gigabits_per_second(self) -> float:
-        return self.link_gigabits_per_second_per_direction * self.num_links * 2  # x2 = both directions
+        return self.link_gigabits_per_second_per_direction * self.num_links * self.sustained_directions
 
     @property
     def roofline_gigabytes_per_second(self) -> float:
@@ -247,8 +258,8 @@ GLM_SEQUENCE_TO_HEAD = CollectivePath(
 def ccl_mesh_param(collective_axis: int):
     """`pytest.param(mesh_shape, device_params, marks, id)` for the box + collective axis (collection time).
 
-    Galaxy (32): the production 8x4. LoudBox (8): an SP=8 ring proxy (one ring approximates each of
-    Galaxy's four concurrent SP rings) for SP collectives, or a 2x4 mesh preserving TP=4 for TP collectives.
+    Galaxy (32): the production 8x4. LoudBox (8): an SP=8 line proxy (one line of 8 mirrors a Galaxy SP
+    row) for SP collectives, or a 2x4 mesh preserving TP=4 for TP collectives.
     """
     num_devices = detect_num_devices()
     canonical_fabric = {  # matches the deepseek conftest FABRIC_2D params (fabric router + reliability mode)
@@ -261,11 +272,12 @@ def ccl_mesh_param(collective_axis: int):
     elif num_devices == 8:
         system = "loudbox_proxy"
         if collective_axis == SP_AXIS:
-            # The SP=8 ring proxy (see _is_sp_ring_proxy) approximates each of Galaxy's four concurrent SP
-            # rings. FABRIC_1D_RING is a deliberately different transport from production FABRIC_2D — the
-            # proxy, not a config bug — so it omits the 2D fabric-router config.
-            mesh_shape, mesh_topology = (8, 1), "ring"
-            device_params = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
+            # SP=8 line proxy for a Galaxy SP row. Production runs the SP all-gather on Topology.Linear
+            # (mla.py:259), so the proxy mirrors that with a FABRIC_1D line — not a ring, which would model a
+            # transport Galaxy does not use today. FABRIC_1D isolates the single axis, so it omits the 2D
+            # fabric-router config.
+            mesh_shape, mesh_topology = (8, 1), "line"
+            device_params = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
         else:
             mesh_shape, mesh_topology, device_params = (2, 4), "mesh-2x4", fabric_2d
     else:
@@ -280,15 +292,13 @@ def ccl_mesh_param(collective_axis: int):
     )
 
 
-def _is_sp_ring_proxy(mesh_shape, collective_axis) -> bool:
-    """The LoudBox SP proxy (8x1) is the only ring topology; every other mesh/axis is Linear."""
-    return collective_axis == SP_AXIS and math.prod(mesh_shape) == 8
-
-
 def resolve_runtime_system(mesh_device, path: CollectivePath) -> RuntimeSystem:
     """Fabric roofline inputs for the live mesh: topology, link count, per-direction bandwidth."""
     mesh_shape = tuple(mesh_device.shape)
-    topology = ttnn.Topology.Ring if _is_sp_ring_proxy(mesh_shape, path.collective_axis) else ttnn.Topology.Linear
+    # Every path — Galaxy 8x4 and both LoudBox proxies — runs the all-gather on a line, matching
+    # production (mla.py:259). The roofline models this topology; a ring path would double the sustained
+    # bandwidth (see CCLTraffic.sustained_directions).
+    topology = ttnn.Topology.Linear
     default_gbps = _GALAXY_LINK_GBPS_PER_DIRECTION if math.prod(mesh_shape) == 32 else _LOUDBOX_LINK_GBPS_PER_DIRECTION
     link_gbps = float(os.environ.get("MLA_CCL_LINK_GBPS_PER_DIRECTION", default_gbps))
     return RuntimeSystem(mesh_shape, topology, NUM_LINKS, link_gbps)
@@ -508,6 +518,7 @@ def all_gather_roofline(path: CollectivePath, workload: Workload, mesh_device, s
         total_network_bytes=critical_path_bytes * math.prod(mesh_shape),
         link_gigabits_per_second_per_direction=system.link_gigabits_per_second_per_direction,
         num_links=system.num_links,
+        topology=system.topology,
     )
 
 
@@ -525,7 +536,8 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
     )
     logger.info(
         f"theoretical fabric roofline: {traffic.link_gigabits_per_second_per_direction:.1f} "
-        f"Gbps/link/direction x {traffic.num_links} links x 2 directions = "
+        f"Gbps/link/direction x {traffic.num_links} links x {traffic.sustained_directions} direction(s) "
+        f"({traffic.topology}) = "
         f"{traffic.roofline_gigabits_per_second:.1f} Gbps ({traffic.roofline_gigabytes_per_second:.1f} GB/s); "
         f"critical-path={traffic.critical_path_bytes / 1e6:.3f} MB, "
         f"total-mesh={traffic.total_network_bytes / 1e6:.3f} MB, "
