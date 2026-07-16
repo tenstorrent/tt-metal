@@ -454,6 +454,8 @@ def validate_generated_perf_test(out_path: Path, task: str) -> tuple[str, str]:
     if caps["trace_2cq"]:
         return "ok_2cq", ""
     if caps["trace_1cq"]:
+        if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
+            return "ok_1cq", ""
         return "invalid", "trace-capable but degraded to 1cq (never held trace+2cq)"
     return "invalid", (
         f"pipeline could not trace at all (path={path2 or _parse_trace_path(out1)}); neither 1cq nor "
@@ -548,6 +550,105 @@ def _invoked_as_pipeline_op(fn: str, demo_src: str) -> bool:
     return bool(re.search(r"\.%s\s*\(" % esc, demo_src) or re.search(r"\b%s\s*\(\s*[^)\s]" % esc, demo_src))
 
 
+_SKELETON_COMPONENT = """
+import os
+import time
+import pytest
+import ttnn
+
+PERF_ITERS = int(os.environ.get("TT_PERF_ITERS", "5"))
+PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
+_TRACE_REGION = int(os.environ.get("TT_PERF_TRACE_REGION", "23887872"))
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": _TRACE_REGION}], indirect=True)
+def test_<task>_perf(device_params, device):
+    ...  # build the one module + its input(s), lifted VERBATIM from the source PCC test
+
+    def _forward():
+        ...  # return the source's ttnn forward call for the built module
+
+    counter = [0]
+    _orig = []
+
+    def _draining(fn):
+        def inner(*a, **k):
+            r = fn(*a, **k)
+            counter[0] += 1
+            if PERF_FLUSH_EVERY and counter[0] % PERF_FLUSH_EVERY == 0:
+                try:
+                    ttnn.ReadDeviceProfiler(device)
+                except Exception:
+                    pass
+            return r
+
+        return inner
+
+    for _mod in [ttnn] + [getattr(ttnn, _s, None) for _s in ("transformer", "experimental")]:
+        if _mod is None:
+            continue
+        for _n in dir(_mod):
+            _op = getattr(_mod, _n, None)
+            if type(_op).__name__ == "FastOperation":
+                _orig.append((_mod, _n, _op))
+                setattr(_mod, _n, _draining(_op))
+    _forward()
+    ttnn.synchronize_device(device)
+    _t0 = time.monotonic()
+    try:
+        for _ in range(PERF_ITERS):
+            out = _forward()
+        try:
+            ttnn.ReadDeviceProfiler(device)
+        except Exception:
+            pass
+    finally:
+        for _mod, _n, _f in _orig:
+            setattr(_mod, _n, _f)
+    ttnn.synchronize_device(device)
+    print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _t0) * 1000.0 / PERF_ITERS))
+    assert out is not None
+
+    try:
+        _tid = ttnn.begin_trace_capture(device, cq_id=0)
+        _forward()
+        ttnn.end_trace_capture(device, _tid, cq_id=0)
+        ttnn.execute_trace(device, _tid, cq_id=0, blocking=True)
+        _tt0 = time.monotonic()
+        for _ in range(PERF_ITERS):
+            ttnn.execute_trace(device, _tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        ttnn.release_trace(device, _tid)
+        print("TRACE_PER_TOKEN_MS=%.4f" % ((time.monotonic() - _tt0) * 1000.0 / PERF_ITERS))
+        print("TRACE_REPLAY_PATH=trace 1cq module-forward")
+    except Exception as _te:  # noqa: BLE001
+        print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
+"""
+
+
+def _component_prompt(out_rel: str, src_label: str, demo_src: str, task: str) -> str:
+    """LLM prompt for a single-component perf test — the GENERAL path (covers any module/model type).
+    Mirrors the demo path's proven 'lift the build+run from a complete source' recipe, but the source is
+    the component's per-component PCC test and the target is one module timed in isolation."""
+    return (
+        f"Write a pytest PERFORMANCE test file `{out_rel}` that times ONE component of this TTNN model in "
+        f"ISOLATION. The source below is that component's per-component CORRECTNESS (PCC) test — it ALREADY "
+        f"builds the module correctly and runs its forward. LIFT ITS SETUP EXACTLY: reproduce VERBATIM its "
+        f"reference-model load, submodule resolution, ttnn module build, and input-tensor construction — "
+        f"these are the ONLY correct source of the module's weights and input, so do NOT drop them and do "
+        f"NOT substitute AutoModel/from_pretrained; if it loads a model-local `_reference_loader`, load it "
+        f"the SAME way it does. DROP ONLY the final comp_pcc / assert_with_pcc correctness comparison, then "
+        f"time the module's forward per the skeleton. This is NOT a pipeline: do NOT use build_pipeline, "
+        f"run_tts, run_main, generate, PipelineStageAdapter, measure_adapter, or PIPELINE_STAGES.\n"
+        f"<pcc_test path='{src_label}'>\n{demo_src}\n</pcc_test>\n\n"
+        f"Fill this structural skeleton — keep the drain, the eager timing, AND the trace-replay block "
+        f"VERBATIM; your ONLY edits are replacing the two `...` placeholders (the build/input in step 1 "
+        f"and the `_forward()` body in step 2) with code lifted from the source:\n{_SKELETON_COMPONENT}\n\n"
+        f"Do NOT use any tools and do NOT write the file yourself — respond with ONLY the complete python "
+        f"file content as your message text, no prose, no markdown fences."
+    )
+
+
 def generate_perf_test(
     model_root: str | Path,
     task: str,
@@ -572,7 +673,8 @@ def generate_perf_test(
     REGENERATES from scratch every time and overwrites — used by discovery so a stale/partial
     (e.g. prefill-only) perf test is NEVER reused; the pipeline's perf workload is recomputed each run."""
     root = Path(model_root)
-    out_rel = f"tests/e2e/test_{task}_perf.py"
+    _component = source_kind == "pcc" and os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False")
+    out_rel = f"tests/pcc/test_{task}_perf.py" if _component else f"tests/e2e/test_{task}_perf.py"
     out_path = root / out_rel
     node = f"{out_rel}::test_{task}_perf"
     if out_path.exists() and not force:
@@ -588,6 +690,8 @@ def generate_perf_test(
             return None
         src_label = demo_rel
     demo_src = src_file.read_text(errors="ignore")
+    if _component:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
     _selfrec_set = _self_tracing_fns(root)
     self_traced = sorted(f for f in _selfrec_set if _invoked_as_pipeline_op(f, demo_src))
     if source_kind == "pcc":
@@ -705,7 +809,9 @@ def generate_perf_test(
         "\n\nDo NOT use any tools and do NOT try to write the file yourself — the caller writes it. "
         "Respond with ONLY the complete python file content as your message text — no prose, no markdown fences."
     )
-    if self_traced:
+    if _component:
+        prompt = _component_prompt(out_rel, src_label, demo_src, task)
+    if self_traced and not _component:
         prompt = _self_traced_prompt(out_rel, task, src_label, demo_src, self_traced)
     # A generative demo's perf test must exercise the (capped) decode loop, not a prefill-only slice.
     demo_is_generative = any(
@@ -783,7 +889,7 @@ def generate_perf_test(
         if not validate:
             return node
         verdict, failure = validate_generated_perf_test(out_path, task)
-        if verdict in ("ok_2cq", "ok_marker", "skip"):
+        if verdict in ("ok_2cq", "ok_1cq", "ok_marker", "skip"):
             return node
         stall += 1
         if "WEDGE" in failure:

@@ -443,6 +443,10 @@ def cmd_optimize(args) -> int:
                 return 1
             run_root, run_demo = iso["wt"], iso["demo_in_wt"]
             print(f"  [optimize/cc] existing demo -> isolated on branch '{iso['branch']}' (working tree untouched)")
+        if getattr(args, "module_level", False):
+            from .module_optimize import run_module_level_optimize
+
+            return run_module_level_optimize(args, run_demo, run_root, run_cc)
         result = run_cc(
             run_demo,
             run_root,

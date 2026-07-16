@@ -928,6 +928,18 @@ def lead_review_gate(
     resolved = apply_agent_env(env_agent_path)
     model = get_model("lead", resolved)
     findings = json.dumps({k: pathmap[k] for k in ("perf_test", "pcc", "components", "summary", "warnings")}, indent=1)
+    prompt = REVIEW_PROMPT.format(findings=findings)
+    if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
+        prompt += (
+            "\n\nMODULE-LEVEL RUN (--module-level): this is a SINGLE-COMPONENT optimization. The perf test "
+            "times ONE module in isolation and the correctness gate is DELIBERATELY that module's OWN "
+            "per-component PCC test (a unit-level PCC >= its target), NOT a full-model end-to-end check. A "
+            "whole-pipeline / end-to-end gate is NOT expected or required here — the per-component PCC test "
+            "IS the correct and sufficient correctness signal for the single module being optimized. Do NOT "
+            "stop for 'the gate is only a per-component/unit test' or 'no correctness signal for the other "
+            "stages'; judge ONLY whether the per-component perf test and its per-component PCC gate are sound "
+            "for that one module."
+        )
     options = ClaudeAgentOptions(
         model=model,
         system_prompt="You make go/no-go calls for an automated perf-optimization harness.",
@@ -941,7 +953,7 @@ def lead_review_gate(
     usage: dict[str, Any] = {}
 
     async def _go() -> None:
-        async for msg in query(prompt=REVIEW_PROMPT.format(findings=findings), options=options):
+        async for msg in query(prompt=prompt, options=options):
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock):

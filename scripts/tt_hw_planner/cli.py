@@ -11385,6 +11385,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="branch on --catalog-remote that holds the shared catalog (default: perf-catalog). "
         "Kept separate from model-optimization commits.",
     )
+    popt.add_argument(
+        "--module-level",
+        action="store_true",
+        dest="module_level",
+        help="optimize graduated native modules ONE AT A TIME (against each module's per-component PCC "
+        "test) instead of the full pipeline. Sidesteps the heavy e2e baseline; a coarse per-module "
+        "pre-pass. Composes with --modules, --hitl, --then-e2e.",
+    )
+    popt.add_argument(
+        "--modules",
+        default=None,
+        help="comma-separated subset of module names for --module-level (default: all graduated modules).",
+    )
+    popt.add_argument(
+        "--then-e2e",
+        action="store_true",
+        dest="then_e2e",
+        help="after --module-level, run one full-pipeline pass to confirm the per-module wins survive " "composition.",
+    )
     popt.set_defaults(func=cmd_optimize)
 
     pao = sub.add_parser(
