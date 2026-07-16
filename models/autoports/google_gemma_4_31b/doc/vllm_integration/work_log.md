@@ -141,6 +141,7 @@ admission / temperature 0 / ignore EOS:
 - Benchmarks: `vllm_result.json`, `vllm_benchmark.json`,
   `vllm_ci_serving_result.json`, and `vllm_ci_serving_benchmark.json`.
 - No live processes were left holding devices; historical PID-1 zombies only.
-- Main repository Stage 09 commit: recorded by the follow-up provenance commit.
+- Main repository Stage 09 implementation/evidence commit:
+  `e07e401794d5b34b61526d5c097e7c68e81189d3`.
 - Nested vLLM plugin commit: `91c467d6fc18c4386eda14360baf0bee0e0f684c`.
 - No push performed.
