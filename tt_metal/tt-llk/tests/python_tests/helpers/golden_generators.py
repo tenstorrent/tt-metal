@@ -289,18 +289,35 @@ def get_golden_generator(cls):
     return golden_registry[cls]
 
 
+def _dummy_zeros(**kwargs):
+    # Size the dummy tensor from the caller's tile-shape kwargs when they are
+    # all present (num_faces * face_r_dim * FACE_DIM per tile, times tile_cnt),
+    # so callers that strictly size-check the result (e.g. untilize_block on a
+    # 16x32 tiny tile) get a correctly-sized tensor. When any sizing kwarg is
+    # absent, fall back to the historical ELEMENTS_PER_TILE (1024) so existing
+    # callers are unaffected.
+    num_faces = kwargs.get("num_faces")
+    face_r_dim = kwargs.get("face_r_dim")
+    tile_cnt = kwargs.get("tile_cnt")
+    if num_faces is None or face_r_dim is None or tile_cnt is None:
+        size = ELEMENTS_PER_TILE
+    else:
+        size = tile_cnt * num_faces * face_r_dim * FACE_DIM
+    return torch.zeros(size, dtype=torch.bfloat16)
+
+
 class DummyGoldenGenerator:
     def __call__(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
+        return _dummy_zeros(**kwargs)
 
     def transpose_faces_multi_tile(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
+        return _dummy_zeros(**kwargs)
 
     def transpose_within_faces_multi_tile(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
+        return _dummy_zeros(**kwargs)
 
     def accumulate_l1(*args, **kwargs):
-        return torch.zeros(1024, dtype=torch.bfloat16)
+        return _dummy_zeros(**kwargs)
 
 
 def dummy_golden_generator(cls):
@@ -3458,11 +3475,16 @@ class ReduceGolden:
 
 @register_golden
 class ReduceBlockMaxRowGolden:
+    # Row-wise block max reduce. Works for both 32x32 (num_faces=4) and 16x32 (num_faces=2,
+    # one face-row) tiles: the reduce is per-row across the full block width and the caller
+    # passes block dims sized by the actual tile row/col dims. Column width per tile is 32 in
+    # both cases (only the row count shrinks for tiny tiles), so the reduce span is ct_dim * 32.
     def __call__(self, operand, ct_dim, data_format, dimensions):
         operand = operand.reshape(dimensions)
         output = torch.zeros(dimensions)
+        reduce_width = min(ct_dim * 32, dimensions[1])
         for i in range(dimensions[0]):
-            output[i, 0] = torch.max(operand[i, : ct_dim * 32])
+            output[i, 0] = torch.max(operand[i, :reduce_width])
 
         return output
 
