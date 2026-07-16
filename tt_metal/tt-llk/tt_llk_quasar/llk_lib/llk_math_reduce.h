@@ -552,7 +552,7 @@ inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& t
     }
     else
     {
-        // Non-int paths and the int32 scalar-MAX path both run the MOP configured in the init.
+        // RUN MOP
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
 

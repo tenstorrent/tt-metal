@@ -85,10 +85,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (is_int_fpu_en)
     {
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY, true /*is_int_fpu_en*/>(tensor_shape_A);
-        for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+        // Int Scalar SUM is unsupported, see SFPU reduce.
+        if constexpr (!(REDUCE_DIM == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM))
         {
-            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /*is_int_fpu_en*/>(i, tensor_shape_A);
+            _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY, true /*is_int_fpu_en*/>(tensor_shape_A);
+            for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+            {
+                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, true /*is_int_fpu_en*/>(i, tensor_shape_A);
+            }
         }
     }
     else
