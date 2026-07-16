@@ -4,6 +4,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/layer_completion_queue.hpp
     api/internal/disaggregation/layer_completion_reorder_buffer.hpp
     api/internal/disaggregation/layer_completion_router.hpp
+    api/tt-metalium/allocation_context.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
