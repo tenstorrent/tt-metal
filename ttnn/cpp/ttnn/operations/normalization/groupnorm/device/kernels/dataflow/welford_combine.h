@@ -22,9 +22,9 @@
  */
 template <typename T>
 struct WelfordStats {
-    T mean;          // Mean of the subgroup.
-    T variance;      // Variance of the subgroup.
-    uint32_t count;  // Number of elements in the subgroup.
+    T mean;               // Mean of the subgroup.
+    T variance;           // Variance of the subgroup.
+    std::uint32_t count;  // Number of elements in the subgroup.
 };
 
 /**
@@ -58,7 +58,7 @@ inline WelfordStats<float> combine(const WelfordStats<float>& a, const WelfordSt
  * @param vars Array of subgroup variances.
  * @return Combined WelfordStats<float> for all subgroups.
  */
-template <uint32_t ARRAY_SIZE, uint32_t COUNT_PER_VALUE, uint32_t STRIDE>
+template <std::uint32_t ARRAY_SIZE, std::uint32_t COUNT_PER_VALUE, std::uint32_t STRIDE>
 inline WelfordStats<float> combine_welford_stats(const float* means, const float* vars) {
     static_assert(ARRAY_SIZE > 0, "ARRAY_SIZE must be greater than 0");
 
@@ -67,7 +67,7 @@ inline WelfordStats<float> combine_welford_stats(const float* means, const float
     result.variance = vars[0];
     result.count = COUNT_PER_VALUE;
 
-    for (uint32_t i = 1; i < ARRAY_SIZE; ++i) {
+    for (std::uint32_t i = 1; i < ARRAY_SIZE; ++i) {
         WelfordStats<float> next;
         next.mean = means[i * STRIDE];
         next.variance = vars[i * STRIDE];
@@ -89,30 +89,31 @@ inline WelfordStats<float> combine_welford_stats(const float* means, const float
  * @param vars Array of subgroup variances (bfloat16).
  * @return Combined WelfordStats<uint16_t> for all subgroups.
  */
-template <uint32_t ARRAY_SIZE, uint32_t COUNT_PER_VALUE, uint32_t STRIDE, typename T>
-inline WelfordStats<uint16_t> combine_welford_stats(T means, T vars) {
+template <std::uint32_t ARRAY_SIZE, std::uint32_t COUNT_PER_VALUE, std::uint32_t STRIDE, typename T>
+inline WelfordStats<std::uint16_t> combine_welford_stats(T means, T vars) {
     static_assert(ARRAY_SIZE > 0, "ARRAY_SIZE must be greater than 0");
     static_assert(
-        std::is_same_v<std::remove_volatile_t<std::remove_pointer_t<T>>, uint16_t>,
+        std::is_same_v<std::remove_volatile_t<std::remove_pointer_t<T>>, std::uint16_t>,
         "T must be uint16_t* or volatile uint16_t*");
 
-    WelfordStats<float> overall;
-    overall.mean = bf16_to_fp32(means[0]);
-    overall.variance = bf16_to_fp32(vars[0]);
-    overall.count = COUNT_PER_VALUE;
+    float mean = bf16_to_fp32(means[0]);
+    float means_m2 = 0.0f;
+    float var_sum = bf16_to_fp32(vars[0]);
 
-    for (uint32_t i = 1; i < ARRAY_SIZE; ++i) {
-        WelfordStats<float> next;
-        next.mean = bf16_to_fp32(means[i * STRIDE]);
-        next.variance = bf16_to_fp32(vars[i * STRIDE]);
-        next.count = COUNT_PER_VALUE;
-        overall = combine(overall, next);
+    for (std::uint32_t i = 1; i < ARRAY_SIZE; ++i) {
+        const float next_mean = bf16_to_fp32(means[i * STRIDE]);
+        const float delta = next_mean - mean;
+        mean += delta / static_cast<float>(i + 1);
+        means_m2 += delta * (next_mean - mean);
+        var_sum += bf16_to_fp32(vars[i * STRIDE]);
     }
 
-    WelfordStats<uint16_t> result;
-    result.mean = fp32_to_bf16_truncate(overall.mean);
-    result.variance = fp32_to_bf16_truncate(overall.variance);
-    result.count = overall.count;
+    // Equal-sized populations have total variance equal to the average subgroup
+    // variance plus the population variance of their means.
+    WelfordStats<std::uint16_t> result;
+    result.mean = fp32_to_bf16_truncate(mean);
+    result.variance = fp32_to_bf16_truncate((var_sum + means_m2) / static_cast<float>(ARRAY_SIZE));
+    result.count = ARRAY_SIZE * COUNT_PER_VALUE;
 
     return result;
 }
