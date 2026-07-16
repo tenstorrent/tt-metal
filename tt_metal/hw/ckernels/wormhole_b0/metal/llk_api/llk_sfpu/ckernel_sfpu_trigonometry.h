@@ -518,11 +518,10 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     sfpi::vFloat d = 1.0f - x_abs;
     sfpi::vFloat switchover = 0.5625f;
     sfpi::vFloat half_d = d * 0.5f;
+    sfpi::vFloat tmp = x_abs - switchover;
 
     // asin(x) = pi/2 - 2 * asin(sqrt((1 - |x|) / 2)).
     sfpi::vFloat reduced = _sfpu_sqrt_endpoint_(half_d);
-
-    sfpi::vFloat tmp = x_abs - switchover;
 
     v_if(tmp < 0.0f) { reduced = x_abs; }
     v_endif;
@@ -564,18 +563,17 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
-    constexpr float SWITCHOVER = 0.5625f;
-
     sfpi::vFloat result;
     sfpi::vFloat x_abs = sfpi::abs(x);
     sfpi::vFloat d = 1.0f - x_abs;
+    sfpi::vFloat switchover = 0.5625f;
     sfpi::vFloat half_d = d * 0.5f;
+    sfpi::vFloat tmp = x_abs - switchover;
 
     // acos(x) = 2 * asin(sqrt((1 - x) / 2)).  Reduce to an asin
     // approximation on [-SWITCHOVER, SWITCHOVER].
     sfpi::vFloat reduced = _sfpu_sqrt_endpoint_(half_d);
 
-    sfpi::vFloat tmp = x_abs - SWITCHOVER;
     v_if(tmp < 0.0f) { reduced = x_abs; }
     v_endif;
 
@@ -605,7 +603,7 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // Map asin(reduced) back to acos(x).
-    v_if(x < SWITCHOVER) {
+    v_if(x < 0.5625f) {
         sfpi::vFloat pio2_fac1 = 0.93318945f;
         sfpi::vFloat pio2_fac2 = 1.68325555f;
         result = __builtin_rvtt_sfpmad(pio2_fac1.get(), pio2_fac2.get(), result.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
