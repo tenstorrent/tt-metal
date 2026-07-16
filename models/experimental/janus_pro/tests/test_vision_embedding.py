@@ -15,7 +15,6 @@ from models.experimental.janus_pro.tt.janus_pro_vision_embedding import TtJanusP
 from ttnn import ConcatMeshToTensor
 
 
-# @pytest.mark.skipif(not is_blackhole(), reason="Janus Pro requires Blackhole")
 @pytest.mark.parametrize(
     "mesh_device",
     [
