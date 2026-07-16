@@ -1,0 +1,28 @@
+TT_METAL_HOME: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip
+PYTHONPATH: /home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/ttnn:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip:/home/smarton/tt-metal/.claude/worktrees/ltxperf-tip/tools
+TT_DIT_CACHE_DIR: /home/smarton/.cache/tt-dit-ltxrt
+TT_METAL_CACHE: /home/smarton/.cache/tt-metal-cache-ltxrt
+LTX_CHECKPOINT: /home/kevinmi/.cache/huggingface/hub/models--Lightricks--LTX-2.3/snapshots/76730e634e70a28f4e8d51f5e29c08e40e2d8e74/ltx-2.3-22b-distilled-1.1.safetensors
+GEMMA_PATH: /home/kevinmi/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/68f7ee4fbd59087436ada77ed2d62f373fdd4482/
+TT_METAL_DEVICE_PROFILER: "1"
+TT_METAL_PROFILER_CPP_POST_PROCESS: "1"
+TT_METAL_PROFILER_TRACE_TRACKING: "1"
+TTNN_OP_PROFILER: "1"
+# BIGBUF: 3000 gave a 36000-marker/RISC DRAM buffer that ONE traced denoise step overflows
+# (2026-07-13 prof_traced.log: "buffers were full, markers were dropped, bufferEndIndex=36000"),
+# even with the per-step LTX_PROFILE_FLUSH drain already active. ~9360 programs/step at ~12
+# markers each needs ~112k; 20000 sizes the per-RISC buffer to ~240k to hold one step clean.
+TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT: "20000"
+LTX_QUALITY: high
+HEIGHT: "1088"
+WIDTH: "1920"
+NUM_FRAMES: "145"
+LTX_TRACED: "1"
+LTX_PROFILE_FLUSH: "1"
+LTX_PROFILE_DENOISE_ONLY: "1"
+NO_PROMPT: "1"
+SEED: "10"
+RUN_VBENCH: "0"
+RUN_CLIP: "0"
+LTX_TIME_STAGES: "1"
+TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
