@@ -35,28 +35,26 @@ namespace hw {
 
 using namespace ckernel;
 
-// One-shot math configure (srcA == srcB format). Float16_b: no int8 math, no
-// fp32 dest.
-inline void math_hw_cfg(const sst::TileConfig& tile_config) {
-    constexpr bool fp32 = (DST_ACCUM_MODE != 0);
-    const std::uint32_t df = tile_config.data_format;
+// One-shot math configure.
+template <typename Traits>
+inline void math_hw_cfg() {
+    constexpr bool fp32 = Traits::fp32_dest_acc;
 
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
 
-    const std::uint32_t int8_math_enabled = (masked_data_format(df) == ckernel::to_underlying(DataFormat::Int8)) ||
-                                            (df == ckernel::to_underlying(DataFormat::Int32));
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(0);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(fp32);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(fp32);
 }
 
 // Claim the whole DST for MATH at startup (blocks until previous packs drain).
+template <typename Traits>
 inline void math_pack_sync_cfg() {
     tensix_sync();
     while (semaphore_read(semaphore::MATH_PACK) > 0) {
     }
-    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+    if constexpr (Traits::dst_sync == sst::DstSyncMode::SyncFull) {
         TTI_SEMINIT(1, 0, p_stall::SEMAPHORE_1);
     } else {
         TTI_SEMINIT(2, 0, p_stall::SEMAPHORE_1);
@@ -77,8 +75,9 @@ inline void math_remap_cfg(bool remap_enable) {
 
 // Program the A2D datacopy MOP: addrmods (idle / per-row / MOV_8_ROWS) + a
 // MOV_8_ROWS MOP (num_faces outer, 16>>3=2 inner) + dvalid/counter epilogue.
+template <typename Traits>
 inline void math_a2d_cfg(const sst::TileConfig& tile_config) {
-    constexpr bool fp32 = (DST_ACCUM_MODE != 0);
+    constexpr bool fp32 = Traits::fp32_dest_acc;
 
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_3);
     addr_mod_t{.srca = {.incr = 1}, .srcb = {.incr = 0}, .dest = {.incr = 1}}.set(ADDR_MOD_0);
@@ -111,9 +110,10 @@ inline void math_a2d(std::uint32_t dst_tile_index) {
 inline void math_wait_for_dest_available() { math::math_dest_wait(); }
 
 // tile_regs_commit (MATH side): hand the written DST section to PACK.
+template <typename Traits>
 inline void math_dest_section_done() {
     math::set_math_semaphores();
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+    if constexpr (Traits::dst_sync == sst::DstSyncMode::SyncHalf) {
         math_sync_tile_dst_index = 0;
         math::dest_section_flip();
     }

@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// The state model.
+// The hardware-configuration state model.
 //
-// `State` is a compile-time description of what the three Tensix engines
-// (UNPACK / MATH / PACK) are currently configured to do. It is NOT stored at
-// runtime: it lives entirely in the type system and is threaded from op to op.
-// Every op is a pure function  Tag<S_in> -> Tag<S_out>.
+// `State` is a compile-time description of independently reconfigurable Tensix
+// hardware domains. It intentionally separates:
+//   * immutable kernel traits (kept outside the mergeable State),
+//   * SrcA / SrcB / PACK operand descriptors,
+//   * UNPACK / MATH / PACK operation programs, and
+//   * DEST layout.
 //
 // C++17 note (the whole reason this file looks the way it does):
 //   * C++17 has NO class-type non-type template parameters. You cannot write
@@ -43,6 +45,15 @@ using tensor::TileConfig;
 enum class UnpackMode : uint8_t { None = 0, DataCopy = 1, Matmul = 2, Tilize = 3, Eltwise = 4, Reduce = 5 };
 enum class MathMode : uint8_t { None = 0, DataCopy = 1, Matmul = 2, Reduce = 3, Tilize = 4, Eltwise = 5 };
 enum class PackMode : uint8_t { None = 0, Default = 1, Untilize = 2, Tilize = 3, Reduce = 4 };
+enum class DstSyncMode : uint8_t { SyncHalf = 0, SyncFull = 1 };
+
+// Immutable JIT/compile-time configuration. Traits are available to operation
+// recipes but are not threaded through control flow or widened at joins.
+template <bool Fp32DestAcc, DstSyncMode DstSync>
+struct KernelTraits {
+    static constexpr bool fp32_dest_acc = Fp32DestAcc;
+    static constexpr DstSyncMode dst_sync = DstSync;
+};
 
 // The binary eltwise sub-kind. It selects a different MATH addrmod/MOP, so it is
 // tracked in the MATH state: switching add<->sub<->mul must reprogram MATH even
@@ -64,8 +75,25 @@ enum class ReduceOp : uint8_t { None = 0, Max = 1, Sum = 2 };
 enum class SfpuOp : uint8_t { None = 0, Exp = 1, Recip = 2, Max = 3 };
 
 // ---------------------------------------------------------------------------
-// The three engine sub-states. Each field is Tracked: known or widened-away.
-// ---------------------------------------------------------------------------
+// The physical source/packer descriptors are independent. Matmul in particular
+// may have asymmetric SrcA and SrcB formats/geometries, while pack reconfiguration
+// changes neither source.
+struct OperandCfg {
+    Tracked<TileConfig> src_a{};
+    Tracked<TileConfig> src_b{};
+    Tracked<TileConfig> pack{};
+
+    constexpr bool operator==(const OperandCfg& o) const {
+        return src_a == o.src_a && src_b == o.src_b && pack == o.pack;
+    }
+    constexpr bool operator!=(const OperandCfg& o) const { return !(*this == o); }
+    static constexpr OperandCfg merge(const OperandCfg& a, const OperandCfg& b) {
+        return OperandCfg{sst::merge(a.src_a, b.src_a), sst::merge(a.src_b, b.src_b), sst::merge(a.pack, b.pack)};
+    }
+};
+
+// Operation-program domains. These describe persistent MOP / ADDR_MOD and
+// operation-specific geometry, not operand descriptor state.
 struct UnpackCfg {
     Tracked<UnpackMode> mode{};
     Tracked<TileConfig> tile_config{};
@@ -86,13 +114,6 @@ struct UnpackCfg {
 struct MathCfg {
     Tracked<MathMode> mode{};
     Tracked<TileConfig> tile_config{};  // format/geometry the datacopy MOP + ALU depend on
-    // The DST-produce layout: true = the stride-16 remapped (row-major) layout a
-    // DST-draining untilize packer consumes; false = the natural tiled layout the
-    // default/tilize packer expects. It is a DEST_ACCESS_CFG toggle that must be
-    // set BEFORE MATH writes DST, so it rides in the MATH state and any op that
-    // writes DST (matmul, tilize fill, copy) declares the layout it needs. A
-    // matmul->untilize pipeline flips it on; a tilize flips it back off.
-    Tracked<bool> remap{};
     // Which binary eltwise op the MATH addrmod/MOP is programmed for. Only
     // meaningful when mode==Eltwise; the datacopy/matmul/tilize paths leave it
     // None. Tracked so add<->sub<->mul re-emits the MATH configure even when the
@@ -114,15 +135,14 @@ struct MathCfg {
     Tracked<SfpuOp> sfpu{};
 
     constexpr bool operator==(const MathCfg& o) const {
-        return mode == o.mode && tile_config == o.tile_config && remap == o.remap && eltwise == o.eltwise &&
-               broadcast == o.broadcast && reduce == o.reduce && sfpu == o.sfpu;
+        return mode == o.mode && tile_config == o.tile_config && eltwise == o.eltwise && broadcast == o.broadcast &&
+               reduce == o.reduce && sfpu == o.sfpu;
     }
     constexpr bool operator!=(const MathCfg& o) const { return !(*this == o); }
     static constexpr MathCfg merge(const MathCfg& a, const MathCfg& b) {
         return MathCfg{
             sst::merge(a.mode, b.mode),
             sst::merge(a.tile_config, b.tile_config),
-            sst::merge(a.remap, b.remap),
             sst::merge(a.eltwise, b.eltwise),
             sst::merge(a.broadcast, b.broadcast),
             sst::merge(a.reduce, b.reduce),
@@ -150,15 +170,45 @@ struct PackCfg {
     }
 };
 
-struct State {
-    UnpackCfg u{};
-    MathCfg m{};
-    PackCfg p{};
+struct OperationCfg {
+    UnpackCfg unpack{};
+    MathCfg math{};
+    PackCfg pack{};
 
-    constexpr bool operator==(const State& o) const { return u == o.u && m == o.m && p == o.p; }
+    constexpr bool operator==(const OperationCfg& o) const {
+        return unpack == o.unpack && math == o.math && pack == o.pack;
+    }
+    constexpr bool operator!=(const OperationCfg& o) const { return !(*this == o); }
+    static constexpr OperationCfg merge(const OperationCfg& a, const OperationCfg& b) {
+        return OperationCfg{
+            UnpackCfg::merge(a.unpack, b.unpack), MathCfg::merge(a.math, b.math), PackCfg::merge(a.pack, b.pack)};
+    }
+};
+
+struct DestLayoutCfg {
+    Tracked<bool> remap{};
+
+    constexpr bool operator==(const DestLayoutCfg& o) const { return remap == o.remap; }
+    constexpr bool operator!=(const DestLayoutCfg& o) const { return !(*this == o); }
+    static constexpr DestLayoutCfg merge(const DestLayoutCfg& a, const DestLayoutCfg& b) {
+        return DestLayoutCfg{sst::merge(a.remap, b.remap)};
+    }
+};
+
+struct State {
+    OperandCfg operands{};
+    OperationCfg operations{};
+    DestLayoutCfg layout{};
+
+    constexpr bool operator==(const State& o) const {
+        return operands == o.operands && operations == o.operations && layout == o.layout;
+    }
     constexpr bool operator!=(const State& o) const { return !(*this == o); }
     static constexpr State merge(const State& a, const State& b) {
-        return State{UnpackCfg::merge(a.u, b.u), MathCfg::merge(a.m, b.m), PackCfg::merge(a.p, b.p)};
+        return State{
+            OperandCfg::merge(a.operands, b.operands),
+            OperationCfg::merge(a.operations, b.operations),
+            DestLayoutCfg::merge(a.layout, b.layout)};
     }
 };
 

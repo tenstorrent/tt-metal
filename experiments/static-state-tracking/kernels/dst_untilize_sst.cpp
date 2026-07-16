@@ -48,7 +48,7 @@ void kernel_main() {
 
     using TileT = Tile32x32_Float16_b;
 
-    auto s0 = hw_startup<TileT, TileT>();
+    auto s0 = hw_startup<TileT, TileT, TileT>();
 
     // Outer loop over block-rows. reserve_back / push_back are pure dataflow and
     // carry no compute state, so they sit in the body around the tracked ops.

@@ -35,24 +35,27 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // One-shot unpack configure.
-inline void unpack_hw_cfg(const sst::TileConfig& tile_config) {
-    constexpr bool fp32 = (DST_ACCUM_MODE != 0);
-    const std::uint32_t df = tile_config.data_format;
-    const std::uint32_t tile_size_bytes = sst::tensor::tile_size_bytes_from_tile_config(tile_config);
+template <typename Traits>
+inline void unpack_hw_cfg(const sst::TileConfig& src_a, const sst::TileConfig& src_b) {
+    constexpr bool fp32 = Traits::fp32_dest_acc;
+    const std::uint32_t df_a = src_a.data_format;
+    const std::uint32_t df_b = src_b.data_format;
+    const std::uint32_t tile_size_bytes_a = sst::tensor::tile_size_bytes_from_tile_config(src_a);
+    const std::uint32_t tile_size_bytes_b = sst::tensor::tile_size_bytes_from_tile_config(src_b);
 
     configure_unpack_AB<fp32>(
-        df,
-        df,
-        df,
-        df,
-        tile_config.face_r_dim,
-        tile_config.face_r_dim,
+        df_a,              // unpA_src_format
+        df_b,              // unpB_src_format
+        df_a,              // unpA_dst_format
+        df_b,              // unpB_dst_format
+        src_a.face_r_dim,  // unpA_face_r_dim
+        src_b.face_r_dim,  // unpB_face_r_dim
         /*transpose_xy_srca_en=*/false,
-        tile_config.num_faces,
-        tile_config.num_faces);
+        src_a.num_faces,   // unpA_num_faces
+        src_b.num_faces);  // unpB_num_faces
 
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_bytes), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_bytes), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_bytes_b), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_bytes_a), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
 }
 
 // --- SrcA-copy configure, split into two field-keyed sub-steps so the tracker

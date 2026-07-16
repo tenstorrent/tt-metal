@@ -42,22 +42,26 @@ namespace compute {
 
 using namespace tensor;
 
+using ActiveKernelTraits = KernelTraits<
+    (DST_ACCUM_MODE != 0),
+    (DST_SYNC_MODE == DstSync::SyncFull) ? DstSyncMode::SyncFull : DstSyncMode::SyncHalf>;
+
 // ---------------------------------------------------------------------------
 // Next-state builders (pure constexpr) + ODR-safe named results.
 // ---------------------------------------------------------------------------
 constexpr State with_copy(State s, const TileConfig& tile_config) {
-    s.u.mode = Tracked<UnpackMode>{UnpackMode::DataCopy};
-    s.u.tile_config = Tracked<TileConfig>{tile_config};
-    s.m.mode = Tracked<MathMode>{MathMode::DataCopy};
-    s.m.tile_config = Tracked<TileConfig>{tile_config};
+    s.operations.unpack.mode = Tracked<UnpackMode>{UnpackMode::DataCopy};
+    s.operations.unpack.tile_config = Tracked<TileConfig>{tile_config};
+    s.operations.math.mode = Tracked<MathMode>{MathMode::DataCopy};
+    s.operations.math.tile_config = Tracked<TileConfig>{tile_config};
     return s;
 }
 constexpr State with_untilize(
     State s, const TileConfig& tile_config, uint16_t tiles_per_block, uint16_t tiles_per_row) {
-    s.p.mode = Tracked<PackMode>{PackMode::Untilize};
-    s.p.tile_config = Tracked<TileConfig>{tile_config};
-    s.p.tiles_per_block = Tracked<uint16_t>{tiles_per_block};
-    s.p.tiles_per_row = Tracked<uint16_t>{tiles_per_row};
+    s.operations.pack.mode = Tracked<PackMode>{PackMode::Untilize};
+    s.operations.pack.tile_config = Tracked<TileConfig>{tile_config};
+    s.operations.pack.tiles_per_block = Tracked<uint16_t>{tiles_per_block};
+    s.operations.pack.tiles_per_row = Tracked<uint16_t>{tiles_per_row};
     return s;
 }
 
@@ -70,23 +74,33 @@ struct UntilizeNext {
     static constexpr State value = with_untilize(S, Resolver<TileT>::tile_config(), TilesPerBlock, TilesPerRow);
 };
 
-// hw_startup establishes the DST-produce layout for the whole kernel (it emits
-// the remap toggle up front when Remap=true.
-constexpr State with_startup(State s, bool remap) {
-    s.m.remap = Tracked<bool>{remap};
+// hw_startup establishes independent operand descriptors and the DEST layout.
+// Immutable FP32/DST-sync configuration lives in KernelTraits, outside State.
+// Operation programs remain unknown until the first op init.
+constexpr State with_startup(
+    State s, const TileConfig& in_a, const TileConfig& in_b, const TileConfig& output, bool remap) {
+    s.operands.src_a = Tracked<TileConfig>{in_a};
+    s.operands.src_b = Tracked<TileConfig>{in_b};
+    s.operands.pack = Tracked<TileConfig>{output};
+
+    s.layout.remap = Tracked<bool>{remap};
     return s;
 }
-template <bool Remap>
+template <typename TileInA, typename TileInB, typename TileOut, bool Remap>
 struct StartupNext {
-    static constexpr State value = with_startup(kInitial, Remap);
+    static constexpr State value = with_startup(
+        kInitial,
+        Resolver<TileInA>::tile_config(),
+        Resolver<TileInB>::tile_config(),
+        Resolver<TileOut>::tile_config(),
+        Remap);
 };
 
 // ---------------------------------------------------------------------------
 // hw_startup: the ONE explicit setup. Base HW configure on every TRISC, plus
-// the untilize MATH remap (output is row-major; the remap is constant for the
-// whole kernel so it is not tracked). Returns the all-unknown state — the
-// per-engine op modes are still established by the first copy / untilize, which
-// the loop combinator hoists so they run exactly once.
+// an explicit MATH remap write. Returns known operand/layout domains; per-engine
+// operation programs remain unknown until the first copy / untilize,
+// which the loop combinator hoists so they run exactly once.
 // ---------------------------------------------------------------------------
 // `Remap` selects the DST production layout the whole kernel uses:
 //   Remap=true  (default) — untilize pipelines: MATH writes DST in the
@@ -94,13 +108,14 @@ struct StartupNext {
 //                consumes it directly. Must be enabled BEFORE any DST write.
 //   Remap=false — tiled-output pipelines (matmul + default pack): DST stays in
 //                the natural tiled layout the default packer expects.
-template <typename TileIn, typename TileOut, bool Remap = true>
+template <typename TileInA, typename TileInB, typename TileOut, bool Remap = true>
 ALWI auto hw_startup() {
-    // Each is consumed inside per-TRISC macro-gated calls below (tile_config_in on
-    // UNPACK/MATH, tile_config_out on PACK), so on the other TRISC builds it is unused —
-    // [[maybe_unused]] silences that per-build warning without duplicating the
-    // (constexpr) resolve at each call site.
-    [[maybe_unused]] constexpr TileConfig tile_config_in = Resolver<TileIn>::tile_config();
+    // Each is consumed inside per-TRISC macro-gated calls below (the two input
+    // configs on UNPACK/MATH, the output on PACK), so on the other TRISC builds it
+    // is unused — [[maybe_unused]] silences that per-build warning without
+    // duplicating the (constexpr) resolve at each call site.
+    [[maybe_unused]] constexpr TileConfig tile_config_in_a = Resolver<TileInA>::tile_config();
+    [[maybe_unused]] constexpr TileConfig tile_config_in_b = Resolver<TileInB>::tile_config();
     [[maybe_unused]] constexpr TileConfig tile_config_out = Resolver<TileOut>::tile_config();
 
     // Base HW configure only — the stuff every kernel needs regardless of which
@@ -109,19 +124,17 @@ ALWI auto hw_startup() {
     // (Default vs Untilize vs Tilize) and every pack op programs its own, so a
     // MOP built at startup is always thrown away. The first pack op builds it
     // exactly once (straight-line: the only time; in a loop: hoisted by `loop`).
-    UNPACK((hw::unpack_hw_cfg(tile_config_in)));
-    MATH((hw::math_pack_sync_cfg()));
-    MATH((hw::math_hw_cfg(tile_config_in)));
-    PACK((hw::pack_hw_cfg(tile_config_out)));
-    PACK((hw::pack_dest_cfg()));
+    UNPACK((hw::unpack_hw_cfg<ActiveKernelTraits>(tile_config_in_a, tile_config_in_b)));
+    MATH((hw::math_pack_sync_cfg<ActiveKernelTraits>()));
+    MATH((hw::math_hw_cfg<ActiveKernelTraits>()));
+    PACK((hw::pack_hw_cfg<ActiveKernelTraits>(tile_config_out)));
+    PACK((hw::pack_dest_cfg<ActiveKernelTraits>()));
 
-    if constexpr (Remap) {
-        // Row-major output => enable the DEST stride-16 remap up front, before any
-        // producer writes DST.
-        MATH((hw::math_remap_cfg(true)));
-    }
+    // Establish a known DEST layout in hardware for both modes. Writing false
+    // matters when a prior kernel left remap/swizzle enabled.
+    MATH((hw::math_remap_cfg(Remap)));
 
-    return Tag<StartupNext<Remap>::value>{};
+    return Tag<StartupNext<TileInA, TileInB, TileOut, Remap>::value>{};
 }
 
 // ---------------------------------------------------------------------------
@@ -129,9 +142,9 @@ ALWI auto hw_startup() {
 // (they change no HW configuration), so they do not thread state.
 // ---------------------------------------------------------------------------
 ALWI void tile_regs_acquire() { MATH((hw::math_wait_for_dest_available())); }
-ALWI void tile_regs_commit() { MATH((hw::math_dest_section_done())); }
+ALWI void tile_regs_commit() { MATH((hw::math_dest_section_done<ActiveKernelTraits>())); }
 ALWI void tile_regs_wait() { PACK((hw::packer_wait_for_math_done())); }
-ALWI void tile_regs_release() { PACK((hw::pack_dest_section_done())); }
+ALWI void tile_regs_release() { PACK((hw::pack_dest_section_done<ActiveKernelTraits>())); }
 
 // ---------------------------------------------------------------------------
 // copy_tile: datacopy one tile A -> DST[dst_idx]. Configures UNPACK + MATH for
@@ -142,17 +155,22 @@ ALWI auto copy_tile(Tag<S>, const Tensor<TileT, B>& in, uint32_t in_idx, uint32_
     constexpr TileConfig tile_config = Resolver<TileT>::tile_config();
 
     // MATH: single datacopy-MOP sub-step (depends on mode + geometry).
-    constexpr bool m_all = !S.m.mode.matches(MathMode::DataCopy) || !S.m.tile_config.matches(tile_config);
+    constexpr bool m_all =
+        !S.operations.math.mode.matches(MathMode::DataCopy) || !S.operations.math.tile_config.matches(tile_config);
 
-    // UNPACK: format sub-step keys on geometry (tile_config); MOP sub-step keys on op mode.
-    if constexpr (!S.u.tile_config.matches(tile_config)) {
+    // UNPACK: format sub-step keys on geometry (tile_config); MOP sub-step keys on op
+    // mode AND geometry — its outer loop count is tile_config.num_faces, so a same-mode
+    // geometry change must still re-emit the MOP.
+    if constexpr (!S.operations.unpack.tile_config.matches(tile_config)) {
         UNPACK((hw::unpack_datacopy_face_cfg(tile_config)));
     }
-    if constexpr (!S.u.mode.matches(UnpackMode::DataCopy)) {
+    if constexpr (
+        !S.operations.unpack.mode.matches(UnpackMode::DataCopy) ||
+        !S.operations.unpack.tile_config.matches(tile_config)) {
         UNPACK((hw::unpack_datacopy_mop_cfg(tile_config)));
     }
     if constexpr (m_all) {
-        MATH((hw::math_a2d_cfg(tile_config)));
+        MATH((hw::math_a2d_cfg<ActiveKernelTraits>(tile_config)));
     }
 
     UNPACK((hw::unpack_a(in.tile_addr_16B(in_idx))));
@@ -173,14 +191,18 @@ template <uint16_t TilesPerBlock, uint16_t TilesPerRow, const State& S, typename
 ALWI auto untilize_block(Tag<S>, const Tensor<TileT, B>& out, uint32_t col_tile_offset) {
     constexpr TileConfig tile_config = Resolver<TileT>::tile_config();
 
-    // The untilize PACR MOP depends on mode + block width (TilesPerBlock); the per-row
-    // strides / output offset depend on geometry (tile_config) + full row width (TilesPerRow).
-    // Changing only the block width thus reprograms the MOP but keeps the strides;
-    // changing only the row width keeps the MOP and redoes the strides.
-    if constexpr (!S.p.mode.matches(PackMode::Untilize) || !S.p.tiles_per_block.matches(TilesPerBlock)) {
+    // The untilize PACR MOP depends on mode + block width (TilesPerBlock) + geometry —
+    // its outer loop count is tile_config.face_r_dim, so a same-mode/same-block geometry
+    // change must still re-emit it. The per-row strides / output offset depend on
+    // geometry (tile_config) + full row width (TilesPerRow).
+    if constexpr (
+        !S.operations.pack.mode.matches(PackMode::Untilize) ||
+        !S.operations.pack.tiles_per_block.matches(TilesPerBlock) ||
+        !S.operations.pack.tile_config.matches(tile_config)) {
         PACK((hw::pack_untilize_mop_cfg<TilesPerBlock>(tile_config)));
     }
-    if constexpr (!S.p.tile_config.matches(tile_config) || !S.p.tiles_per_row.matches(TilesPerRow)) {
+    if constexpr (
+        !S.operations.pack.tile_config.matches(tile_config) || !S.operations.pack.tiles_per_row.matches(TilesPerRow)) {
         PACK((hw::pack_untilize_row_cfg<TilesPerRow>(tile_config)));
     }
 

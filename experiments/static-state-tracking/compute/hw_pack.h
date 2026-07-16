@@ -40,8 +40,9 @@ using namespace ckernel;
 using namespace ckernel::packer;
 
 // One-shot pack configure (dest read format == L1 write format, no conversion).
+template <typename Traits>
 inline void pack_hw_cfg(const sst::TileConfig& tile_config) {
-    constexpr bool fp32 = (DST_ACCUM_MODE != 0);
+    constexpr bool fp32 = Traits::fp32_dest_acc;
     const std::uint32_t df = tile_config.data_format;
     const std::uint32_t tile_size_bytes = sst::tensor::tile_size_bytes_from_tile_config(tile_config);
     configure_pack<fp32, ckernel::PackMode::Default>(
@@ -55,18 +56,24 @@ inline void pack_hw_cfg(const sst::TileConfig& tile_config) {
         /*relu_config=*/0);
 }
 
+template <typename Traits>
 inline void pack_dest_offset_cfg() {
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK);
     TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
     TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    select_packer_dest_registers<DST_SYNC_MODE>();
+    if constexpr (Traits::dst_sync == sst::DstSyncMode::SyncFull) {
+        select_packer_dest_registers<DstSync::SyncFull>();
+    } else {
+        select_packer_dest_registers<DstSync::SyncHalf>();
+    }
 }
 
+template <typename Traits>
 inline void pack_dest_cfg() {
     tensix_sync();
     reset_dest_offset_id();
-    pack_dest_offset_cfg();
+    pack_dest_offset_cfg<Traits>();
     packer_addr_counter_init();
     pack_sync_tile_dst_ptr = 0;
 }
@@ -207,16 +214,17 @@ inline void packer_wait_for_math_done() {
 }
 
 // tile_regs_release (PACK side): free the drained DST section back to MATH.
+template <typename Traits>
 inline void pack_dest_section_done() {
-    constexpr bool fp32 = (DST_ACCUM_MODE != 0);
+    constexpr bool fp32 = Traits::fp32_dest_acc;
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK);
-    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+    if constexpr (Traits::dst_sync == sst::DstSyncMode::SyncFull) {
         TTI_ZEROACC(p_zeroacc::CLR_ALL, fp32, 0, ADDR_MOD_1, 0);
     } else {
         TT_ZEROACC(p_zeroacc::CLR_HALF, fp32, 0, ADDR_MOD_1, dest_offset_id % 2);
     }
     t6_semaphore_get<p_stall::NONE>(semaphore::MATH_PACK);
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+    if constexpr (Traits::dst_sync == sst::DstSyncMode::SyncHalf) {
         flip_packer_dest_offset_id();
         select_packer_dest_registers<DstSync::SyncHalf>();
     }
