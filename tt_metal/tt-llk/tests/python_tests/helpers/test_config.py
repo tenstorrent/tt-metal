@@ -490,13 +490,22 @@ class TestConfig:
             in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
             else ""
         )
+        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs:
+        # with asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
+        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel,
+        # so a single run can enumerate every (fn_name, shape) pair exercised.
+        llk_assert_define = (
+            ""
+            if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
+            else "-DENABLE_LLK_ASSERT "
+        )
         TestConfig.INITIAL_OPTIONS_COMPILE = (
             "-Wall -Werror -Wno-error=deprecated-declarations "
             "-Wunused-parameter "
             "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls "
             "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
-            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = [
@@ -1248,11 +1257,12 @@ class TestConfig:
             )
 
             def build_kernel_part(name: str):
-                optional_kernel_flags = ""
-                if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                    optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
-                        TestConfig.KERNEL_COMPONENTS.index(name)
-                    )
+                # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
+                # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
+                # LLK headers now require COMPILE_FOR_TRISC (see ckernel_addrmod.h), so pass it for Quasar too.
+                optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
+                    TestConfig.KERNEL_COMPONENTS.index(name)
+                )
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"

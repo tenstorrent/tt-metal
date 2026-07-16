@@ -5,14 +5,13 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-
-	constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_dfb_id = get_compile_time_arg_val(0);
     constexpr bool write_to_dram = get_compile_time_arg_val(1);
     constexpr bool unaligned = get_compile_time_arg_val(2);
     constexpr uint32_t unit_size = get_compile_time_arg_val(3);
@@ -30,11 +29,11 @@ void kernel_main() {
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
     uint32_t args_idx = 0;
 
-    CircularBuffer shard_cb(shard_cb_id);
+    DataflowBuffer shard_dfb(shard_dfb_id);
     Noc noc;
     AllocatorBank<bank_type> bank;
 
-    uint32_t l1_read_addr = shard_cb.get_read_ptr() + read_offset;
+    uint32_t l1_read_addr = shard_dfb.get_read_ptr() + read_offset;
     if constexpr (unaligned) {
         // The local (input) shard stores each row at local_unit_size_padded stride and the remote
         // (output) shard at remote_unit_size_padded stride, and unit_size < either padded stride.
