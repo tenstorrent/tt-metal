@@ -133,3 +133,10 @@ Independent stage-review evidence is appended after that final gate.
 The first fresh-context review at `/root/functional_decoder_stage_review` returned `more-work-needed` for one evidence-isolation gap: the first passing emitted-mask run still retained an explicit 8x4 SDPA config, so its necessity had not been ablated. The config was removed, the focused watcher gate passed with identical PCC, the docs were corrected, and the complete synthetic/real suite was rerun.
 
 The second fresh-context review at `/root/functional_decoder_stage_rereview` independently rechecked the selected raw IR and lowered emit, implementation, official-HF tests, post-edit JUnit timestamps, context contract, documentation, and functional-only scope. Its verdict was `clean-pass` with no required actions. It specifically confirmed that the final decode path has no `SDPAProgramConfig` or `program_config` argument and matches the emitted masked, non-causal SDPA signature.
+
+## Local checkpoint
+
+- Repository: `/home/mvasiljevic/tt-metal`
+- Branch: `mvasiljevic/model/meta-llama-llama-3.1-70b-instruct`
+- Functional-decoder checkpoint: `0d020f9ea7221dc89ae32d205421e6bdf4bc5493`
+- Remote action: none; the checkpoint was not pushed.
