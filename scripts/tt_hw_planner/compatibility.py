@@ -118,6 +118,22 @@ def detect_family(cfg: dict) -> str:
     return f"unknown ({mt or 'no model_type'})"
 
 
+def _minted_category(cfg: dict) -> str:
+    """Honest NEW-category name for an unrecognized model, from the config in
+    priority order: model_type -> architectures[0]. Used to LABEL the report
+    (traceable, dedup-able) instead of silently characterizing an unknown model
+    as a confident LLM. (pipeline_tag, the first choice in the plan, is hub
+    metadata not present in the config passed here.)
+    """
+    mt = str(cfg.get("model_type") or "").strip()
+    if mt:
+        return mt
+    archs = cfg.get("architectures") or []
+    if isinstance(archs, (list, tuple)) and archs:
+        return str(archs[0])
+    return "unrecognized"
+
+
 SUPPORTED_HF_MODELS = {
     "meta-llama/Llama-3.2-1B",
     "meta-llama/Llama-3.2-3B",
@@ -704,6 +720,10 @@ def _aggregate_overall(report: CompatReport) -> None:
 
 def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
     family = detect_family(cfg)
+    is_unknown = family.startswith("unknown")
+    minted = _minted_category(cfg) if is_unknown else None
+    if is_unknown:
+        family = f"unknown / NEW category '{minted}' — attempting generic LLM path as fallback"
     closest = closest_supported_model(model_id, cfg)
 
     results: List[CheckResult] = []
@@ -720,13 +740,21 @@ def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
                 )
             )
             continue
+        status = blk.status_when_needed
+        notes = blk.notes
+        if is_unknown and status == Status.SUPPORTED:
+            status = Status.PARTIAL
+            notes = (
+                f"LLM fallback for unrecognized model (NEW category '{minted}'): assumed by the "
+                f"generic decoder path, NOT a confident match — verify against the real architecture. " + (notes or "")
+            ).strip()
         results.append(
             CheckResult(
                 block=blk,
                 needed=True,
-                status=blk.status_when_needed,
+                status=status,
                 effort=blk.effort_when_needed,
-                notes=blk.notes,
+                notes=notes,
             )
         )
 
