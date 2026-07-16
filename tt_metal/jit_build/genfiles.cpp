@@ -364,6 +364,7 @@ std::string generate_tt_kernel_shim_if_present(
     validate_signature_against_schema(
         *sig, cta_names, settings.get_runtime_arg_names(), settings.get_common_runtime_arg_names());
     return generate_kernel_main_shim(*sig);
+}
 // EXPERIMENTAL (blaze leading-edge, NOT Metal 2.0):
 // Emits named_args_generated.h with a single ct_args:: namespace. Each prefix becomes a
 // struct containing both CT values (uint32_t) and RT arg descriptors (rt_args::Arg /
