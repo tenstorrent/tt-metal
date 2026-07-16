@@ -353,8 +353,8 @@ def test_sku_config_aliases_point_at_grouped_prio_skus():
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_smoke_merge_gate_push_includes_n150():
-    """Functional change: merge-gate smoke now runs wh_n150_civ2 (was filtered out)."""
+def test_runtime_smoke_merge_gate_excludes_n150():
+    """Merge-gate smoke keeps prior coverage (no wh_n150_civ2); PR-gate list owns n150."""
     matrix = run_matrix(
         PIPELINE / "runtime_validation_merge_gate_tests.yaml",
         "ALL_SKUS_IN_TESTS",
@@ -362,11 +362,11 @@ def test_runtime_smoke_merge_gate_push_includes_n150():
         "push",
     )
     assert concrete_skus(matrix) == {
-        "wh_n150_civ2",
         "wh_n300_civ2",
         "wh_llmbox_civ2_viommu",
         "bh_p150b_civ2_viommu",
     }
+    assert "wh_n150_civ2" not in concrete_skus(matrix)
 
 
 def test_runtime_smoke_merge_gate_routes_prio_on_merge_group():
@@ -377,7 +377,6 @@ def test_runtime_smoke_merge_gate_routes_prio_on_merge_group():
         "merge_group",
     )
     assert concrete_skus(matrix) == {
-        "wh_n150_civ2",
         "wh_n300_civ2",
         "wh_llmbox_civ2_prio",
         "bh_p150b_civ2_viommu_prio",
