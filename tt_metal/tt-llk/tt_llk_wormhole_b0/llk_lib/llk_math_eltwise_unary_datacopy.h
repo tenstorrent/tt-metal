@@ -63,9 +63,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         // Switch from the default SrcA format bank to the override bank so manual SrcA_val writes control MOVB2D behavior.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
 
-        // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
-        // zero-substitution flag via the math state tracker.
-        math::_configure_mov_ops_zero_flag_state_();
+        // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; disable the Src
+        // zero-substitution flag (via the tracker) so its recorded state stays consistent with HW.
+        math::ZeroFlags::execute_reconfig_unary_preserve();
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
@@ -190,12 +190,8 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TTI_CLEARDVALID(0b10, 0);
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-
-        // This 32b hi16/lo16 MOV sequence drove the Src zero-substitution flag (and the SrcA format
-        // override bank) directly for the duration of the block; invalidate the tracked state so the
-        // next configurator re-applies the flag from a known baseline instead of taking its
-        // skip-if-set fast path (matches the Blackhole path).
-        math::_invalidate_src_zero_flag_state_();
+        // The block manipulated only the SrcA format override bank directly; the Src zero-substitution flag
+        // was set via the tracker above, so its recorded UNARY_PRESERVE state is still accurate.
     }
     else
     {
@@ -209,7 +205,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+                // Disable the Src zero-substitution flag (via the tracker) so UInt16 datums whose low byte is 0
+                // are not flushed. Owning it through the tracker keeps its recorded state consistent with HW.
+                math::ZeroFlags::execute_reconfig_unary_preserve();
                 cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
             }
         }
@@ -236,16 +234,12 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
 
         if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
         {
-            // Undo format switching option: clear the override and zero-flag-disable bits set above so the
-            // implied SrcA format and default zero-flag behavior are restored (matches the Blackhole path).
+            // Undo format switching option: clear the SrcA override so the implied SrcA format is restored.
+            // The Src zero-substitution flag was set via the tracker above (UNARY_PRESERVE); leave it for the
+            // next reconfig to re-apply, matching the Blackhole path.
             if (dst_format == to_underlying(DataFormat::UInt16))
             {
                 cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
-                // The Zero_Flag_disabled_src bit was set/cleared above via raw RMW, bypassing the math
-                // state tracker; invalidate the tracked state so the next configurator re-applies the flag
-                // instead of taking its skip-if-set fast path (matches the Blackhole path).
-                math::_invalidate_src_zero_flag_state_();
             }
         }
 

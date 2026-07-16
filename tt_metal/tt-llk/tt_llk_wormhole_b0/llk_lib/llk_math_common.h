@@ -55,7 +55,7 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
     // Establish the operand-driven baseline for the Src zero-substitution flag.
-    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
+    ZeroFlags::execute_reconfig(srca_data_format, srcb_data_format);
 }
 
 /**
@@ -153,7 +153,7 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
     }
 
     // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcA format.
-    _configure_default_zero_flag_state_(srca_data_format, src_zero_flag_srcb_fmt);
+    ZeroFlags::execute_reconfig(srca_data_format, ZeroFlags::get_sfpu_format());
 }
 
 /**
@@ -187,7 +187,7 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
     }
 
     // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcB format.
-    _configure_default_zero_flag_state_(src_zero_flag_srca_fmt, srcb_data_format);
+    ZeroFlags::execute_reconfig(ZeroFlags::get_fpu_format(), srcb_data_format);
 }
 
 /**
@@ -225,7 +225,7 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
     }
 
     // Re-establish the operand-driven baseline (clears stale op-state) for the new formats.
-    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
+    ZeroFlags::execute_reconfig(srca_data_format, srcb_data_format);
 }
 
 /**
