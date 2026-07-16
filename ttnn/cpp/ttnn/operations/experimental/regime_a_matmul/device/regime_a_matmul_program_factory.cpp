@@ -103,6 +103,9 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["DIAG_NO_REDUCE"] = "1";
         ddefs["DIAG_NO_REDUCE"] = "1";
     }
+    if (diag & RegimeADiag::DIAG_BARRIER_DRAIN) {
+        wdefs["DIAG_BARRIER_DRAIN"] = "1";  // A/B baseline: OLD per-block phase-2 completion barrier
+    }
     if (diag & RegimeADiag::DIAG_LOCAL_FEED) {
         rdefs["DIAG_LOCAL_FEED"] = "1";
         wdefs["DIAG_LOCAL_FEED"] = "1";
