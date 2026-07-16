@@ -1,20 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
 name: "LLK onboarding perf"
-# Entry point for the onboarding perf test.
-# This file owns *when* the pipeline runs; the actual work lives in the
-# reusable implementation workflow (onboarding_perf-impl.yaml).
-#
-# Compare with the production pair llk-perf.yaml / llk-perf-impl.yaml: this is a
-# deliberately slimmed-down version that runs ONLY the onboarding test, on a
-# single board, with no nightly schedule and no Slack/summary plumbing.
 
 on:
-  # Manual trigger from the Actions tab. A workflow_dispatch workflow must exist
-  # on the default branch to show up in the UI, but can then be dispatched
-  # against any branch/ref -- which is how you run it on your own branch.
+  push:
+    branches:
+      - nstojicTT-feature-onboarding-test
+    paths:
+      - "tt_metal/tt-llk/tests/sources/eltwise_onboarding.cpp"
+      - "tt_metal/tt-llk/tests/python_tests/perf_eltwise_onboarding.py"
+      - ".github/workflows/onboarding_perf*.yaml"
+
   workflow_dispatch:
     inputs:
       chip_arch:
@@ -27,21 +24,18 @@ on:
           - blackhole
 
 permissions:
-  checks: write # publish JUnit results as a check
+  checks: write
   contents: read # checkout
   packages: write # pull the LLK CI docker image
 
 concurrency:
-  # One onboarding run per branch; a newer dispatch cancels the in-flight one.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   onboarding-perf:
-    name: "Onboarding perf (${{ inputs.chip_arch }})"
-    # The caller -> callee handoff. `secrets: inherit` forwards org secrets the
-    # docker build needs; `with:` passes the chosen architecture through.
+    name: "Onboarding perf (${{ inputs.chip_arch || 'wormhole' }})"
     uses: ./.github/workflows/onboarding_perf-impl.yaml
     secrets: inherit
     with:
-      chip_arch: ${{ inputs.chip_arch }}
+      chip_arch: ${{ inputs.chip_arch || 'wormhole' }}

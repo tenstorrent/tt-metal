@@ -84,7 +84,7 @@ def test_perf_eltwise_binary_sfpu_float(
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
     )
 
-    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+    tile_c§ount, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 

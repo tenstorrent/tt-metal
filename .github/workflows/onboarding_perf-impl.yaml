@@ -1,12 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
 # SPDX-License-Identifier: Apache-2.0
 
 name: "LLK onboarding perf impl"
-# Reusable implementation for the onboarding perf test. Callable only via
-# workflow_call (from onboarding_perf.yaml). This file owns *what* runs:
-# build/resolve the LLK CI docker image, then compile and execute the single
-# onboarding test on a real Tenstorrent board.
 
 on:
   workflow_call:
@@ -25,9 +20,6 @@ env:
   LLK_PATH: tt_metal/tt-llk
 
 jobs:
-  # Reuse the shared docker image build so our container matches the rest of LLK
-  # CI. This is the same reusable workflow llk-perf-impl.yaml calls, and it
-  # exposes the image tag as the `llk-ci-tag` output used below.
   build-images:
     name: "Docker setup"
     uses: ./.github/workflows/build-docker-artifact.yaml
@@ -35,18 +27,12 @@ jobs:
 
   onboarding-exec:
     needs: [build-images]
-    # Single SKU per architecture (no test matrix). Pick the runner label from
-    # the input: blackhole -> P150b board, otherwise wormhole -> N150 board.
-    # These labels come from .github/sku_config.yaml (bh_p150b_civ2 / wh_n150_civ2).
     runs-on: ${{ inputs.chip_arch == 'blackhole' && 'tt-ubuntu-2204-P150b-stable' || 'tt-ubuntu-2204-N150-viommu-stable' }}
     timeout-minutes: 30
     container:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      # --device exposes the Tensix board to the container; without it the test
-      # cannot reach hardware.
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     env:
-      # The test harness reads CHIP_ARCH to select the target architecture.
       CHIP_ARCH: ${{ inputs.chip_arch }}
     steps:
       - name: Checkout code
@@ -54,7 +40,6 @@ jobs:
         timeout-minutes: 20
 
       - name: Install SFPI
-        # Installs the kernel (SFPI) toolchain the compile phase needs.
         shell: bash
         working-directory: ${{ env.LLK_PATH }}/tests
         run: ./setup_testing_env.sh
