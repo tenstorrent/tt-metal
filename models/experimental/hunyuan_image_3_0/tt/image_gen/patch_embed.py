@@ -15,10 +15,14 @@
 # conv2d uses per-layer Conv2dConfig (sweep winners). GroupNorm uses the
 # interleaved TILE manual path (fused GN variants slower on grid-8).
 # Residual add keeps the out_conv shard layout by aligning skip onto it.
+# Skip scheduling: when Cin!=Cout, ``skip_conv(x)`` runs *before* the main path
+# so ``out_conv`` need not spill its L1-sharded output just to free room for skip.
 #
 # Timestep conditioning is adaptive group-norm: the (already-embedded) timestep
 # vector -> SiLU -> Linear(emb, 2*out) -> (scale, shift); after the second
 # GroupNorm,  h = norm(h) * (1 + scale) + shift.
+
+from __future__ import annotations
 
 import os
 
@@ -311,6 +315,23 @@ class HunyuanTtResBlock(LightweightModule):
     def __call__(self, x_flat, t_emb, B, H, W):
         n_rows = B * H * W
         sharded_path = _PATCH_EMBED_SHARDED
+        # Spatial size of the residual input (patch_size=1 → same as after in_conv).
+        H_in, W_in = H, W
+
+        # Skip scheduling: project the residual *before* the main path's out_conv
+        # peaks L1. Previously we ran skip_conv after out_conv and had to spill
+        # sharded `hn` to DRAM so skip_conv could allocate — that S2I is gone.
+        # Keep skip in DRAM interleaved so out_conv can own the L1 peak alone;
+        # residual add will reshard skip onto hn via `_match_shard_to`.
+        if self.skip_conv is not None:
+            skip, _, _ = self.skip_conv(x_flat, B, H_in, W_in)
+            if ttnn.is_sharded(skip):
+                spilled = _to_interleaved_dram(skip)
+                if spilled is not skip:
+                    ttnn.deallocate(skip)
+                skip = spilled
+        else:
+            skip = x_flat
 
         h = self.in_norm(x_flat, n_rows)
         h = ttnn.silu(h)
@@ -351,19 +372,8 @@ class HunyuanTtResBlock(LightweightModule):
         hn = ttnn.silu(hn)
         hn, H, W = self.out_conv(hn, B, H, W)
 
-        if self.skip_conv is not None:
-            # out_conv often leaves a large L1-sharded tensor; free it before
-            # skip_conv allocates another (grid=8 block+ADB winners OOM at prod H×W).
-            if ttnn.is_sharded(hn):
-                spilled = _to_interleaved_dram(hn)
-                if spilled is not hn:
-                    ttnn.deallocate(hn)
-                hn = spilled
-            skip, _, _ = self.skip_conv(x_flat, B, H, W)
-        else:
-            skip = x_flat
+        # Residual add: hn may stay L1-sharded (no late spill for skip_conv).
         if sharded_path and ttnn.is_sharded(hn):
-            # Align skip onto out_conv's shard layout so residual add stays sharded.
             skip = _match_shard_to(skip, hn)
             out = ttnn.add(hn, skip)
         else:
@@ -482,6 +492,43 @@ class HunyuanTtUNetUp(LightweightModule):
             layer_name="final_tail_conv",
             dtype=dtype,
         )
+
+    @staticmethod
+    def take_image_span(hidden, *, img_slice, batch: int, n_img: int, hidden_size: int):
+        """Handoff: backbone ``[B, seq, H]`` → flat NHWC ``[1,1,B·n_img,H]`` for UNetUp.
+
+        Pipeline and Tracy fixtures share this so slice+reshape stay in one place.
+        Caller still owns ``hidden`` (deallocate after this returns if done with it).
+        """
+        img = ttnn.slice(
+            hidden,
+            [0, img_slice.start, 0],
+            [batch, img_slice.stop, hidden_size],
+        )
+        return ttnn.reshape(img, [1, 1, batch * n_img, hidden_size])
+
+    def forward_from_hidden(
+        self,
+        hidden,
+        t_emb,
+        token_h,
+        token_w,
+        *,
+        img_slice,
+        batch: int = 1,
+        n_img: int | None = None,
+        deallocate_hidden: bool = True,
+    ):
+        """Slice image tokens from backbone hidden, run UNetUp, free the span buffer."""
+        H = int(list(hidden.shape)[-1])
+        if n_img is None:
+            n_img = int(img_slice.stop - img_slice.start)
+        img_out = self.take_image_span(hidden, img_slice=img_slice, batch=batch, n_img=n_img, hidden_size=H)
+        if deallocate_hidden:
+            ttnn.deallocate(hidden)
+        pred, oh, ow = self(img_out, t_emb, token_h, token_w, B=batch)
+        ttnn.deallocate(img_out)
+        return pred, oh, ow
 
     def __call__(self, tokens, t_emb, token_h, token_w, B=1):
         H, W = token_h, token_w
