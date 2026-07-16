@@ -99,12 +99,13 @@ class UnarySfpu(Sfpu):
     ) -> str:
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         en_32bit_dest = config.dest_acc.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
         sfpu_format = config.sentinel._math_format.cpp_enum_value
         quasar_iterations = self.iterations // 4
 
         return (
             f"test_utils::call_unary_sfpu_operation_quasar<"
-            f"{op}, {en_32bit_dest}, {quasar_iterations}"
+            f"{op}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}"
             f">({self.dest_idx}, {sfpu_format});\n"
         )
 

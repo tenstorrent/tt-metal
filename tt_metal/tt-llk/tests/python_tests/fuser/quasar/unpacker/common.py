@@ -72,8 +72,9 @@ def configure_unpack(
     return _emit_configure(compute_node, dest_acc, new_A_dst, new_B_dst)
 
 
-def dvalid_init() -> str:
-    return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+def dvalid_init(sfpu_on_dest: bool = False) -> str:
+    chain = "DestChain::FPU_SFPU_PACK" if sfpu_on_dest else "DestChain::FPU_PACK"
+    return f"setup_dest_dvalid<{chain}>();\n"
 
 
 def sync_with_packer(needs_pack_sync: bool) -> str:

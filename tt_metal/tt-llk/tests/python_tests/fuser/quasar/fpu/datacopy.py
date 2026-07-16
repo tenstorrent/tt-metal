@@ -73,11 +73,7 @@ class DatacopyFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        num_faces = operation.tile_shape.total_num_faces()
-        face_r_dim = operation.tile_shape.face_r_dim
-        num_rows_per_tile = face_r_dim * num_faces
-
-        return f"_llk_math_eltwise_unary_datacopy_({num_rows_per_tile}, {block.tile_id_block});\n"
+        return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_block});\n"
 
     def uninit(
         self,

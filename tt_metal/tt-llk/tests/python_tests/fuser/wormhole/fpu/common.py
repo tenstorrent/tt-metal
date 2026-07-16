@@ -30,7 +30,7 @@ def configure_math(
     )
 
 
-def math_pack_sync_init(dest_sync: str, dest_acc: str) -> str:
+def math_pack_sync_init(dest_sync: str, dest_acc: str, **kwargs) -> str:
     return f"_llk_math_pack_sync_init_<{dest_sync}, {dest_acc}>();\n"
 
 

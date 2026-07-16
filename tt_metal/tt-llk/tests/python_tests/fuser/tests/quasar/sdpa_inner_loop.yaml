@@ -71,7 +71,7 @@ operations:
         reduce_pool: "MAX"
         reduce_to_tile: true
         unpacker: "ReduceUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     block_size: [32, 64]
     pack:
       - output: "row_max"

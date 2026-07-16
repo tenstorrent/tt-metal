@@ -122,7 +122,7 @@ def configure_unpack(
     return code
 
 
-def dvalid_init() -> str:
+def dvalid_init(**kwargs) -> str:
     return ""
 
 
