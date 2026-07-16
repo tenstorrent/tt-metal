@@ -69,7 +69,7 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
 
     const auto& padded_shape = a.padded_shape();
     const uint32_t tensor_width = padded_shape[-1];
-    const uint32_t tensor_height = a.physical_volume() / tensor_width;
+    const uint32_t tensor_height = std::max(output.physical_volume(), a.physical_volume()) / tensor_width;
 
     TT_FATAL(tensor_width % in_tile_width == 0, "Tensor width must be divisible by input tile width");
     TT_FATAL(tensor_height % in_tile_height == 0, "Tensor height must be divisible by input tile height");
