@@ -59,7 +59,6 @@ void kernel_main() {
     const uint32_t outer_dim_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);        // W-halo cols per side this core emits (pad2)
     const uint32_t barrier_count = get_arg_val<uint32_t>(arg_idx++);  // H->W barrier signals to await (H producers)
-    const uint32_t output_row_width = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t pad2_left = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_interior_sticks = get_arg_val<uint32_t>(arg_idx++);  // interior W width (aka W_dev / Wd)
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
@@ -83,9 +82,6 @@ void kernel_main() {
 
     const auto input_accessor = TensorAccessor(src_args, input_tensor_address, stick_size);
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
-
-    // output_row_width is unused here; it stays in the RTA layout only to keep it stable across call sites.
-    (void)output_row_width;
 
     volatile tt_l1_ptr uint32_t* w_neighbor_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_neighbor_sem_addr);

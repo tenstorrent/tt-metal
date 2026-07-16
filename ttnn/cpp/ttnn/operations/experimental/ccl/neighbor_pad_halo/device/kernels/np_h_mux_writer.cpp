@@ -83,14 +83,6 @@ void kernel_main() {
     const uint8_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // The H->W barrier is signaled by np_h_reader after its recv drains (recv-authority), not here — the
-    // W corner reads need this device's incoming H to have LANDED, which the writer's send-done can't
-    // guarantee for >2 H-axes or small shapes. Only the startup-barrier opp coords are read here.
-    // Opposite-direction H-worker coords on the neighbor device, for the pairwise startup barrier (so the
-    // non-sending edge worker on the neighbor also gets incremented). NOC coords are device-independent.
-    const uint8_t opp_bar_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t opp_bar_y = get_arg_val<uint32_t>(arg_idx++);
-
     const auto dst_accessor = TensorAccessor(dst_ct_args, output_tensor_address, stick_size);
     // is_first_chip/is_last_chip are direction-adjusted by the factory (match np_h_reader + np_writer):
     // a worker sends iff !is_last_chip; it fills its own outward padding locally iff is_first_chip.
@@ -127,10 +119,7 @@ void kernel_main() {
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_count});
 
     // No startup barrier here: np_h_reader signals the H->W barrier after its recv drains
-    // (H_SIGNAL_W_RECV), so W corners already wait on real H-recv — a send-side start sync would add
-    // nothing. opp_bar_x/y are the barrier-target args, unused on this path.
-    (void)opp_bar_x;
-    (void)opp_bar_y;
+    // (H_SIGNAL_W_RECV), so W corners already wait on real H-recv — a send-side start sync would add nothing.
 
     // Compact H-section layout: rows are [frame][pad_id][W], stride padding rows per frame. h_base already
     // includes this worker's outer_dim_start offset + the h_top/h_bot section base. Per frame the reader

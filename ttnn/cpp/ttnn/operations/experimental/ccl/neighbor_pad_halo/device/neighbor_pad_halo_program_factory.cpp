@@ -841,11 +841,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         term_master_vc,
                         w_rt,
                         std::nullopt);
-                    // (H->W barrier targets moved to the H reader, which signals after recv.)
-                    // Opp-direction H-worker coords on the neighbor (for the pairwise startup barrier).
-                    CoreCoord opp_vc = hmux_worker_virtual[(link * num_directions + (1 - dir)) * num_h_workers + wk];
-                    w_rt.push_back(opp_vc.x);
-                    w_rt.push_back(opp_vc.y);
                     SetRuntimeArgs(program, h_writer_kernel_id, {wc}, w_rt);
                 }
             }
@@ -1070,7 +1065,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                             wk_start,
                             pw,
                             h_signal_count,
-                            output_num_sticks_per_halo_dim,
                             op.np_pad2_left,
                             num_sticks_per_halo_dim,
                             static_cast<uint32_t>(w_dir ? is_last_w_device : is_first_w_device),
@@ -1089,8 +1083,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         std::vector<uint32_t> w_rt = {
                             section_base + wk_start * pw,
                             wk_count,
-                            wc_vc.x,
-                            wc_vc.y,
                             wc_vc.x,
                             wc_vc.y,
                             static_cast<uint32_t>(is_first_w_device),
@@ -1201,7 +1193,6 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
                         w_link_start,
                         w_direction ? op.np_pad2_right : op.np_pad2_left,
                         barrier_count,
-                        output_num_sticks_per_halo_dim,
                         op.np_pad2_left,
                         num_sticks_per_halo_dim};
                     w_reader_rt_args.push_back(w_direction ? is_last_w_device : is_first_w_device);
@@ -1454,9 +1445,9 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
                 wr[3] = tensor_args.padded_output.value().buffer()->address();
             }
 
-            // Per-core RTA[10] of the W-reader holds input_buffer->address() (set in
+            // Per-core RTA[9] of the W-reader holds input_buffer->address() (set in
             // create_at from the first dispatch's input). On subsequent dispatches the
-            // input tensor may be at a different DRAM address, so refresh RTA[10] here
+            // input tensor may be at a different DRAM address, so refresh RTA[9] here
             // or the W-reader will pull halo sticks from a stale/garbage DRAM region
             // and fabric-write garbage into the neighbor's halo buffer.
             auto& w_reader_args_by_core = GetRuntimeArgs(program, shared_vars.np_artifacts.w_reader_kernel_id);
@@ -1464,8 +1455,8 @@ void NpHaloMeshWorkloadFactory::override_runtime_arguments(
                 for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
                     for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                         auto& w_reader_args = w_reader_args_by_core[x][y];
-                        if (w_reader_args.size() > 10) {
-                            w_reader_args[10] = input_addr;
+                        if (w_reader_args.size() > 9) {
+                            w_reader_args[9] = input_addr;
                         }
                     }
                 }

@@ -47,7 +47,6 @@ void kernel_main() {
     // ---- Common runtime args ----
     const address_t output_tensor_address = get_common_arg_val<address_t>(1);
     const size_t neighbor_sem = get_common_arg_val<uint32_t>(2);
-    const size_t barrier_sem = get_common_arg_val<uint32_t>(3);
 
     // ---- Per-core runtime args ----
     uint32_t arg_idx = 0;
@@ -55,8 +54,6 @@ void kernel_main() {
     const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);  // this worker's row count
     const uint8_t neighbor_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t neighbor_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
@@ -124,13 +121,8 @@ void kernel_main() {
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_sem, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, outer_dim_size});
 
-    // NOTE (bring-up): no separate W startup barrier here. barrier_sem is shared with the reader's H->W
-    // barrier (same core), so a writer inc/reset would clobber the reader's count. H->W ordering is
-    // provided by the reader's barrier wait; buffers are fresh in a single standalone dispatch.
-    (void)barrier_sem;
-    (void)barrier_sem_noc0_x;
-    (void)barrier_sem_noc0_y;
-    (void)is_first_chip;
+    // No separate W startup barrier: H->W ordering is provided entirely by the reader's barrier wait, and
+    // the send buffers are fresh in a single standalone dispatch.
 
     // ---- Coalesced W send through the mux (bank-major; lockstep with np_phase2_w_reader) ----
     if (has_neighbor && mux_connection_valid) {
