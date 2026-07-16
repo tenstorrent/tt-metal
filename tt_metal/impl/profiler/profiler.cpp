@@ -2018,7 +2018,7 @@ void DeviceProfiler::readTsData16BMarkerData(
     ZoneScoped;
 
     nlohmann::json meta_data;
-    std::optional<NOCDebugEvent> noc_debug_event;
+    [[maybe_unused]] std::optional<NOCDebugEvent> noc_debug_event;
 #if defined(TRACY_ENABLE)
     if ((timer_id & 0xFFFF) == kernel_profiler::NOC_TRACING_STATIC_ID) {
         using EMD = KernelProfilerNocEventMetadata;
