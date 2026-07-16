@@ -84,16 +84,6 @@ tensor_return_value_t SiLUBackwardDeviceOperation::create_output_tensors(
     }
 }
 
-ttsl::hash::hash_t SiLUBackwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& input_logical_shape = input_tensor.logical_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<SiLUBackwardDeviceOperation>(
-        args, input_tensor.dtype(), input_logical_shape);
-
-    return hash;
-}
-
 }  // namespace ttml::metal::ops::silu_bw::device
 
 namespace ttnn::prim {
