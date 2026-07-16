@@ -533,3 +533,15 @@ def test_fibo_wrapper_traced(*, mesh_device):
 
     assert set(wrapper._tracers) == {1024}
     assert wrapper._tracers[1024].trace_captured
+
+    # Consolidation correctness: the stacked-and-split readback (+ host-derived prompt_embeds) must still
+    # match HF on the realistic prompt. len == transformer-block count after build_text_encoder_layers.
+    hf = _load_hf_smollm3()
+    ids = wrapper.tokenizer([json_prompt], add_special_tokens=True, return_tensors="pt").input_ids
+    with torch.no_grad():
+        ref = hf.model(input_ids=ids, output_hidden_states=True)
+    ref_embeds = torch.cat([ref.hidden_states[-1], ref.hidden_states[-2]], dim=-1).float()
+    embeds, hidden = outs[0]  # traced, full JSON prompt
+    assert len(hidden) == len(ref.hidden_states)
+    assert list(embeds.shape) == list(ref_embeds.shape)
+    assert_quality(ref_embeds, embeds.float(), pcc=0.99, relative_rmse=0.2)

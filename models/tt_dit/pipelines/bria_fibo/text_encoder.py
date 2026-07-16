@@ -149,17 +149,18 @@ class SmolLM3TextEncoderWrapper:
             if tracer is None:
                 tracer = Tracer(self._forward, device=self._device, prep_run=True, clone_prep_inputs=False)
                 self._tracers[bucket] = tracer
-            outputs = tracer(tt_ids, tt_cos, tt_sin)
+            stacked = tracer(tt_ids, tt_cos, tt_sin)
         else:
-            outputs = self._forward(tt_ids, tt_cos, tt_sin)
-        prompt_embeds, all_hidden_states = outputs[0], list(outputs[1:])
+            stacked = self._forward(tt_ids, tt_cos, tt_sin)
 
-        # Under SP the outputs are sequence-sharded; gather them back over the sp axis on readback.
+        # ONE readback: gather the stacked [N, seq, hidden] over the SP axis (seq dim), then split on host.
         gather = (
             dict(mesh_axes=[None, self._sp_axis, None], composer_device=self._device) if self._sp_factor > 1 else {}
         )
-        host_prompt_embeds = tt_tensor.to_torch(prompt_embeds, **gather)[:, :seq_len, :]
-        host_hidden_states = [tt_tensor.to_torch(h, **gather)[:, :seq_len, :] for h in all_hidden_states]
+        stacked_host = tt_tensor.to_torch(stacked, **gather)[:, :seq_len, :]  # [N, seq_len, hidden]
+        host_hidden_states = [stacked_host[i : i + 1] for i in range(stacked_host.shape[0])]
+        # prompt_embeds = cat(last, second-last) -- diffusers pipeline_bria_fibo.py contract.
+        host_prompt_embeds = torch.cat([host_hidden_states[-1], host_hidden_states[-2]], dim=-1)
         return host_prompt_embeds, host_hidden_states
 
     def _prep_inputs(self, input_ids: torch.Tensor, seq_len: int) -> tuple:
@@ -191,9 +192,13 @@ class SmolLM3TextEncoderWrapper:
             tt_sin = tt_tensor.from_torch(sin, device=self._device)
         return tt_ids, tt_cos, tt_sin, bucket
 
-    def _forward(self, tt_ids: ttnn.Tensor, tt_cos: ttnn.Tensor, tt_sin: ttnn.Tensor) -> tuple:
-        """Device forward (the traced unit): flat tuple ``(prompt_embeds, *all_hidden_states)``."""
-        prompt_embeds, all_hidden_states = self._encoder.encode(
-            tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin)
-        )
-        return (prompt_embeds, *all_hidden_states)
+    def _forward(self, tt_ids: ttnn.Tensor, tt_cos: ttnn.Tensor, tt_sin: ttnn.Tensor) -> ttnn.Tensor:
+        """Device forward (the traced unit): the N hidden states stacked on dim 0 into ONE tensor.
+
+        Stacking device-side (inside the trace) turns the readback into a single ``to_torch`` (one
+        mesh-gather over the SP axis) instead of one per hidden state (~N x sp_factor tiny transfers),
+        which is what dominated the readback. ``prompt_embeds`` is derived on host from the last two
+        hidden states, so it needs no separate readback.
+        """
+        all_hidden_states = self._encoder.forward(tt_ids, attention_mask=None, pos_embeds=(tt_cos, tt_sin))
+        return ttnn.concat(all_hidden_states, dim=0)  # [N, seq_local, hidden]; seq still sharded on the SP axis
