@@ -573,9 +573,6 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     v_if(tmp < 0.0f) { reduced = x_abs; }
     v_endif;
 
-    reduced = sfpi::copysgn(reduced, x);
-    sfpi::vUInt flip = sfpi::as<sfpi::vUInt>(sfpi::copysgn(sfpi::vFloat(0.0f), tmp));
-
     // Minimax approximation for asin(reduced).
     sfpi::vFloat square = reduced * reduced;
     sfpi::vFloat polynomial = 0x1.834000p-5f;
@@ -595,12 +592,14 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     polynomial *= square;
-    reduced = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(reduced) ^ flip);
-    sfpi::vFloat x_lt_switchover = x - 0.5625f;
+    sfpi::vUInt x_bits = sfpi::as<sfpi::vUInt>(x);
+    sfpi::vUInt tmp_bits = sfpi::as<sfpi::vUInt>(tmp);
+    reduced = sfpi::copysgn(reduced, sfpi::as<sfpi::vFloat>(x_bits ^ tmp_bits));
     result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // Map asin(reduced) back to acos(x).
-    v_if(x_lt_switchover < 0.0f) { result += 1.57079637050628662109f; }
+    sfpi::vFloat add_pio2 = sfpi::as<sfpi::vFloat>(x_bits | tmp_bits);
+    v_if(add_pio2 < 0.0f) { result += 1.57079637050628662109f; }
     v_endif;
 
     v_if(tmp >= 0.0f) { result += result; }
