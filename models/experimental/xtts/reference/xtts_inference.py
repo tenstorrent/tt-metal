@@ -20,7 +20,7 @@ by the caller (the conditioning mel as a tensor; the speaker path takes raw audi
 
 import torch
 
-from models.experimental.xtts.reference.xtts_conditioning import reference_conditioning
+from models.experimental.xtts.reference.xtts_conditioning import chunk_cond_mel, reference_conditioning
 from models.experimental.xtts.reference.xtts_gpt_generate import START_AUDIO_TOKEN, greedy_generate
 from models.experimental.xtts.reference.xtts_gpt_model import reference_gpt_model
 from models.experimental.xtts.reference.xtts_hifi_decoder import XttsHifiDecoderFull
@@ -36,12 +36,19 @@ class XttsReference(torch.nn.Module):
         self.gpt = reference_gpt_model(state_dict)
         self.decoder_full = XttsHifiDecoderFull(state_dict)
 
+    def _cond_latents(self, cond_mel):
+        """coqui get_gpt_cond_latents: chunk the mel into gpt_cond_chunk_len windows,
+        get_style_emb per chunk, average -> [1, 32, 1024]. Single chunk for short mels."""
+        parts = [self.conditioning(m) for m in chunk_cond_mel(cond_mel)]  # each [1, 1024, 32]
+        style = torch.stack(parts, dim=0).mean(dim=0) if len(parts) > 1 else parts[0]
+        return style.transpose(1, 2)  # [1, 1024, 32] -> [1, 32, 1024]
+
     @torch.no_grad()
     def inference(self, text_ids, cond_mel, ref_wav_spk, max_new_tokens):
         """``text_ids`` are ``[START]/[STOP]``-wrapped (pass ``wrap_text=False``-style
         ids); ``cond_mel`` is the 80-mel ``[1, 80, s]``; ``ref_wav_spk`` is 16 kHz
         speaker audio ``[1, L]``. Returns ``(waveform [1, 1, T_out], codes, latents)``."""
-        cond_latents = self.conditioning(cond_mel).transpose(1, 2)  # [1, 1024, 32] -> [1, 32, 1024]
+        cond_latents = self._cond_latents(cond_mel)  # [1, 32, 1024]
         codes, latents = greedy_generate(
             self.gpt, text_ids, cond_latents, max_new_tokens=max_new_tokens, wrap_text=False
         )
@@ -54,7 +61,7 @@ class XttsReference(torch.nn.Module):
         """Teacher-forced torch decode of a *given* code sequence to waveform — for an
         apples-to-apples A/B against the device output on identical codes (rather than
         running an independent greedy generation that would diverge)."""
-        cond_latents = self.conditioning(cond_mel).transpose(1, 2)
+        cond_latents = self._cond_latents(cond_mel)
         codes_t = torch.as_tensor(codes, dtype=torch.long).reshape(1, -1)
         start = torch.full((1, 1), START_AUDIO_TOKEN, dtype=torch.long)
         mel_ids = torch.cat([start, codes_t], dim=1)  # [start, c_0, ..., c_{T-1}]

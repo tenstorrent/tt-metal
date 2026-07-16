@@ -76,16 +76,21 @@ class TtXttsGenerator:
         c = pick(logits)
 
         codes, latents, step = [], [], 1
-        while True:
-            logits, latent, kv = self.model.decode(c, step, kv)
-            codes.append(c)
-            latents.append(latent)
-            nxt = pick(logits)
-            if nxt == STOP_AUDIO_TOKEN or len(codes) >= max_new_tokens:
-                break
-            c = nxt
-            step += 1
-        return torch.tensor([codes], dtype=torch.long), ttnn.concat(latents, dim=1)
+        # Stop must be checked on the *first* predicted code too (matches the reference,
+        # which strips a leading STOP and returns empty): a first-token STOP means
+        # "generate nothing" — never emit 1025 as a real code / feed it to the vocoder.
+        if c != STOP_AUDIO_TOKEN:
+            while True:
+                logits, latent, kv = self.model.decode(c, step, kv)
+                codes.append(c)
+                latents.append(latent)
+                nxt = pick(logits)
+                if nxt == STOP_AUDIO_TOKEN or len(codes) >= max_new_tokens:
+                    break
+                c = nxt
+                step += 1
+        latents_cat = ttnn.concat(latents, dim=1) if latents else None
+        return torch.tensor([codes], dtype=torch.long), latents_cat
 
     def latents_for_codes(self, text_ids, cond_latents, codes):
         """Teacher-forced decode over a fixed code sequence — used to compare latents
