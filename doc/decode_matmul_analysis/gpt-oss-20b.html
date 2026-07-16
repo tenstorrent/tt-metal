@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GPT-OSS-20B (MoE) — optimized decoder analysis</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e2e2e2;--head:#f4f4f5;--acc:#0f5127;--card:#fafafa}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1113;--fg:#e6e6e6;--muted:#9aa0a6;--line:#2a2d31;--head:#1a1d20;--acc:#b7f0c6;--card:#15181b}}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;max-width:1100px;background:var(--bg);color:var(--fg);
+ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+h1{font-size:22px;margin:0 0 6px} h2{font-size:16px;margin:26px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+h3{font-size:14px;margin:18px 0 6px}
+p,li{font-size:13.5px} .muted,p em{color:var(--muted)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--head);padding:1px 4px;border-radius:4px}
+b{color:var(--fg)}
+hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+thead th{background:var(--head);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+ul{margin:6px 0;padding-left:22px}
+</style></head><body>
+<h1>GPT-OSS-20B (MoE) — optimized decoder analysis</h1>
+<p><b>Verdict:</b> The interesting outlier. MoE with <code>sparse_matmul</code> experts (<b>outside shard-advise coverage</b>). Ships <b>1D-mcast for QKV/O at only ~12% DRAM util</b> — but that is <b>correctness-bounded</b> (DRAM-sharded QKV/O was tried and rejected on sliding-window PCC, not perf). **Pattern A does *not* bite** (0 Copy ops, 1 reshard/replay). Pattern B done right.</p>
+<p>_Analyzed read-only from committed artifacts on <code>mvasiljevic/model/openai-gpt-oss-20b</code>._</p>
+<h2>Model &amp; shape</h2>
+<div class="tw"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td>hidden</td><td>2880</td></tr><tr><td>heads / kv</td><td>64 / 8 (GQA), head_dim 64</td></tr><tr><td>experts</td><td>32 total, <b>top_k=4 active</b> (<code>sparse_matmul</code>)</td></tr><tr><td>expert intermediate</td><td>2880 (gate/up packed to 2×2880)</td></tr><tr><td>layers</td><td>24 (rep: one per attn kind — sliding + full)</td></tr><tr><td>batch / seq</td><td><b>1</b> (hard contract) / 17</td></tr><tr><td>device</td><td>Blackhole P300</td></tr><tr><td>KV cache</td><td><b>BF16</b> (BFP8 rejected: sliding pos-129 PCC 0.863)</td></tr><tr><td>attention</td><td>alternating sliding-window (128) + full, <b>attention sinks</b></td></tr></tbody></table></div>
+<h2>Headline decode perf</h2>
+<div class="tw"><table><thead><tr><th>Path</th><th>Warmed prefill</th><th>Traced decode</th><th>vs functional</th></tr></thead><tbody><tr><td>functional</td><td>7.709</td><td>6.139</td><td>1.0×</td></tr><tr><td><b>final selected</b></td><td><b>3.875</b></td><td><b>0.928</b></td><td><b>6.61×</b> decode</td></tr><tr><td>full dense advisor A/B</td><td>7.727</td><td>5.910</td><td>rejected (6.4× slower)</td></tr></tbody></table></div>
+<p>Harness: <code>test_optimized_decoder_perf</code>, 10 prefill / 100 replay; 0 host ops.</p>
+<h2>Precision policy shipped</h2>
+<ul><li>- Attention (QKV/O): <b>BF16, HiFi4</b> (BFP4/global-LoFi rejected on PCC).</li><li>- Router: <b>FP32 compute</b> (norm BF16 → FP32 linear → BF16 for topk/softmax/scatter).</li><li>- Experts (gate/up/down): <b>BFP8 weights &amp; intermediates, LoFi</b> (BFP4/LoFi failed the 0.99 gate).</li><li>- KV cache: <b>BF16</b> linear paged.</li></ul>
+<h2>Decode matmul strategy shipped</h2>
+<div class="tw"><table><thead><tr><th>Role</th><th>Shape</th><th>Strategy</th></tr></thead><tbody><tr><td>QKV</td><td>32×2880×5120</td><td><b>1D-mcast</b> <code>@11x8</code>, 80 cores, L1 width-sharded</td></tr><tr><td>O</td><td>32×4096×2880</td><td><b>1D-mcast</b> <code>@11x9</code>, 90 cores</td></tr><tr><td>Router</td><td>32×2880×32</td><td>1D-mcast <code>@1x1</code>, 1 core, DRAM</td></tr><tr><td>Experts gate/up/down</td><td>active 4/32 ×32×2880×2880</td><td><b><code>ttnn.sparse_matmul</code></b>, 90 cores, block 45, <b>nnz unset</b> (nnz=4 unsafe — routing weights can flush to 0)</td></tr></tbody></table></div>
+<h2>Shard-advise: applied vs rejected</h2>
+<ul><li>- Run this pass; captured the packed-attention + <b>dense</b>-MLP graph (46 ops). Applied: 10-core block-sharded norm; 80-core QKV (11x8); 90-core O/residual (11x9); DRAM cache + SDPA retained (decode 0.984 → 0.928 ms).</li><li>- <b>Rejected (with evidence):</b> full dense-MoE advisor chain — PCC-correct (0.9996) but <b>7.73 / 5.91 ms</b> → performance reject. First-bad tensor localized to router scatter.</li><li>- <b>Sparse limitation:</b> the advisor cannot trace <code>ttnn.sparse_matmul</code>, so the shipped routed experts have <b>no shard-advisor coverage</b> (tuned manually) and are 6.4× faster than the dense chain it recommended. No &quot;unfixable op&quot;; 0 spills.</li></ul>
+<h2>Per-op decode matmul table</h2>
+<p>Per replay (from committed decode_perf_report):</p>
+<div class="tw"><table><thead><tr><th>Role</th><th>Device µs</th><th>Cores</th><th>DRAM %</th><th>Fidelity/dtype</th></tr></thead><tbody><tr><td>QKV 32×2880×5120</td><td>77</td><td>80</td><td><b>12.2%</b></td><td>HiFi4 BF16→BF16 (1D, L1)</td></tr><tr><td>O 32×4096×2880</td><td>62</td><td>90</td><td><b>12.2%</b></td><td>HiFi4 BF16→BF16 (1D, L1)</td></tr><tr><td>Router 32×2880×32</td><td>23</td><td>1</td><td>0.25%</td><td>HiFi4 FP32×BF16→FP32</td></tr><tr><td>SparseMatmul gate</td><td>117</td><td>90</td><td>18.2%</td><td>LoFi BF16×BFP8→BFP8</td></tr><tr><td>SparseMatmul up</td><td>116</td><td>90</td><td>18.3%</td><td>LoFi BF16×BFP8→BFP8</td></tr><tr><td>SparseMatmul down</td><td>114</td><td>90</td><td>18.6%</td><td>LoFi BF16×BFP8→BFP8</td></tr></tbody></table></div>
+<p><b>0 Copy ops; 1 reshard/replay</b> (~1.8 µs). One 46 µs single-core post-attn LayerNorm stands out. Decode ≈ 0.905 ms/replay, ~89 ops/replay; sparse 38%, dense matmul 18% of time; 33% aggregate roofline.</p>
+<h2>Pattern A — segment-boundary reverts</h2>
+<p><b>Present in the capture, does NOT manifest.</b> <code>final_ir.mlir</code> ends with <code>add → return: l1/width_sharded → dram/interleaved (output revert)</code> and entry DRAM→block conversions — but the shipped runtime shows <b>0 Copy ops and 1 reshard/replay</b> (sharded↔interleaved reverts ~1–3 µs). The DRAM boundary here is the genuine decoder-layer output/next-layer contract, not an artifact. This is the model where Pattern A&#x27;s &quot;expensive per-step Copy&quot; is <b>not observed</b> — a useful counter-example.</p>
+<h2>Pattern B — strategy × precision</h2>
+<p><b>Not stale.</b> Sparse grid/block and SDPA K were swept at the final BFP8/LoFi precision. <b>Low-DRAM% dominant rows present</b> (QKV/O at 12.2%, sparse experts ~18%), and the advisor/report explicitly advises &quot;try DRAM-sharded&quot; on QKV/O. But DRAM-sharded QKV/O <b>was tried and rejected on correctness</b> (sliding-window pos-130 PCC 0.913 with the required bias-after-matmul repair), not perf — so the low util is a <b>correctness-bounded ceiling</b>, not a missed config. The router (0.25% DRAM, 1 core, FP32, SLOW) and the 46 µs single-core LayerNorm are the clearest small remaining rows.</p>
+<h2>Notable</h2>
+<p>MoE routing FP32→topk→softmax→scatter; <code>nnz</code> intentionally unset for safety (Blackhole zero-flush). Attention sinks preserved; native sliding-window kernel rejected on PCC → device-built explicit 128-token mask + BF16 dest accumulation. RoPE AutoFix (host scalar position absent from program hash → device-gathered cos/sin). Context held at 21,248 tokens (DRAM-limited). No shard-advise coverage of the sparse experts is the structural gap for MoE.</p>
+</body></html>

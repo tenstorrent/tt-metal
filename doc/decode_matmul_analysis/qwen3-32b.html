@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Qwen3-32B — optimized decoder analysis</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e2e2e2;--head:#f4f4f5;--acc:#0f5127;--card:#fafafa}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1113;--fg:#e6e6e6;--muted:#9aa0a6;--line:#2a2d31;--head:#1a1d20;--acc:#b7f0c6;--card:#15181b}}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;max-width:1100px;background:var(--bg);color:var(--fg);
+ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+h1{font-size:22px;margin:0 0 6px} h2{font-size:16px;margin:26px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+h3{font-size:14px;margin:18px 0 6px}
+p,li{font-size:13.5px} .muted,p em{color:var(--muted)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--head);padding:1px 4px;border-radius:4px}
+b{color:var(--fg)}
+hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+thead th{background:var(--head);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+ul{margin:6px 0;padding-left:22px}
+</style></head><body>
+<h1>Qwen3-32B — optimized decoder analysis</h1>
+<p><b>Verdict:</b> Shipped <b>DRAM-sharded all-BFP4/LoFi</b>; advisor 1D-mcast rejected at final precision (1.217 vs 1.737 ms) — Pattern B done right. <b>Pattern A present in the capture but deliberately avoided as a Copy</b> (residual moves straight to public DRAM output; 0 Copy ops), though ~118 µs/replay of boundary <code>ReshapeView</code> remains (~10%).</p>
+<p>_Analyzed read-only from committed artifacts on <code>mvasiljevic/model/qwen-qwen3-32b</code>._</p>
+<h2>Model &amp; shape</h2>
+<div class="tw"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td>hidden</td><td>5120</td></tr><tr><td>heads / kv</td><td>64 / 8 (GQA 8:1), head_dim 128</td></tr><tr><td>intermediate</td><td>25600</td></tr><tr><td>layers</td><td>64 (dense) · rep layer 32</td></tr><tr><td>batch / seq</td><td>32 / 17 (stressed 31, pos 31–34)</td></tr><tr><td>device</td><td>Blackhole P300</td></tr><tr><td>KV cache</td><td>BFP8</td></tr><tr><td>special</td><td><b>QK-norm</b> (per-head RMSNorm on Q and K before RoPE)</td></tr></tbody></table></div>
+<h2>Headline decode perf</h2>
+<div class="tw"><table><thead><tr><th>Path</th><th>Prefill (warmed)</th><th>Traced decode</th></tr></thead><tbody><tr><td>functional BF16</td><td>83.252</td><td>82.101</td></tr><tr><td><b>final optimized (all-BFP4/LoFi, DRAM-sharded)</b></td><td><b>5.477</b></td><td><b>1.217</b> (200 replay)</td></tr><tr><td>speedup</td><td>15.2×</td><td><b>67.4×</b></td></tr></tbody></table></div>
+<p>Also 10.9% faster than the strongest earlier correct trace (1.367 ms). PCC 0.99899. Harness: 25 warmup / 200 replay.</p>
+<h2>Precision policy shipped</h2>
+<p>All projections <b>BFP4 / LoFi</b> (attention compute too); activations/residuals/norm-weights BF16; KV cache <b>BFP8</b>. HiFi2 rejected (raises decode to 1.971 MLP / 1.368 attn-only).</p>
+<h2>Decode matmul strategy shipped</h2>
+<p>All five projections <b>DRAM-sharded</b> (<code>MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</code>; CSV <code>INPUT_1_MEMORY = DEV_0_DRAM_WIDTH_SHARDED</code>). QKV 100 cores, O 80, gate 100, up 100, down 80 (32-core K-shard by 500-replay tie-break). Advisor 1D-mcast rejected.</p>
+<h2>Shard-advise: applied vs rejected</h2>
+<ul><li>- Run this pass (26 ops, 23 choices, 1 spill, 6.9% occupancy). Applied directionally: lower-precision grouping as a *seed* only (precision then swept independently on real data); the sharded residual/norm/linear skeleton → shipped 40-core L1 width-sharded chain.</li><li>- <b>Rejected (with evidence):</b> full legal advisor layouts — decode PCC <b>0.985 fails the 0.99 bar</b> (5.627/1.743 ms); advisor 1D matmuls + production heads — correct (0.9993) but slower (5.645/<b>1.737 ms</b>). Selected DRAM-sharded is correct (0.99899) and ~30% faster than the correct advisor-matmul trial (1.217 vs 1.737).</li><li>- <b>Unfixable op:</b> <code>ttnn.nlp_concat_heads_decode</code> (requires sharded input).</li></ul>
+<h2>Per-op decode matmul table</h2>
+<p>Tracy CSV <code>PERF_DECODE</code> region, per replay. All <code>LoFi BF16×BFP4</code>, DRAM-width-sharded weights.</p>
+<div class="tw"><table><thead><tr><th>Role (in0 × in1)</th><th>Device µs</th><th>Cores</th><th>DRAM GB/s</th><th>% of 512</th></tr></thead><tbody><tr><td>packed QKV 32×5120 · 5120×10240</td><td>100.7</td><td>100</td><td>260</td><td>~51%</td></tr><tr><td>O 32×8192 · 8192×5120</td><td>79.6</td><td>80</td><td>263</td><td>~51%</td></tr><tr><td>gate 32×5120 · 5120×25600</td><td>233.4</td><td>100</td><td>281</td><td>~55%</td></tr><tr><td>up 32×5120 · 5120×25600</td><td>233.3</td><td>100</td><td>282</td><td>~55%</td></tr><tr><td>down 32×25600 · 25600×5120</td><td>220.9</td><td>80</td><td>297</td><td>~58%</td></tr></tbody></table></div>
+<p>Five matmuls = 867 µs/replay (~72% of 1.202 ms device). (DRAM % column blank under trace replay; GB/s from <code>tt-perf-report</code>.) SDPA-decode ~50 µs (8×8), NLPCreateQKVHeads ~29 µs. <b>No Copy/Tilize/Untilize/Typecast in the decode region.</b></p>
+<h2>Pattern A — segment-boundary reverts</h2>
+<p><b>Present in capture, avoided as a Copy.</b> <code>final_ir.mlir</code> line 51: <code>reshape → return: l1/interleaved/10x11 → dram/interleaved (output revert)</code> + entry DRAM→L1 conversions. The shipped path recognized this — &quot;the last residual moves directly to the public DRAM output before its view, avoiding an extra copy&quot; — Tracy confirms <b>zero CopyDeviceOperation</b>. But the boundary still costs a ~50 µs input + ~68 µs output DRAM→DRAM <code>ReshapeView</code> ≈ <b>118 µs/replay (~10%)</b>; <code>perf_report.md</code> estimates only ~3 µs recoverable since the path is traced.</p>
+<h2>Pattern B — strategy × precision</h2>
+<p><b>Not stale.</b> An early MLP-core seed sweep used the shared-shard precision, but geometry/strategy was <b>re-swept coherently at final all-BFP4</b> (500-replay tie-break → down-32 at 1.217 ms), and DRAM-sharded-vs-1D was compared at the shipped precision (1.217 vs 1.737). No dominant matmul below 40% DRAM (QKV/O ~51%, gate/up ~55%, down ~58%) — remaining gap is projection kernel/dataflow efficiency, not a missed strategy.</p>
+<h2>Notable</h2>
+<p>QK-norm shipped as two block-sharded RMSNorms (Q 40 cores, K 32 cores) before RoPE. Packed QKV (10240) and fused SwiGLU (SiLU activation arg, ~34 µs). Packed gate/up rejected (1.551 vs 1.219). Capacity: batch-32 prefill passes at 8192; 16384 hits a hard DRAM OOM. Roofline 0.540 ms; wall = 2.25× that.</p>
+</body></html>

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Llama-3.1-8B — optimized decoder analysis</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e2e2e2;--head:#f4f4f5;--acc:#0f5127;--card:#fafafa}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1113;--fg:#e6e6e6;--muted:#9aa0a6;--line:#2a2d31;--head:#1a1d20;--acc:#b7f0c6;--card:#15181b}}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;max-width:1100px;background:var(--bg);color:var(--fg);
+ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+h1{font-size:22px;margin:0 0 6px} h2{font-size:16px;margin:26px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+h3{font-size:14px;margin:18px 0 6px}
+p,li{font-size:13.5px} .muted,p em{color:var(--muted)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--head);padding:1px 4px;border-radius:4px}
+b{color:var(--fg)}
+hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+thead th{background:var(--head);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+ul{margin:6px 0;padding-left:22px}
+</style></head><body>
+<h1>Llama-3.1-8B-Instruct — optimized decoder analysis (on-device verified)</h1>
+<p><b>Verdict:</b> The reference case, and the <b>sole Pattern-B miss</b> across the fleet. Shipped <b>advisor 1D-mcast</b> matmuls, but at the shipped all-BFP4 precision a plain <b>DRAM-sharded</b> path is <b>~2% faster with identical PCC</b> — the strategy was frozen at an earlier precision and never re-decided. The advisor&#x27;s norm/residual chain was correctly rejected (Pattern A: a ~33 µs boundary copy).</p>
+<p>This model was <b>re-run on a Blackhole P300</b> with real layer-16 weights (the others are analyzed from committed artifacts). Full detail with side-by-side <code>tt-perf-report</code>:</p>
+<ul><li>- [<code>exact_vs_mixed_decode_perf.html</code>](../../models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_decoder/shard_advise/exact_vs_mixed_decode_perf.html) — advisor exact residual chain vs shipped mixed 32-way (Pattern A).</li><li>- [<code>dram_sharded_vs_advisor_matmul.html</code>](../../models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_decoder/shard_advise/dram_sharded_vs_advisor_matmul.html) — DRAM-sharded vs advisor 1D at final precision (Pattern B).</li></ul>
+<h2>Model &amp; shape</h2>
+<p>hidden 4096 · 32 q / 8 kv (GQA 4:1), head_dim 128 · intermediate 14336 · 32 layers · rep layer 16 · batch 32 / seq 18 · Blackhole P300 · BFP8 cache.</p>
+<h2>Headline decode perf (BFP8 cache, 10 prefill / 100 replay)</h2>
+<div class="tw"><table><thead><tr><th>Path</th><th>Traced decode ms</th></tr></thead><tbody><tr><td>functional BF16</td><td>36.95</td></tr><tr><td>shipped optimized (advisor_1d)</td><td>0.710</td></tr><tr><td><b>DRAM-sharded, 32c (untried at final precision)</b></td><td><b>0.6965</b></td></tr><tr><td>advisor exact residual chain (rejected)</td><td>0.744</td></tr></tbody></table></div>
+<p>Functional→optimized ≈ 49× traced decode.</p>
+<h2>Shard-advise: applied vs rejected</h2>
+<ul><li>- <b>Applied (verified advisor-caused):</b> the 5 matmul 1D program configs (grids 11×9/11×6, <code>in0_block_w</code>, <code>per_core_N</code>, output subblock 5) and projection output-shard geometry — drives all 5 dominant matmuls.</li><li>- <b>Coincides / independent (not advisor):</b> projection outputs being L1 width-sharded (baseline already did), the 32-way residual grid, and BFP4/LoFi precision (separate sweep; advisor doesn&#x27;t do dtype).</li><li>- <b>Rejected:</b> the exact norm/residual chain — PCC-fine but ~5% slower.</li><li>- <b>Unfixable op:</b> <code>ttnn.nlp_concat_heads_decode</code>.</li></ul>
+<h2>Per-op decode matmul table (advisor_1d shipped)</h2>
+<div class="tw"><table><thead><tr><th>Role</th><th>Device µs</th><th>Cores</th><th>DRAM %</th></tr></thead><tbody><tr><td>QKV 32×4096×6144</td><td>91</td><td>96</td><td><b>27%</b></td></tr><tr><td>O 32×4096×4096</td><td>33</td><td>64</td><td>50%</td></tr><tr><td>gate 32×4096×14336</td><td>107</td><td>90</td><td>54%</td></tr><tr><td>up 32×4096×14336</td><td>108</td><td>90</td><td>53%</td></tr><tr><td>down 32×14336×4096</td><td>111</td><td>64</td><td>52%</td></tr></tbody></table></div>
+<p>DRAM-sharded QKV instead hits <b>46% / 53 µs</b> (vs 27% / 91 µs) — the driver of the ~14 µs win.</p>
+<h2>Pattern A — segment-boundary reverts</h2>
+<p><b>Present, and bites in the rejected variant.</b> The advisor&#x27;s exact chain holds the residual L1-interleaved (110 cores) and reverts to DRAM at the boundary → a ~33 µs 110-core <code>Copy</code> per step. The shipped mixed 32-way chain keeps the residual width-sharded and avoids it (metadata-only reshapes).</p>
+<h2>Pattern B — strategy × precision</h2>
+<p><b>Stale (the miss).</b> advisor_1d beat DRAM-sharded at *original* precision, was &quot;retained as search base&quot; (<code>work_log:131</code>), and all BFP4 reductions were layered only onto it. DRAM-sharded was never re-measured at the shipped BFP4 precision, where it wins. QKV at 27% DRAM was the tell. Filed as skill fixes (OPT-014/OPT-015) on <code>mvasiljevic/optimize-skill-notes</code>.</p>
+</body></html>

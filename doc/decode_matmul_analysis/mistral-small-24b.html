@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mistral-Small-24B — optimized decoder analysis</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e2e2e2;--head:#f4f4f5;--acc:#0f5127;--card:#fafafa}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1113;--fg:#e6e6e6;--muted:#9aa0a6;--line:#2a2d31;--head:#1a1d20;--acc:#b7f0c6;--card:#15181b}}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;max-width:1100px;background:var(--bg);color:var(--fg);
+ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+h1{font-size:22px;margin:0 0 6px} h2{font-size:16px;margin:26px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+h3{font-size:14px;margin:18px 0 6px}
+p,li{font-size:13.5px} .muted,p em{color:var(--muted)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--head);padding:1px 4px;border-radius:4px}
+b{color:var(--fg)}
+hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+thead th{background:var(--head);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+ul{margin:6px 0;padding-left:22px}
+</style></head><body>
+<h1>Mistral-Small-24B-Instruct-2501 — optimized decoder analysis</h1>
+<p><b>Verdict:</b> Shipped <b>DRAM-sharded BFP4/LoFi</b> for all five matmuls and <b>rejected the advisor&#x27;s 1D-mcast at the final precision</b> (1.288 vs 1.788 ms) — i.e. it did Pattern B *correctly* (unlike Llama-3.1-8B). <b>Pattern A is present</b> (advisor output-revert), but the residual is kept L1-resident; the ~119 µs/step boundary reshapes are the public <code>[1,32,1,H]</code> interface flatten and would be largely elidable in a stacked model.</p>
+<p>_Analyzed read-only from committed artifacts on <code>mvasiljevic/model/mistralai-mistral-small-24b-instruct-2501</code> (not re-run on device)._</p>
+<h2>Model &amp; shape</h2>
+<div class="tw"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td>hidden</td><td>5120</td></tr><tr><td>heads / kv</td><td>32 / 8 (GQA 4:1), head_dim 128</td></tr><tr><td>intermediate</td><td>32768</td></tr><tr><td>layers</td><td>40 (dense, SwiGLU) · rep layer 20</td></tr><tr><td>batch / seq</td><td>32 / 18, cache 128</td></tr><tr><td>device</td><td>Blackhole P300 (grid 11×10)</td></tr><tr><td>KV cache</td><td>BFP8</td></tr></tbody></table></div>
+<h2>Headline decode perf</h2>
+<div class="tw"><table><thead><tr><th>Path</th><th>Prefill ms</th><th>Traced decode ms</th></tr></thead><tbody><tr><td>functional BF16</td><td>94.153</td><td>93.315</td></tr><tr><td><b>selected (all-BFP4/LoFi, DRAM-sharded)</b></td><td><b>5.387</b></td><td><b>1.288</b></td></tr><tr><td>speedup</td><td>17.5×</td><td><b>72.4×</b></td></tr></tbody></table></div>
+<p>Harness: warmed prefill + traced decode, 3 warmup / 100 replay. Real PCC 0.99980 prefill / 0.99983 decode.</p>
+<h2>Precision policy shipped</h2>
+<p>All projections <b>BFP4 / LoFi</b>; KV cache <b>BFP8</b>; SDPA compute <b>HiFi4</b>; norms BF16 (11-core block-sharded). BFP4/LoFi won the sweep (1.288) over BFP8/HiFi2 (2.420), BFP8/LoFi (1.723), BFP4/HiFi2 (2.228).</p>
+<h2>Decode matmul strategy shipped</h2>
+<p>All five dominant matmuls are <b>DRAM-sharded</b> (<code>MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</code>), BFP4/LoFi. Separate gate/up (packed decode measured 1.857 ms, loses). No MoE / no LM-head in this stage.</p>
+<h2>Shard-advise: applied vs rejected</h2>
+<ul><li>- <b>Applied:</b> 11-core block-sharded norms; coherent <b>L1 width-sharded residual chain</b> (improved decode 1.529 → 1.377 ms); width-sharded QKV/O + direct QKV→heads / concat→O edges (retuned to DRAM-sharded BFP4 block-16); full-table indexed RoPE (removed two slices + both untilize/tilize triplets); separate gate/up.</li><li>- <b>Rejected (with evidence):</b> exact advisor <b>1D-mcast</b> seed → 1.788 ms vs 1.288 selected; BFP4/HiFi2 → 2.228; packed gate/up decode → 1.857.</li><li>- <b>Unfixable op:</b> <code>ttnn.nlp_concat_heads_decode</code> (needs sharded input; abstract input is DRAM) — runtime repairs SDPA→height shard→concat→one L1 reshard into O.</li></ul>
+<h2>Per-op decode matmul table</h2>
+<p>From committed <code>tracy/final/decode_perf_report.txt</code> (Blackhole, 110 cores). All <code>LoFi BF16×BFP4→BF16</code>, DRAM-sharded, 12 workers.</p>
+<div class="tw"><table><thead><tr><th>Role (M×K×N)</th><th>Device µs</th><th>Cores</th><th>DRAM GB/s</th><th>DRAM %</th></tr></thead><tbody><tr><td>QKV 32×5120×6144</td><td>59</td><td>12</td><td>268</td><td>52.4%</td></tr><tr><td>O 32×4096×5120</td><td>41</td><td>12</td><td>258</td><td>50.3%</td></tr><tr><td>gate 32×5120×32768</td><td>292</td><td>12</td><td>287</td><td>56.0%</td></tr><tr><td>up 32×5120×32768</td><td>295</td><td>12</td><td>285</td><td>55.6%</td></tr><tr><td>down 32×32768×5120</td><td>286</td><td>12</td><td>293</td><td>57.2%</td></tr></tbody></table></div>
+<p>Other: SDPA-decode 43 µs/64c; 2× PagedUpdateCache 12 µs/32c; SiLU-fused multiply 54 µs/110c. <b>Decode device total 1,281 µs, 31 ops, 42.4% aggregate DRAM.</b> MLP (gate+up+down) = 873 µs ≈ 67% of decode.</p>
+<h2>Pattern A — segment-boundary reverts</h2>
+<p><b>Present.</b> <code>final_ir.mlir</code>: <code>reshape → return: l1/interleaved/10x11 → dram/interleaved (output revert)</code>. The pure revert (ShardedToInterleaved) is only 2 µs, but the associated boundary reshapes are real full-tensor ops: <b>entry ReshapeView 51 µs + exit 68 µs = 119 µs/step (~9.3%)</b> on 110 cores. The residual itself stays L1 width-sharded within the block, so the *residual-copy* form of the artifact is avoided; the DRAM round-trip is retained by the public single-layer contract and would be a fuse-away candidate in a 40-layer stack.</p>
+<h2>Pattern B — strategy × precision</h2>
+<p><b>Not stale — done right.</b> The DRAM-sharded-vs-1D choice was measured directly at the shipped BFP4/LoFi precision (1.288 vs 1.788 ms), and BFP4 was crossed with geometry. No dominant matmul below 40% DRAM (all 50–57%); the two widest MLP geometries were rejected by a hard L1 blocker (3.98 MB CB &gt; 1.57 MB), not left unexplored.</p>
+<h2>Notable</h2>
+<p>Packed QKV (48 heads→6144); GQA 4:1; fused SiLU into gate×up multiply; <code>nlp_concat_heads_decode</code> is the one advisor-unfixable op; prefill keeps a per-user cache-fill loop deferred to a later generator stage.</p>
+</body></html>

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Falcon3-10B — optimized decoder analysis</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e2e2e2;--head:#f4f4f5;--acc:#0f5127;--card:#fafafa}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1113;--fg:#e6e6e6;--muted:#9aa0a6;--line:#2a2d31;--head:#1a1d20;--acc:#b7f0c6;--card:#15181b}}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;max-width:1100px;background:var(--bg);color:var(--fg);
+ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+h1{font-size:22px;margin:0 0 6px} h2{font-size:16px;margin:26px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+h3{font-size:14px;margin:18px 0 6px}
+p,li{font-size:13.5px} .muted,p em{color:var(--muted)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--head);padding:1px 4px;border-radius:4px}
+b{color:var(--fg)}
+hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+thead th{background:var(--head);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+ul{margin:6px 0;padding-left:22px}
+</style></head><body>
+<h1>Falcon3-10B-Base — optimized decoder analysis</h1>
+<p><b>Verdict:</b> Shipped <b>DRAM-sharded all-BFP4/LoFi</b> with a <b>precision-aware core target</b> (BFP4→24 cores); advisor 1D-mcast rejected at final precision (0.793 vs 0.804 ms) — Pattern B done right. <b>Pattern A present:</b> exit <code>ReshapeView</code> 34 µs + boundary <code>Copy</code> 25 µs ≈ <b>59 µs/layer (~7.3%)</b>, characterized as the public DRAM layer boundary.</p>
+<p>_Analyzed read-only from committed artifacts on <code>mvasiljevic/model/tiiuae-falcon3-10b-base</code>._</p>
+<h2>Model &amp; shape</h2>
+<div class="tw"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td>hidden</td><td>3072</td></tr><tr><td>heads / kv</td><td>12 / 4 (GQA 3:1), head_dim 256</td></tr><tr><td>intermediate</td><td>23040</td></tr><tr><td>layers</td><td>40 (dense) · rep layer 20</td></tr><tr><td>batch / seq</td><td>32 (+batch 1), cache 128 (capacity 6528)</td></tr><tr><td>device</td><td>Blackhole P300</td></tr><tr><td>KV cache</td><td>BFP8 (functional was BF16)</td></tr></tbody></table></div>
+<h2>Headline decode perf</h2>
+<div class="tw"><table><thead><tr><th>Path</th><th>Traced decode ms (batch 32)</th></tr></thead><tbody><tr><td>functional BF16</td><td>4.201</td></tr><tr><td><b>selected (DRAM-sharded, all-BFP4/LoFi, 24-core)</b></td><td><b>0.793</b></td></tr><tr><td>speedup</td><td><b>5.29× (81% faster)</b></td></tr></tbody></table></div>
+<p>Batch 1: 1.433 → <b>0.668</b>. PCC 0.99999667. Harness: 100 traced replays.</p>
+<h2>Precision policy shipped</h2>
+<p>All projections <b>BFP4 / LoFi</b>; KV cache <b>BFP8</b> (cache PCC 0.9966/0.9950). Rejected: attention-HiFi2 (no accuracy need), MLP-HiFi2 (40.7% slower decode).</p>
+<h2>Decode matmul strategy shipped</h2>
+<p>All five projections <b>DRAM-sharded</b> (12 workers). <b>Precision-aware core target:</b> BFP4→24-core, BFP8/BF16→48-core; <code>in0_block_w=4</code> gate/up, <code>in0_block_w=30</code> down. Advisor 1D-mcast (<code>@11x8/11x9/11x10</code>) seeded, measured, rejected.</p>
+<h2>Shard-advise: applied vs rejected</h2>
+<ul><li>- Run once (24 ops, 21 choices, 1 spill). Every recommendation seeded then <b>rejected on whole-layer measurement</b>: report-sharded-inputs chain 0.819; report residual chain 0.817; exact advisor all-BFP4 0.804 — all lose to selected <b>0.793</b>. Exact advisor BFP4 kept as a regression test.</li><li>- Residual: advisor 96-core residual + 103/90-core MLP grid → 0.817 vs selected 24-core phase-specific → 0.793.</li><li>- <b>Unfixable op:</b> <code>ttnn.nlp_concat_heads_decode</code> (requires sharded input).</li></ul>
+<h2>Per-op decode matmul table</h2>
+<p>From committed <code>tracy/.../decode_perf_report.txt</code>. All <code>LoFi BF16×BFP4→BF16</code>, DRAM-sharded, 12 workers.</p>
+<div class="tw"><table><thead><tr><th>Role (M×K×N)</th><th>Device µs</th><th>Cores</th><th>DRAM GB/s</th><th>DRAM %</th></tr></thead><tbody><tr><td>QKV 32×3072×5120</td><td>38</td><td>12</td><td>207</td><td>40.4%</td></tr><tr><td>O 32×3072×3072</td><td>28</td><td>12</td><td>168</td><td>32.8%</td></tr><tr><td>gate 32×3072×23040</td><td>133</td><td>12</td><td>267</td><td>52.2%</td></tr><tr><td>up 32×3072×23040</td><td>133</td><td>12</td><td>266</td><td>51.9%</td></tr><tr><td>down 32×23040×3072</td><td>123</td><td>12</td><td>289</td><td>56.4%</td></tr></tbody></table></div>
+<p>Per iteration ≈ 42 ops, 0.782 ms kernels, 29.7% aggregate DRAM. SDPA-decode 38 µs/64c (maskless).</p>
+<h2>Pattern A — segment-boundary reverts</h2>
+<p><b>Present.</b> <code>final_ir.mlir</code>: exit <code>reshape → return: l1/interleaved/10x11 → dram/interleaved (output revert)</code> + two entry <code>dram→dram [to_layout]</code> conversions. Reproduced per layer as <code>ReshapeView</code> 34 µs + <code>Copy</code> 25 µs ≈ <b>59 µs/layer (~7.3%)</b> on 110 cores — the largest non-matmul rows, flagged &quot;High Op-to-Op Gap&quot;. Residual L1-resident within the layer; only the layer output reverts to public DRAM (single-layer contract). In a 40-layer stack this revert-then-re-enter would be a fuse-away candidate.</p>
+<h2>Pattern B — strategy × precision</h2>
+<p><b>Not stale.</b> DRAM-sharded-vs-1D and 24-vs-48-core were re-measured on all-BFP4/LoFi with real layer-20 weights (0.793 vs 0.804; 200-replay 0.793@24 vs 0.799@48); default is precision-aware. <b>Low-DRAM% hint:</b> <b>O (32.8%)</b> and QKV (40.4%) are the least-efficient dominant rows. A <b>per-op mixed strategy (DRAM-sharded MLP + 1D-mcast QKV/O)</b> was *not* tried in isolation and is the plausible remaining lever for the ~33% O row — though upside is bounded (~28 µs O row; MLP is already near roofline).</p>
+<h2>Notable</h2>
+<p>Maskless SDPA (mask removed) was the biggest graph-rewrite win (2.62 → 0.80 ms). Separate decode weight copies (prefill interleaved / decode sharded). Smaller-core geometries hit exact L1 blockers (12-core gate/up <code>in0=8</code> = 1.585 MB &gt; 1.573 MB). Bytes floor 0.265 ms = 32% of wall.</p>
+</body></html>

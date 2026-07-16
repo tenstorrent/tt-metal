@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Falcon3-7B — optimized decoder analysis</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e2e2e2;--head:#f4f4f5;--acc:#0f5127;--card:#fafafa}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1113;--fg:#e6e6e6;--muted:#9aa0a6;--line:#2a2d31;--head:#1a1d20;--acc:#b7f0c6;--card:#15181b}}
+*{box-sizing:border-box}
+body{margin:0;padding:28px;max-width:1100px;background:var(--bg);color:var(--fg);
+ font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
+h1{font-size:22px;margin:0 0 6px} h2{font-size:16px;margin:26px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+h3{font-size:14px;margin:18px 0 6px}
+p,li{font-size:13.5px} .muted,p em{color:var(--muted)}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;background:var(--head);padding:1px 4px;border-radius:4px}
+b{color:var(--fg)}
+hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+thead th{background:var(--head);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:5px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+ul{margin:6px 0;padding-left:22px}
+</style></head><body>
+<h1>Falcon3-7B-Base — optimized decoder analysis</h1>
+<p><b>Verdict:</b> Shipped <b>DRAM-sharded all-BFP4/LoFi</b>; the advisor&#x27;s 1D-mcast was implemented as a control and <b>rejected at the final precision</b> (0.773 vs 0.768 ms) — Pattern B done right. <b>Pattern A present:</b> a per-step boundary <code>Copy</code> (24 µs) + reshapes ≈ <b>78 µs/iter (~10%)</b> around an otherwise L1-resident residual.</p>
+<p>_Analyzed read-only from committed artifacts on <code>mvasiljevic/model/tiiuae-falcon3-7b-base</code>._</p>
+<h2>Model &amp; shape</h2>
+<div class="tw"><table><thead><tr><th></th><th></th></tr></thead><tbody><tr><td>hidden</td><td>3072</td></tr><tr><td>heads / kv</td><td>12 / 4 (GQA 3:1), head_dim 256</td></tr><tr><td>intermediate</td><td>23040</td></tr><tr><td>layers</td><td>28 (dense) · rep layer 14</td></tr><tr><td>batch / seq</td><td>32 (+batch 1), cache 128</td></tr><tr><td>device</td><td>Blackhole P300</td></tr><tr><td>KV cache</td><td>BFP8</td></tr></tbody></table></div>
+<h2>Headline decode perf</h2>
+<div class="tw"><table><thead><tr><th>Path</th><th>Traced decode ms (batch 32)</th></tr></thead><tbody><tr><td>functional BF16</td><td>1.798</td></tr><tr><td><b>selected (DRAM-sharded, all-BFP4/LoFi)</b></td><td><b>0.768</b></td></tr><tr><td>speedup</td><td><b>2.34× (57% faster)</b></td></tr></tbody></table></div>
+<p>Batch 1: 1.402 (BF16 advisor) → <b>0.644</b>. Harness: 100 traced replays. Selected is ~0.6% faster than the all-BFP4 advisor 1D control.</p>
+<h2>Precision policy shipped</h2>
+<p>All projections <b>BFP4 / LoFi</b>; KV cache <b>BFP8</b>. MLP BFP4 LoFi vs HiFi2 isolated (0.783 vs 0.786; LoFi wins).</p>
+<h2>Decode matmul strategy shipped</h2>
+<p>All five projections <b>DRAM-sharded</b> (12 workers reported). Per-role geometry: QKV 32-way <code>in0_block_w=3</code>/<code>per_core_N=5</code>; O 32-way <code>in0=3</code>/<code>pcN=3</code>; gate/up 48-way <code>in0=2</code>/<code>pcN=15</code>; down 48-way <code>in0=15</code>/<code>pcN=2</code>. Advisor 1D-mcast (<code>@11x8/11x9/11x10</code>) rejected.</p>
+<h2>Shard-advise: applied vs rejected</h2>
+<ul><li>- <b>Applied:</b> coherent <b>32-core L1 width-sharded residual/norm chain</b> (final, faster than advisor&#x27;s 96-core residual + 103/90-core MLP grid); RoPE full-table indexing; direct head/O boundary.</li><li>- <b>Rejected (with evidence):</b> advisor 1D-mcast matmul family lost the all-BFP4 cross (0.773 vs 0.768 batch-32; 0.653 vs 0.644 batch-1); kept as a regression control.</li><li>- <b>Unfixable op:</b> <code>ttnn.nlp_concat_heads_decode</code> (requires sharded input; advisor proposed DRAM interleaved).</li></ul>
+<h2>Per-op decode matmul table</h2>
+<p>From committed <code>tracy/dense_layer/decode_perf_report.txt</code>. All <code>LoFi BF16×BFP4→BF16</code>, DRAM-sharded, 12 workers.</p>
+<div class="tw"><table><thead><tr><th>Role (M×K×N)</th><th>Device µs</th><th>Cores</th><th>DRAM GB/s</th><th>DRAM %</th></tr></thead><tbody><tr><td>QKV 32×3072×5120</td><td>38</td><td>12</td><td>207</td><td>40.4%</td></tr><tr><td>O 32×3072×3072</td><td>28</td><td>12</td><td>170</td><td>33.2%</td></tr><tr><td>gate 32×3072×23040</td><td>145</td><td>12</td><td>244</td><td>47.6%</td></tr><tr><td>up 32×3072×23040</td><td>146</td><td>12</td><td>243</td><td>47.4%</td></tr><tr><td>down 32×23040×3072</td><td>128</td><td>12</td><td>277</td><td>54.0%</td></tr></tbody></table></div>
+<p>SDPA-decode 38 µs/64c (maskless causal). Per iter ≈ 42 ops, 0.758 ms kernels, 30.6% aggregate DRAM.</p>
+<h2>Pattern A — segment-boundary reverts</h2>
+<p><b>Present.</b> <code>final_ir.mlir</code> reshard #18: <code>reshape → return: l1/interleaved/10x11 → dram/interleaved (output revert)</code>. Per iteration this materializes as exit <code>ReshapeView</code> 34 µs + boundary <b><code>Copy</code> 24 µs</b> + next-block entry <code>ReshapeView</code> 20 µs ≈ <b>78 µs/iter (~10% of 758 µs)</b> on 110/96 cores. Residual chain itself is L1-resident (add ops ~1 µs); the DRAM revert is by public single-layer contract and is the clearest fuse-away candidate in a stacked model.</p>
+<h2>Pattern B — strategy × precision</h2>
+<p><b>Not stale.</b> Precision (BFP4/LoFi) selected first, then the strategy cross (advisor-1D vs DRAM-48, split vs packed) run <b>at final all-BFP4, 100 replays</b>. Lowest-util dominant rows are <b>O (33.2%)</b> and <b>QKV (40.4%)</b> — both small (M=32) and cheap (28/38 µs); the report&#x27;s only matmul advice is accuracy-oriented, no untried faster config identified for them; the cost center (gate/up/down, 47–54%) is already best-utilized.</p>
+<h2>Notable</h2>
+<p>AutoFix: near-zero DRAM-BFP4 PCC was a decode-formatted weight leaking into the large-M prefill path → fixed with <b>separate width-sharded decode weight copies</b> (persistent storage cost, capacity preserved). Maskless causal decode SDPA (0.783 vs 1.004 masked). Split gate/up beats packed (0.773 vs 0.938).</p>
+</body></html>
