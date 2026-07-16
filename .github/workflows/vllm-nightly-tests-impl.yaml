@@ -826,40 +826,52 @@ jobs:
         with:
           log-file: ${{ env.FILE_MULTIMODAL_TEST_LOG }}
           run: |
-            resp=$(curl -sS http://localhost:8000/v1/chat/completions \
-              -H "Content-Type: application/json" \
-              -H "X-User-ID: vllm_test" \
-              -d '{
-                "model": "${{ matrix.test-group.model }}",
-                "messages": [
-                  {
-                    "role": "user",
-                    "content": [
-                      {
-                        "type": "text",
-                        "text": "Describe this image in 50 words."
-                      },
-                      {
-                        "type": "image_url",
-                        "image_url": {
-                          "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+            # Same image + prompt for both requests; only the sampling differs.
+            # The second uses repetition_penalty to probe whether the greedy
+            # decode degeneration is decode-side fragility (penalty recovers a
+            # coherent answer) or a genuinely wrong model state (still degenerate).
+            req() {
+              curl -sS http://localhost:8000/v1/chat/completions \
+                -H "Content-Type: application/json" \
+                -H "X-User-ID: vllm_test" \
+                -d '{
+                  "model": "${{ matrix.test-group.model }}",
+                  "messages": [
+                    {
+                      "role": "user",
+                      "content": [
+                        {
+                          "type": "text",
+                          "text": "Describe this image in 50 words."
+                        },
+                        {
+                          "type": "image_url",
+                          "image_url": {
+                            "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+                          }
                         }
-                      }
-                    ]
-                  }
-                ],
-                "max_tokens": 512,
-                "temperature": 0.0,
-                "top_p": 0.9,
-                "top_k": 10,
-                "repetition_penalty": 1.0,
-                "stream": false,
-                "ignore_eos": false
-            }')
+                      ]
+                    }
+                  ],
+                  "max_tokens": 512,
+                  "temperature": 0.0,
+                  "top_p": 0.9,
+                  "top_k": 10,
+                  "repetition_penalty": '"$1"',
+                  "stream": false,
+                  "ignore_eos": false
+              }'
+            }
+            resp=$(req 1.0)
+            echo "=== greedy (repetition_penalty=1.0) ==="
             echo "$resp"
+            echo "=== diagnostic (repetition_penalty=1.05) ==="
+            req 1.05
+            echo
             # cats.jpeg: a correct description mentions a cat, so its absence
             # means the model or image pipeline misbehaved. Grep the captured
-            # response (not the log) to stay race-free under the wrapper.
+            # response (not the log) to stay race-free under the wrapper. The
+            # gate is the greedy request only; the diagnostic is informational.
             grep -qi cat <<<"$resp" || { echo '❌ keyword "cat" not found in multimodal response'; exit 1; }
             echo '✅ Multimodal response describes a cat'
       - name: 🧪 Run sampling tests
