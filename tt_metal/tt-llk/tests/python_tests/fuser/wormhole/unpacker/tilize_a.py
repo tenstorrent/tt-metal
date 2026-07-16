@@ -57,10 +57,11 @@ class UnpackerTilizeA(Unpacker):
             compute_unit.src_a.dimensions,
             compute_unit.src_a.data_format,
             compute_unit.src_a.tile_shape.total_num_faces(),
-            tile_dimensions=(
+            tile_dimensions=[
                 compute_unit.src_a.tile_shape.total_row_dim(),
                 compute_unit.src_a.tile_shape.total_col_dim(),
-            ),
+            ],
+            face_r_dim=compute_unit.src_a.tile_shape.face_r_dim,
         )
 
         return tilized_a, None
@@ -104,4 +105,10 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return f"_llk_unpack_tilize_uninit_({config.sentinel.unpack_a_dst_format});\n\n"
+        tile_shape = compute_unit.src_a.tile_shape
+
+        return (
+            f"_llk_unpack_tilize_uninit_({config.sentinel.unpack_a_dst_format}, "
+            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, "
+            f"{tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}});\n\n"
+        )

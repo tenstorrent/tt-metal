@@ -1,0 +1,41 @@
+# DiffusionGemma bring-up — Python env (curated)
+#
+# Captured 2026-06-24 from the dedicated venv `/home/zni/venvs/tt-diffusion-gemma`
+# on the TT-QuietBox 2 (Blackhole) box (Python 3.12.12). Curated to the packages
+# DiffusionGemma's reference oracle + PCC/device harness actually use.
+#
+# ttnn / tt-metal are EDITABLE from THIS repo (built from source, loaded via the
+# venv's .pth) — do NOT pip-install them. For reference only, the env had:
+#     ttnn==0.65.1rc17.dev6840+gg48be0eecb6a   tt-umd==0.9.6   tt-exalens==0.3.21
+#
+# torch is the CPU build (the reference/oracle runs on CPU; device math is ttnn on
+# Blackhole). Install torch from the CPU index, e.g.:
+#     pip install torch==2.11.0+cpu torchvision==0.26.0+cpu \
+#         --index-url https://download.pytorch.org/whl/cpu
+
+# --- HF transformers stack ---
+# transformers>=5.12 is REQUIRED: the `diffusion_gemma` model type ships since 5.12
+# (absent in 5.10.x). 5.12.1 is the pinned, verified version.
+transformers==5.12.1
+tokenizers==0.22.2
+safetensors==0.8.0
+huggingface_hub==1.20.1
+hf-xet==1.5.1
+accelerate==1.7.0
+sentencepiece==0.2.1
+
+# --- Torch (CPU build — reference oracle only; see note above for the index URL) ---
+torch==2.11.0+cpu
+torchvision==0.26.0+cpu
+
+# --- Numerics / utils used by reference + harness ---
+numpy==1.26.4
+ml_dtypes==0.5.4
+einops==0.6.1
+loguru==0.6.0
+
+# --- Test ---
+pytest==9.0.3
+pytest-timeout==2.4.0
+pytest-split==0.11.0
+pytest-github-actions-annotate-failures==0.3.0

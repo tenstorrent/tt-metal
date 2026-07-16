@@ -2,7 +2,18 @@
 
 This directory will contain the implementation of prefill stage for DeepSeek V3 model. More details TBD.
 
+## Multiple models
+
+The prefill runner is a model-agnostic engine in the common package
+(`models/demos/common/prefill/`). It drives any model through a `PrefillModelAdapter`; the
+DeepSeek-V3 family's concrete adapters live here in `tt/runners/adapters/`, selected by the
+**`PREFILL_MODEL`** env var (default `deepseek_v3_d_p`; Kimi is `kimi_k2_6`). To integrate a new
+model, see
+[models/demos/common/prefill/runners/ADDING_A_PREFILL_MODEL.md](../common/prefill/runners/ADDING_A_PREFILL_MODEL.md).
+
 ## Environment Variables
+
+- **`PREFILL_MODEL`** — Which model adapter the runner / producers use (`deepseek_v3_d_p` | `kimi_k2_6`). Defaults to `deepseek_v3_d_p`. Replaces the former `PREFILL_MODEL_VARIANT`.
 
 - **`DEEPSEEK_V3_HF_MODEL`** — Path to DeepSeek-R1-0528 weights directory. Falls back to `models/demos/deepseek_v3/reference/` then `/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528`.
 - **`TT_DS_PREFILL_TTNN_CACHE`** — Directory for cached TTNN weight tensors (`.tensorbin` files). First run writes cache, subsequent runs load directly. Defaults to `{model_path}/tensor_cache_{arch}_{num_devices}dev/`.

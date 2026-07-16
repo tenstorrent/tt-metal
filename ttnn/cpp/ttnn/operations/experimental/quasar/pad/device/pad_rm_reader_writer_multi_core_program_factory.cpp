@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -28,6 +29,7 @@ using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // This is currently mostly hardcoded for resnet shapes
 inline std::tuple<uint32_t, uint32_t, uint32_t, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t, uint32_t, uint32_t>
@@ -185,10 +187,12 @@ MeshTensor build_pad_value_const_mesh_tensor(const PadInputs& tensor_args, float
     return tt::tt_metal::enqueue_write_tensor(cq, host_pad.host_tensor(), *device, mem_cfg);
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactory::create_program_artifacts(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN0{"cb_in0"};  // legacy c_0: input stream (reader produces, writer consumes)
 
@@ -325,7 +329,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                   "num_local_unpadded_Y",
                   "full_unpadded_X_nbytes",
                   "num_local_W"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
     // ------------------------------------------------------------------------
@@ -351,7 +355,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                   "full_padded_X_nbytes",
                   "dst_stick_offset",
                   "num_local_W"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     log_debug(tt::LogOp, "ncores: {}", ncores);
@@ -412,40 +416,48 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                 }
 
                 const NodeCoord node = core;
-                reader_run.runtime_arg_values.push_back(
-                    {node,
-                     {{"num_unpadded_W", static_cast<uint32_t>(a.padded_shape()[0])},
-                      {"num_total_W", static_cast<uint32_t>(output_shape[0])},
-                      {"num_unpadded_Z", static_cast<uint32_t>(a.padded_shape()[1])},
-                      {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
-                      {"num_unpadded_Y", static_cast<uint32_t>(a.padded_shape()[2])},
-                      {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
-                      {"unpadded_X_nbytes", curr_stick_size_nbytes},
-                      {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
-                      {"padded_X_diff_nbytes", static_cast<uint32_t>(curr_stick_diff_nbytes)},
-                      {"pad_value_packed", packed_pad_value},
-                      {"start_src_stick_id", start_src_stick_id},
-                      {"start_src_stick_wi", start_src_stick_wi},
-                      {"start_src_stick_offset", start_src_stick_wi * a.element_size()},
-                      {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
-                      {"num_local_unpadded_Y", num_local_unpadded_nsticks},
-                      {"full_unpadded_X_nbytes", unpadded_row_size_nbytes},
-                      {"num_local_W", nbatch_per_core_h}}});
+                KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+                AddRuntimeArgsForNode(
+                    reader_rtas,
+                    node,
+                    {
+                        {"num_unpadded_W", static_cast<uint32_t>(a.padded_shape()[0])},
+                        {"num_total_W", static_cast<uint32_t>(output_shape[0])},
+                        {"num_unpadded_Z", static_cast<uint32_t>(a.padded_shape()[1])},
+                        {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
+                        {"num_unpadded_Y", static_cast<uint32_t>(a.padded_shape()[2])},
+                        {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
+                        {"unpadded_X_nbytes", curr_stick_size_nbytes},
+                        {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
+                        {"padded_X_diff_nbytes", static_cast<uint32_t>(curr_stick_diff_nbytes)},
+                        {"pad_value_packed", packed_pad_value},
+                        {"start_src_stick_id", start_src_stick_id},
+                        {"start_src_stick_wi", start_src_stick_wi},
+                        {"start_src_stick_offset", start_src_stick_wi * a.element_size()},
+                        {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
+                        {"num_local_unpadded_Y", num_local_unpadded_nsticks},
+                        {"full_unpadded_X_nbytes", unpadded_row_size_nbytes},
+                        {"num_local_W", nbatch_per_core_h},
+                    });
 
-                writer_run.runtime_arg_values.push_back(
-                    {node,
-                     {{"num_total_W", static_cast<uint32_t>(output_shape[0])},
-                      {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
-                      {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
-                      {"num_total_X", static_cast<uint32_t>(output_shape[3])},
-                      {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
-                      {"start_dst_stick_id", start_dst_stick_id},
-                      {"start_dst_stick_wi", start_dst_stick_wi},
-                      {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
-                      {"num_local_unpadded_Y", num_local_unpadded_nsticks},
-                      {"full_padded_X_nbytes", padded_row_size_nbytes},
-                      {"dst_stick_offset", start_dst_stick_wi * output.element_size()},
-                      {"num_local_W", nbatch_per_core_h}}});
+                KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+                AddRuntimeArgsForNode(
+                    writer_rtas,
+                    node,
+                    {
+                        {"num_total_W", static_cast<uint32_t>(output_shape[0])},
+                        {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
+                        {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
+                        {"num_total_X", static_cast<uint32_t>(output_shape[3])},
+                        {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
+                        {"start_dst_stick_id", start_dst_stick_id},
+                        {"start_dst_stick_wi", start_dst_stick_wi},
+                        {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
+                        {"num_local_unpadded_Y", num_local_unpadded_nsticks},
+                        {"full_padded_X_nbytes", padded_row_size_nbytes},
+                        {"dst_stick_offset", start_dst_stick_wi * output.element_size()},
+                        {"num_local_W", nbatch_per_core_h},
+                    });
 
                 start_src_stick_wi += ntiles_per_core_w * TILE_WIDTH;
                 start_dst_stick_wi += ntiles_per_core_w * TILE_WIDTH;

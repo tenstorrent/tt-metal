@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -52,11 +52,11 @@ void kernel_main() {
     const auto start_mean_rstd_idx = tile_offset / num_inner_tiles;
 
     Noc noc;
-    CircularBuffer cb_output(cb_id_output);
-    CircularBuffer cb_mean(cb_id_mean);
-    CircularBuffer cb_rstd(cb_id_rstd);
+    DataflowBuffer dfb_output(cb_id_output);
+    DataflowBuffer dfb_mean(cb_id_mean);
+    DataflowBuffer dfb_rstd(cb_id_rstd);
 
-    const auto output_l1_read_ptr = cb_output.get_read_ptr();
+    const auto output_l1_read_ptr = dfb_output.get_read_ptr();
     uint32_t output_tile_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; ++outer_idx) {
         // mean, rstd (1, 1, N, num_groups)
@@ -81,55 +81,55 @@ void kernel_main() {
         // mean (1, 1, N, num_groups)
         if (mean_has_value) {
             const auto mean_dtype_bytes = mean_tile_bytes / (TILE_H * TILE_W);
-            const auto mean_l1_read_ptr = cb_mean.get_read_ptr();
-            cb_mean.wait_front(onetile);
+            const auto mean_l1_read_ptr = dfb_mean.get_read_ptr();
+            dfb_mean.wait_front(onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
                 CoreLocalMem<uint16_t> mean_ptr(mean_l1_read_ptr);
                 mean_ptr[tilized_mean_rstd_idx_in_tile] = mean_ptr[0];
             }
             noc.async_write(
-                cb_mean,
+                dfb_mean,
                 mean_addrg,
                 mean_dtype_bytes,
                 {.offset_bytes = tilized_mean_rstd_idx_in_tile * mean_dtype_bytes},
                 {.page_id = mean_rstd_tile_idx, .offset_bytes = tilized_mean_rstd_idx_in_tile * mean_dtype_bytes});
             noc.async_write_barrier();
-            cb_mean.pop_front(onetile);
+            dfb_mean.pop_front(onetile);
         }
 
         // rstd (1, 1, N, num_groups)
         if (rstd_has_value) {
             const auto rstd_dtype_bytes = rstd_tile_bytes / (TILE_H * TILE_W);
-            const auto rstd_l1_read_ptr = cb_rstd.get_read_ptr();
-            cb_rstd.wait_front(onetile);
+            const auto rstd_l1_read_ptr = dfb_rstd.get_read_ptr();
+            dfb_rstd.wait_front(onetile);
             if (tilized_mean_rstd_idx_in_tile != 0) {
                 CoreLocalMem<uint16_t> rstd_ptr(rstd_l1_read_ptr);
                 rstd_ptr[tilized_mean_rstd_idx_in_tile] = rstd_ptr[0];
             }
             noc.async_write(
-                cb_rstd,
+                dfb_rstd,
                 rstd_addrg,
                 rstd_dtype_bytes,
                 {.offset_bytes = tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes},
                 {.page_id = mean_rstd_tile_idx, .offset_bytes = tilized_mean_rstd_idx_in_tile * rstd_dtype_bytes});
             noc.async_write_barrier();
-            cb_rstd.pop_front(onetile);
+            dfb_rstd.pop_front(onetile);
         }
 
         for (uint32_t inner_idx = 0; inner_idx < num_inner_tiles; inner_idx += block_size) {
             // output (N, C, H, W)
-            cb_output.wait_front(block_size);
+            dfb_output.wait_front(block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 output_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                 noc.async_write(
-                    cb_output,
+                    dfb_output,
                     output_addrg,
                     output_tile_bytes,
                     {.offset_bytes = r * output_tile_bytes},
                     {.page_id = output_tile_idx});
             }
             noc.async_write_barrier();
-            cb_output.pop_front(block_size);
+            dfb_output.pop_front(block_size);
         }  // inner_idx loop
     }  // outer_idx loop
 

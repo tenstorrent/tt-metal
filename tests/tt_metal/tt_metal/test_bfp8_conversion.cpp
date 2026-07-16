@@ -28,26 +28,26 @@ TEST(HostOnlyTest, Bfp8Conversion) {
 
     std::vector<uint32_t> shape_vec = {1, 1, 32, 32};
     std::vector<float> tiled_fp32_vec = convert_layout(
-        tt::stl::make_const_span(fp32_vec), shape_vec, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+        ttsl::make_const_span(fp32_vec), shape_vec, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
 
     std::vector<uint32_t> packed_bfp8b_tile_vec_rm_in =
-        pack_as_bfp8_tiles(tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true, /*is_exp_a=*/false);
+        pack_as_bfp8_tiles(ttsl::make_const_span(fp32_vec), /*row_major_input=*/true, /*is_exp_a=*/false);
     std::vector<float> unpacked_bfp8b_tile_vec_rm_out =
         unpack_bfp8_tiles_into_float_vec(packed_bfp8b_tile_vec_rm_in, /*row_major_output*/ true, /*is_exp_a=*/false);
 
     std::vector<uint32_t> packed_bfp8b_tile_vec_tile_in =
-        pack_as_bfp8_tiles(tt::stl::make_const_span(tiled_fp32_vec), /*row_major_input=*/false, /*is_exp_a=*/false);
+        pack_as_bfp8_tiles(ttsl::make_const_span(tiled_fp32_vec), /*row_major_input=*/false, /*is_exp_a=*/false);
     std::vector<float> unpacked_bfp8b_tile_vec_tile_out =
         unpack_bfp8_tiles_into_float_vec(packed_bfp8b_tile_vec_tile_in, /*row_major_output=*/false, /*is_exp_a=*/false);
 
     // Validation
     std::vector<float> tiled_to_rm_fp32_vec = convert_layout(
-        tt::stl::make_const_span(unpacked_bfp8b_tile_vec_tile_out),
+        ttsl::make_const_span(unpacked_bfp8b_tile_vec_tile_out),
         shape_vec,
         TensorLayoutType::TILED_NFACES,
         TensorLayoutType::LIN_ROW_MAJOR);
     std::vector<float> rm_to_tiled_fp32_vec = convert_layout(
-        tt::stl::make_const_span(unpacked_bfp8b_tile_vec_rm_out),
+        ttsl::make_const_span(unpacked_bfp8b_tile_vec_rm_out),
         shape_vec,
         TensorLayoutType::LIN_ROW_MAJOR,
         TensorLayoutType::TILED_NFACES);

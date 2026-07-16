@@ -16,7 +16,7 @@ from typing import Optional
 
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.model_variants import TestVariant
+from models.demos.common.prefill.adapter import PrefillModelAdapter as TestVariant
 
 
 def run_reference_moe(
@@ -31,9 +31,16 @@ def run_reference_moe(
     """Forward the variant's upstream MoE reference on CPU."""
     if variant.reference_moe_cls is None:
         return None
-    # Test params can use fewer experts than the variant's default, so we patch the config
+    # Test params can override the variant's default MoE dims (expert count, hidden/intermediate size —
+    # e.g. GLM-5.1's 256 experts / 6144 hidden vs the deepseek_v3 variant's 7168), so patch the reference
+    # config from the actual generated weight shapes: gate.weight is [n_experts, hidden], each expert's
+    # gate_proj is [moe_intermediate, hidden]. Without this the reference is built at the variant default
+    # and load_state_dict fails with a size mismatch.
     cfg = deepcopy(config)
     cfg.n_routed_experts = gate_weights["weight"].shape[0]
+    cfg.hidden_size = gate_weights["weight"].shape[1]
+    if routed_expert_weights:
+        cfg.moe_intermediate_size = routed_expert_weights[0]["gate_proj"].shape[0]
     moe = variant.reference_moe_cls(cfg)
     moe.load_state_dict(
         _pack_reference_moe_state_dict(gate_weights, routed_expert_weights, shared_expert_weights),

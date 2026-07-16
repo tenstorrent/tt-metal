@@ -87,14 +87,14 @@ static Tensor conv_group_weight_zero_pad_helper(
                     for (int k = 0; k < original_weight_shape[3]; k++) {
                         for (int m = 0; m < original_weight_shape[4]; m++) {
                             auto value_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                ttnn::SmallVector<uint32_t>{
+                                ttsl::SmallVector<uint32_t>{
                                     (uint32_t)curr_batch_idx, (uint32_t)j, (uint32_t)d, (uint32_t)k, (uint32_t)m},
                                 original_strides);
                             auto value = conv_weight_tensor_buffer[value_flat_input_index];
 
                             auto new_channel_idx = new_channel_start_idx + j;
                             auto output_flat_input_index = tt::tt_metal::compute_flat_indices(
-                                ttnn::SmallVector<uint32_t>{
+                                ttsl::SmallVector<uint32_t>{
                                     (uint32_t)new_batch_idx,
                                     (uint32_t)new_channel_idx,
                                     (uint32_t)d,
@@ -163,12 +163,12 @@ Tensor prepare_conv3d_weights(
     }
     prepare_weights = ttnn::operations::core::to_device(prepare_weights, device, std::nullopt);
 
-    ttnn::SmallVector<int64_t> dims_1 = {2, 3, 4, 1, 0};
+    ttsl::SmallVector<int64_t> dims_1 = {2, 3, 4, 1, 0};
     prepare_weights = ttnn::permute(prepare_weights, dims_1);
     uint32_t C = prepare_weights.logical_shape()[3];
     uint32_t ALIGN_PAD = alignment - (C % alignment);
     if (C % alignment != 0) {
-        ttnn::SmallVector<std::array<uint32_t, 2>> padding_shape({{0, 0}, {0, 0}, {0, 0}, {0, ALIGN_PAD}, {0, 0}});
+        ttsl::SmallVector<std::array<uint32_t, 2>> padding_shape({{0, 0}, {0, 0}, {0, 0}, {0, ALIGN_PAD}, {0, 0}});
         prepare_weights = ttnn::pad(prepare_weights, padding_shape, 0.0f, /*use_multicore=*/true);
     }
     // Reshape and permute weights
@@ -190,7 +190,7 @@ Tensor prepare_conv3d_weights(
 
     prepare_weights =
         ttnn::reshape(prepare_weights, ttnn::Shape{kD, kH, kW, num_C_in_blocks, C_in_block, out_channels});
-    ttnn::SmallVector<int64_t> dims_2 = {3, 0, 1, 2, 4, 5};
+    ttsl::SmallVector<int64_t> dims_2 = {3, 0, 1, 2, 4, 5};
     prepare_weights = ttnn::permute(prepare_weights, dims_2);
     prepare_weights = ttnn::reshape(prepare_weights, ttnn::Shape{-1, out_channels});
     return prepare_weights;

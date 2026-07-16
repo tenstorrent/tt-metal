@@ -4,7 +4,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -78,7 +78,7 @@ void kernel_main() {
 
     constexpr auto cb_out = tt::CBIndex::c_2;
     Noc noc;
-    CircularBuffer cb_out_exp(cb_out);
+    DataflowBuffer dfb_out_exp(cb_out);
 
     //--------------------------------------------------------------------------
     // 3) Runtime Arguments
@@ -212,8 +212,8 @@ void kernel_main() {
         }
 
         // Wait for 1 tile from cb_out
-        cb_out_exp.wait_front(1);
-        uint32_t transposed_buffer_read_addr = cb_out_exp.get_read_ptr();
+        dfb_out_exp.wait_front(1);
+        uint32_t transposed_buffer_read_addr = dfb_out_exp.get_read_ptr();
 
         // ---------------------------------------------------------------------
         // 6.1) Write out each W in [w_start..w_end)
@@ -258,7 +258,7 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb_out_exp.pop_front(1);
+        dfb_out_exp.pop_front(1);
     }
 
     //--------------------------------------------------------------------------
@@ -273,9 +273,9 @@ void kernel_main() {
         // We'll reuse 'dest_multi_idx' for tile indexing
         dest_multi_idx[RANK - 2] = y_t;  // fix the tile dimension in the RANK-2 dimension
 
-        CircularBuffer cb3(tt::CBIndex::c_3);
-        cb3.wait_front(1);
-        uint32_t l1_read_ptr = cb3.get_read_ptr();
+        DataflowBuffer dfb3(tt::CBIndex::c_3);
+        dfb3.wait_front(1);
+        uint32_t l1_read_ptr = dfb3.get_read_ptr();
 
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Unflatten 'tile_idx' => dest_multi_idx
@@ -318,6 +318,6 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb3.pop_front(1);
+        dfb3.pop_front(1);
     }
 }

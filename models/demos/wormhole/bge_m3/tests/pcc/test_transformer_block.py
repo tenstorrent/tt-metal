@@ -66,7 +66,11 @@ def test_transformer_block_vs_hf_first_layer(device, first_layer_artifacts, seq_
     hidden_states = torch.randn((BATCH_SIZE, seq_len, HIDDEN_SIZE), dtype=torch.bfloat16)
 
     with torch.no_grad():
-        reference_output = hf_layer(hidden_states=hidden_states, attention_mask=None)[0].unsqueeze(1).to(torch.float32)
+        hf_result = hf_layer(hidden_states=hidden_states, attention_mask=None)
+        # transformers < 5.0 returns a tuple[Tensor], while >= 5.0 returns a bare Tensor.
+        # Unwrap the tuple form without indexing into the batch dim of the bare Tensor.
+        hf_hidden_states = hf_result[0] if isinstance(hf_result, tuple) else hf_result
+        reference_output = hf_hidden_states.unsqueeze(1).to(torch.float32)
 
     tt_block = BgeM3TransformerBlock(
         args=args,

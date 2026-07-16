@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -114,7 +114,7 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer dfb_out(cb_id_out0);
 
     // ------------------------------------------------------------------------
     // 3) Height dimension remainder logic
@@ -230,8 +230,8 @@ void kernel_main() {
         uint32_t base_output_face_line_offset_bytes = output_face_line_offset * element_size;
 
         // 6d) Wait for data block
-        cb_out.wait_front(1);
-        uint32_t base_l1_read_addr = cb_out.get_read_ptr();
+        dfb_out.wait_front(1);
+        uint32_t base_l1_read_addr = dfb_out.get_read_ptr();
 
         // 6e) Loop over faces in the height dimension
         for (uint8_t face_h = 0; face_h < num_faces_h; ++face_h) {
@@ -282,16 +282,16 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb_out.pop_front(1);
+        dfb_out.pop_front(1);
     }
 
     // ------------------------------------------------------------------------
     // 7) Handle padding if needed
     // ------------------------------------------------------------------------
     if constexpr (needs_padding) {
-        CircularBuffer cb1(tt::CBIndex::c_1);
-        cb1.wait_front(1);
-        uint32_t l1_read_ptr = cb1.get_read_ptr();
+        DataflowBuffer dfb1(tt::CBIndex::c_1);
+        dfb1.wait_front(1);
+        uint32_t l1_read_ptr = dfb1.get_read_ptr();
 
         // We'll reuse 'dest_multi_idx' for tile indexing
         constexpr uint32_t x_t = output_H_tiled - 1;
@@ -342,6 +342,6 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb1.pop_front(1);
+        dfb1.pop_front(1);
     }
 }

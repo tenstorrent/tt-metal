@@ -28,7 +28,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/kernels/cq_prefetch.hpp"
@@ -59,7 +59,8 @@ void loop_and_wait_with_timeout(
     const FuncWait& wait_condition,
     const OnTimeout& on_timeout,
     std::chrono::duration<float> timeout_duration,
-    const GetProgress& get_progress) {
+    const GetProgress& get_progress,
+    std::atomic<bool>* exit_condition = nullptr) {
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
         uint32_t last_progress_value = 0;
@@ -70,6 +71,10 @@ void loop_and_wait_with_timeout(
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_progress_update_ms());
 
         while (true) {
+            if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
+                break;
+            }
+
             func_body();
 
             // Check if operation is finished
@@ -101,6 +106,9 @@ void loop_and_wait_with_timeout(
         }
     } else {
         do {
+            if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
+                break;
+            }
             func_body();
         } while (wait_condition());
     }
@@ -681,7 +689,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
             return;
         }
-        ZoneScopedN("wait_for_fetch_q_space");
+        TTZoneScopedDN(DISPATCH, "wait_for_fetch_q_space");
 
         // Body of the operation
         auto fetch_operation_body = [&]() {
@@ -767,7 +775,8 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         wait_condition,
         on_timeout,
         tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
-        get_dispatch_progress);
+        get_dispatch_progress,
+        &exit_condition);
 
     return write_ptr_and_toggle;
 }

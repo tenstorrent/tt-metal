@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -19,22 +19,22 @@ void kernel_main() {
     const uint32_t num_batches = get_arg_val<uint32_t>(5);
     const uint32_t packed_pad_value = get_arg_val<uint32_t>(6);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t pad_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t pad_dfb = get_compile_time_arg_val(2);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_pad(pad_cb);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
+    DataflowBuffer dfb_pad(pad_dfb);
 
-    cb_in0.reserve_back(num_input_rows);
-    cb_in1.reserve_back(num_padded_tiles_per_batch);
-    cb_pad.reserve_back(1);
+    dfb_in0.reserve_back(num_input_rows);
+    dfb_in1.reserve_back(num_padded_tiles_per_batch);
+    dfb_pad.reserve_back(1);
 
-    uint32_t read_addr = cb_in0.get_read_ptr();
-    uint32_t write_addr = cb_in1.get_write_ptr();
-    uint32_t pad_addr = cb_pad.get_write_ptr();
+    uint32_t read_addr = dfb_in0.get_read_ptr();
+    uint32_t write_addr = dfb_in1.get_write_ptr();
+    uint32_t pad_addr = dfb_pad.get_write_ptr();
 
     {
         CoreLocalMem<uint32_t> dst(write_addr);
@@ -62,11 +62,11 @@ void kernel_main() {
         write_addr += input_width_bytes;
     }
     noc.async_read_barrier();
-    cb_in1.push_back(num_padded_tiles_per_batch);
+    dfb_in1.push_back(num_padded_tiles_per_batch);
 
     for (uint32_t b = 1; b < num_batches; ++b) {
-        cb_in1.reserve_back(num_padded_tiles_per_batch);
-        write_addr = cb_in1.get_write_ptr();
+        dfb_in1.reserve_back(num_padded_tiles_per_batch);
+        write_addr = dfb_in1.get_write_ptr();
         {
             CoreLocalMem<uint32_t> dst(write_addr);
             noc.async_read(
@@ -93,6 +93,6 @@ void kernel_main() {
             write_addr += input_width_bytes;
         }
         noc.async_read_barrier();
-        cb_in1.push_back(num_padded_tiles_per_batch);
+        dfb_in1.push_back(num_padded_tiles_per_batch);
     }
 }

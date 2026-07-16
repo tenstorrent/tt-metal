@@ -107,21 +107,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     const uint32_t num_coord_varargs = (uint32_t)(total_subordinate_cores * 2);
 
+    DataMovementHardwareConfig gatherer_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        gatherer_hw_config = DataMovementGen2Config{};
+    } else {
+        gatherer_hw_config = DataMovementGen1Config{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = test_config.noc_id,
+        };
+    }
     KernelSpec gatherer_spec{
         .unique_id = KernelSpecName{"gatherer"},
         .source = "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer_2_0.cpp",
         .num_threads = 1,
         .compile_time_args = cta_bindings,
         .runtime_arg_schema = {.runtime_arg_names = {"num_of_transactions", "transaction_size_bytes"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = test_config.noc_id,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = gatherer_hw_config,
         .advanced_options = {.num_runtime_varargs = num_coord_varargs},
     };
 
@@ -139,11 +140,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs gatherer_run_params{.kernel = gatherer_spec.unique_id};
-    gatherer_run_params.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-             {"transaction_size_bytes", (uint32_t)transaction_size_bytes}}});
+    AddRuntimeArgsForNode(
+        gatherer_run_params.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+            {"transaction_size_bytes", (uint32_t)transaction_size_bytes},
+        });
     gatherer_run_params.advanced_options.runtime_varargs.emplace(
         test_config.master_core_coord, subordinate_phys_coords);
     run_params.kernel_run_args.push_back(gatherer_run_params);
@@ -495,7 +498,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes_2_0) {
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(mesh_device);
         unit_tests::dm::core_from_all::OneFromAllConfig test_config = {
-            .test_id = 115,
+            .test_id = 162,
             .master_core_coord = {0, 0},
             .sub_start_core_coord = {0, 0},
             .sub_grid_size = {2, 1},
@@ -509,7 +512,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes_2_0) {
     }
 
     // WH/BH full sweep.
-    uint32_t test_id = 115;
+    uint32_t test_id = 162;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -556,7 +559,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal_2_0) 
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(mesh_device);
         unit_tests::dm::core_from_all::OneFromAllConfig test_config = {
-            .test_id = 130,
+            .test_id = 163,
             .master_core_coord = {0, 0},
             .sub_start_core_coord = {0, 0},
             .sub_grid_size = {2, 1},
@@ -570,7 +573,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal_2_0) 
     }
 
     // WH/BH ideal config.
-    uint32_t test_id = 130;
+    uint32_t test_id = 163;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -607,7 +610,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels_2_0
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(mesh_device);
         unit_tests::dm::core_from_all::OneFromAllConfig test_config = {
-            .test_id = 162,
+            .test_id = 164,
             .master_core_coord = {0, 0},
             .sub_start_core_coord = {0, 0},
             .sub_grid_size = {2, 1},
@@ -624,7 +627,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels_2_0
 
     unit_tests::dm::core_from_all::virtual_channels_test(
         mesh_device,
-        162,
+        164,
         {0, 0},
         {0, 0},
         {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y});
@@ -638,13 +641,13 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllCustom_2_0) {
         if (device->compute_with_storage_grid_size().x < 2) {
             GTEST_SKIP() << "Skipping: sub_grid_size {2, 1} requires >= 2 columns.";
         }
-        unit_tests::dm::core_from_all::custom_test(mesh_device, 163, {0, 0}, {0, 0}, {2, 1}, 4, 1, 2, NOC::NOC_0);
+        unit_tests::dm::core_from_all::custom_test(mesh_device, 165, {0, 0}, {0, 0}, {2, 1}, 4, 1, 2, NOC::NOC_0);
         return;
     }
 
     unit_tests::dm::core_from_all::custom_test(
         mesh_device,
-        163,
+        165,
         {0, 0},
         {0, 0},
         {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y},

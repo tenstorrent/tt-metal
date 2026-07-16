@@ -34,7 +34,7 @@ SubDeviceImpl::SubDeviceImpl(
     this->validate();
 }
 
-SubDeviceImpl::SubDeviceImpl(tt::tt_metal::MetalEnvImpl* env, tt::stl::Span<const CoreRangeSet> cores) :
+SubDeviceImpl::SubDeviceImpl(tt::tt_metal::MetalEnvImpl* env, ttsl::Span<const CoreRangeSet> cores) :
     env_(get_env_or_default(env)) {
     TT_FATAL(cores.size() <= this->cores_.size(), "Too many core types for SubDevice");
     std::copy(cores.begin(), cores.end(), this->cores_.begin());
@@ -77,7 +77,7 @@ const CoreRangeSet& SubDeviceImpl::cores(HalProgrammableCoreType core_type) cons
 
 // SubDevice implementation
 
-SubDevice::SubDevice(tt::stl::Span<const CoreRangeSet> cores) :
+SubDevice::SubDevice(ttsl::Span<const CoreRangeSet> cores) :
     pimpl_(std::make_unique<SubDeviceImpl>(nullptr, cores)) {}
 
 SubDevice::SubDevice(SubDeviceImpl&& impl) : pimpl_(std::make_unique<SubDeviceImpl>(std::move(impl))) {}

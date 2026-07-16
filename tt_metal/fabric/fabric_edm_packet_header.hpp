@@ -103,7 +103,7 @@ enum NocSendType : uint8_t {
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
     NOC_UNICAST_READ = 7,
-    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
+    NOC_SEND_TYPE_LAST = NOC_UNICAST_READ
 };
 // How to send the payload across the cluster
 // 1 bit

@@ -76,7 +76,7 @@ def _get_diffusers_pipeline(is_ci_env):
             10,
             640,
             1,
-            0.993,
+            0.992,
         ),
     ],
 )

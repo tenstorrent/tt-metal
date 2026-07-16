@@ -28,7 +28,8 @@
           "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
           "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
           "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
-          "BUILD_TT_TRAIN": {"value": "ON"}
+          "BUILD_TT_TRAIN": {"value": "ON"},
+          "TT_METAL_SKIP_LINKING": {"value": "ON"}
         }
       },
       {

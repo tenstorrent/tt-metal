@@ -475,36 +475,67 @@ _DEFAULT_BLOCKINGS = {
     (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_out
     (1024, 4096, (1, 3, 3)): (256, 32, 1, 1, 1),  # upsampler (kT=1)
     (1024, 128, (3, 3, 3)): (256, 32, 1, 1, 1),  # upsampler final_conv
+    # LTX-2.3 22B VAE encoder (I2V) conservative channel fallbacks.
+    (64, 128, (3, 3, 3)): (64, 128, 1, 2, 2),  # conv_in
+    (128, 64, (3, 3, 3)): (128, 64, 1, 2, 2),  # compress_space_res inner conv (mult 2)
+    (256, 256, (3, 3, 3)): (128, 32, 1, 2, 2),  # res_x @256 / compress_time_res inner conv
+    (512, 128, (3, 3, 3)): (256, 32, 1, 1, 1),  # compress_all_res inner conv (mult 2)
+    (512, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # res_x @512
+    (1024, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),  # res_x @1024 / compress_all_res inner conv (mult 1)
+    # LTX-2.3 audio mel-VAE decoder (Conv2dViaConv3d, kT=1, W=mel_bins=16). These
+    # combos otherwise fell to the hardcoded (Cin, 32, 1, 1, 1) default, whose
+    # H_out=W_out=1 forces one output pixel per work-unit (4-16ms/conv). Block the
+    # full mel width (W_out=16) and a height chunk so each unit produces more output.
+    (512, 512, (1, 3, 3)): (512, 32, 1, 8, 16),
+    (256, 256, (1, 3, 3)): (256, 32, 1, 8, 16),
+    (128, 128, (1, 3, 3)): (128, 32, 1, 8, 16),
+    (512, 256, (1, 3, 3)): (512, 32, 1, 8, 16),
+    (256, 128, (1, 3, 3)): (256, 32, 1, 8, 16),
+    (32, 512, (1, 3, 3)): (32, 32, 1, 8, 16),  # conv_in (z_channels 8 -> aligned 32)
+    (128, 32, (1, 3, 3)): (128, 32, 1, 8, 16),  # conv_out (out_ch 2 -> aligned 32)
 }
 
 
-# fp32 conv3d has 2× the L1 footprint of bf16, so it keeps its own channel-keyed
-# table, swept on BH-LB 1×8 mesh with L1 budget = 50% of 1.5 MB (safe when the
-# audio chain runs co-resident with pipeline allocations).
-# Key:   (in_channels, out_channels, kernel_size_3tuple)
-# Value: (C_in_block, C_out_block, T_out_block, H_out_block=1, W_out_block=1)
+# fp32 conv3d blockings (separate table; 2× L1 vs bf16).
+# Key: (in_channels, out_channels, kernel_size). Value: (C_in, C_out, T_out, 1, 1).
 _FP32_BLOCKINGS: dict = {
-    # --- Main vocoder (upsample_rates=[5,2,2,2,2,2], initial_channel=1536) ---
+    # ups inner-conv
+    (1536, 768, (11, 1, 1)): (128, 128, 32, 1, 1),  # ups[0]
+    (768, 384, (4, 1, 1)): (256, 32, 64, 1, 1),  # ups[1]
+    (384, 192, (4, 1, 1)): (128, 64, 32, 1, 1),  # ups[2]
+    (192, 96, (4, 1, 1)): (64, 32, 64, 1, 1),  # ups[3]
+    (96, 64, (4, 1, 1)): (32, 32, 16, 1, 1),  # ups[4]
+    (64, 32, (4, 1, 1)): (64, 32, 16, 1, 1),  # ups[5]
+    # main vocoder
     (128, 1536, (7, 1, 1)): (128, 32, 29, 1, 1),  # conv_pre
-    (768, 768, (11, 1, 1)): (256, 32, 2, 1, 1),  # stage 0 AMP k11
-    (768, 768, (7, 1, 1)): (192, 32, 6, 1, 1),  # stage 0 AMP k7
-    (768, 768, (3, 1, 1)): (384, 96, 6, 1, 1),  # stage 0 AMP k3
-    (384, 384, (11, 1, 1)): (128, 64, 3, 1, 1),  # stage 1 AMP k11
-    (384, 384, (7, 1, 1)): (384, 32, 3, 1, 1),  # stage 1 AMP k7
-    (384, 384, (3, 1, 1)): (384, 64, 6, 1, 1),  # stage 1 AMP k3
-    (192, 192, (11, 1, 1)): (192, 32, 3, 1, 1),  # stage 2 AMP k11
-    (192, 192, (7, 1, 1)): (192, 96, 3, 1, 1),  # stage 2 AMP k7
-    (192, 192, (3, 1, 1)): (192, 96, 21, 1, 1),  # stage 2 AMP k3
-    (96, 96, (11, 1, 1)): (96, 96, 3, 1, 1),  # stage 3 AMP k11
-    (96, 96, (7, 1, 1)): (96, 96, 4, 1, 1),  # stage 3 AMP k7
-    (96, 96, (3, 1, 1)): (32, 32, 10, 1, 1),  # stage 3 AMP k3
-    # 48 channels: aligned_channels(48)=64, max(32,48)=48 → key is (64,48,...).
-    (64, 48, (11, 1, 1)): (64, 64, 3, 1, 1),  # stage 4 AMP k11
-    (64, 48, (7, 1, 1)): (64, 64, 3, 1, 1),  # stage 4 AMP k7
-    (64, 48, (3, 1, 1)): (64, 32, 6, 1, 1),  # stage 4 AMP k3
-    # 24 channels: aligned(24)=32, max(32,24)=32 → key (32,32,...) same as BWE stage 3.
-    # --- BWE vocoder (upsample_rates=[6,5,2,2,2], initial_channel=512) ---
+    (768, 768, (11, 1, 1)): (128, 64, 64, 1, 1),  # stage 0 AMP k11
+    (768, 768, (7, 1, 1)): (256, 32, 64, 1, 1),  # stage 0 AMP k7
+    (768, 768, (3, 1, 1)): (128, 64, 16, 1, 1),  # stage 0 AMP k3
+    (384, 384, (11, 1, 1)): (32, 64, 32, 1, 1),  # stage 1 AMP k11
+    (384, 384, (7, 1, 1)): (128, 128, 16, 1, 1),  # stage 1 AMP k7
+    (384, 384, (3, 1, 1)): (64, 384, 8, 1, 1),  # stage 1 AMP k3
+    (192, 192, (11, 1, 1)): (32, 32, 16, 1, 1),  # stage 2 AMP k11
+    (192, 192, (7, 1, 1)): (64, 64, 16, 1, 1),  # stage 2 AMP k7
+    (192, 192, (3, 1, 1)): (64, 32, 16, 1, 1),  # stage 2 AMP k3
+    (96, 96, (11, 1, 1)): (32, 32, 16, 1, 1),  # stage 3 AMP k11
+    (96, 96, (7, 1, 1)): (32, 32, 16, 1, 1),  # stage 3 AMP k7
+    (96, 96, (3, 1, 1)): (32, 32, 8, 1, 1),  # stage 3 AMP k3
+    (64, 64, (11, 1, 1)): (64, 64, 32, 1, 1),  # stage 4 AMP k11
+    (64, 64, (7, 1, 1)): (64, 64, 4, 1, 1),  # stage 4 AMP k7
+    (64, 64, (3, 1, 1)): (32, 32, 16, 1, 1),  # stage 4 AMP k3
+    (32, 32, (11, 1, 1)): (32, 32, 4, 1, 1),  # stage 5 AMP k11
+    (32, 32, (7, 1, 1)): (32, 32, 64, 1, 1),  # stage 5 AMP k7
+    (32, 32, (3, 1, 1)): (32, 32, 2, 1, 1),  # stage 5 AMP k3
+    # BWE vocoder
     (128, 512, (7, 1, 1)): (64, 32, 7, 1, 1),  # conv_pre
+    # BWE upsample inner-convs. Without these they hit the default (…,1,1,1): T_out_block=1
+    # collapses the matmul M dim to a single 1/32-full tile and reloads the weight once per
+    # output frame, so the long-T ups cost ~130/66/15 ms. T_out_block=32 fills the M tile.
+    (512, 256, (12, 1, 1)): (128, 128, 32, 1, 1),  # ups[0] rate6
+    (256, 128, (11, 1, 1)): (128, 64, 32, 1, 1),  # ups[1] rate5
+    (128, 64, (4, 1, 1)): (64, 32, 32, 1, 1),  # ups[2] rate2
+    (64, 32, (4, 1, 1)): (64, 32, 32, 1, 1),  # ups[3] rate2
+    (32, 32, (4, 1, 1)): (32, 32, 32, 1, 1),  # ups[4] rate2 (finest T)
     (256, 256, (11, 1, 1)): (64, 32, 6, 1, 1),  # stage 0 AMP k11
     (256, 256, (7, 1, 1)): (256, 32, 3, 1, 1),  # stage 0 AMP k7
     (256, 256, (3, 1, 1)): (256, 128, 4, 1, 1),  # stage 0 AMP k3
@@ -614,15 +645,20 @@ def _walk_conv3d_modules(module: Module):
 
 
 def conv3d_blocking_hash(module: Module) -> str:
-    """Build a cache key suffix from C_in_block values of all conv3d layers.
+    """Build a cache key suffix from the per-conv weight-prep state of all conv3d layers.
 
-    prepare_conv3d_weights reshapes weights by C_in_block, so cached weights
-    are only valid for the same blocking configuration.
+    Cached weights depend on C_in_block (prepare_conv3d_weights reshapes by it) and, for
+    depth-to-space convs, depth_to_space_stride (they reorder output channels at load). The
+    stride is appended only when set, so keys for modules without any depth-to-space conv are
+    byte-identical to the pre-reorder scheme and their existing caches stay valid.
     """
-    cin_blocks = [str(m.conv_config.C_in_block) for m in _walk_conv3d_modules(module)]
-    if not cin_blocks:
+    parts = []
+    for m in _walk_conv3d_modules(module):
+        dts = getattr(m, "depth_to_space_stride", None)
+        parts.append(str(m.conv_config.C_in_block) if dts is None else f"{m.conv_config.C_in_block}:{dts}")
+    if not parts:
         return ""
-    return "cin" + hashlib.sha256("_".join(cin_blocks).encode()).hexdigest()[:8]
+    return "cin" + hashlib.sha256("_".join(parts).encode()).hexdigest()[:8]
 
 
 def count_convs(module: Module) -> int:

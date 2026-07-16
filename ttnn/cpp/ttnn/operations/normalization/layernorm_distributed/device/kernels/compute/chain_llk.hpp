@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/debug/dprint_pages.h"
 
 using fn_compute_5 = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
@@ -114,14 +115,17 @@ template <uint32_t num_dst_regs, typename cur_llk_type>
 void unroll_inner_loop(uint32_t register_loops) {
     constexpr auto cur_llk = cur_llk_type::node;
     uint32_t wt = register_loops * num_dst_regs;
+    CircularBuffer cb_a(cur_llk.CB_A);
+    CircularBuffer cb_b(cur_llk.CB_B);
+    CircularBuffer cb_out(cur_llk.CB_OUT);
     tile_regs_acquire();
-    cb_wait_front(cur_llk.CB_A, num_dst_regs);
+    cb_a.wait_front(num_dst_regs);
     if constexpr (cur_llk.fixed_CB_B_index == 0xFFFF) {
-        cb_wait_front(cur_llk.CB_B, num_dst_regs);
+        cb_b.wait_front(num_dst_regs);
     } else if constexpr (cur_llk.fixed_CB_B_index == 0xDDDD) {
-        cb_wait_front(cur_llk.CB_B, num_dst_regs + (wt));
+        cb_b.wait_front(num_dst_regs + (wt));
     } else {
-        cb_wait_front(cur_llk.CB_B, cur_llk.fixed_CB_B_index + 1);
+        cb_b.wait_front(cur_llk.fixed_CB_B_index + 1);
     }
     for (uint32_t j = 0; j < num_dst_regs; j++) {
         if constexpr (cur_llk.debug_mode == 1) {
@@ -134,16 +138,16 @@ void unroll_inner_loop(uint32_t register_loops) {
             //  dprint_tensix_dest_reg(j);
         }
     }
-    cb_pop_front(cur_llk.CB_A, num_dst_regs);
+    cb_a.pop_front(num_dst_regs);
     if constexpr (cur_llk.fixed_CB_B_index == 0xFFFF) {
-        cb_pop_front(cur_llk.CB_B, num_dst_regs);
+        cb_b.pop_front(num_dst_regs);
     }
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cur_llk.CB_OUT, num_dst_regs);
+    cb_out.reserve_back(num_dst_regs);
     for (uint32_t j = 0; j < num_dst_regs; j++) {
         pack_tile(j, cur_llk.CB_OUT);
     }
-    cb_push_back(cur_llk.CB_OUT, num_dst_regs);
+    cb_out.push_back(num_dst_regs);
     tile_regs_release();
 }

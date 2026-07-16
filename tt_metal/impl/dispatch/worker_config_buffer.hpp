@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 #include <tt-metalium/hal_types.hpp>
@@ -43,6 +44,10 @@ public:
 
     // Test/Debug
     uint32_t get_last_slot_addr(HalProgrammableCoreType programmable_core_type) const;
+
+    // Returns the ring-buffer indices of the currently-queued (freeable) entries for a buffer type,
+    // in walk order from free_index_ up to (but not including) alloc_index_.
+    std::vector<size_t> get_queued_entry_indices(size_t buffer_type) const;
 
     void PrintStatus();
 

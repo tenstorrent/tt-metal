@@ -390,6 +390,7 @@ class Sampling1D(LightweightModule):
             topk_indices_int32,
             dtype=ttnn.int32,
             memory_config=cfg.sampling_memory_config,
+            sub_core_grids=cfg.sub_core_grids,
         )
         ttnn.deallocate(topk_indices_int32)
 

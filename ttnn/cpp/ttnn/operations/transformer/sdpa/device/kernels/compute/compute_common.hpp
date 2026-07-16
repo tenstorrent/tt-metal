@@ -1126,14 +1126,16 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t out_cb,
     uint32_t num_padded,
     uint32_t num_cols,
-    uint32_t num_rows) {
+    uint32_t num_rows,
+    uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     uint32_t start = num_cols - num_padded;
 
     copy_tile_to_dst_init_short(neginf_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
-        stamp_tile_range_l1_acc<dst_batch>(neginf_cb, neginf_tile_idx, out_cb, row * num_cols + start, num_padded);
+        stamp_tile_range_l1_acc<dst_batch>(
+            neginf_cb, neginf_tile_idx, out_cb, (row_base + row) * num_cols + start, num_padded);
     }
 
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -1156,7 +1158,8 @@ void apply_partial_mask_lightweight(
     uint32_t out_cb,
     uint32_t boundary_col,
     uint32_t num_cols,
-    uint32_t num_rows) {
+    uint32_t num_rows,
+    uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1165,7 +1168,7 @@ void apply_partial_mask_lightweight(
         copy_tile(mask_cb, partial_tile_idx, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile<true>(0, out_cb, row * num_cols + boundary_col);
+        pack_tile<true>(0, out_cb, (row_base + row) * num_cols + boundary_col);
         tile_regs_release();
     }
 

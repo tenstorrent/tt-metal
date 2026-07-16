@@ -25,14 +25,6 @@ inline void _llk_math_eltwise_sfpu_done_()
     math::clear_dst_reg_addr();
 }
 
-inline void _llk_math_eltwise_sfpu_done_with_addrmod_reset_()
-{
-    math::clear_dst_reg_addr();
-
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
-    TTI_SETC16(2, 0);
-}
-
 inline void _llk_math_eltwise_sfpu_inc_dst_face_addr_()
 {
     math::inc_dst_addr<8>();

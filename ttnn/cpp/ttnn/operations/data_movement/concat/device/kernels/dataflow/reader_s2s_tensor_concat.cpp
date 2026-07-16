@@ -5,20 +5,20 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t output_stride = get_compile_time_arg_val(2);
     constexpr uint32_t num_input_tensors = get_compile_time_arg_val(3);
 
     Noc noc;
-    CircularBuffer output_cb(output_cb_id);
-    const uint32_t base_l1_write_addr = output_cb.get_write_ptr();
+    DataflowBuffer output_dfb(output_dfb_id);
+    const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
 
     uint32_t arg_idx = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
@@ -27,9 +27,9 @@ void kernel_main() {
         const uint32_t input_write_offset = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t input_read_offset = get_arg_val<uint32_t>(arg_idx++);
 
-        CircularBuffer input_cb(input_id);
+        DataflowBuffer input_dfb(input_id);
         uint32_t l1_write_addr = base_l1_write_addr + input_write_offset;
-        uint32_t l1_read_addr = input_cb.get_read_ptr() + input_read_offset;
+        uint32_t l1_read_addr = input_dfb.get_read_ptr() + input_read_offset;
 
         noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
             UnicastEndpoint{},

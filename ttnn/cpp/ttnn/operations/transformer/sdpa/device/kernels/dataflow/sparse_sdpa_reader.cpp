@@ -16,7 +16,7 @@
 #include <tt-metalium/constants.hpp>  // tt::constants::TILE_HEIGHT
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-#include "sparse_sdpa_gather.hpp"              // dual-NoC trid-ring gather helper (shared with the writer)
+#include "sparse_sdpa_gather.hpp"  // dual-NoC trid-ring gather helper (shared with the writer)
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 constexpr uint16_t neg_inf_bf16 = 0xFF80u;
@@ -40,10 +40,15 @@ void kernel_main() {
     constexpr uint32_t q_elem_bytes = get_compile_time_arg_val(10);    // bf16
     constexpr uint32_t kv_elem_bytes = get_compile_time_arg_val(11);   // bf16 or fp8_e4m3
     constexpr uint32_t idx_elem_bytes = get_compile_time_arg_val(12);  // uint32
+    constexpr bool block_cyclic = get_compile_time_arg_val(13) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(14);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(15);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(16);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(17);
 
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
-    constexpr auto q_args = TensorAccessorArgs<13, 0>();
+    constexpr auto q_args = TensorAccessorArgs<18, 0>();
     constexpr auto kv_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
@@ -135,8 +140,9 @@ void kernel_main() {
                 }
                 kreq_cb.push_back(1);
                 // Reader gathers its half [half, valid) on its NoC (depth-4 trid ring, shared helper).
-                sparse_sdpa::trid_ring_gather(
-                    noc, kv, k_cb, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
+                sparse_sdpa::
+                    trid_ring_gather<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(
+                        noc, kv, k_cb, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
                 kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
                 kack_cb.pop_front(1);
                 // Zero-fill the sentinel suffix: masked-key scores become a defined 0 (compute adds -inf).

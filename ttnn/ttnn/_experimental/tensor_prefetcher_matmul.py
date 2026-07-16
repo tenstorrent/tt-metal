@@ -43,12 +43,21 @@ def prefetch_and_linear(
     """Queue a DRAM-core prefetch of ``weight`` into ``global_cb``, then run the
     gather_in0 1D matmul (``ttnn.linear``) that consumes it.
 
+    Batched vs streaming delivery is selected automatically from
+    ``program_config.stream_in1`` -- there is no separate argument. When it is set the
+    prefetch streams the weight's K-blocks in natural ring order (identity rotation) so
+    the matmul can consume them FIFO from a shallow GCB; this works for both
+    ROUND_ROBIN_1D and CONTIGUOUS_1D receiver-contiguous weights. When it is unset the
+    request is batched (the whole per-receiver slab is delivered before the matmul reads).
+
     Args:
         input_tensor_a: Activation (in0), width-sharded on the receiver cores.
-        weight: DRAM-sharded weight (in1) to prefetch and multiply by.
+        weight: DRAM-sharded weight (in1) to prefetch and multiply by. Streaming
+            (``stream_in1``) additionally requires a receiver-contiguous weight layout.
         global_cb: DRAM-sender GlobalCircularBuffer shared by the prefetch and
             the matmul. Its receiver count fixes the prefetch ``block_count``.
-        program_config: gather_in0 1D mcast matmul program config driving the matmul.
+        program_config: gather_in0 1D mcast matmul program config driving the matmul;
+            its ``stream_in1`` flag selects streaming vs batched prefetch delivery.
         cq_id: Command queue for the prefetch request. When that CQ is mid
             trace-capture the request is captured into the trace. Defaults to the
             current command queue.
@@ -63,9 +72,22 @@ def prefetch_and_linear(
     # wait_front(ring_size) per layer, so this is the only value that balances the
     # page credits, regardless of the weight's shard layout.
     block_count = global_cb.receiver_cores().num_cores()
+    # Streaming vs batched is decided entirely by the matmul's program config, so the
+    # caller passes no extra argument. With ``stream_in1`` the matmul consumes K-blocks
+    # FIFO as they land (letting the GCB hold only a shallow window), so the prefetch
+    # must deliver them in natural ring order -- an identity rotation table
+    # (``rotation[r] = r``). That table is layout-agnostic: it is identical for
+    # ROUND_ROBIN_1D and CONTIGUOUS_1D weights because the kernel slices it by each
+    # weight's own global receiver position, so no distribution-strategy argument is
+    # needed here. Without ``stream_in1`` the matmul waits for the whole per-receiver
+    # slab, so we queue the batched (rotation-free) request.
+    if program_config.stream_in1:
+        request = (weight, block_count, list(range(block_count)))
+    else:
+        request = (weight, block_count)
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
-        [(weight, block_count)],
+        [request],
         global_cb=global_cb,
         cq_id=cq_id,
     )

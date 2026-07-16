@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "internal/risc_attribs.h"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/kernel_profiler.hpp"
@@ -56,8 +57,8 @@ void kernel_main() {
         (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + 2 * q_num_cores + 2 * q_num_cores + q_num_cores));
 
     // rt args for reduction receiver kernel
-    const uint32_t signal_semaphore_addr =
-        get_semaphore(get_arg_val<uint32_t>(arg_idx + 2 * q_num_cores + 2 * q_num_cores + 2 * q_num_cores));
+    const uint32_t signal_semaphore_id =
+        get_arg_val<uint32_t>(arg_idx + 2 * q_num_cores + 2 * q_num_cores + 2 * q_num_cores);
 
     uint32_t device_batch_offset = 0;
     if constexpr (PHASES_TO_READ == 2) {
@@ -84,12 +85,11 @@ void kernel_main() {
 
     if constexpr (PHASES_TO_READ == 1) {  // only do the semaphore in reading kernel(NCRISC), as all reduce reduction
                                           // only has reading kernel
-        volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
+        Semaphore<> signal_semaphore(signal_semaphore_id);
 
         // 1. Wait for signal from All-Gather worker
-        noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
-        noc_semaphore_set(signal_semaphore_addr_ptr, 0);
+        signal_semaphore.wait(VALID);
+        signal_semaphore.set(0);
 
         // 2. Signal compute kernel to start processing
         cb_push_back(cb_id, total_num_reduction_tiles);

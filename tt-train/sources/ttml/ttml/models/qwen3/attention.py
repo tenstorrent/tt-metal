@@ -19,11 +19,11 @@ from typing import Optional
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
-from .autograd_ops import ConcatLastDim, RMSNormFunction
+from .autograd_ops import ConcatLastDim
 
 
 class _QKNorm(AbstractModuleBase):
-    """RMSNorm for QK normalization (per-head, on head_dim)."""
+    """RMSNorm for QK normalization (per-head, on head_dim), fused device op."""
 
     def __init__(self, hidden_size: int, eps: float = 1e-6):
         super().__init__()
@@ -31,7 +31,7 @@ class _QKNorm(AbstractModuleBase):
         self.weight = Parameter(ttml.init.ones()((1, 1, 1, hidden_size)))
 
     def forward(self, hidden_states):
-        return RMSNormFunction.apply(hidden_states, self.weight.tensor, self.eps)
+        return ttml.ops.rmsnorm.rmsnorm(hidden_states, self.weight.tensor, self.eps)
 
 
 class Qwen3Attention(AbstractModuleBase):

@@ -228,9 +228,6 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
     auto* const mean_buf = mean.buffer();
     auto* const rstd_buf = rstd.buffer();
 
-    const auto gamma_grad_addr = gamma_grad_has_value ? gamma_grad.value().buffer()->address() : 0u;
-    const auto beta_grad_addr = beta_grad_has_value ? beta_grad.value().buffer()->address() : 0u;
-
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -243,36 +240,37 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
             TT_THROW("Core not in specified core ranges.");
         }
 
-        // NOTE: do not pass Buffer* here. tile_offset/num_channels_per_core/etc are
-        // per-core shape-derived; using BufferBinding would skip create_descriptor()
-        // on cache hits and leave those scalars stale.
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                output_grad_buf->address(),
-                input_buf->address(),
-                mean_buf->address(),
-                rstd_buf->address(),
-                tile_offset,
-                num_channels_per_core,
-                num_inner_tiles,
-                num_channels,
-                num_groups,
-                origin_h,
-                origin_w,
-            });
+            {output_grad_buf,
+             input_buf,
+             mean_buf,
+             rstd_buf,
+             tile_offset,
+             num_channels_per_core,
+             num_inner_tiles,
+             num_channels,
+             num_groups,
+             origin_h,
+             origin_w});
 
-        // writer (already address-only, no BufferBinding)
-        writer_desc.runtime_args.emplace_back(
-            core,
-            tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
-                gamma_grad_addr,
-                beta_grad_addr,
-                tile_offset,
-                num_channels_per_core,
-                num_inner_tiles,
-                batch,
-            });
+        // writer
+        KernelDescriptor::RTArgList writer_args;
+        if (gamma_grad_has_value) {
+            writer_args.push_back(gamma_grad.value().buffer());
+        } else {
+            writer_args.push_back(0u);
+        }
+        if (beta_grad_has_value) {
+            writer_args.push_back(beta_grad.value().buffer());
+        } else {
+            writer_args.push_back(0u);
+        }
+        writer_args.push_back(tile_offset);
+        writer_args.push_back(num_channels_per_core);
+        writer_args.push_back(num_inner_tiles);
+        writer_args.push_back(batch);
+        writer_desc.emplace_runtime_args(core, writer_args);
 
         tile_offset += num_channels_per_core * HtWt;
     }

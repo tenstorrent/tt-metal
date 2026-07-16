@@ -5,13 +5,13 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_dfb_id = get_compile_time_arg_val(0);
     constexpr bool read_from_dram = get_compile_time_arg_val(1);
     constexpr AllocatorBankType bank_type = read_from_dram ? AllocatorBankType::DRAM : AllocatorBankType::L1;
 
@@ -24,11 +24,11 @@ void kernel_main() {
     uint32_t args_idx = 0;
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(5));
 
-    CircularBuffer shard_cb(shard_cb_id);
+    DataflowBuffer shard_dfb(shard_dfb_id);
     Noc noc;
     AllocatorBank<bank_type> bank;
 
-    uint32_t base_write_addr = shard_cb.get_write_ptr();
+    uint32_t base_write_addr = shard_dfb.get_write_ptr();
 
     for (uint32_t i = 0; i < num_segments; ++i) {
         uint32_t read_size = args[args_idx++];

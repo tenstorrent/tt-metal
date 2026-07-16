@@ -1,0 +1,185 @@
+name: "[internal] Single-card Frequent model and ttnn tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      models-to-run:
+        required: false
+        type: string
+        default: "all"
+      enable-ops-recording:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Tracy ops recording for all tests"
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.apply-filters.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/single_card_ttnn_models_frequent_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "frequent"
+      - name: Build unified test matrix
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ALL_SKUS_IN_TESTS \
+            ./.github/sku_config.yaml
+      - name: Apply model filter
+        id: apply-filters
+        run: |
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
+          SEL='${{ inputs.models-to-run }}'
+          if [ -z "${SEL}" ] || [ "${SEL}" = "all" ]; then
+            FILTERED="${MATRIX}"
+          elif echo "${SEL}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            FILTERED=$(echo "${MATRIX}" | jq -c --argjson sel "${SEL}" '[.[] | select(.model | IN($sel[]))]')
+          else
+            echo "::error::models-to-run must be 'all' or a JSON array of model names"
+            exit 1
+          fi
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::warning::No tests found for models-to-run=${SEL}. Pipeline will be skipped."
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+          else
+            echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$FILTERED" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+  single-card-ttnn-models-frequent-tests:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ startsWith(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
+        HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        LOGURU_LEVEL: INFO
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface:ro' || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface:/mnt/MLPerf/huggingface:ro') || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+      options: "--device /dev/tenstorrent --privileged -v /sys:/sys -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            ${{ matrix.test-group.cmd }}
+      - name: Prepare Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        with:
+          profiler-dir: /work/generated/profiler
+          model-name: ${{ matrix.test-group.model }}
+          card: ${{ matrix.test-group.sku }}
+      - name: Upload Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        with:
+          path: /work/generated/profiler/reports
+          prefix: "tracy_ops_${{ matrix.test-group.model }}_${{ matrix.test-group.sku }}_"
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}
+
+  aggregate-ops-recording:
+    needs: [single-card-ttnn-models-frequent-tests]
+    if: ${{ !cancelled() && inputs.enable-ops-recording }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/actions/aggregate-ops-report
+          sparse-checkout-cone-mode: false
+
+      - name: Download all Tracy profiler reports
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: tracy_ops_*
+          path: all_tracy_reports
+          merge-multiple: false
+
+      - name: Aggregate operations report
+        uses: ./.github/actions/aggregate-ops-report
+        with:
+          reports-path: all_tracy_reports
+          output-path: aggregated_ops
+
+      - name: Upload aggregated operations report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: aggregated-device-operations
+          path: aggregated_ops/

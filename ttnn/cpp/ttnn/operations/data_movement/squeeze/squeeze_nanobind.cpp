@@ -22,7 +22,7 @@ namespace {
 // the wrapper boundary (GIL held), so the body runs with the GIL released
 // (call_guard applied by bind_function).
 ttnn::Tensor squeeze_wrapper(
-    const ttnn::Tensor& input_tensor, std::optional<std::variant<int, ttnn::SmallVector<int>>> dim) {
+    const ttnn::Tensor& input_tensor, std::optional<std::variant<int, ttsl::SmallVector<int>>> dim) {
     if (!dim.has_value()) {  // None
         return ttnn::squeeze(input_tensor);
     }

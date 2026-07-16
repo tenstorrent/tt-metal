@@ -117,7 +117,7 @@ void kernel_main() {
                     /*guaranteed_16B_aligned=*/false,
                     /*copy_async=*/true,
                     /*use_read_datamover=*/true,
-                    /*max_transfer_size=*/SUBTILE_LINE_BYTES>(write_addr, scratch_read_offset, SUBTILE_LINE_BYTES);
+                    /*max_transfer_size=*/SUBTILE_LINE_BYTES>(noc, write_addr, scratch_read_offset, SUBTILE_LINE_BYTES);
                 scratch_read_offset += DRAM_ALIGN_BYTES;
                 write_addr += tile_size;
             }

@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -28,25 +28,25 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    CircularBuffer cb_scaler(cb_id_scaler);
-    fill_cb_with_value(cb_scaler, scaler.u);
+    DataflowBuffer dfb_scaler(cb_id_scaler);
+    fill_cb_with_value(dfb_scaler, scaler.u);
 
     if (do_mask_h || do_mask_w) {
-        CircularBuffer cb_mask_h_w(cb_id_mask_h_w);
-        generate_mask_h_w(cb_mask_h_w, mask_h, mask_w);
+        DataflowBuffer dfb_mask_h_w(cb_id_mask_h_w);
+        generate_mask_h_w(dfb_mask_h_w, mask_h, mask_w);
     }
 
     const auto s0 = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(cb_id_in0);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
 
     constexpr uint32_t onetile = 1;
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
-        cb_in0.reserve_back(onetile);
-        noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+        dfb_in0.reserve_back(onetile);
+        noc.async_read(s0, dfb_in0, in0_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0.push_back(onetile);
+        dfb_in0.push_back(onetile);
     }
 }

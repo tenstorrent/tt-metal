@@ -201,11 +201,11 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
         {"pages_per_tx", (uint32_t)test_config.pages_per_transaction},
         {"bytes_per_page", (uint32_t)test_config.bytes_per_page},
         {"test_id", (uint32_t)test_config.test_id},
-        {"num_subordinates", (uint32_t)num_subordinates}};
+        {"num_subordinates", (uint32_t)num_subordinates},
+        {"loopback", (uint32_t)test_config.loopback}};
 
     if (test_config.is_multicast) {
         sender_named_args["is_linked"] = (uint32_t)test_config.is_linked;
-        sender_named_args["loopback"] = (uint32_t)test_config.loopback;
         sender_named_args["start_x"] = (uint32_t)sub_worker_start_coord.x;
         sender_named_args["start_y"] = (uint32_t)sub_worker_start_coord.y;
         sender_named_args["end_x"] = (uint32_t)sub_worker_end_coord.x;
@@ -241,21 +241,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
 
         const uint32_t num_coord_varargs = test_config.is_multicast ? 0u : (uint32_t)sub_worker_coordinates.size();
 
+        DataMovementHardwareConfig sender_hw_config;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            sender_hw_config = DataMovementGen2Config{};
+        } else {
+            sender_hw_config = DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = test_config.noc_id,
+            };
+        }
         KernelSpec sender_spec{
             .unique_id = KernelSpecName{"sender"},
             .source = sender_kernel_path,
             .num_threads = 1,
             .compile_time_args = cta_bindings,
             .runtime_arg_schema = {.runtime_arg_names = {"num_of_transactions", "pages_per_transaction"}},
-            .hw_config =
-                DataMovementHardwareConfig{
-                    .gen1_config =
-                        DataMovementHardwareConfig::Gen1Config{
-                            .processor = DataMovementProcessor::RISCV_0,
-                            .noc = test_config.noc_id,
-                        },
-                    .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-                },
+            .hw_config = sender_hw_config,
             .advanced_options = {.num_runtime_varargs = num_coord_varargs},
         };
 
@@ -274,11 +275,13 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToA
         ProgramRunArgs run_params;
         ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
         for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-            sender_run_params.runtime_arg_values.push_back(
-                {.node = mst_logical_core,
-                 .args = {
-                     {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-                     {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction}}});
+            AddRuntimeArgsForNode(
+                sender_run_params.runtime_arg_values,
+                mst_logical_core,
+                {
+                    {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+                    {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction},
+                });
             if (!test_config.is_multicast) {
                 sender_run_params.advanced_options.runtime_varargs.emplace(mst_logical_core, sub_worker_coordinates);
             }

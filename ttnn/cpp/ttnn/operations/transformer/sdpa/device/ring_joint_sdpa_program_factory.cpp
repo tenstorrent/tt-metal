@@ -124,11 +124,6 @@ constexpr uint32_t kAllGatherWriterForwardKernelIndex = 4;
 constexpr uint32_t kAllGatherReaderBackwardKernelIndex = 5;
 constexpr uint32_t kAllGatherWriterBackwardKernelIndex = 6;
 
-// Compute runtime args 0/1 are global_q_start/global_q_end (see ring_joint_sdpa.cpp kernel_main).
-// A core with global_q_start == global_q_end got no Q chunks at emplace time and is idle.
-constexpr uint32_t kComputeGlobalQStartArg = 0;
-constexpr uint32_t kComputeGlobalQEndArg = 1;
-
 // Runtime-arg offsets used by cache-hit patching. Descriptor construction appends the same slots through
 // CheckedRuntimeArgList, so future layout edits fail on program creation instead of corrupting cache hits.
 constexpr uint32_t kReaderBaseBufferArgCount = 5;
@@ -568,12 +563,18 @@ void apply_ring_joint_scalar_runtime_args(
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
 
-        // Patch only working cores, matching the emplace-time Q-work distribution. A core with no Q
-        // chunks (global_q_start == global_q_end) never processes KV, so its scalar args are dead.
+        // Patch EVERY core, exactly as the create-time build sets these scalars on all cores
+        // unconditionally. A core with no Q chunks (global_q_start == global_q_end) is NOT dead: in the
+        // GQA / shared-K row-wide multicast path it runs padded handshake iterations (loop_q_count =
+        // *_max_q_per_core) so the injector's mcast rectangle never targets a silent worker. Every such
+        // iteration is gated by active_ring_iter_mask (ring_joint_reader.cpp), so a stale mask makes the
+        // padded receiver skip a ring iter the injector still multicasts to — the injector then blocks
+        // forever waiting for that receiver's ready signal. Previously these cores were skipped on the
+        // assumption their scalars were dead; that held only while every dispatch shared the create-time
+        // logical_n. When logical_n grows across dispatches that reuse one cached program (chunked-prefill
+        // accumulation), the create-miss mask is stale for later hits, deadlocking the mcast handshake
+        // (RingJointSDPA hang, all-gather eth reads left undrained).
         auto& compute_args = GetRuntimeArgs(program, kComputeKernelIndex, core);
-        if (compute_args[kComputeGlobalQStartArg] == compute_args[kComputeGlobalQEndArg]) {
-            continue;
-        }
 
         auto& reader_args = GetRuntimeArgs(program, kReaderKernelIndex, core);
         if (patch_indexed_kv_cache) {

@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -45,15 +45,15 @@ void kernel_main() {
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 
     Noc noc;
-    CircularBuffer cb_pred(predicate_cb);
-    CircularBuffer cb_b(src_b_cb);
+    DataflowBuffer dfb_pred(predicate_cb);
+    DataflowBuffer dfb_b(src_b_cb);
 
 #if !SRC_SHARDED_A
-    const uint32_t src0_tile_bytes = cb_pred.get_tile_size();
+    const uint32_t src0_tile_bytes = dfb_pred.get_entry_size();
     const auto s0 = TensorAccessor(src0_args, src0_addr);
 #endif
 #if !SRC_SHARDED_B
-    const uint32_t src1_tile_bytes = cb_b.get_tile_size();
+    const uint32_t src1_tile_bytes = dfb_b.get_entry_size();
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 #endif
 
@@ -101,23 +101,23 @@ void kernel_main() {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_SHARDED_A
-                            cb_pred.reserve_back(onetile);
+                            dfb_pred.reserve_back(onetile);
                             noc.async_read(
-                                s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                                s0, dfb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED_B
-                            cb_b.reserve_back(onetile);
+                            dfb_b.reserve_back(onetile);
                             noc.async_read(
-                                s1, cb_b, src1_tile_bytes, {.page_id = tile_offset_b + tw}, {.offset_bytes = 0});
+                                s1, dfb_b, src1_tile_bytes, {.page_id = tile_offset_b + tw}, {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B
                             noc.async_read_barrier();
 #endif
 #if !SRC_SHARDED_A
-                            cb_pred.push_back(onetile);
+                            dfb_pred.push_back(onetile);
 #endif
 #if !SRC_SHARDED_B
-                            cb_b.push_back(onetile);
+                            dfb_b.push_back(onetile);
 #endif
                         }
                         if constexpr (!has_sharding) {

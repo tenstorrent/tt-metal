@@ -79,6 +79,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
         test_config.read ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0;
     const NOC noc = test_config.read ? NOC::RISCV_1_default : NOC::RISCV_0_default;
 
+    DataMovementHardwareConfig kspec_hw_config;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        kspec_hw_config = DataMovementGen2Config{};
+    } else {
+        kspec_hw_config = DataMovementGen1Config{
+            .processor = proc,
+            .noc = noc,
+        };
+    }
     KernelSpec kspec{
         .unique_id = KernelSpecName{"one_packet_kernel"},
         .source = std::filesystem::path{kernel_path},
@@ -94,15 +103,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
                      "responder_x",
                      "responder_y"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = proc,
-                        .noc = noc,
-                    },
-                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
-            },
+        .hw_config = kspec_hw_config,
     };
 
     ProgramSpec spec{
@@ -119,15 +120,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs krp{.kernel = kspec.unique_id};
-    krp.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_packets", (uint32_t)test_config.num_packets},
-             {"packet_size_bytes", (uint32_t)test_config.packet_size_bytes},
-             {"master_l1_addr", master_l1_address},
-             {"subordinate_l1_addr", subordinate_l1_address},
-             {"responder_x", (uint32_t)physical_subordinate_core.x},
-             {"responder_y", (uint32_t)physical_subordinate_core.y}}});
+    AddRuntimeArgsForNode(
+        krp.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_packets", (uint32_t)test_config.num_packets},
+            {"packet_size_bytes", (uint32_t)test_config.packet_size_bytes},
+            {"master_l1_addr", master_l1_address},
+            {"subordinate_l1_addr", subordinate_l1_address},
+            {"responder_x", (uint32_t)physical_subordinate_core.x},
+            {"responder_y", (uint32_t)physical_subordinate_core.y},
+        });
     run_params.kernel_run_args.push_back(krp);
     SetProgramRunArgs(program, run_params);
 
@@ -391,7 +394,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         unit_tests::dm::one_packet::OnePacketConfig test_config = {
-            .test_id = 84,
+            .test_id = 90,
             .master_core_coord = {0, 0},
             .subordinate_core_coord = subordinate,
             .num_packets = 4,
@@ -412,7 +415,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
         for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
              packet_size_bytes *= 2) {
             unit_tests::dm::one_packet::OnePacketConfig test_config = {
-                .test_id = 84,
+                .test_id = 90,
                 .master_core_coord = master_core_coord,
                 .subordinate_core_coord = subordinate_core_coord,
                 .num_packets = num_packets,
@@ -441,7 +444,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         unit_tests::dm::one_packet::OnePacketConfig test_config = {
-            .test_id = 85,
+            .test_id = 91,
             .master_core_coord = {0, 0},
             .subordinate_core_coord = subordinate,
             .num_packets = 4,
@@ -462,7 +465,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
         for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
              packet_size_bytes *= 2) {
             unit_tests::dm::one_packet::OnePacketConfig test_config = {
-                .test_id = 85,
+                .test_id = 91,
                 .master_core_coord = master_core_coord,
                 .subordinate_core_coord = subordinate_core_coord,
                 .num_packets = num_packets,
@@ -493,7 +496,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal_2_
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         unit_tests::dm::one_packet::OnePacketConfig test_config = {
-            .test_id = 86,
+            .test_id = 92,
             .master_core_coord = master_core_coord,
             .subordinate_core_coord = subordinate_core_coord,
             .num_packets = 4,
@@ -508,7 +511,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal_2_
     uint32_t num_packets = max_transmittable_bytes / packet_size_bytes;
 
     unit_tests::dm::one_packet::OnePacketConfig test_config = {
-        .test_id = 86,
+        .test_id = 92,
         .master_core_coord = master_core_coord,
         .subordinate_core_coord = subordinate_core_coord,
         .num_packets = num_packets,
@@ -537,7 +540,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal_2
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         unit_tests::dm::one_packet::OnePacketConfig test_config = {
-            .test_id = 87,
+            .test_id = 93,
             .master_core_coord = master_core_coord,
             .subordinate_core_coord = subordinate_core_coord,
             .num_packets = 4,
@@ -552,7 +555,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal_2
     uint32_t num_packets = max_transmittable_bytes / packet_size_bytes;
 
     unit_tests::dm::one_packet::OnePacketConfig test_config = {
-        .test_id = 87,
+        .test_id = 93,
         .master_core_coord = master_core_coord,
         .subordinate_core_coord = subordinate_core_coord,
         .num_packets = num_packets,

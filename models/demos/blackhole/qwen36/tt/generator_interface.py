@@ -24,7 +24,7 @@ def unpack_rope(packed):
     return packed[0:n], packed[n : 2 * n]
 
 
-def prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace):
+def prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace, vision_tokens=None):
     """All prefill is model-owned. traced -> chunk-outer trace; non-traced -> paged.
     Both fill the paged KV cache + finalize GDN state, so decode continues correctly.
 
@@ -39,17 +39,23 @@ def prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace):
     NOTE (vLLM block allocation): the masked path writes K/V for the full bucket, so the
     page_table must map enough blocks to cover the rounded-up bucket length (<= 2048 -> 32
     blocks of 64), not just the real prompt length.
+
+    vision_tokens (multimodal): the image embeddings to splice into the text embeddings. The
+    traced path splices them with a fixed-shape ttnn.where over persistent buffers (trace-safe —
+    compiled at warmup, updated per request by copy_host_to_device), so multimodal works WITH a
+    captured trace (single device). The non-traced path uses the on-device scatter in
+    prefill_paged, which is safe only because no trace is parked there.
     """
     T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
     if use_trace:
-        return model.prefill_traced_chunked(tokens, page_table, actual_len=T)
+        return model.prefill_traced_chunked(tokens, page_table, actual_len=T, vision_tokens=vision_tokens)
     # The single-device paged path derives its sequence length from tokens.shape and returns logits
     # for the last token, so a bucket-padded buffer would prefill the padding and read out the pad
     # boundary instead of prompt_lens[0]-1. Clip to the real length T first (the TP path clips the
-    # same way, and the traced path passes actual_len=T).
+    # same way, and the traced path passes actual_len=T, vision_tokens=vision_tokens).
     if tokens.shape[1] > T:
         tokens = tokens[:, :T]
-    return model.prefill_paged(tokens, page_table, valid_len=T)
+    return model.prefill_paged(tokens, page_table, valid_len=T, vision_tokens=vision_tokens)
 
 
 def prime_decode_trace(generator, model, tokens, current_pos, page_table):

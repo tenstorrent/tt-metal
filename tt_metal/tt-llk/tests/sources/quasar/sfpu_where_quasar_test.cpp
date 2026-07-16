@@ -114,7 +114,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(num_rows, params.DST_INDEX + i);
+            _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
 
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();

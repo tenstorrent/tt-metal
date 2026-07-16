@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -16,21 +17,6 @@
 /*************************************************************************
  * LLK MATH COMMON
  *************************************************************************/
-
-// TODO SK: the two functions below must be removed ASAP (in the next PR), issue #46326
-constexpr bool llk_math_is_unpack_to_dest_32b(const std::uint32_t operand_id) {
-    const DataFormat unpack_dst_fmt = static_cast<DataFormat>(unpack_dst_format[operand_id]);
-    return unpack_dst_fmt == DataFormat::Float32 || unpack_dst_fmt == DataFormat::Int32;
-}
-
-constexpr bool llk_math_has_unpack_to_dest_32b() {
-    for (std::uint32_t operand_id = 0; operand_id < NUM_CIRCULAR_BUFFERS; ++operand_id) {
-        if (llk_math_is_unpack_to_dest_32b(operand_id)) {  // Invalid is neither Float32 nor Int32
-            return true;
-        }
-    }
-    return false;
-}
 
 /**
  *
@@ -118,7 +104,7 @@ inline void llk_math_set_dvalid() {
 inline void llk_math_wait_for_dest_available() {
     _llk_math_wait_for_dest_available_();
 
-    if (llk_math_has_unpack_to_dest_32b()) {
+    if constexpr (UnpackToDestEn) {
         _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
             semaphore::UNPACK_MATH);
         _llk_sync_get_(semaphore::UNPACK_MATH);
@@ -135,8 +121,8 @@ inline void llk_math_dest_section_done() {
     // Always post MATH_PACK, the math thread is in the chain for every op, including the
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !llk_math_has_unpack_to_dest_32b()) {
-        _llk_sync_advance_dest_section_<ckernel::math::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
+        _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }
 }
 
@@ -147,7 +133,7 @@ inline void llk_math_dest_section_done() {
 inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE>();
 
-    if (llk_math_has_unpack_to_dest_32b()) {
+    if constexpr (UnpackToDestEn) {
         constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
         _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
     }

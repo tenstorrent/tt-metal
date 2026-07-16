@@ -66,52 +66,6 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 }
 
 /**
- * @deprecated Operand A face geometry (face_r_dim, num_faces) is now derived from the CB metadata. Use the
- * llk_unpack_hw_configure(unpA_operand, unpB_operand) overload instead. This explicit-face-geometry overload
- * is retained only for backwards compatibility and will be removed.
- *
- * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
- * @param  unpA_operand          Input operand index for unpack source A.
- * @param  unpB_operand          Input operand index for unpack source B.
- * @param  unpA_face_r_dim       Face row dimension for operand A (overrides operand metadata).
- * @param  unpA_num_faces        Number of faces for operand A (overrides operand metadata).
- */
-template <bool is_fp32_dest_acc_en>
-[[deprecated(
-    "Operand A face geometry is now derived from CB metadata; use the "
-    "llk_unpack_hw_configure(unpA_operand, unpB_operand) overload instead.")]] inline void
-llk_unpack_hw_configure(
-    const std::uint32_t unpA_operand,
-    const std::uint32_t unpB_operand,
-    const std::uint32_t unpA_face_r_dim,
-    const std::uint32_t unpA_num_faces) {
-    // In0 -> unpA
-    // In1 -> unpB
-    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
-
-    const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
-    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
-
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
-    const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
-
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        unpack_src_format[unpA_operand_id],
-        unpack_src_format[unpB_operand_id],
-        unpack_dst_format[unpA_operand_id],
-        unpack_dst_format[unpB_operand_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces,
-        unpA_tile_size,
-        unpB_tile_size);
-}
-
-/**
  * Single-operand convenience overload that configures both unpack sources from
  * the same operand id. Equivalent to calling the two-operand overload with
  * unpA_operand == unpB_operand.

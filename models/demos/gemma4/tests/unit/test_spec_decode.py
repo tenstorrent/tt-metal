@@ -3089,3 +3089,177 @@ def test_argmax_cost(mesh_device, reset_seeds):
 
     _check_pad32(1)
     _check_pad32(K + 1)
+
+
+@_needs_assistant
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_spec_decode_batched(mesh_device, reset_seeds):
+    """End-to-end BATCHED (B>1) greedy speculative decode for B independent users.
+
+    Each iteration drafts every user at batch=1 and runs ONE batched packed
+    verify over all B users (the KV-amortization win). Users accept raggedly, so
+    their positions diverge. Validates:
+      * the batched path runs and every user emits tokens;
+      * user-0's batched output matches a batch=1 plain-greedy reference up to the
+        first target near-tie (same contract as test_spec_decode_matches_greedy);
+      * distinct prompts -> distinct outputs (no gross cross-user KV leak);
+    and reports per-user + aggregate throughput.
+    """
+    import time
+
+    near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL (target) to run")
+    num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
+    num_layers = int(num_layers) if num_layers else None
+
+    B = int(os.environ.get("GEMMA4_SPEC_BATCH", 4))
+    max_seq_len = int(os.environ.get("GEMMA4_SPEC_MAX_SEQ", 1024))
+    n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
+    draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 4))
+    block_size = 64
+    blocks_per_user = math.ceil(max_seq_len / block_size)
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=B * blocks_per_user)
+
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=B,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+        max_local_batch_size=int(os.environ.get("GEMMA4_SPEC_ASSIST_BATCH", B)),
+    )
+
+    from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
+
+    page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
+
+    base_prompts = [
+        "The capital of France is",
+        "Water boils at a temperature of",
+        "The largest planet in our solar system is",
+        "The author of Romeo and Juliet is",
+        "The chemical symbol for gold is",
+        "The speed of light is approximately",
+        "The first president of the United States was",
+        "The square root of sixty-four is",
+    ]
+    prompts = [base_prompts[b % len(base_prompts)] for b in range(B)]
+
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=draft_len,
+    )
+
+    # Per-user prefill (distinct lengths -> prefill each user into its own blocks).
+    anchor_tokens, anchor_positions = [], []
+    for b in range(B):
+        in_pt, encoded, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+            [prompts[b]], tokenizer, generator.model_args, True, n_new, max_prefill_len=max_seq_len
+        )
+        in_pt = torch.stack(in_pt).view(1, -1)
+        generator.prefill_forward_text(
+            in_pt,
+            page_table=page_table[b : b + 1],
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+            warmup_prefill=False,
+        )
+        anchor_positions.append(prefill_lens[0] - 1)
+        anchor_tokens.append(int(encoded[0][prefill_lens[0] - 1]))
+
+    # Batched spec decode.
+    t0 = time.perf_counter()
+    outs, accepts = spec.generate_batched(
+        anchor_tokens=anchor_tokens,
+        anchor_positions=anchor_positions,
+        max_new_tokens=n_new,
+        max_seq_len=max_seq_len,
+        temperature=0.0,
+    )
+    ttnn.synchronize_device(mesh_device)
+    elapsed = time.perf_counter() - t0
+
+    total_tokens = sum(len(o) for o in outs)
+    mean_accepts = [(sum(a) / len(a)) if a else 0.0 for a in accepts]
+    traced = spec._use_trace
+    setup_s = getattr(spec, "_last_fused_setup_s", 0.0) if traced else 0.0
+    replay_s = getattr(spec, "_last_fused_replay_s", elapsed) if traced else elapsed
+    logger.info(
+        f"[batched-spec] B={B} draft_len={draft_len} n_new={n_new} ctx~{max(anchor_positions)+1} traced={traced}"
+    )
+    for b in range(B):
+        logger.info(f"  user {b}: prompt={prompts[b]!r}")
+        logger.info(f"           out='{tokenizer.decode(outs[b]).strip()}' (acc/iter={mean_accepts[b]:.2f})")
+    logger.info(
+        f"[batched-spec] total {total_tokens} tokens in {elapsed:.2f}s wall "
+        f"(setup {setup_s:.2f}s, steady {replay_s:.2f}s) -> "
+        f"{total_tokens/replay_s:.1f} tok/s aggregate, {total_tokens/replay_s/B:.1f} tok/s/user (steady, {'traced' if traced else 'untraced'})"
+    )
+
+    assert all(len(o) > 0 for o in outs), f"some user produced no tokens: {[len(o) for o in outs]}"
+    if len({prompts[b] for b in range(B)}) > 1:
+        distinct = {tuple(o) for o in outs}
+        assert len(distinct) > 1, "distinct prompts collapsed to identical outputs (gross cross-user KV leak)"
+
+    # Correctness anchor: user-0 batched output vs batch=1 plain-greedy reference.
+    in_pt0, encoded0, decoding_pos0, prefill_lens0 = preprocess_inputs_prefill(
+        [prompts[0]], tokenizer, generator.model_args, True, n_new, max_prefill_len=max_seq_len
+    )
+    in_pt0 = torch.stack(in_pt0).view(1, -1)
+    generator.prefill_forward_text(
+        in_pt0, page_table=page_table[0:1], kv_cache=tt_kv_cache, prompt_lens=decoding_pos0, warmup_prefill=False
+    )
+    ref0 = _plain_greedy(spec, anchor_tokens[0], anchor_positions[0], len(outs[0]))
+    gen0 = outs[0]
+    first_div = next((i for i in range(min(len(gen0), len(ref0))) if gen0[i] != ref0[i]), None)
+    if first_div is None:
+        logger.info("[batched-spec] user-0 batched output is TOKEN-IDENTICAL to batch=1 plain greedy")
+        return
+
+    generator.prefill_forward_text(
+        in_pt0, page_table=page_table[0:1], kv_cache=tt_kv_cache, prompt_lens=decoding_pos0, warmup_prefill=False
+    )
+    tok, pos = anchor_tokens[0], anchor_positions[0]
+    for _ in range(first_div):
+        lg, hd = spec._verify([tok], [pos])
+        hd.deallocate(True)
+        tok = int(torch.argmax(lg[0]))
+        pos += 1
+    lg, hd = spec._verify([tok], [pos])
+    hd.deallocate(True)
+    top2 = torch.topk(lg[0].float(), 2)
+    gap = float(top2.values[0] - top2.values[1])
+    logger.info(
+        f"[batched-spec] user-0 first divergence at idx {first_div}: batched={gen0[first_div]} "
+        f"greedy={ref0[first_div]} target top2={top2.indices.tolist()} gap={gap:.4f} (near-tie={near_tie_gap})"
+    )
+    assert gap < near_tie_gap, (
+        f"batched user-0 diverged from plain greedy at a CONFIDENT token (idx {first_div}, "
+        f"top-2 gap={gap:.3f} >= {near_tie_gap}); indicates a batched accept/commit/KV-write bug"
+    )

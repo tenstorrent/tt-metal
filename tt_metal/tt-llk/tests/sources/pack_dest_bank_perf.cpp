@@ -48,7 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             /* num_faces */ 4,
             /* num_faces */ 4);
         _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            0, 0, FACE_R_DIM, 4, formats.unpack_A_src, formats.unpack_A_dst);
+            0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
 
         for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)

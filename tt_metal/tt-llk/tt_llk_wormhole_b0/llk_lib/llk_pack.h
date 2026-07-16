@@ -435,7 +435,8 @@ inline void _llk_pack_init_(
  */
 inline void _llk_pack_uninit_()
 {
-    llk::san::operation_uninit<llk::san::Operation::Pack>();
+    // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
+    // llk::san::operation_uninit<llk::san::Operation::Pack>();
 }
 
 /**
