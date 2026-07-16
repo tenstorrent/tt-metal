@@ -198,24 +198,19 @@ void kernel_main() {
     bool apply_gamma_beta[block_w];
     constexpr uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
 
-#ifdef UNTILIZE_OUT
-    // Affine wiring matches the TILE path (tiled result -> c_16, or c_22 when no gamma/beta); the
-    // untilize stage below converts that tiled result into the row-major output c_30.
+    // Affine wiring is shared with the TILE path (tiled result -> c_16, or c_22 when no gamma/beta).
     constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
     constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_reread_write_out_id;
     constexpr int cb_outbeta_id = cb_out0_id;
+#ifdef UNTILIZE_OUT
+    // The untilize stage below converts the tiled result into the row-major output c_30.
     constexpr int cb_untilize_in_id = (do_gamma or do_beta) ? cb_out0_id : cb_reread_write_out_id;
     constexpr int cb_untilize_out_id =
 #ifdef READER_REPACK
         cb_repack_out_id;
 #else
-        // Untilize target is cb_out_id (c_30, the row-major output CB)
         cb_out_id;
 #endif
-#else
-    constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
-    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_reread_write_out_id;
-    constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
     CircularBuffer cb_beta(cb_beta_id);
@@ -434,7 +429,6 @@ void kernel_main() {
                         tile_regs_release();
                         index_subblock_w_offset += subblock_w;
                     }
-                    // ROW_MAJOR input keeps the group resident (no pop); the TILE path pops the read rows.
 #ifndef TILIZE_IN
                     cb_in0.pop_front(block_w);
 #endif
@@ -571,8 +565,6 @@ void kernel_main() {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
-                // ROW_MAJOR input reuses the resident tilized group (indexed by row_base below); only the TILE
-                // path waits on freshly-read rows.
 #ifndef TILIZE_IN
                 cb_in0.wait_front(out_block_hw_normal);
 #endif
@@ -601,7 +593,6 @@ void kernel_main() {
                         tile_regs_release();
                         index_subblock_w_offset += subblock_w;
                     }
-                    // ROW_MAJOR input keeps the group resident (no pop); the TILE path pops the read rows.
 #ifndef TILIZE_IN
                     cb_in0.pop_front(block_w);
 #endif

@@ -11,6 +11,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "groupnorm_reader_rm.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -207,40 +208,21 @@ void kernel_main() {
                     }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
 #ifdef TILIZE_IN
-                    // The input is laid out row-major (row by row), not as tiles, so read its rows into
-                    // cb_in0 for the compute kernel to tilize on-core. GroupNorm reads the input three
-                    // times (mean/variance/normalize), but the compute kernel tilizes it once and keeps the
-                    // whole group resident in L1, so gather from DRAM only on the first pass.
+                    // ROW_MAJOR input: gather rows into cb_in0 for the compute kernel to tilize on-core.
+                    // The group stays resident in L1 across all three passes, so gather only on the first.
                     if (cur_read_iteration == 0) {
-                        constexpr uint32_t row_chunk_bytes = tile_width * datum_size_bytes;
                         const auto src_a = TensorAccessor(src0_args, src_addr);
-                        uint32_t l1_write_addr = cb_in0.get_write_ptr();
-                        cb_in0.reserve_back(out_block_hw_normal);
-                        for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
-                            for (uint32_t r = 0; r < tile_height; r++) {
-                                for (uint32_t nt = 0; nt < block_w; nt++) {
-                                    // Clamp out-of-range columns (last group) to the last valid column (masked out
-                                    // downstream); avoids a NOC address-overflow fault on L1-interleaved buffers.
-                                    const uint32_t abs_col = index_g_offset + nt;
-                                    const uint32_t col = abs_col < num_channels_tiles ? abs_col : num_channels_tiles - 1;
-                                    const uint32_t page_id_tile = start_id + out_block_start_id_offset +
-                                                                  (mt * num_channels_tiles) + index_b_offset + col;
-                                    const uint32_t tile_row = page_id_tile / num_channels_tiles;
-                                    const uint32_t tile_col = page_id_tile % num_channels_tiles;
-                                    const uint32_t rm_row = (tile_row * tile_height) + r;
-                                    const uint32_t col_off_bytes = tile_col * row_chunk_bytes;
-                                    noc.async_read(
-                                        src_a,
-                                        CoreLocalMem<uint32_t>(l1_write_addr),
-                                        row_chunk_bytes,
-                                        {.page_id = rm_row, .offset_bytes = col_off_bytes},
-                                        {});
-                                    l1_write_addr += row_chunk_bytes;
-                                }
-                            }
-                            noc.async_read_barrier();
-                        }
-                        cb_in0.push_back(out_block_hw_normal);
+                        groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
+                            noc,
+                            src_a,
+                            cb_in0,
+                            start_id,
+                            out_block_start_id_offset,
+                            index_b_offset,
+                            index_g_offset,
+                            num_channels_tiles,
+                            out_block_h_actual,
+                            out_block_hw_normal);
                     }
 #else
                     const uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
@@ -290,37 +272,19 @@ void kernel_main() {
                         uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
 #ifdef UNTILIZE_OUT
-                        // Output is row-major: re-read the already-written rows into cb_reread_rm (c_20), like the
-                        // input gather above; compute tilizes c_20 into cb_reread_out (c_23) for the cross-group add.
-                        constexpr uint32_t reread_row_chunk_bytes = tile_width * datum_size_bytes;
-                        uint32_t l1_write_addr = cb_reread_rm.get_write_ptr();
-                        cb_reread_rm.reserve_back(out_block_hw_normal);
-                        for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
-                            for (uint32_t r = 0; r < tile_height; r++) {
-                                for (uint32_t nt = 0; nt < block_w; nt++) {
-                                    // Clamp out-of-range columns (last group) to the last valid column (masked out
-                                    // downstream); avoids a NOC address-overflow fault on L1-interleaved buffers.
-                                    const uint32_t abs_col = index_g_offset + nt;
-                                    const uint32_t col =
-                                        abs_col < num_channels_tiles ? abs_col : num_channels_tiles - 1;
-                                    const uint32_t page_id_tile = out_start_id + out_block_start_id_offset +
-                                                                  (mt * num_channels_tiles) + index_b_offset + col;
-                                    const uint32_t tile_row = page_id_tile / num_channels_tiles;
-                                    const uint32_t tile_col = page_id_tile % num_channels_tiles;
-                                    const uint32_t rm_row = (tile_row * tile_height) + r;
-                                    const uint32_t col_off_bytes = tile_col * reread_row_chunk_bytes;
-                                    noc.async_read(
-                                        dst_a,
-                                        CoreLocalMem<uint32_t>(l1_write_addr),
-                                        reread_row_chunk_bytes,
-                                        {.page_id = rm_row, .offset_bytes = col_off_bytes},
-                                        {});
-                                    l1_write_addr += reread_row_chunk_bytes;
-                                }
-                            }
-                            noc.async_read_barrier();
-                        }
-                        cb_reread_rm.push_back(out_block_hw_normal);
+                        // ROW_MAJOR output: re-read the already-written rows into cb_reread_rm (c_20) with the
+                        // same gather as the input; compute tilizes c_20 into cb_reread_out (c_23) for the add.
+                        groupnorm_gather_rm_block<tile_width, tile_height, block_w, datum_size_bytes>(
+                            noc,
+                            dst_a,
+                            cb_reread_rm,
+                            out_start_id,
+                            out_block_start_id_offset,
+                            index_b_offset,
+                            index_g_offset,
+                            num_channels_tiles,
+                            out_block_h_actual,
+                            out_block_hw_normal);
 #else
                         const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out_id);
                         uint32_t l1_write_addr;
