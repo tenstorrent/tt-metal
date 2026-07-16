@@ -275,3 +275,14 @@
       timeout: 40
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
+
+- name: "trace allocation tracker"
+  cmd: |
+    pytest --timeout 300 tests/ttnn/unit_tests/test_trace_allocation_config.py -xv
+    TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking' -xv
+    TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking_acknowledgments_and_lifetime' -xv
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev

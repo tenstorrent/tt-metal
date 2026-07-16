@@ -16,6 +16,10 @@
   cmd: |
     [ "$ARCH_NAME" = "wormhole_b0" ] && export TT_METAL_GTEST_ETH_DISPATCH=1
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='-*NIGHTLY_*'
+    if [ "$ARCH_NAME" = "wormhole_b0" ]; then
+      TT_METAL_TRACE_ALLOC_TRACKING=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshCQSingleCardFixture.TraceAllocationTrackerCoversSubDeviceAllocators'
+      TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshCQSingleCardFixture.TraceAllocationTrackerCoversSubDeviceAllocators'
+    fi
   skus:
     wh_n150_civ2:
       timeout: 10

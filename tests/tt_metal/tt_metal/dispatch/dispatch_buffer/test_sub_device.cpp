@@ -206,9 +206,23 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                      .contains(acknowledged->get_backing_buffer()->unique_id()));
 
+    std::shared_ptr<distributed::MeshBuffer> program_cache_allocation;
+    {
+        AllocationContextGuard guard("program_cache:test");
+        program_cache_allocation = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    }
+    auto program_cache_allocation_id = program_cache_allocation->get_backing_buffer()->unique_id();
+    EXPECT_EQ(
+        distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+            .contains(program_cache_allocation_id),
+        !trace_allocation_skip_program_cache_enabled());
+
     tracked->deallocate();
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                      .contains(tracked_id));
+    program_cache_allocation->deallocate();
+    EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
+                     .contains(program_cache_allocation_id));
     distributed::trace_allocation_tracker::clear_unsafe_tracked_ids(mesh_device.get(), trace_id);
     distributed::trace_allocation_tracker::mark_allocations_safe(mesh_device.get());
 }
