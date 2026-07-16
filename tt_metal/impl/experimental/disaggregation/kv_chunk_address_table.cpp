@@ -14,9 +14,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/experimental/disaggregation/noc_addr.hpp"
 
-<<<<<<< blaze
-=======
-namespace tt::tt_metal::internal::disaggregation {
+namespace tt::tt_metal::experimental::disaggregation {
 
 namespace {
 
@@ -30,7 +28,6 @@ tt::tt_metal::IDevice* resolve_device(const tt::tt_fabric::FabricNodeId& node_id
 
 }  // namespace
 
->>>>>>> upstream
 void KvChunkAddressTable::init_configs(
     std::span<const KvChunkAddressTableConfig> configs, std::vector<std::string> names) {
     TT_FATAL(!configs.empty(), "KvChunkAddressTable requires at least one config");
@@ -67,7 +64,6 @@ KvChunkAddressTable::KvChunkAddressTable(std::span<const KvChunkAddressTableConf
         names.push_back(std::to_string(i));  // "0".."N-1"
     }
     init_configs(configs, std::move(names));
-<<<<<<< blaze
 }
 
 KvChunkAddressTable::KvChunkAddressTable(const std::map<std::string, KvChunkAddressTableConfig>& configs) {
@@ -88,28 +84,6 @@ uint32_t KvChunkAddressTable::resolve_config(const std::string& name) const {
     return it->second;
 }
 
-=======
-}
-
-KvChunkAddressTable::KvChunkAddressTable(const std::map<std::string, KvChunkAddressTableConfig>& configs) {
-    std::vector<KvChunkAddressTableConfig> cfgs;
-    std::vector<std::string> names;
-    cfgs.reserve(configs.size());
-    names.reserve(configs.size());
-    for (const auto& [name, cfg] : configs) {  // std::map iterates in sorted key order
-        names.push_back(name);
-        cfgs.push_back(cfg);
-    }
-    init_configs(cfgs, std::move(names));
-}
-
-uint32_t KvChunkAddressTable::resolve_config(const std::string& name) const {
-    auto it = name_to_config_id_.find(name);
-    TT_FATAL(it != name_to_config_id_.end(), "config name '{}' not found", name);
-    return it->second;
-}
-
->>>>>>> upstream
 void KvChunkAddressTable::validate_config_id(uint32_t config_id) const {
     TT_FATAL(config_id < configs_.size(), "config_id {} >= num_configs {}", config_id, configs_.size());
 }
@@ -224,8 +198,6 @@ bool KvChunkAddressTable::has_host(const tt::tt_fabric::FabricNodeId& node_id) c
     return fabric_node_to_host_.contains(node_id);
 }
 
-<<<<<<< blaze
-=======
 std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
     uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id) const {
     const auto& loc = lookup(layer, position, slot, config_id);
@@ -251,7 +223,6 @@ std::vector<uint8_t> KvChunkAddressTable::read_device_chunk(
     uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const {
     return read_device_chunk(layer, position, slot, resolve_config(config));
 }
->>>>>>> upstream
 
 const KvChunkAddressTableConfig& KvChunkAddressTable::config(uint32_t config_id) const {
     validate_config_id(config_id);
@@ -277,8 +248,4 @@ size_t KvChunkAddressTable::total_entries() const {
     }
     return total;
 }
-<<<<<<< blaze
 }  // namespace tt::tt_metal::experimental::disaggregation
-=======
-}  // namespace tt::tt_metal::internal::disaggregation
->>>>>>> upstream

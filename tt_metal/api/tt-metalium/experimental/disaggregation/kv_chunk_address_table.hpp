@@ -14,7 +14,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_stl/strong_type.hpp>
 
-namespace tt::tt_metal::internal::disaggregation {
+namespace tt::tt_metal::experimental::disaggregation {
 
 // Strongly-typed index into the device group side table.
 using DeviceGroupIndex = ttsl::StrongType<uint32_t, struct DeviceGroupIndexTag>;
@@ -131,8 +131,6 @@ public:
     // Check if a FabricNodeId has a registered host mapping.
     bool has_host(const tt::tt_fabric::FabricNodeId& node_id) const;
 
-<<<<<<< blaze
-=======
     // --- Device reads ---
 
     // Read a single chunk's raw bytes from the primary replica device
@@ -142,7 +140,6 @@ public:
     std::vector<uint8_t> read_device_chunk(uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id = 0) const;
     std::vector<uint8_t> read_device_chunk(
         uint32_t layer, uint32_t position, uint32_t slot, const std::string& config) const;
->>>>>>> upstream
 
     // --- Config introspection ---
 
@@ -177,4 +174,4 @@ private:
     std::unordered_map<tt::tt_fabric::FabricNodeId, std::string> fabric_node_to_host_;  // shared across configs
 };
 
-}  // namespace tt::tt_metal::internal::disaggregation
+}  // namespace tt::tt_metal::experimental::disaggregation
