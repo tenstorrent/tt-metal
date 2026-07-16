@@ -99,19 +99,6 @@ AdamWDeviceOperation::tensor_return_value_t AdamWDeviceOperation::create_output_
     return tensor_args.param;
 }
 
-ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& param_tensor = tensor_args.param;
-    const auto& param_logical_shape = param_tensor.logical_shape();
-    auto amsgrad = args.amsgrad;
-    auto stochastic_rounding = args.stochastic_rounding;
-    auto max_exp_avg_sq_initialized = tensor_args.max_exp_avg_sq.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<AdamWDeviceOperation>(
-        amsgrad, stochastic_rounding, max_exp_avg_sq_initialized, param_tensor.dtype(), param_logical_shape);
-
-    return hash;
-}
-
 }  // namespace ttml::metal::optimizers::adamw::device
 
 namespace ttnn::prim {
