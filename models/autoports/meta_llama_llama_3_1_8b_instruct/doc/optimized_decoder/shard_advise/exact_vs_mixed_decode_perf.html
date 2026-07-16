@@ -130,6 +130,15 @@ Both configs differ only by <code>advisor_exact_residual_chain</code>.</p>
   <span class="pill b-ind">independent</span> from a separate sweep / graph-rewrite, or the advisor's advice was rejected.
   <br>Net: the advisor's real, verifiable contribution to <code>optimized</code> is the <b>matmul program geometry, output-shard geometry, and gate/up subblock</b> — i.e. the parts driving the five dominant matmuls. Everything else was already there or came from other steps.</p>
 
+<h2 style="font-size:16px;margin:28px 0 4px">Decode RMSNorm core grid</h2>
+<p class="muted" style="max-width:1060px">In <code>optimized</code>, both decode RMSNorms are L1 width-sharded on a uniform <b>4×8 = 32-core</b> grid — input shard, compute grid, and output shard are all the same, so there is no reshard across the norm.</p>
+<div class="prov"><table>
+<tr><th>Decode RMSNorm</th><th>Core grid</th><th>Code</th></tr>
+<tr><td>input norm</td><td>L1 width-sharded, <b>4×8 (32 cores)</b>, <code>program_config=norm_program_config</code></td><td><code>optimized_decoder.py:879</code> (in <code>decode_forward</code>, <code>:860</code>)</td></tr>
+<tr><td>post-attention norm</td><td>L1 width-sharded, <b>4×8 (32 cores)</b></td><td><code>optimized_decoder.py:1022</code></td></tr>
+</table></div>
+<p class="muted" style="max-width:1060px">The <b>32 → 4×8</b> arrangement comes from <code>_rectangular_core_grid(32, …)</code> (<code>:72–80</code>): first divisor <code>y=8</code>, <code>x=4</code>, on the 11×10 Blackhole compute grid. Core count is the <code>residual_cores=32</code> default (<code>:51</code>); the sharded program config is built by <code>_make_norm_program_config</code> (<code>:408</code>). The rejected <code>advisor_exact_chain</code> instead runs the decode norms on 11 and 22 cores (the amber rows above).</p>
+
 <p class="muted" style="margin-top:18px">Hover any highlighted row for the reason. Generated from <code>tt-perf-report</code>
 over the <code>PERF_DECODE</code> window (<code>--tracing-mode</code>). Raw: <code>optimized_full.txt</code>, <code>advisor_exact_chain_full.txt</code>.</p>
 </body></html>
