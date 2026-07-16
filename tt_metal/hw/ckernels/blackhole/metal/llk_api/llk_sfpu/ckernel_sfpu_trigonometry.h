@@ -372,7 +372,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     sfpi::vFloat r;
-    sfpi::vFloat q;
+    sfpi::vFloat p;
     sfpi::vFloat s;
     sfpi::vFloat a;
     sfpi::vFloat ax;
@@ -396,23 +396,23 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
 
     // Minimax approximation of atan(a) on [0, 1].
     {
-        q = 0x1.01cp-8f;
+        p = 0x1.01cp-8f;
         s = a * a;
         sfpi::vFloat c6 = -0x1.4bcp-6f;
-        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c6.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        p = __builtin_rvtt_sfpmad(p.get(), s.get(), c6.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c5 = 0x1.93p-5f;
-        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c5.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        p = __builtin_rvtt_sfpmad(p.get(), s.get(), c5.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c4 = -0x1.48cp-4f;
-        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c4.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        p = __builtin_rvtt_sfpmad(p.get(), s.get(), c4.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c3 = 0x1.bd4p-4f;
-        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c3.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        p = __builtin_rvtt_sfpmad(p.get(), s.get(), c3.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat c2 = -0x1.24p-3f;
-        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        p = __builtin_rvtt_sfpmad(p.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         sfpi::vFloat a3 = s * a;
-        q = q * s + sfpi::vConstFloatPrgm1;
-        q = q * s + sfpi::vConstFloatPrgm2;
+        p = p * s + sfpi::vConstFloatPrgm1;
+        p = p * s + sfpi::vConstFloatPrgm2;
         pio2 = 0x1.921fb6p+0f;
-        r = q * a3 + a;
+        r = p * a3 + a;
     }
 
     // atan(|x|) = pi/2 - atan(1/|x|) for |x| >= 1.
