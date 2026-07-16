@@ -5,6 +5,9 @@
 #include "permute_codegen_device_operation.hpp"
 
 #include <algorithm>
+#include <array>
+
+#include <tt-metalium/tt_align.hpp>
 
 #include "permute_codegen_supported.hpp"
 #include "ttnn/device_operation.hpp"
@@ -98,13 +101,84 @@ PermuteCodegenDeviceOperation::create_op_performance_model(
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::PermuteCodegenDeviceOperation::tensor_return_value_t permute_codegen(
-    const Tensor& /*input_tensor*/,
-    const ttsl::SmallVector<uint32_t>& /*dims*/,
-    const std::optional<MemoryConfig>& /*memory_config*/,
-    std::optional<Tensor> /*optional_output_tensor*/) {
-    // Phase 4a: compute operation_attributes_t (cache_key_fields, incl. output_strides / num_rows /
-    // aligned_stick_bytes / elem_size / num_blocks_total per manifest) from spec.py's host math,
-    // then ttnn::device_operation::launch<PermuteCodegenDeviceOperation>(...).
-    TT_THROW("ttnn::prim::permute_codegen not yet implemented (phase 4a)");
+    const Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& dims,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<Tensor> optional_output_tensor) {
+    using ttnn::operations::data_movement::PermuteCodegenDeviceOperation;
+    constexpr uint32_t kMaxDims = PermuteCodegenDeviceOperation::MAX_DIMS;
+
+    const auto input_shape = input_tensor.logical_shape();
+    const uint32_t rank = input_shape.rank();
+    TT_FATAL(dims.size() == rank, "permute_codegen: dims length {} does not match tensor rank {}", dims.size(), rank);
+    // Structural guard: operation_attributes_t packs dims/shape/strides into fixed-size
+    // std::array<uint32_t, MAX_DIMS>; supported_by_codegen() rejects this before routing ever
+    // reaches here, but a direct forced-codegen call must not overrun the arrays below.
+    TT_FATAL(rank <= kMaxDims, "permute_codegen: rank {} exceeds the maximum supported rank {}", rank, kMaxDims);
+
+    std::array<uint32_t, kMaxDims> dims_arr{};
+    std::array<uint32_t, kMaxDims> input_shape_arr{};
+    for (uint32_t i = 0; i < rank; ++i) {
+        dims_arr[i] = dims[i];
+        input_shape_arr[i] = input_shape[i];
+    }
+
+    ttsl::SmallVector<uint32_t> output_shape_vec(rank);
+    for (uint32_t i = 0; i < rank; ++i) {
+        output_shape_vec[i] = input_shape[dims[i]];
+    }
+
+    // get_row_strides(output_shape) (ops/permute/builder.py): row-unit strides over all but the
+    // last (W) dim. The last two slots are both stride 1 — W is intra-row, and rank-2 is the
+    // innermost row-counted dim — matched exactly by both writers' addressing math.
+    std::array<uint32_t, kMaxDims> output_strides{};
+    if (rank == 1) {
+        output_strides[0] = 1;
+    } else {
+        output_strides[rank - 1] = 1;
+        output_strides[rank - 2] = 1;
+        for (int32_t i = static_cast<int32_t>(rank) - 3; i >= 0; --i) {
+            output_strides[i] = output_strides[i + 1] * output_shape_vec[i + 1];
+        }
+    }
+
+    const uint32_t elem_size = input_tensor.element_size();
+    const uint32_t w = input_shape[rank - 1];
+    uint32_t num_rows = 1;
+    for (uint32_t i = 0; i < rank; ++i) {
+        num_rows *= input_shape[i];
+    }
+    num_rows /= w;
+
+    const uint32_t stick_bytes = w * elem_size;
+    const uint32_t aligned_stick_bytes = tt::align(stick_bytes, input_tensor.buffer()->alignment());
+
+    uint32_t num_blocks_total = 0;
+    if (dims[rank - 1] != rank - 1) {
+        // W-changing (BlockedGeneric): 32x32 block count over the permuted-last (x_dim) and W
+        // axes, matching build_permute_rm_blocked's host section exactly.
+        constexpr uint32_t kBlock = 32;
+        const uint32_t x_dim = dims[rank - 1];
+        const uint32_t x = input_shape[x_dim];
+        const uint32_t x_blocks = (x + kBlock - 1) / kBlock;
+        const uint32_t w_blocks = (w + kBlock - 1) / kBlock;
+        const uint32_t non_x_rows = num_rows / x;
+        num_blocks_total = non_x_rows * x_blocks * w_blocks;
+    }
+
+    PermuteCodegenDeviceOperation::operation_attributes_t attrs{
+        .rank = rank,
+        .dims = dims_arr,
+        .input_shape = input_shape_arr,
+        .output_strides = output_strides,
+        .num_rows = num_rows,
+        .aligned_stick_bytes = aligned_stick_bytes,
+        .elem_size = elem_size,
+        .num_blocks_total = num_blocks_total,
+        .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+    };
+
+    return ttnn::device_operation::launch<PermuteCodegenDeviceOperation>(
+        attrs, PermuteCodegenDeviceOperation::tensor_args_t{input_tensor, std::move(optional_output_tensor)});
 }
 }  // namespace ttnn::prim

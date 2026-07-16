@@ -27,6 +27,7 @@ void bind_permute(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             pad_value (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
+            implementation (str, optional): dispatch selector — "auto" (default), "native", or "codegen".
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -40,17 +41,21 @@ void bind_permute(nb::module_& mod) {
                 const ttnn::Tensor&,
                 const ttsl::SmallVector<int64_t>&,
                 const std::optional<ttnn::MemoryConfig>&,
-                float>(&ttnn::permute),
+                float,
+                const std::string&>(&ttnn::permute),
             nb::arg("input_tensor").noconvert(),
             nb::arg("dims"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = 0.0f),
+            nb::arg("pad_value") = 0.0f,
+            nb::arg("implementation") = "auto"),
         ttnn::overload_t(
-            nb::overload_cast<const ttnn::Tensor&, const ttsl::SmallVector<int64_t>&, float>(&ttnn::permute),
+            nb::overload_cast<const ttnn::Tensor&, const ttsl::SmallVector<int64_t>&, float, const std::string&>(
+                &ttnn::permute),
             nb::arg("input_tensor").noconvert(),
             nb::arg("dims"),
-            nb::arg("pad_value") = 0.0f));
+            nb::arg("pad_value") = 0.0f,
+            nb::arg("implementation") = "auto"));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

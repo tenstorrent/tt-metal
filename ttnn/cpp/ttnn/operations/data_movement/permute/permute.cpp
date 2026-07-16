@@ -7,6 +7,8 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/codegen/permute_codegen_supported.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -205,7 +207,8 @@ ttnn::Tensor permute(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
-    float pad_value) {
+    float pad_value,
+    const std::string& implementation) {
     const auto input_rank = input_tensor.logical_shape().rank();
     TT_FATAL(
         input_rank == dims.size(),
@@ -216,6 +219,24 @@ ttnn::Tensor permute(
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
+
+    {
+        namespace permute_codegen = operations::data_movement::permute_codegen;
+        const auto selector = permute_codegen::parse_implementation(implementation);
+        if (selector == permute_codegen::ImplementationSelector::Codegen) {
+            TT_FATAL(
+                permute_codegen::supported_by_codegen(input_tensor, normalized_dims),
+                "ttnn::permute: implementation=\"codegen\" requested but this input is not supported by the "
+                "codegen implementation");
+            return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
+        }
+        if (selector == permute_codegen::ImplementationSelector::Auto &&
+            permute_codegen::supported_by_codegen(input_tensor, normalized_dims) &&
+            !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
+            return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
+        }
+    }
+
     if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
@@ -255,8 +276,12 @@ ttnn::Tensor permute(
     return output_tensor;
 }
 
-ttnn::Tensor permute(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int64_t>& dims, float pad_value) {
-    return permute(input_tensor, dims, std::nullopt, pad_value);
+ttnn::Tensor permute(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int64_t>& dims,
+    float pad_value,
+    const std::string& implementation) {
+    return permute(input_tensor, dims, std::nullopt, pad_value, implementation);
 }
 
 }  // namespace ttnn
