@@ -4,6 +4,8 @@
 
 #include "untilize.hpp"
 
+#include "codegen/untilize_codegen_device_operation.hpp"
+#include "codegen/untilize_codegen_supported.hpp"
 #include "device/untilize_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -35,11 +37,10 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
         .operation = std::move(base_untilize)});
 }
 
-}  // namespace ttnn::operations::data_movement
-
-namespace ttnn {
-
-ttnn::Tensor untilize(
+// The existing native implementation, unconditionally. Calls itself directly (never through
+// the public ttnn::untilize entry) so that a forced implementation="native" caller never
+// escalates back to "auto"/"codegen" partway through.
+ttnn::Tensor untilize_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
@@ -86,6 +87,50 @@ ttnn::Tensor untilize(
     };
 
     return operations::data_movement::build_ndiml_untilize(base_untilize)(input_tensor);
+}
+
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+ttnn::Tensor untilize(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    bool use_multicore,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::string& implementation) {
+    using ttnn::operations::data_movement::untilize_codegen::ImplementationSelector;
+    using ttnn::operations::data_movement::untilize_codegen::is_demoted;
+    using ttnn::operations::data_movement::untilize_codegen::parse_implementation;
+    using ttnn::operations::data_movement::untilize_codegen::supported_by_codegen;
+
+    const auto selector = parse_implementation(implementation);
+
+    // Route on the same normalized (squeeze_from_ND_to_4D'd) attributes untilize_native applies
+    // via build_ndiml_untilize -- otherwise a logical-rank>4 input reaches supported_by_codegen /
+    // is_demoted / the codegen dispatch itself on the raw, un-squeezed tensor, while the native
+    // path's equivalent decisions run on the squeezed 4D tensor.
+    auto dispatch = [=](const ttnn::Tensor& normalized_input) -> ttnn::Tensor {
+        const auto output_mem_config = memory_config.value_or(normalized_input.memory_config());
+
+        if (selector == ImplementationSelector::Codegen) {
+            TT_FATAL(
+                supported_by_codegen(normalized_input, output_mem_config),
+                "ttnn.untilize(implementation='codegen') invoked for a case not supported by the codegen "
+                "implementation (requires TILE-layout, interleaved (non-sharded) input and output, dtype "
+                "bfloat16 or bfloat8_b, and a width within the multi-tile-row L1 chunking threshold)");
+            return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);
+        }
+        if (selector == ImplementationSelector::Auto && supported_by_codegen(normalized_input, output_mem_config) &&
+            !is_demoted(normalized_input, output_mem_config)) {
+            return ttnn::prim::untilize_codegen(normalized_input, output_mem_config);
+        }
+
+        return operations::data_movement::untilize_native(
+            normalized_input, memory_config, use_multicore, sub_core_grids);
+    };
+
+    return operations::data_movement::build_ndiml_untilize(dispatch)(input_tensor);
 }
 
 }  // namespace ttnn
