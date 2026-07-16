@@ -84,7 +84,7 @@ void ObjectIntentTracker::pre_launch_snapshot(
 void ObjectIntentTracker::accumulate_resolved(
     const EmuleOobTensorState& oob, const uint64_t* resolved_log, uint32_t count) {
     // Called in-fiber at kernel exit with this fiber's per-ctx resolved log
-    // (__emule_self->san.resolved_log). snapshots_ non-empty ⇒ single-kernel core
+    // (__emule_self->san_resolved_log). snapshots_ non-empty ⇒ single-kernel core
     // (one fiber here): gating on it keeps this append off multi-kernel cores,
     // where concurrent inserts would race an unsynchronized std::vector.
     if (!oob.object_intent_strict || snapshots_.empty() || count == 0) {
@@ -175,8 +175,8 @@ void clear_sanitizer_thread_locals() {
     san.cb_boundary_strict = false;
     san.pending_noc_reads = 0;
     san.kernel_name = nullptr;
-    san.resolved_active = false;
-    san.resolved_count = 0;
+    __emule_self->san_resolved_active = false;
+    __emule_self->san_resolved_count = 0;
 }
 
 namespace {

@@ -62,9 +62,9 @@ TEST(EmuleSanitizerFiberState, PerFiberIsolation) {
     __emule_self->san.cb_reserve_dangling[3] = true;
     __emule_self->san.pending_noc_reads = 5;
     __emule_self->san.kernel_name = "kernel_A";
-    __emule_self->san.resolved_active = true;  // Object-Intent recording log (per-fiber)
-    __emule_self->san.resolved_count = 3;
-    __emule_self->san.resolved_log[0] = 0xdead0000beef0000ULL;
+    __emule_self->san_resolved_active = true;  // Object-Intent recording log (per-fiber)
+    __emule_self->san_resolved_count = 3;
+    __emule_self->san_resolved_log[0] = 0xdead0000beef0000ULL;
 
     // A different program arms fiber B — this is the co-scheduled fiber that, under
     // the old thread_local design, would have clobbered A's state on the shared worker.
@@ -77,8 +77,8 @@ TEST(EmuleSanitizerFiberState, PerFiberIsolation) {
     __emule_self->san.cb_reserve_dangling[3] = false;
     __emule_self->san.pending_noc_reads = 0;
     __emule_self->san.kernel_name = "kernel_B";
-    __emule_self->san.resolved_active = false;
-    __emule_self->san.resolved_count = 0;
+    __emule_self->san_resolved_active = false;
+    __emule_self->san_resolved_count = 0;
 
     // Resume fiber A: its state must be exactly what it armed, NOT B's.
     __emule_self = &fiber_a;
@@ -90,9 +90,9 @@ TEST(EmuleSanitizerFiberState, PerFiberIsolation) {
     EXPECT_TRUE(__emule_self->san.cb_reserve_dangling[3]);
     EXPECT_EQ(__emule_self->san.pending_noc_reads, 5u);
     EXPECT_STREQ(__emule_self->san.kernel_name, "kernel_A");
-    EXPECT_TRUE(__emule_self->san.resolved_active);
-    EXPECT_EQ(__emule_self->san.resolved_count, 3u);
-    EXPECT_EQ(__emule_self->san.resolved_log[0], 0xdead0000beef0000ULL);
+    EXPECT_TRUE(__emule_self->san_resolved_active);
+    EXPECT_EQ(__emule_self->san_resolved_count, 3u);
+    EXPECT_EQ(__emule_self->san_resolved_log[0], 0xdead0000beef0000ULL);
 
     // And fiber B keeps its own.
     __emule_self = &fiber_b;
@@ -103,8 +103,8 @@ TEST(EmuleSanitizerFiberState, PerFiberIsolation) {
     EXPECT_FALSE(__emule_self->san.cb_reserve_dangling[3]);
     EXPECT_EQ(__emule_self->san.pending_noc_reads, 0u);
     EXPECT_STREQ(__emule_self->san.kernel_name, "kernel_B");
-    EXPECT_FALSE(__emule_self->san.resolved_active);
-    EXPECT_EQ(__emule_self->san.resolved_count, 0u);
+    EXPECT_FALSE(__emule_self->san_resolved_active);
+    EXPECT_EQ(__emule_self->san_resolved_count, 0u);
 
     __emule_self = saved;
 }
@@ -121,8 +121,8 @@ TEST(EmuleSanitizerFiberState, DefaultConstructedIsInert) {
     EXPECT_EQ(fiber.san.cb_reserved_pages[0], 0u);
     EXPECT_FALSE(fiber.san.cb_boundary_strict);
     EXPECT_EQ(fiber.san.kernel_name, nullptr);
-    EXPECT_FALSE(fiber.san.resolved_active);
-    EXPECT_EQ(fiber.san.resolved_count, 0u);
+    EXPECT_FALSE(fiber.san_resolved_active);
+    EXPECT_EQ(fiber.san_resolved_count, 0u);
 }
 
 }  // namespace

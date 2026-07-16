@@ -72,7 +72,7 @@ public:
         uint32_t lx,
         uint32_t ly);
     // Fold a finished kernel's per-fiber resolved-range log (from
-    // __emule_self->san.resolved_log) into this core's resolved set. No-op unless
+    // __emule_self->san_resolved_log) into this core's resolved set. No-op unless
     // ASAN is on and the core is single-kernel (snapshots_ non-empty).
     void accumulate_resolved(const EmuleOobTensorState& oob, const uint64_t* resolved_log, uint32_t count);
     void verify_post_launch(const uint8_t* l1_data, uint32_t lx, uint32_t ly, const char* kernel_name) const;

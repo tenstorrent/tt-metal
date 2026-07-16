@@ -3289,10 +3289,10 @@ static void launch_cores(
                     set_sanitizer_thread_locals(oob_state, sem_base, sem_size);
                     // Arm the Object-Intent resolved-range log in THIS fiber's ctx (reset
                     // count, enable recording). The kernel-side OOB check appends resolved
-                    // extents to __emule_self->san.resolved_log; accumulate/verify below.
+                    // extents to __emule_self->san_resolved_log; accumulate/verify below.
                     if (intent_tracker != nullptr) {
-                        __emule_self->san.resolved_active = true;
-                        __emule_self->san.resolved_count = 0;
+                        __emule_self->san_resolved_active = true;
+                        __emule_self->san_resolved_count = 0;
                     }
                     try {
                         for (size_t t = 0; t < ki.variants.size(); ++t) {
@@ -3306,8 +3306,8 @@ static void launch_cores(
                     } catch (...) {
                         if (intent_tracker != nullptr) {
                             intent_tracker->accumulate_resolved(
-                                oob_state, __emule_self->san.resolved_log, __emule_self->san.resolved_count);
-                            __emule_self->san.resolved_active = false;
+                                oob_state, __emule_self->san_resolved_log, __emule_self->san_resolved_count);
+                            __emule_self->san_resolved_active = false;
                         }
                         clear_sanitizer_thread_locals();
                         std::throw_with_nested(std::runtime_error(
@@ -3320,8 +3320,8 @@ static void launch_cores(
                         // resolved is an Object-Intent violation (aborts). No-op on multi-kernel
                         // cores (nothing snapshotted). Runs in-fiber, after the kernel wrote L1.
                         intent_tracker->accumulate_resolved(
-                            oob_state, __emule_self->san.resolved_log, __emule_self->san.resolved_count);
-                        __emule_self->san.resolved_active = false;
+                            oob_state, __emule_self->san_resolved_log, __emule_self->san_resolved_count);
+                        __emule_self->san_resolved_active = false;
                         intent_tracker->verify_post_launch(l1_data, lx, ly, __emule_kernel_name);
                     }
                     __emule_kernel_name = nullptr;
