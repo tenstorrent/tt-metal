@@ -5,13 +5,6 @@
 #include "ttnn/device_operation.hpp"
 #include "fusion_dispatch_op_device_operation.hpp"
 
-#include <tt_stl/reflection.hpp>
-
-// Reuse the hash function from generic_op
-namespace ttnn::operations::generic {
-ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
-}
-
 namespace ttnn::operations::experimental::fusion {
 
 using namespace tt::tt_metal;
@@ -30,18 +23,6 @@ fusion_dispatch_spec_return_value_t FusionDispatchOpDeviceOperation::compute_out
 fusion_dispatch_tensor_return_value_t FusionDispatchOpDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     return tensor_args.output_tensor;
-}
-
-ttsl::hash::hash_t FusionDispatchOpDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t&) {
-    // Must differ from GenericOpDeviceOperation::compute_program_hash — same descriptor would
-    // otherwise hit the wrong cached_mesh_workload_t layout (segfault in override).
-    size_t hash = ttsl::hash::type_hash<FusionDispatchOpDeviceOperation>;
-    for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {
-        ttsl::hash::hash_combine(hash, mesh_coord_range);
-        ttsl::hash::hash_combine(hash, ttnn::operations::generic::compute_program_descriptor_hash(program_descriptor));
-    }
-    return hash;
 }
 
 ProgramDescriptor FusionDispatchOpDeviceOperation::create_descriptor(

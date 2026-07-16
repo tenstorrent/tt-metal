@@ -23,7 +23,6 @@ struct FusionDispatchOpDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     // The operation_attributes_t holds a MeshPrograms vector of
     // (MeshCoordinateRange, ProgramDescriptor) pairs.  In practice Python emits a
