@@ -39,9 +39,7 @@ def geometric_mean_ratio(log_ratios):
 def main():
     args = parse_args()
     if len(args.baseline) != len(args.candidate):
-        raise ValueError(
-            "Baseline and candidate must contain the same number of paired process runs"
-        )
+        raise ValueError("Baseline and candidate must contain the same number of paired process runs")
     if len(args.baseline) < 4:
         raise ValueError("At least four paired process runs are required")
 
@@ -54,21 +52,15 @@ def main():
     if not all(run["execute_trace_is_direct_binding"] for run in baseline + candidate):
         raise ValueError("Every run must use the direct execute_trace binding")
     if any(run["tracker_environment"] for run in baseline + candidate):
-        raise ValueError(
-            "Every run must have all trace allocation tracker variables unset"
-        )
+        raise ValueError("Every run must have all trace allocation tracker variables unset")
 
     metric_names = baseline[0]["results"].keys()
     rng = random.Random(20260716)
     comparisons = {}
 
     for metric_name in metric_names:
-        baseline_medians = [
-            run["results"][metric_name]["median_ns_per_iteration"] for run in baseline
-        ]
-        candidate_medians = [
-            run["results"][metric_name]["median_ns_per_iteration"] for run in candidate
-        ]
+        baseline_medians = [run["results"][metric_name]["median_ns_per_iteration"] for run in baseline]
+        candidate_medians = [run["results"][metric_name]["median_ns_per_iteration"] for run in candidate]
         log_ratios = [
             math.log(candidate_ns / baseline_ns)
             for baseline_ns, candidate_ns in zip(baseline_medians, candidate_medians)
@@ -89,8 +81,7 @@ def main():
             "candidate_median_ns_per_iteration": statistics.median(candidate_medians),
             "paired_geometric_mean_change_percent": (ratio - 1) * 100,
             "change_95_percent_ci": [(lower_ratio - 1) * 100, upper_slowdown_percent],
-            "equivalent_within_margin": upper_slowdown_percent
-            <= args.equivalence_margin_percent,
+            "equivalent_within_margin": upper_slowdown_percent <= args.equivalence_margin_percent,
         }
 
     payload = {
@@ -98,9 +89,7 @@ def main():
         "candidate_commit": candidate[0]["git_commit"],
         "paired_process_runs": len(baseline),
         "equivalence_margin_percent": args.equivalence_margin_percent,
-        "all_metrics_equivalent": all(
-            result["equivalent_within_margin"] for result in comparisons.values()
-        ),
+        "all_metrics_equivalent": all(result["equivalent_within_margin"] for result in comparisons.values()),
         "comparisons": comparisons,
     }
     rendered = json.dumps(payload, indent=2) + "\n"

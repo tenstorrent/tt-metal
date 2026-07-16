@@ -77,15 +77,9 @@ def parse_args():
 
 def main():
     args = parse_args()
-    enabled = {
-        name: os.environ.get(name)
-        for name in TRACKER_ENV_VARS
-        if os.environ.get(name) is not None
-    }
+    enabled = {name: os.environ.get(name) for name in TRACKER_ENV_VARS if os.environ.get(name) is not None}
     if any(enabled.get(name) == "1" for name in TRACKER_ENV_VARS):
-        raise RuntimeError(
-            f"Tracker benchmark requires all tracker toggles disabled; got {enabled}"
-        )
+        raise RuntimeError(f"Tracker benchmark requires all tracker toggles disabled; got {enabled}")
 
     # Import only after validating the environment because tracker settings are
     # deliberately captured during module/shared-library initialization.
@@ -109,9 +103,7 @@ def main():
         input_b = ttnn.allocate_tensor_on_device(
             shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
         )
-        output = ttnn.allocate_tensor_on_device(
-            shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
-        )
+        output = ttnn.allocate_tensor_on_device(shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
         tensors.extend((input_a, input_b, output))
 
         def dispatch():
@@ -149,10 +141,7 @@ def main():
             ),
         }
 
-        direct_binding = (
-            getattr(ttnn, "_ttnn_execute_trace", ttnn.execute_trace)
-            is ttnn.execute_trace
-        )
+        direct_binding = getattr(ttnn, "_ttnn_execute_trace", ttnn.execute_trace) is ttnn.execute_trace
         payload = {
             "label": args.label,
             "git_commit": subprocess.run(
