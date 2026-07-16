@@ -236,6 +236,58 @@ Artifacts: `/tmp/dg48291_floor_5seed.pt` (fp32/bf16), `/tmp/dg48291_seed{2,3,4}.
   from #47464 / sharded-terminal and is those stages' cleanup, but it is a live
   HARD-RULE gate failure on the branch and is flagged for owner action.
 
+## Router top-8 expert SELECTION: bf16 vs fp32 (device-free proxy for TT vs HF)
+
+"How much does TT's per-layer top-8 expert selection differ from HF?" measured at
+the router level with `doc/decision_fidelity/measure_topk_overlap.py`: run the HF
+backbone fp32 and bf16 on the *same* seeded canvas/noise (zero TT kernels),
+capture every router's dense top-8 per step/layer, and compare index-set overlap,
+functional weight-mass overlap (`sum_e min(w_fp32, w_bf16)` after renormalizing,
+= 1 − TV distance), top-1 (dominant-expert) agreement, and rank-resolved drop.
+TT's router is bf16 (`sparse_moe.py:921` softmax + `:923` topk) and tracks the
+bf16 committed floor over 5 seeds, so fp32-vs-bf16 is a faithful device-free proxy
+(TT flips *slightly more*: TT does bf16 softmax where HF-bf16 keeps fp32 softmax).
+
+**STEP 0 (identical initial canvas — clean router-precision isolate), seed 0 / 1:**
+
+| metric | seed 0 | seed 1 |
+| --- | --- | --- |
+| top-8 index set shared | **6.80 / 8** | **6.79 / 8** |
+| exact top-8 set match | 0.436 (56% flip ≥1) | 0.448 (55% flip ≥1) |
+| **weight-mass overlap (functional)** | **0.846** | **0.845** |
+| top-1 dominant-expert agree | 0.818 | 0.808 |
+| rank-0 (dominant) drop out of bf16 top-8 | **4.2%** | **4.4%** |
+| rank-7 (weakest) drop | 36.4% | 35.4% |
+
+Rank-resolved drop @step0 (fp32 rank0..7 → out of bf16 top-8), seed 0:
+`[0.042, 0.053, 0.072, 0.098, 0.133, 0.184, 0.253, 0.364]`. **Flips are
+tail-dominated**: the dominant expert survives in the top-8 ~96% of the time and
+is the exact #1 ~81% of the time; the weakest (8th) expert — which carries ~1–2%
+of the routing weight — flips ~36%. Only ~15% of routing *weight* lands on a
+flipped expert.
+
+**Depth compounding (per-layer @ step 0, same input):** the topk operator is
+essentially exact where the hidden state is still shared — layers 0–4 weight-mass
+`0.98–0.99`, top-1 `0.97–1.00`. Divergence grows with backbone depth as bf16
+hidden-state rounding accumulates — layers 20–27 weight-mass `0.64–0.72`, top-1
+`0.55–0.66` — then partly recovers at the output layers (28–29 `0.85–0.90`). So
+the divergence is **bf16 backbone drift, not a faulty router**.
+
+**OVERALL (full 8-step trajectory), seed 0 / 1:** top-8 shared `5.21 / 5.34` of 8;
+weight-mass overlap `0.637 / 0.655`; top-1 agree `0.568 / 0.588`. This is *lower*
+than step 0 because the two runs commit different tokens after step 0 — later-step
+routing differs for the legitimate reason that the trajectories themselves have
+diverged (the same #48291 paraphrase bifurcation), not because the router got less
+accurate. Per-step confirms it: step 0 (identical input) mass `0.845`, steps 1–5
+drop to `0.50–0.69` as trajectories split, steps 6–7 recover as they converge.
+
+**Reading:** given the same input, TT-class bf16 preserves the *functional*
+routing — 85% of the weight and 96% of the dominant expert — and only reshuffles
+the near-tied tail (rank 6–8). This is the router-level face of the same bf16
+chaos floor that governs committed decisions, and it is why the output stays
+coherent. Artifacts `/tmp/dg48291_topk2_tanh_seed{0,1}.pt`; reproduce with
+`measure_topk_overlap.py --stage-artifact /tmp/dg48291_tanh_seed{0,1}.pt`.
+
 ## Current conclusion
 
 The tanh-GELU semantic fix clears the core seed-0 committed-decision bar at
