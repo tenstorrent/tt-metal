@@ -109,7 +109,7 @@ TEST_F(RegimeADiagFixture, Run) {
     // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
     if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
-        mask == 2048) {
+        mask == 2048 || mask == 4096 || mask == 8192) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -358,6 +358,90 @@ TEST_F(RegimeADiagFixture, PipelinedDrainCorrectness) {
                 if (mask != 0u) {
                     // Only write-sync differs -> barrier must match the pipelined default bit-for-bit.
                     EXPECT_EQ(ab, 0.0) << "barrier != pipelined default (case=" << c.label << " pass=" << pass << ")";
+                }
+            }
+        }
+    }
+}
+
+// Physical ring ordering: bank (default, mask 0) vs greedy (1<<12) vs exhaustive-opt (1<<13). Only the in0
+// ring visiting order changes (which core seeds which shard + forward route + in1 rotated read) — the math is
+// identical, so output must be BIT-IDENTICAL across orders. Random BF16 vs CPU f32 golden, PCC >= 0.999,
+// fresh AND cached. Table spans Pk=1 + split-K (both reader-NoC orientations via multi-slice Pk), Ns>1, Sm>1,
+// W=1/W>1, and balanced K/N tails.
+TEST_F(RegimeADiagFixture, RingOrderCorrectness) {
+    struct Case {
+        const char* label;
+        uint32_t M, K, N, Ns, Pk, Sm, kb, nsb;
+    };
+    const std::vector<Case> cases = {
+        {"pk1_W4_noc0", 256, 2048, 1024, 1, 1, 1, 2, 2},        // Pk=1 single ring (NOC0-reader), W=4
+        {"pk2_ns2_bothnoc", 32, 2048, 2048, 2, 2, 1, 4, 4},     // Pk=2 -> both reader NoCs; Ns>1
+        {"pk4_sm2_bothnoc", 256, 2048, 1024, 1, 4, 2, 2, 2},    // Sm>1; Pk=4 -> both NoCs
+        {"pk12_768_W1", 256, 6144, 768, 1, 12, 1, 2, 1},        // deep chain, W=1, both NoCs, N_bpc=3
+        {"wideN_pk12", 256, 6144, 4608, 1, 12, 1, 2, 1},        // wide-N
+        {"ktail_ntail_pk12", 256, 6080, 4640, 1, 12, 1, 2, 1},  // balanced K-tail (190) + N-tail (145)
+    };
+    // mask 0 = opt (production default); 1<<12 = DIAG_RING_BANK (old bank order); 1<<13 = DIAG_RING_GREEDY.
+    const std::vector<std::pair<uint32_t, const char*>> masks = {{4096u, "bank"}, {8192u, "greedy"}, {0u, "opt"}};
+    auto* device = device_;
+
+    for (const auto& c : cases) {
+        const uint32_t M = c.M, K = c.K, N = c.N;
+        std::mt19937 rng(9091);
+        std::normal_distribution<float> dist(0.0f, 1.0f);
+        std::vector<bfloat16> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
+        std::vector<float> af(a.size()), bf(b.size());
+        for (size_t i = 0; i < a.size(); ++i) {
+            a[i] = bfloat16(dist(rng));
+            af[i] = static_cast<float>(a[i]);
+        }
+        for (size_t i = 0; i < b.size(); ++i) {
+            b[i] = bfloat16(dist(rng));
+            bf[i] = static_cast<float>(b[i]);
+        }
+        std::vector<float> golden(static_cast<size_t>(M) * N, 0.0f);
+        for (uint32_t i = 0; i < M; ++i) {
+            for (uint32_t kk = 0; kk < K; ++kk) {
+                const float aik = af[static_cast<size_t>(i) * K + kk];
+                const float* brow = &bf[static_cast<size_t>(kk) * N];
+                float* crow = &golden[static_cast<size_t>(i) * N];
+                for (uint32_t j = 0; j < N; ++j) {
+                    crow[j] += aik * brow[j];
+                }
+            }
+        }
+
+        const MemoryConfig il{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        const TensorLayout lay(DataType::BFLOAT16, PageConfig(Layout::TILE), il);
+        Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
+        const MemoryConfig wcfg = ttnn::experimental::prim::create_regime_a_weight_memory_config(
+            ttnn::Shape({K, N}), DataType::BFLOAT16, device);
+        Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
+        const ttnn::experimental::prim::RegimeAMatmulConfig cfg{
+            .k_slices = c.Pk, .n_slices = c.Ns, .m_slices = c.Sm, .k_block_tiles = c.kb, .n_subblock_tiles = c.nsb};
+
+        std::vector<float> bank_out;
+        for (const auto& [mask, tag] : masks) {
+            for (int pass = 0; pass < 2; ++pass) {  // fresh then cached-program
+                Tensor out =
+                    ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
+                const std::vector<float> got = out.to_vector<float>();
+                const double p = pcc(got, golden);
+                double ab = -1.0;
+                if (bank_out.empty()) {
+                    bank_out = got;  // first variant (bank) = reference for the A/B bit-identity check
+                } else {
+                    ab = 0.0;
+                    for (size_t i = 0; i < got.size(); ++i) {
+                        ab = std::max(ab, std::abs(static_cast<double>(got[i]) - bank_out[i]));
+                    }
+                }
+                fmt::print("DIAGRING case={} {} pass={} pcc={:.5f} ab_maxdiff={:.6f}\n", c.label, tag, pass, p, ab);
+                EXPECT_GT(p, 0.999) << "ring-order case=" << c.label << " " << tag << " pass=" << pass
+                                    << " PCC too low (" << p << ")";
+                if (ab >= 0.0) {
+                    EXPECT_EQ(ab, 0.0) << tag << " != bank order (case=" << c.label << " pass=" << pass << ")";
                 }
             }
         }
