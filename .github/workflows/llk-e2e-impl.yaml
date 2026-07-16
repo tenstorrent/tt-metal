@@ -17,6 +17,7 @@ on:
 permissions:
   checks: write
   contents: read
+  packages: write # required so build-docker-artifact.yaml can pull/build the LLK CI image
 
 env:
   LLK_PATH: tt_metal/tt-llk
