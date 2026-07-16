@@ -130,3 +130,7 @@ The unavailable endpoint pair remains an external host-state limitation, not a s
 - Branch: `mvasiljevic/agentic-skills`
 - Functional-decoder checkpoint: `9a33ac6ee68605e4e897f2f2985dfb59aa6f7443`
 - Remote action: none; the checkpoint was not pushed.
+
+## 2026-07-16: Multichip provenance
+
+Static IR analysis is recorded in `multichip_provenance.json`. The selected prefill and decode compiler graphs use the named `1x4` mesh with TP degree 4 on positional mesh dimension / `cluster_axis` 1. Representative layer 16 contains two ring sum `ttnn.all_reduce` operations per path—after the row-parallel attention output projection and after the row-parallel MLP down projection—and no other layer-local collective type.
