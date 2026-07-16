@@ -88,6 +88,7 @@ def _generate_solutions(
     output_dir: Path,
     max_solutions: int,
     distinct_host_sets: bool,
+    allow_shape_permutations: bool,
     mpi_args: Optional[List[str]],
     dry_run: bool,
 ) -> Path:
@@ -114,6 +115,9 @@ def _generate_solutions(
         extra += ["--max-solutions", str(max_solutions)]
     if distinct_host_sets:
         extra += ["--distinct-host-sets"]
+    if allow_shape_permutations:
+        # hidden: turn OFF generate_rank_bindings' always-on solver unique_shapes dedup
+        extra += ["--allow-shape-permutations"]
     cmd = _inject_solution_flags(cmd, extra)
 
     click.echo(f"{PREFIX} Phase 1 (generate solutions):\n  {' '.join(shlex.quote(c) for c in cmd)}")
@@ -211,7 +215,10 @@ def _build_tt_run_cmd(
 @click.option("--max-solutions", type=int, default=0,
               help="EXTRA: cap solutions generated in Phase 1 (0 = all). Forwarded to generate_rank_bindings.")
 @click.option("--distinct-host-sets", is_flag=True,
-              help="EXTRA: one solution per unique host set. Forwarded to generate_rank_bindings.")
+              help="EXTRA: keep only one solution per unique set of HOSTS (real host-set dedup). "
+                   "Forwarded to generate_rank_bindings.")
+@click.option("--allow-shape-permutations", is_flag=True, hidden=True,
+              help="(advanced/hidden) Disable generate_rank_bindings' always-on solver unique_shapes dedup.")
 @click.option("--select", type=str, default=None, help="EXTRA: only sweep these solution ids (comma-separated).")
 @click.option("--limit", type=int, default=None, help="EXTRA: sweep at most the first N solutions (index order).")
 @click.option("--per-solution-timeout", type=int, default=None, help="EXTRA: kill a launch after N seconds (=> timeout).")
@@ -242,6 +249,7 @@ def main(
     solutions_output_dir,
     max_solutions,
     distinct_host_sets,
+    allow_shape_permutations,
     select,
     limit,
     per_solution_timeout,
@@ -273,6 +281,7 @@ def main(
             output_dir=out,
             max_solutions=max_solutions,
             distinct_host_sets=distinct_host_sets,
+            allow_shape_permutations=allow_shape_permutations,
             mpi_args=parsed_mpi_args,
             dry_run=dry_run,
         )
@@ -328,8 +337,8 @@ def main(
                    f"({sol.get('num_hosts', '?')} hosts)\n  {cmd_str}")
 
         if dry_run:
-            results.append({"id": label, "status": "dry-run", "returncode": None, "duration_s": 0.0,
-                            "tt_run_command": cmd_str})
+            results.append({"solution_id": label, "status": "dry-run", "returncode": None,
+                            "duration_seconds": 0.0, "tt_run_command": cmd_str})
             continue
 
         log_path = logs_root / f"{label}.log"
@@ -348,9 +357,15 @@ def main(
 
         click.echo(f"{PREFIX}   -> {status} (rc={rc}, {dur}s)\n     log={log_path}")
         results.append({
-            "id": label, "status": status, "returncode": rc, "duration_s": dur,
-            "num_hosts": sol.get("num_hosts"), "host_set": sol.get("host_set"),
-            "tt_run_command": cmd_str, "log": str(log_path),
+            "solution_id": label,               # content hash = the solution subdirectory name
+            "status": status,                   # pass | fail | timeout | dry-run
+            "returncode": rc,                   # process exit code (null if it timed out)
+            "duration_seconds": dur,            # wall-clock for this solution's launch
+            "num_hosts": sol.get("num_hosts"),  # distinct physical hosts this solution occupies
+            "host_set": sol.get("host_set"),    # the hosts (per-host cluster descriptor / hostname)
+            "tt_run_command": cmd_str,          # exact tt-run command run for this solution (copy-paste to re-run)
+            "rank_binding_path": str((sol_dir / sol["dir"] / "rank_bindings.yaml").resolve()),
+            "log_path": str(log_path),          # full stdout+stderr of this solution's launch
         })
         if status != "pass" and stop_on_failure:
             click.echo(f"{PREFIX} --stop-on-failure: halting after {label}.")
@@ -362,15 +377,29 @@ def main(
     timed_out = sum(r["status"] == "timeout" for r in results)
     report = {
         "mesh_graph_desc_path": index.get("mesh_graph_desc_path"),
-        "command": program,
+        "solutions_dir": str(sol_dir),
+        # The workload run once per solution, as a single-line command string.
+        "workload_command": " ".join(shlex.quote(p) for p in program),
+        # Enumeration metadata copied from solutions_index.yaml:
+        #   mode           = all | distinct-host-sets
+        #   max_solutions  = requested cap (0 = all up to the solver safety cap)
+        #   found          = number of distinct solutions generated
+        #   truncated      = true if the cap bounded the result (more solutions may exist)
         "enumeration": index.get("enumeration"),
-        "summary": {"total": len(results), "passed": passed, "failed": failed, "timed_out": timed_out},
+        # Tally across the solutions actually swept this run.
+        "summary": {
+            "total": len(results),        # solutions attempted
+            "passed": passed,             # workload exit code 0
+            "failed": failed,             # workload non-zero exit
+            "timed_out": timed_out,       # killed by --per-solution-timeout
+        },
         "results": results,
     }
     report_path = Path(sweep_report).resolve() if sweep_report else (sol_dir / "sweep_report.yaml")
     if not dry_run:
         with open(report_path, "w") as f:
-            yaml.safe_dump(report, f, sort_keys=False)
+            # width=inf keeps long values (tt_run_command, paths) on a single line instead of YAML-wrapping them.
+            yaml.safe_dump(report, f, sort_keys=False, default_flow_style=False, width=float("inf"))
         click.echo(f"\n{PREFIX} Report: {report_path}")
 
     click.echo(f"{PREFIX} SUMMARY: {passed}/{len(results)} passed"
