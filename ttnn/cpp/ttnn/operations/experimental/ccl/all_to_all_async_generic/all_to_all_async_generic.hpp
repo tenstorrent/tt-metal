@@ -22,14 +22,4 @@ ttnn::Tensor all_to_all_async_generic(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt);
 
-ttnn::Tensor all_to_all_async_2d(
-    const ttnn::Tensor& input_tensor,
-    int32_t in_dim,
-    int32_t out_dim,
-    const std::optional<Tensor>& persistent_output_buffer = std::nullopt,
-    std::optional<uint32_t> num_links = std::nullopt,
-    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-    std::optional<uint32_t> cluster_axis = std::nullopt);
-
 }  // namespace ttnn::experimental
