@@ -47,6 +47,9 @@ namespace tt::tt_metal::experimental {
 // Type used for unpack_modes; see configuration structs below for details
 using ComputeUnpackModes = Table<DFBSpecName, tt::tt_metal::UnpackMode>;
 
+// Compute configuration for Gen1 architectures:
+//  - Wormhole  (TT-1.1.0)
+//  - Blackhole (TT-1.2.0)
 struct ComputeGen1Config {
     ////////////////////////////////////////////////
     // General accuracy / performance tradeoffs
@@ -108,7 +111,7 @@ struct ComputeGen1Config {
     //    (Precision is lost for FP32; 32-bit integers are truncated).
     //  - This is the fastest option on Wormhole and Blackhole.
     //
-    // UnpackToDest should be used (on Gen1 architectures) only if:
+    // UnpackToDest should be used (on Wormhole and Blackhole) only if:
     //  - The data format has 32-bit precision, AND enable_32_bit_dest is set to true
     //  - You want to preserve the full precision
     //  - The data will be consumed by the SFPU (not the FPU)
@@ -120,6 +123,9 @@ struct ComputeGen1Config {
     ComputeUnpackModes unpack_modes;
 };
 
+// Compute configuration for Gen2 architectures:
+//  - Quasar (TT-2.0.0)
+//  - Quasar derivatives (TT-2.0.x)
 struct ComputeGen2Config {
     ////////////////////////////////////////////////
     // General accuracy / performance tradeoffs
@@ -150,9 +156,9 @@ struct ComputeGen2Config {
     //       Dest, so UnpackMode=UnpackToDest is the preferred mode for any SFPU-consumed data.
     ComputeUnpackModes unpack_modes;
 
-    ////////////////////////////////////////////////
-    // Temporary hacks (these will change)
-    ////////////////////////////////////////////////
+    ///////////////////////////////////////////
+    // Temporary configs (these will change!)
+    ///////////////////////////////////////////
 
     // When true, the unpacker packs two values into each source-register slot instead of one.
     // The math engine reads twice as many elements per pass, effectively doubling throughput.
@@ -168,8 +174,8 @@ struct ComputeGen2Config {
     // math results! Enable this setting ONLY for kernels whose inputs are consumed solely by
     // a matmul or a column reduce.
     //
-    // This API is not final and subject to change! It should most likely become a per-DFB
-    // setting, similar to unpack_modes.
+    // This API is not final and subject to change!
+    // It should most likely become a per-DFB setting, similar to unpack_modes.
     bool enable_2x_src_register = false;
 
     // Explicitly route this kernel's unpacked operands into dest
