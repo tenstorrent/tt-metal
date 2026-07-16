@@ -184,6 +184,30 @@ class TestYUVConversion:
             ttnn.close_device(device)
 
 
+class TestYUVValidation:
+    """Op validation: unsupported configs must be rejected, not silently run."""
+
+    def test_sharded_output_rejected(self, expect_error):
+        H, W, T = 4, 4, 32
+        device = _make_device()
+        try:
+            cpu = torch.rand(3, H, W, T, dtype=torch.bfloat16) * 2.0 - 1.0
+            tt_in = ttnn.from_torch(cpu, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            coefficients = ttnn.experimental.YUVCoefficients(y=list(_Y_COEFF), cb=list(_CB_COEFF), cr=list(_CR_COEFF))
+
+            shard_spec = ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+                [H, W * T],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            sharded_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+            with expect_error(RuntimeError, "Sharded output is not supported"):
+                ttnn.experimental.yuv_conversion(tt_in, coefficients, memory_config=sharded_cfg)
+        finally:
+            ttnn.close_device(device)
+
+
 _SWEEP_H = [2, 4, 6, 10, 32, 64, 180]
 _SWEEP_W = [2, 4, 6, 14, 32, 64, 160]
 _SWEEP_T = [1, 2, 3, 16, 31, 32, 33, 64, 81]

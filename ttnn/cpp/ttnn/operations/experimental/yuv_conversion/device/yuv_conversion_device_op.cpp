@@ -10,6 +10,17 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
+// Sharded output is not supported and must never silently run. This gate is
+// called from compute_output_specs (which the framework runs before validate,
+// via create_output_tensors) so it fires before any sharded TensorSpec is
+// constructed, and from validate for defense-in-depth on the cache-hit path.
+static void reject_unsupported_output_memory_config(const MemoryConfig& mem_cfg) {
+    TT_FATAL(
+        mem_cfg.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Sharded output is not supported; output memory must be interleaved, got {}",
+        mem_cfg.memory_layout());
+}
+
 YUVConversionDeviceOperation::program_factory_t YUVConversionDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return YUVConversionProgramFactory{};
@@ -41,6 +52,8 @@ void YUVConversionDeviceOperation::validate_on_program_cache_miss(
         "Input memory must be interleaved, got {}",
         in.memory_config().memory_layout());
 
+    reject_unsupported_output_memory_config(attrs.output_memory_config);
+
     const auto& c = attrs.coefficients;
     for (int i = 0; i < 4; i++) {
         TT_FATAL(std::isfinite(c.y[i]), "y coefficient [{}] is not finite", i);
@@ -56,6 +69,8 @@ void YUVConversionDeviceOperation::validate_on_program_cache_hit(
 
 YUVConversionDeviceOperation::spec_return_value_t YUVConversionDeviceOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    reject_unsupported_output_memory_config(attrs.output_memory_config);
+
     const auto& shape = tensor_args.input.logical_shape();
     uint32_t H = shape[1], W = shape[2], T = shape[3];
 
