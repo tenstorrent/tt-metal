@@ -213,6 +213,26 @@ class Qwen36ModelArgs(ModelArgs):
             use_height_and_width_as_shard_shape=True,
         )
 
+    def ccl_topology(self):
+        """Force Linear reduce-scatter on the 8-device P150 LINE mesh (MESH_DEVICE="(1, 8)").
+
+        The base returns Topology.Ring for P150_X8, but this deployment opens it as a 1xN line
+        (a 1 in cluster_shape → no ring-closing dev(N-1)->dev0 link). A Ring reduce-scatter over
+        that line under-drains the shared, double-buffered fabric semaphores when a >1024-token
+        prefill rounds to the 2048 masked bucket (a full-bucket, 2x-load reduce-scatter over the
+        longer 8-hop chain); a later decode reduce-scatter then waits on the stale completion,
+        producing sporadic multi-second decode stalls that escalate to a device timeout
+        (system_memory_manager.cpp TT_THROW). Linear has no wraparound dependency and drains
+        cleanly. Scoped to num_devices>=8 lines so the validated 4-device Ring configs
+        (P300X2 / P150X4, which ring correctly) are untouched. Mirrors the base's own
+        "1x4 submesh does not support ring topology; fallback to linear" guard.
+        """
+        import ttnn
+
+        if self.num_devices >= 8 and 1 in tuple(getattr(self, "cluster_shape", ()) or ()):
+            return ttnn.Topology.Linear
+        return super().ccl_topology()
+
     def _set_hf_params(self, checkpoint_dir):
         # Load the HF config with trust_remote_code=True. Set the
         # flag before delegating so the base AutoConfig.from_pretrained call uses it.
