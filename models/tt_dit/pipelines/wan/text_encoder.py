@@ -88,6 +88,7 @@ class TextEncoder:
             subfolder="text_encoder",
             parallel_config=self._encoder_parallel_config,
             mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
             get_torch_state_dict=lambda: self._torch_text_encoder.state_dict(),
         )
 
