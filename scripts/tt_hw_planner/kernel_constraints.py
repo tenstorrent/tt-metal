@@ -39,12 +39,14 @@ class KernelFinding:
     field: str
     value: Any
     constraint: str
-    passes: bool
+    passes: Optional[bool]
     severity: Severity
     fix: str = ""
     source: str = ""
 
     def status_glyph(self) -> str:
+        if self.passes is None:
+            return "[ ?? ]"
         if self.passes:
             return "[ ok ]"
         if self.severity == Severity.WARN:
@@ -59,7 +61,7 @@ class KernelFinding:
             "field": self.field,
             "value": self.value,
             "constraint": self.constraint,
-            "passes": bool(self.passes),
+            "passes": self.passes,
             "severity": self.severity.value if isinstance(self.severity, Severity) else str(self.severity),
             "fix": self.fix or "",
             "source": self.source or "",
@@ -78,7 +80,7 @@ class KernelFinding:
             field=str(d.get("field") or ""),
             value=d.get("value"),
             constraint=str(d.get("constraint") or ""),
-            passes=bool(d.get("passes", False)),
+            passes=(lambda p: p if p is None else bool(p))(d.get("passes", False)),
             severity=sev or Severity.WARN,
             fix=str(d.get("fix") or ""),
             source=str(d.get("source") or ""),
@@ -99,7 +101,7 @@ def collect_actionable_findings(report: "KernelReport") -> List[KernelFinding]:
     out: List[KernelFinding] = []
     for findings in report.findings_by_tp.values():
         for f in findings:
-            if f.passes:
+            if f.passes is not False:
                 continue
             if f.severity not in (Severity.WARN, Severity.BLOCKER):
                 continue
@@ -131,14 +133,53 @@ def _g(cfg: dict, *keys, default=None):
     return default
 
 
+def normalize_config_value(v):
+    """Detect the FORMAT of a config value, then extract a scalar from it.
+
+    Returns ``(kind, scalar, detail)`` where:
+      kind   : 'scalar' | 'per_layer' | 'mapping' | 'unknown'
+      scalar : a single representative int (the max), or None if undeterminable
+      detail : the raw structure, so callers can react to heterogeneity
+
+    Never raises: any shape it does not recognize degrades to
+    ``('unknown', None, v)`` rather than crashing the caller.
+    """
+    if isinstance(v, bool):
+        return ("scalar", int(v), v)
+    if isinstance(v, (int, float)):
+        return ("scalar", int(v), v)
+    if isinstance(v, str):
+        s = v.strip()
+        return ("scalar", int(s), v) if s.lstrip("-").isdigit() else ("unknown", None, v)
+    if isinstance(v, dict):
+        nums = [normalize_config_value(x)[1] for x in v.values()]
+        nums = [n for n in nums if n is not None]
+        return ("mapping", max(nums) if nums else None, v)
+    if isinstance(v, (list, tuple)):
+        nums = [normalize_config_value(x)[1] for x in v]
+        nums = [n for n in nums if n is not None]
+        return ("per_layer", max(nums) if nums else None, v)
+    return ("unknown", None, v)
+
+
+def _cfg_int(v) -> Optional[int]:
+    """Representative scalar int of a config value, or None if undeterminable.
+
+    Thin wrapper over :func:`normalize_config_value` so config reads stay
+    shape-agnostic: a scalar passes through, a per-layer list/dict reduces to
+    its max, and any unrecognized shape degrades to None instead of raising.
+    """
+    return normalize_config_value(v)[1]
+
+
 def _head_dim(cfg: dict) -> Optional[int]:
-    hd = _g(cfg, "head_dim")
+    hd = _cfg_int(_g(cfg, "head_dim"))
     if hd:
-        return int(hd)
-    h = _g(cfg, "hidden_size", "dim")
-    n = _g(cfg, "num_attention_heads", "n_heads")
+        return hd
+    h = _cfg_int(_g(cfg, "hidden_size", "dim"))
+    n = _cfg_int(_g(cfg, "num_attention_heads", "n_heads"))
     if h and n:
-        return int(h) // int(n)
+        return h // n
     return None
 
 
@@ -152,9 +193,9 @@ def _is_mla(cfg: dict) -> bool:
 def check_attention_shapes(cfg: dict, tp: int) -> List[KernelFinding]:
     """Predicates from sdpa_device_operation.cpp and the matmul backing QKV."""
     out: List[KernelFinding] = []
-    h = _g(cfg, "hidden_size", "dim")
-    nh = _g(cfg, "num_attention_heads", "n_heads")
-    nkv = _g(cfg, "num_key_value_heads", "n_kv_heads", default=nh)
+    h = _cfg_int(_g(cfg, "hidden_size", "dim"))
+    nh = _cfg_int(_g(cfg, "num_attention_heads", "n_heads"))
+    nkv = _cfg_int(_g(cfg, "num_key_value_heads", "n_kv_heads", default=nh))
     hd = _head_dim(cfg)
     mla = _is_mla(cfg)
 
@@ -177,7 +218,8 @@ def check_attention_shapes(cfg: dict, tp: int) -> List[KernelFinding]:
         rope_hd = t.get("qk_rope_head_dim")
         nope_hd = t.get("qk_nope_head_dim")
         v_hd = t.get("v_head_dim")
-        for name, val in [("qk_rope_head_dim", rope_hd), ("qk_nope_head_dim", nope_hd), ("v_head_dim", v_hd)]:
+        for name, _raw in [("qk_rope_head_dim", rope_hd), ("qk_nope_head_dim", nope_hd), ("v_head_dim", v_hd)]:
+            val = _cfg_int(_raw)
             if val is None:
                 continue
             out.append(
@@ -186,7 +228,7 @@ def check_attention_shapes(cfg: dict, tp: int) -> List[KernelFinding]:
                     field=name,
                     value=val,
                     constraint=f"{name} must be a multiple of TILE({TILE})",
-                    passes=(int(val) % TILE == 0),
+                    passes=(val % TILE == 0),
                     severity=Severity.BLOCKER,
                     fix="MLA head dims are model-defined; mismatched values usually mean an unusual variant.",
                     source="ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp",
@@ -357,7 +399,7 @@ def check_rope_hf(cfg: dict, _tp: int) -> List[KernelFinding]:
 
 def check_rmsnorm(cfg: dict, _tp: int) -> List[KernelFinding]:
     """rmsnorm.cpp / layernorm_device_operation.cpp - TILE layout, last dim aligned."""
-    h = _g(cfg, "hidden_size", "dim")
+    h = _cfg_int(_g(cfg, "hidden_size", "dim"))
     if h is None:
         return []
     return [
@@ -377,7 +419,7 @@ def check_rmsnorm(cfg: dict, _tp: int) -> List[KernelFinding]:
 def check_mlp_shapes(cfg: dict, tp: int) -> List[KernelFinding]:
     """MLP / SwiGLU: gate_up and down projections share intermediate_size."""
     out: List[KernelFinding] = []
-    inter = _g(cfg, "intermediate_size", "hidden_dim")
+    inter = _cfg_int(_g(cfg, "intermediate_size", "hidden_dim"))
     if inter is None:
         return out
 
@@ -414,7 +456,7 @@ def check_mlp_shapes(cfg: dict, tp: int) -> List[KernelFinding]:
 def check_embedding(cfg: dict, _tp: int) -> List[KernelFinding]:
     """embedding_device_operation.cpp: BF16 weights only; tilized-output alignment."""
     out: List[KernelFinding] = []
-    vocab = _g(cfg, "vocab_size")
+    vocab = _cfg_int(_g(cfg, "vocab_size"))
     if vocab is None:
         return out
 
@@ -436,7 +478,7 @@ def check_embedding(cfg: dict, _tp: int) -> List[KernelFinding]:
 def check_lm_head(cfg: dict, tp: int) -> List[KernelFinding]:
     """LM head: vocab sharded across TP via column-split matmul."""
     out: List[KernelFinding] = []
-    vocab = _g(cfg, "vocab_size")
+    vocab = _cfg_int(_g(cfg, "vocab_size"))
     if vocab is None or tp <= 1:
         return out
 
@@ -461,7 +503,7 @@ def check_lm_head(cfg: dict, tp: int) -> List[KernelFinding]:
 
 def check_topk(cfg: dict, _tp: int) -> List[KernelFinding]:
     """topk_device_operation.cpp: multi-core requires dim power-of-2, k<=64, dim<65536."""
-    vocab = _g(cfg, "vocab_size")
+    vocab = _cfg_int(_g(cfg, "vocab_size"))
     if vocab is None:
         return []
     v = int(vocab)
@@ -488,31 +530,41 @@ def check_moe(cfg: dict, _tp: int) -> List[KernelFinding]:
         return []
     out: List[KernelFinding] = []
 
-    top_k = t.get("num_experts_per_tok") or t.get("moe_topk")
-    if top_k is not None:
+    tk_kind, tk, tk_raw = normalize_config_value(t.get("num_experts_per_tok") or t.get("moe_topk"))
+    if tk_raw is not None:
+        tk_hetero = tk_kind in ("per_layer", "mapping")
         out.append(
             KernelFinding(
                 op="models/tt_transformers/tt/mixtral_moe.py",
                 field="num_experts_per_tok",
-                value=top_k,
-                constraint="shared MoE block hardcodes top-2 routing",
-                passes=(int(top_k) == 2),
-                severity=Severity.WARN,
+                value=tk_raw,
+                constraint=(
+                    "shared MoE block hardcodes top-2 routing"
+                    + (" (per-layer top-k varies; the shared block supports only a single top-2)" if tk_hetero else "")
+                ),
+                passes=(None if tk is None else (tk == 2)),
+                severity=(Severity.INFO if tk is None else Severity.WARN),
                 fix="Lift mixtral_moe.py to parameterize top-k, or use the model-specific MoE in models/demos/{gpt_oss,deepseek_v3}.",
                 source="models/tt_transformers/tt/mixtral_moe.py",
             )
         )
 
-    num_experts = t.get("num_local_experts") or t.get("num_experts") or t.get("n_routed_experts")
-    if num_experts is not None:
+    ne_kind, ne, ne_raw = normalize_config_value(
+        t.get("num_local_experts") or t.get("num_experts") or t.get("n_routed_experts")
+    )
+    if ne_raw is not None:
+        ne_hetero = ne_kind in ("per_layer", "mapping")
         out.append(
             KernelFinding(
                 op="models/tt_transformers/tt/mixtral_moe.py",
                 field="num_local_experts",
-                value=num_experts,
-                constraint="shared MoE block assumes num_experts == 8 (one expert per device on a T3K)",
-                passes=(int(num_experts) == 8),
-                severity=Severity.WARN,
+                value=ne_raw,
+                constraint=(
+                    "shared MoE block assumes num_experts == 8 (one expert per device on a T3K)"
+                    + (" (per-layer expert count varies)" if ne_hetero else "")
+                ),
+                passes=(None if ne is None else (ne == 8)),
+                severity=(Severity.INFO if ne is None else Severity.WARN),
                 fix="Use a per-model MoE in demos, or refactor the shared block to parameterize expert count.",
                 source="models/tt_transformers/tt/mixtral_moe.py",
             )
@@ -715,16 +767,16 @@ class KernelReport:
         """tp -> [findings that depend on TP and FAIL at that TP]."""
         out = {}
         for tp, findings in self.findings_by_tp.items():
-            tp_findings = [f for f in findings if "TP(" in f.constraint and not f.passes]
+            tp_findings = [f for f in findings if "TP(" in f.constraint and f.passes is False]
             if tp_findings:
                 out[tp] = tp_findings
         return out
 
     def has_blockers(self, tp: Optional[int] = None) -> bool:
         if tp is not None:
-            return any(not f.passes and f.severity == Severity.BLOCKER for f in self.findings_by_tp.get(tp, []))
+            return any(f.passes is False and f.severity == Severity.BLOCKER for f in self.findings_by_tp.get(tp, []))
         return any(
-            not f.passes and f.severity == Severity.BLOCKER
+            f.passes is False and f.severity == Severity.BLOCKER
             for findings in self.findings_by_tp.values()
             for f in findings
         )

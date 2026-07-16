@@ -457,9 +457,9 @@ def render_compat_table(
 def _render_kernel_section(kr: KernelReport, p, *, verbose: bool, chips: Optional[int] = None) -> None:
     """Render the kernel constraints table inside a compat report."""
     shape = kr.shape_findings
-    blockers_shape = [f for f in shape if not f.passes and f.severity == Severity.BLOCKER]
-    warns_shape = [f for f in shape if not f.passes and f.severity == Severity.WARN]
-    info_shape = [f for f in shape if not f.passes and f.severity == Severity.INFO]
+    blockers_shape = [f for f in shape if f.passes is False and f.severity == Severity.BLOCKER]
+    warns_shape = [f for f in shape if f.passes is False and f.severity == Severity.WARN]
+    info_shape = [f for f in shape if f.passes is not True and f.severity == Severity.INFO]
 
     p(f"{'STATUS':<7} {'OP':<48} {'FIELD':<24} CONSTRAINT")
     p("-" * 92)
