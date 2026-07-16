@@ -18,6 +18,12 @@ struct RandnDeviceOperation {
         MeshDevice* device;
         const DeviceComputeKernelConfig compute_kernel_config;
         std::optional<uint32_t> seed;
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("device", "shape", "dtype", "layout", "memory_config", "compute_kernel_config");
+        auto attribute_values() const {
+            return std::forward_as_tuple(device, shape, dtype, layout, memory_config, compute_kernel_config);
+        }
     };
 
     struct tensor_args_t {};
@@ -52,7 +58,6 @@ struct RandnDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::randn
