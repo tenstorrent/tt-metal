@@ -24,7 +24,6 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     const auto& a = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
 
-    // Input is already tiled; its tile shape differs from the requested output tile shape.
     const Tile& input_tile = a.tensor_spec().tile();
     const Tile& output_tile = operation_attributes.tile;
 
@@ -53,12 +52,9 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_cb_data_format);
-    // Intermediate page = input tile size: untilize (the producer) writes one input tile of RM
-    // per page. The consumer (tilize) addresses output tile-rows by byte offset within the CB,
-    // independent of the page size.
     const uint32_t mid_page_size = input_single_tile_size;
-    // The intermediate bytes are in the input data format throughout (conversion happens on the
-    // final pack to the output CB), so the consumer view sizes an output tile in the input format.
+    // The intermediate stays in the input data format (conversion happens on the final pack), so
+    // the consumer view sizes an output tile in the input format, not the output format.
     const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
@@ -77,20 +73,19 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     TT_FATAL(tensor_height % in_tile_height == 0, "Tensor height must be divisible by input tile height");
     TT_FATAL(tensor_height % out_tile_height == 0, "Tensor height must be divisible by output tile height");
 
-    const uint32_t tiles_per_block = tensor_width / in_tile_width;  // == width / out_tile_width
+    const uint32_t tiles_per_block = tensor_width / in_tile_width;
     const uint32_t num_input_tile_rows = tensor_height / in_tile_height;
     const uint32_t num_output_tile_rows = tensor_height / out_tile_height;
 
-    // In the grow case the padded output can be taller than the real (padded) input, so some of the
-    // trailing input tile-rows do not exist in DRAM. Only the real rows are read; the compute kernel
-    // zero-fills the rest into the intermediate CB (instead of reading invalid input as padding).
+    // In the grow case the padded output can be taller than the real input, so some trailing input
+    // tile-rows don't exist in DRAM. Only these real rows are read; the compute kernel zero-fills
+    // the rest rather than reading invalid input.
     const uint32_t num_real_input_tile_rows = a.physical_volume() / tensor_width / in_tile_height;
 
-    // SHRINK: 1 input tile-row -> `ratio` output tile-rows. GROW: `ratio` input tile-rows -> 1 output tile-row.
     const uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
 
     // Split by whole tile-rows of the taller tile so each core's work maps to whole tile-rows on
-    // both sides: shrink splits input tile-rows, grow splits output tile-rows.
+    // both sides.
     const uint32_t num_split_units = shrink ? num_input_tile_rows : num_output_tile_rows;
 
     auto* device = a.device();
@@ -126,18 +121,10 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         }}},
     });
 
-    // Single intermediate RM allocation, shared by untilize (producer) and tilize (consumer) — no
-    // L1 copy between them. Double-buffered so the reader/writer overlap with compute.
-    //
-    // Two aliased views over the same L1 region (the producer and consumer need different tile/face
-    // geometry, which is fixed per-CB at program-creation time):
-    //   c_1 (input geometry):  what pack_untilize writes into — one input tile of RM per page.
-    //   c_2 (output geometry): what tilize reads from — so llk_unpack_tilize uses the output tile's
-    //                          face_r_dim/num_faces and reads the correct number of RM rows. The
-    //                          bytes are still in the input data format (conversion happens on the
-    //                          final pack), hence the input-format tile size for the view page.
-    // The consumer view has no independent producer; the compute kernel points its fifo_rd_ptr at
-    // the producer's block base each iteration. Kernels must not call get_tile_size() on either.
+    // c_1 and c_2 are two views over one shared intermediate L1 region (avoids an L1 copy between
+    // untilize and tilize). They must be separate CBs because face geometry is fixed per-CB at
+    // program-creation time: c_1 carries the input tile shape for pack_untilize to write into, c_2
+    // the output tile shape so llk_unpack_tilize reads the correct number of RM rows.
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * mid_pages_per_out_block * mid_page_size,
         .core_ranges = all_cores,
@@ -259,7 +246,7 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         // nblocks_per_core is in split units (input tile-rows if shrink, output tile-rows if grow).
         const uint32_t input_rows = shrink ? nblocks_per_core : nblocks_per_core * ratio;
         const uint32_t output_rows = shrink ? nblocks_per_core * ratio : nblocks_per_core;
-        const uint32_t num_input_blocks = input_rows;  // compute kernel derives its outer loop from this
+        const uint32_t num_input_blocks = input_rows;
         // Padding is always at the tail (highest rows), so this core's real rows are a prefix.
         const uint32_t core_row_start = input_tile_start_id / tiles_per_block;
         const uint32_t real_rows = core_row_start >= num_real_input_tile_rows

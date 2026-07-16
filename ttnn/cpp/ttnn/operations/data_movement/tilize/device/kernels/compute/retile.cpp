@@ -11,38 +11,15 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
-// Fused retile: untilize input tiles → intermediate RM → tilize to output tile shape.
-//
-// A single intermediate RM allocation is used for both untilize output and tilize input, avoiding
-// an L1 copy. It is exposed as two aliased CB views over the same L1 (the producer and consumer
-// need different tile/face geometry, which is fixed per-CB at program-creation time):
-//   mid_cb      — input tile geometry; pack_untilize (producer) writes one input tile of RM/page.
-//   mid_view_cb — output tile geometry; llk_unpack_tilize (consumer) reads with the output tile's
-//                 face_r_dim/num_faces so it consumes the correct number of RM rows.
-// The consumer view has no independent producer, so we point its fifo_rd_ptr at the producer's
-// block base each iteration. Never call get_tile_size() on either view; use the out_tile_size CT
-// arg (input data format) for byte offsets.
-//
-// Two regimes, selected at compile time from the tile heights (one must divide the other exactly):
-//
-//   SHRINK (in_tile_height >= out_tile_height), ratio = in_tile_height / out_tile_height:
-//     One untilized input tile-row holds `ratio` output tile-rows of RM. The consumer reads them
-//     as `ratio` consecutive output tile-rows via fifo_rd_ptr offsets (their byte offsets are not
-//     CB-page aligned, so pops can't express them), then pops the whole input tile-row once.
-//
-//   GROW (out_tile_height > in_tile_height), ratio = out_tile_height / in_tile_height:
-//     `ratio` untilized input tile-rows land contiguously and form exactly one output tile-row of
-//     RM. A single tilize reads the whole block (one output tile-row).
-//
-// Height padding (grow): the padded output can be taller than the real (padded) input — the tail
-// input tile-rows do not exist in DRAM. `num_real_input_rows` (runtime) marks how many of this
-// core's input tile-rows are real; the rest are filled with zeros directly into the intermediate
-// CB (no read of invalid input), so the padded output region is zero.
+// Retile: untilize input tiles into an intermediate row-major buffer, then tilize into the output
+// tile shape. The intermediate is a single L1 allocation shared by untilize (producer) and tilize
+// (consumer) to avoid a copy, exposed as two aliased CB views because the producer and consumer
+// need different fixed tile/face geometry: mid_cb has the input tile shape, mid_view_cb the output
+// tile shape (its bytes stay in the input data format; conversion happens on the final pack).
 
 namespace {
 
-// Producer-side zero fill: reserve `num_pages` on the intermediate CB, zero the L1 bytes (PACK
-// owns the valid write pointer), and push. Used for padding input tile-rows in the grow case.
+// PACK owns the valid write pointer, so the zero fill runs inside a PACK block.
 ALWI void fill_zeros_pages(DataflowBuffer& dfb, uint32_t num_pages, uint32_t page_size) {
     dfb.reserve_back(num_pages);
     PACK({
@@ -81,13 +58,14 @@ void kernel_main() {
             (out_tile_height > in_tile_height && (out_tile_height % in_tile_height) == 0),
         "retile kernel requires one tile height to divide the other exactly");
 
+    // Shrink: one input tile-row untilizes to `ratio` output tile-rows. Grow: `ratio` input
+    // tile-rows form one output tile-row. One tile height must divide the other exactly.
     constexpr bool shrink = in_tile_height >= out_tile_height;
     constexpr uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
 
-    // Per outer iteration: input tile-rows consumed and output tile-rows produced.
     constexpr uint32_t in_rows_per_iter = shrink ? 1u : ratio;
     constexpr uint32_t out_rows_per_iter = shrink ? ratio : 1u;
-    constexpr uint32_t block_pages = in_rows_per_iter * tiles_per_block;  // producer pages per iteration
+    constexpr uint32_t block_pages = in_rows_per_iter * tiles_per_block;
     constexpr uint32_t words_per_out_tile_row = (tiles_per_block * out_tile_size) >> 4;
 
     const uint32_t num_iters = num_input_blocks / in_rows_per_iter;
@@ -98,8 +76,8 @@ void kernel_main() {
     DataflowBuffer out_dfb(out_cb);
 
     for (uint32_t b = 0; b < num_iters; ++b) {
-        // Split this iteration's input tile-rows into real rows (untilized from the input) and
-        // padding rows (beyond the real input) that are zero-filled directly into the intermediate.
+        // Rows beyond num_real_input_rows are grow-case height padding: they don't exist in DRAM,
+        // so they are zero-filled into the intermediate instead of untilized from the input.
         const uint32_t block_in_row_start = b * in_rows_per_iter;
         uint32_t real_rows = 0;
         if (block_in_row_start < num_real_input_rows) {
@@ -108,7 +86,6 @@ void kernel_main() {
         }
         const uint32_t pad_rows = in_rows_per_iter - real_rows;
 
-        // Untilize the real input tile-row(s) for this output block into the producer view.
         if (real_rows > 0) {
             compute_kernel_lib::untilize<
                 tiles_per_block,
@@ -118,7 +95,6 @@ void kernel_main() {
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(real_rows);
         }
-        // Zero the padding tile-row(s) so the padded output region is zero instead of invalid data.
         for (uint32_t k = 0; k < pad_rows; ++k) {
             fill_zeros_pages(mid, tiles_per_block, mid_page_size);
         }
@@ -127,8 +103,9 @@ void kernel_main() {
         uint32_t block_rd_ptr = 0;
         UNPACK({ block_rd_ptr = get_local_cb_interface(mid_cb).fifo_rd_ptr; })
 
-        // Consume the block through the output-geometry view. Each output tile-row starts at a
-        // byte offset within the block; point the view's rd_ptr there before each tilize.
+        // mid_view_cb aliases the mid_cb L1 region but has no producer of its own, and its output
+        // tile-rows sit at non-page-aligned byte offsets within the block that pops can't express.
+        // So set its fifo_rd_ptr directly to the block base plus each output tile-row's offset.
         tilize_init(mid_view_cb, tiles_per_block, out_cb);
         for (uint32_t r = 0; r < out_rows_per_iter; ++r) {
             UNPACK({ get_local_cb_interface(mid_view_cb).fifo_rd_ptr = block_rd_ptr + r * words_per_out_tile_row; })
