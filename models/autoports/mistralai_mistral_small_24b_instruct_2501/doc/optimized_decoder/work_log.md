@@ -371,5 +371,11 @@ gate; `gzip -dk ops.csv.gz` restores the report input.
 
 ## Checkpoint
 
-The local optimized-stage commit SHA is appended here after independent
-`$stage-review` returns clean-pass. No push is performed.
+The final fresh-context `$stage-review` returned `clean-pass` with no required
+work after independently recomputing the profiler totals and checking the
+advisor, correctness, capacity, watcher, and expected-failure artifacts.
+
+- Optimized implementation/artifact checkpoint:
+  `92f5a3cbf5c64708212a26938a33c7af00c55480`.
+- This documentation-only follow-up records that review and checkpoint; its
+  SHA is reported at handoff. No push was performed.
