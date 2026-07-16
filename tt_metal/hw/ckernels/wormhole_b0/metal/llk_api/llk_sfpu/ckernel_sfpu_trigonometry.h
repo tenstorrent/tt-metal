@@ -522,7 +522,9 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     // asin(x) = pi/2 - 2 * asin(sqrt((1 - |x|) / 2)).
     sfpi::vFloat reduced = _sfpu_sqrt_endpoint_(half_d);
 
-    v_if(x_abs < switchover) { reduced = x_abs; }
+    sfpi::vFloat tmp = x_abs - switchover;
+
+    v_if(tmp < 0.0f) { reduced = x_abs; }
     v_endif;
 
     // Minimax approximation for asin(reduced) on [0, SWITCHOVER].
@@ -543,7 +545,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     polynomial *= square;
     result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    v_if(x_abs >= switchover) {
+    v_if(tmp >= 0.0f) {
         sfpi::vFloat pio2_fac1 = 0.93318945f;
         sfpi::vFloat pio2_fac2 = 1.68325555f;
         sfpi::vFloat negative_twice_result = -2.0f * result;
@@ -610,7 +612,7 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     }
     v_endif;
 
-    v_if(x_abs >= SWITCHOVER) { result += result; }
+    v_if(tmp >= 0.0f) { result += result; }
     v_endif;
 
     v_if(half_d < 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
