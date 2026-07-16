@@ -524,6 +524,14 @@ jobs:
               google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
             esac
 
+            # Pin xgrammar to the tenstorrent-fork baseline (0.1.29) over the
+            # upstream-0.24 pin (0.2.3) to test whether the grammar engine is
+            # the structured-output regression. --no-deps leaves vLLM untouched;
+            # the upstream 0.24 backend targets the 0.2.x API, so this may fail
+            # to import (inconclusive) rather than downgrade cleanly.
+            uv pip install --force-reinstall --no-deps xgrammar==0.1.29
+            python3 -c "import xgrammar; print('xgrammar', xgrammar.__version__)"
+
       - name: ⬇️ Checkout vLLM benchmark sources
         run: |
           VLLM_VERSION="$(python3 -c 'from importlib.metadata import version; print(version("vllm").split("+", 1)[0])')"
