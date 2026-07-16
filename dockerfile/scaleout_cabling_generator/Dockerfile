@@ -14,7 +14,11 @@
 #   - tools/      : the tt-metal source checkout (for the Python driver script)
 # This mirrors how dockerfile/upstream_test_images/Dockerfile.template consumes _tt-metal/build.
 
-FROM mirror.gcr.io/ubuntu:22.04
+# Must match the Ubuntu version the binary was built against (build-artifact platform),
+# otherwise the binary can require a newer glibc than the runtime base provides. The
+# workflow passes this as a build-arg derived from its `platform` input.
+ARG UBUNTU_VERSION=22.04
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION}
 
 ENV DEBIAN_FRONTEND=noninteractive
 

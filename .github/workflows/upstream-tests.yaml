@@ -284,13 +284,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Compute tags
+      - name: Compute tags and Ubuntu version
         id: tags
         run: |
           suffix="${{ needs.get-image-tags.outputs.image-tag-suffix }}"
           TAGS="${{ env.CABLING_GENERATOR_IMAGE_NAME }}:${suffix}"
-          # Move :latest only on main (scheduled runs on main and dispatches from main).
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          # Move :latest on main, or when explicitly requested for a non-main dispatch.
+          # Mirrors the push-latest job's update-latest-via-branch gating so this image
+          # doesn't go stale relative to the upstream test images.
+          if [ "${{ github.ref }}" = "refs/heads/main" ] || [ "${{ inputs.update-latest-via-branch }}" = "true" ]; then
             TAGS="${TAGS}"$'\n'"${{ env.CABLING_GENERATOR_IMAGE_NAME }}:latest"
           fi
           {
@@ -298,6 +300,10 @@ jobs:
             echo "$TAGS"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          # Runtime base must match the version the binary was built against so glibc
+          # is compatible. "Ubuntu 22.04" -> "22.04", "Ubuntu 24.04" -> "24.04".
+          platform="${{ inputs.platform || 'Ubuntu 22.04' }}"
+          echo "ubuntu-version=${platform#Ubuntu }" >> "$GITHUB_OUTPUT"
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -306,6 +312,8 @@ jobs:
           pull: true
           tags: ${{ steps.tags.outputs.tags }}
           context: ${{ github.workspace }}
+          build-args: |
+            UBUNTU_VERSION=${{ steps.tags.outputs.ubuntu-version }}
           outputs: |
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
   test-wh-6u-image:
