@@ -305,3 +305,9 @@ explicitly confirmed that the prior P1 is closed by the five HF-checked actual
 replays, bit-exact repeats, original/refreshed K/V append checks, and changed
 HF-matching output after refreshing the exact captured input. No material
 blockers remained.
+
+## Local commits
+
+- Stage implementation/evidence commit: `8b2656be7cc` (`Add optimized Llama
+  3.1 8B decoder`). All repository pre-commit hooks passed.
+- This work-log-only follow-up records the stage SHA. Nothing was pushed.
