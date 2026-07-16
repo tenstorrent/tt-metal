@@ -342,6 +342,12 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
         return mapped_dst_type;
     }
 
+    // int8 is a storage-only dtype: host to_dtype from/to int8 is unsupported. Keep an
+    // int8 host buffer only for an int8 -> int8 borrow.
+    if (to_ttnn_dtype(src_dtype) == DataType::INT8 && dst_dtype != DataType::INT8) {
+        return mapped_dst_type;
+    }
+
     if (is_sharded && get_datatype_tile_size(dst_dtype) != get_datatype_tile_size(to_ttnn_dtype(src_dtype))) {
         // Sharded typecast does not support conversion between tensors with types of different tile size:
         // See explicit assertion in the `TypecastShardedProgramFactory::create` method implementation.
