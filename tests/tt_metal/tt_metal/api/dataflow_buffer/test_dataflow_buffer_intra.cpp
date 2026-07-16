@@ -8,7 +8,6 @@
 
 namespace tt::tt_metal {
 
-
 // legacy intra-Tensix self-loop harness + test
 static void run_intra_tensix_dfb_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
@@ -36,7 +35,8 @@ static void run_intra_tensix_dfb_program(
     TT_FATAL(
         num_entries % num_threads == 0,
         "num_entries ({}) must be divisible by num_threads ({}) for intra-tensix block partitioning",
-        num_entries, num_threads);
+        num_entries,
+        num_threads);
     const uint32_t entries_per_neo = num_entries / num_threads;
 
     const experimental::DFBSpecName INTRA_DFB{"intra_dfb"};
@@ -77,7 +77,7 @@ static void run_intra_tensix_dfb_program(
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -100,11 +100,9 @@ static void run_intra_tensix_dfb_program(
     experimental::SetProgramRunArgs(program, run_params);
 
     const uint32_t total_size = num_entries * entry_size;
-    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
-        0, 100, total_size / sizeof(uint32_t));
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
 
-    const uint32_t dfb_l1_addr =
-        static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+    const uint32_t dfb_l1_addr = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
 
     detail::WriteToDeviceL1(device, logical_core, dfb_l1_addr, input);
 
@@ -224,11 +222,13 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     params.kernel_run_args = {
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{
             .kernel = CONSUMER,
-            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+            .runtime_arg_values =
+                m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}),
         },
         m2::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -425,7 +425,8 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
         {.kernel = PRODUCER,
-         .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}},
+         .runtime_arg_values =
+             m2::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}})},
     };
     params.tensor_args = {{IN_TENSOR, std::cref(in_tensor)}};
     m2::SetProgramRunArgs(program, params);

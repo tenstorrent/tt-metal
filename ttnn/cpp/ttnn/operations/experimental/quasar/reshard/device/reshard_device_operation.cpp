@@ -18,6 +18,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
 
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig& out_mem_config) {
     auto inp_mem_layout = input_tensor.memory_config().memory_layout();
@@ -50,6 +51,7 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
     return true;
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
