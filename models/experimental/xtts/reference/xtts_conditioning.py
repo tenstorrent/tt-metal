@@ -45,7 +45,29 @@ MEL_WIN = 1024
 MEL_SR = 22050
 MEL_FMIN = 0
 MEL_FMAX = 8000
-COND_CHUNK_SEC = 6  # coqui chunks reference audio into 6s windows
+COND_CHUNK_SEC = 6  # legacy single-window length (kept for load_reference_audio default)
+
+# coqui get_gpt_cond_latents: condition on up to gpt_cond_len=30 s of reference audio,
+# split into gpt_cond_chunk_len=4 s windows, run get_style_emb per chunk and AVERAGE the
+# 32-latent style embeddings. We chunk the precomputed log-mel along time (equivalent to
+# chunking the audio, up to a few STFT-overlap frames at boundaries) and average.
+GPT_COND_LEN_SEC = 30  # gpt_cond_len / max_ref_len
+GPT_COND_CHUNK_SEC = 4  # gpt_cond_chunk_len
+COND_CHUNK_FRAMES = int(round(GPT_COND_CHUNK_SEC * MEL_SR / MEL_HOP))  # ~344 mel frames / chunk
+COND_MIN_CHUNK_FRAMES = 32  # drop a tiny trailing chunk (also keeps lengths tile-sane)
+
+
+def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUNK_FRAMES):
+    """Split a log-mel ``[b, 80, s]`` along time into ``gpt_cond_chunk_len`` windows for
+    coqui-style style-embedding averaging. Returns a list of ``[b, 80, <=chunk_frames]``
+    mels. A trailing window shorter than ``min_frames`` is dropped; a mel already shorter
+    than one chunk is returned as-is (single window == the previous behaviour, no change)."""
+    s = mel.shape[-1]
+    if s <= chunk_frames:
+        return [mel]
+    chunks = [mel[..., i : i + chunk_frames] for i in range(0, s, chunk_frames)]
+    kept = [c for c in chunks if c.shape[-1] >= min_frames]
+    return kept or [mel]
 
 
 # ---------------------------------------------------------------------------
