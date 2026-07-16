@@ -31,6 +31,8 @@
 // since one worker hosts many fibers. See tt-emule docs/fiber-engine.md.
 extern thread_local uint8_t my_x[2];
 extern thread_local uint8_t my_y[2];
+extern thread_local uint8_t my_logical_x_;
+extern thread_local uint8_t my_logical_y_;
 
 namespace tt::tt_metal::emule_fiber {
 
@@ -104,6 +106,19 @@ struct FiberSchedulerImpl {
     std::atomic<uint64_t> progress_{0};      // fiber completions + published pages (tier 2)
     std::atomic<uint64_t> resumptions_{0};   // swap-ins (tier 2 livelock signal)
 
+    // Raw-L1-store lost-wakeup recovery watermarks (guarded by mu_; per-run — reset
+    // in run_until_idle alongside progress_/resumptions_). A kernel that advances a
+    // same-core handshake word with a raw L1 store (`*ptr = v`, no noc_semaphore_set)
+    // issues no __emule_fiber_wake, so a peer's noc_semaphore_wait can miss it. This
+    // surfaces two ways: livelock while busy-waiters churn (spin-starvation release),
+    // or true quiescence if every fiber parks at once (one-shot re-poll before the
+    // tier-1 deadlock abort). Both wake all parked fibers to re-check predicates;
+    // spurious-wake-safe (__emule_fiber_wait re-checks under lock), gated so healthy
+    // runs never trigger. See tt-emule docs/fiber-engine.md.
+    uint64_t last_progress_val_ = 0;
+    uint64_t last_progress_resump_ = 0;
+    uint64_t last_deadlock_repoll_progress_ = UINT64_MAX;  // sentinel = never re-polled
+
     size_t stack_bytes_ = 1u << 20;          // 1 MB default
 
     // Persistent worker pool, created once and reused: threads block on start_cv_
@@ -147,6 +162,8 @@ void FiberSchedulerImpl::install_fiber(Fiber* f) {
     __emule_self = f->owned_ctx.get();       // the single thread_local repoint
     my_x[0] = my_x[1] = f->id.phys_x;        // restore the silicon-named coords
     my_y[0] = my_y[1] = f->id.phys_y;
+    my_logical_x_ = static_cast<uint8_t>(f->id.logical_x);  // firmware LOGICAL coords
+    my_logical_y_ = static_cast<uint8_t>(f->id.logical_y);
 }
 
 void FiberSchedulerImpl::worker_main(unsigned w) {
@@ -182,8 +199,46 @@ void FiberSchedulerImpl::worker_main(unsigned w) {
 // Per-program scheduling loop. Pre: mu_ held. Post: mu_ held. Runs this program's fibers to
 // completion (active_ == 0) or to an abort (deadlock / kernel exception).
 void FiberSchedulerImpl::inner_loop(unsigned w) {
+    // Force-complete pending in-flight reads + wake all parked fibers once the
+    // scheduler churns this many resumptions with zero progress. Below the tier-2
+    // livelock backstop (TT_EMULE_FIBER_PROGRESS_WINDOW) and above healthy churn.
+    static const uint64_t spin_release_window = env_size("TT_EMULE_SPIN_RELEASE_WINDOW", 4096);
     for (;;) {
         if (abort_flag_) break;
+        // Spin-starvation release: a kernel busy-wait (do{invalidate_l1_cache();}while
+        // (<raw L1 word>)) yields every iteration, so the ready queue never empties and
+        // full quiescence is never reached — latency-parked reads never "complete" and a
+        // raw-store lost wakeup never re-checks. On churn past the window with zero
+        // progress, force-complete the reads AND wake every parked fiber to re-poll its
+        // predicate. Gated so healthy runs (progress advancing) never trigger.
+        if (!latency_parked_.empty() || !parked_.empty()) {
+            uint64_t p = progress_.load(std::memory_order_relaxed);
+            uint64_t r = resumptions_.load(std::memory_order_relaxed);
+            if (p != last_progress_val_) {
+                last_progress_val_ = p;
+                last_progress_resump_ = r;
+            } else if (r - last_progress_resump_ > spin_release_window) {
+                for (Fiber* f : latency_parked_) {
+                    f->state = FiberState::Ready;
+                    ready_[f->home].push_back(f);
+                }
+                latency_parked_.clear();
+                for (auto& kv : parked_) {
+                    Fiber* f = kv.second;
+                    while (f) {
+                        Fiber* nx = f->park_link;
+                        f->park_link = nullptr;
+                        f->park_key = nullptr;
+                        f->state = FiberState::Ready;
+                        ready_[f->home].push_back(f);
+                        f = nx;
+                    }
+                }
+                parked_.clear();
+                cv_.notify_all();
+                last_progress_resump_ = r;  // re-arm; don't re-fire until more churn
+            }
+        }
         if (ready_[w].empty()) {
             if (active_ == 0) break;
             ++idle_;
@@ -206,8 +261,35 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                     --idle_;
                     continue;
                 }
-                // Tier-1 quiescent deadlock: nothing to release and fibers still sync-parked.
+                // Fibers still sync-parked at quiescence. Before declaring a tier-1
+                // deadlock, do a one-shot re-poll: wake every parked fiber so it
+                // re-checks its __emule_fiber_wait predicate (recovers a raw-L1-store
+                // lost wakeup when every fiber parked at once). Keyed off a progress
+                // watermark: if progress advanced since the last re-poll (or this is
+                // the first), the wake-all may unblock a waiter whose word a raw store
+                // already set — try it; if a re-poll yields no new progress it is a
+                // genuine deadlock. Spurious-wake-safe: __emule_fiber_wait re-checks
+                // under the lock and re-parks. See tt-emule docs/fiber-engine.md.
                 if (!parked_.empty()) {
+                    uint64_t p = progress_.load(std::memory_order_relaxed);
+                    if (p != last_deadlock_repoll_progress_) {
+                        last_deadlock_repoll_progress_ = p;
+                        for (auto& kv : parked_) {
+                            Fiber* f = kv.second;
+                            while (f) {
+                                Fiber* nx = f->park_link;
+                                f->park_link = nullptr;
+                                f->park_key = nullptr;
+                                f->state = FiberState::Ready;
+                                ready_[f->home].push_back(f);
+                                f = nx;
+                            }
+                        }
+                        parked_.clear();
+                        cv_.notify_all();
+                        --idle_;
+                        continue;
+                    }
                     deadlock_ = true;
                     abort_flag_ = true;
                     --idle_;
@@ -451,6 +533,12 @@ void FiberScheduler::run_until_idle() {
         p_->abort_flag_ = false;
         p_->first_eptr_ = nullptr;
         p_->latency_parked_.clear();
+        // Per-run recovery watermarks — reset alongside progress_/resumptions_ (below).
+        // A stale last_deadlock_repoll_progress_ from a prior run can collide with this
+        // run's quiescence progress and skip the recovery re-poll → spurious deadlock.
+        p_->last_progress_val_ = 0;
+        p_->last_progress_resump_ = 0;
+        p_->last_deadlock_repoll_progress_ = UINT64_MAX;
         // Activate W = min(K, fiber count) workers; pin each fiber round-robin across [0,W).
         // Surplus workers (>= W) stay parked on start_cv_, so a tiny program pays no herd.
         // See tt-emule docs/fiber-engine.md.

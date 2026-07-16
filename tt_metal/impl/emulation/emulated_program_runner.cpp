@@ -179,6 +179,15 @@ thread_local uint8_t my_x[NUM_NOCS] = {};
 thread_local uint8_t my_y[NUM_NOCS] = {};
 thread_local uint32_t __emule_logical_x = 0;
 thread_local uint32_t __emule_logical_y = 0;
+// Silicon-named per-core LOGICAL coords (firmware globals `my_logical_x_/y_`,
+// declared extern by blaze/kernels/kernel_utils.hpp). Defined here so compute
+// (TRISC) kernels that reference them link; restored per fiber swap-in by the
+// scheduler's install_fiber. The dataflow (NCRISC/BRISC) senders that must read a
+// CORRECT per-fiber value instead resolve `my_logical_x_/y_` through the
+// dataflow_utils.hpp shadow's per-fiber accessor (__emule_self->core->logical_*),
+// so this definition is only a link/fallback anchor on other RISCs.
+thread_local uint8_t my_logical_x_ = 0;
+thread_local uint8_t my_logical_y_ = 0;
 
 // NOC encoding constants (matching firmware for Blackhole/Wormhole).
 static constexpr uint32_t NOC_LOCAL_BITS = 36;
@@ -328,7 +337,7 @@ extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
 // silicon clears the bit and the sender NIU drops the packet at itself ->
 // include_self=false. Sender coords come from the TLS that thread launch
 // wires up (my_x[0], my_y[0]).
-extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self) {
+extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self, uint8_t noc) {
     uint32_t x_end = (mcast_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t y_end = (mcast_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint32_t x_start = (mcast_addr >> (NOC_LOCAL_BITS + 2 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
@@ -351,9 +360,38 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t self_x = my_x[0];
     uint32_t self_y = my_y[0];
 
+    // NOC1 rectangles arrive with start<->end SWAPPED: silicon describes a NOC1
+    // multicast in NOC1's reflected coordinate frame (paired with the DYNAMIC_NOC_X/Y
+    // reflection). Emule models NOC coordinates as identity (DYNAMIC_NOC_X/Y is
+    // identity — see jit_hw api/dataflow/dataflow_api.h), so no reflection happens and
+    // the swap alone leaves the rectangle reversed. Undo it so the walk below runs on
+    // physical (NOC0-frame) coordinates for both NOCs. Without this, canonical NOC1
+    // in0/in1-mcast ops (matmul/linear, multicore argmax) present start>end and the
+    // torus walk misreads it as a wraparound → receivers never see their semaphore →
+    // quiescent deadlock.
+    if (noc != 0) {
+        uint32_t t;
+        t = x_start; x_start = x_end; x_end = t;
+        t = y_start; y_start = y_end; y_end = t;
+    }
+
+    // Torus-wraparound walk on physical coords. Silicon's NOC treats the rectangle on
+    // a torus, so a rectangle whose cores straddle the worker-grid seam encodes
+    // start > end and wraps around the NOC node space rather than covering the min..max
+    // bounding box; flash_mla's S4/S8 SDPA blocks (NOC0) rely on this. Walk each axis
+    // start->end stepping +1 mod the node space; coords with no core in the map are
+    // skipped. For a non-wrapping rectangle (start <= end) this is identical to
+    // min..max — the post-un-swap NOC1 case (matmul/argmax in0-mcast).
+    auto axis_count = [](uint32_t s, uint32_t e) -> uint32_t {
+        return (e >= s ? (e - s) : ((NOC_NODE_MASK + 1 - s) + e)) + 1;
+    };
+    const uint32_t nx = axis_count(x_start, x_end);
+    const uint32_t ny = axis_count(y_start, y_end);
     uint32_t delivered = 0;
-    for (uint32_t x = std::min(x_start, x_end); x <= std::max(x_start, x_end); x++) {
-        for (uint32_t y = std::min(y_start, y_end); y <= std::max(y_start, y_end); y++) {
+    for (uint32_t ix = 0; ix < nx; ix++) {
+        const uint32_t x = (x_start + ix) & NOC_NODE_MASK;
+        for (uint32_t iy = 0; iy < ny; iy++) {
+            const uint32_t y = (y_start + iy) & NOC_NODE_MASK;
             if (!include_self && x == self_x && y == self_y) {
                 continue;
             }
@@ -1050,7 +1088,12 @@ static std::function<void()> jit_compile_kernel(
 
     // 10. Clean up temp directory (wrapper.cpp etc.) — always safe since .so is
     // either in the disk cache dir or mmap'd into memory from the temp dir.
-    std::filesystem::remove_all(dir);
+    // TT_EMULE_KEEP_JIT_SRC keeps the patched_kernel.cpp/wrapper.cpp for inspection.
+    if (!std::getenv("TT_EMULE_KEEP_JIT_SRC")) {
+        std::filesystem::remove_all(dir);
+    } else {
+        fprintf(stderr, "[EMULE] kept JIT src: %s\n", dir.c_str());
+    }
 
     // 11. Wrap in shared_ptr for lifetime management (dlclose on destruction).
     auto shared_handle = std::shared_ptr<void>(handle, [](void* h) { dlclose(h); });
@@ -1891,12 +1934,23 @@ static void jit_compile_pending(
 static std::mutex g_core_map_mutex;
 static std::unordered_map<uint32_t, std::shared_ptr<std::unordered_map<uint64_t, tt_emule::Core*>>>
     g_core_map_cache;
+// The SWEmuleChip each cached core_map was built against. A device close+reopen mints
+// a NEW SWEmuleChip with fresh per-core L1 mmaps (single-process-galaxy L1 model), so a
+// core_map cached from the prior chip holds Core* into a now-disjoint L1 region. The NOC
+// path (this map) would then resolve a worker's semaphore to a different L1 backing than
+// that worker's own fiber (built from the CURRENT chip in setup_core_state) reads —
+// cross-core sems never observed → deadlock. Rebuild when the chip identity changes.
+static std::unordered_map<uint32_t, tt::umd::SWEmuleChip*> g_core_map_sw_emu;
 
 static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
     tt::umd::SWEmuleChip* sw_emu, IDevice* device, ChipId device_id) {
     std::lock_guard<std::mutex> lock(g_core_map_mutex);
     auto& core_map = g_core_map_cache[device_id];
+    if (core_map && g_core_map_sw_emu[device_id] != sw_emu) {
+        core_map.reset();  // stale: built against a different (now-replaced) SWEmuleChip
+    }
     if (!core_map && sw_emu) {
+        g_core_map_sw_emu[device_id] = sw_emu;
         core_map = std::make_shared<std::unordered_map<uint64_t, tt_emule::Core*>>();
         // Add ALL worker cores from the device grid
         auto grid = device->compute_with_storage_grid_size();
