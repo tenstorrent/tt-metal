@@ -504,6 +504,72 @@ def _device_reset() -> bool:
     return False
 
 
+_DEVICE_OVERHEAT_RE = re.compile(r"Waiting for AICLK value to settle failed|possible overheating|AICLK clamped")
+_COOL_MARGIN_C = float(os.environ.get("PERF_MCP_COOL_MARGIN_C", "5") or "5")
+_COOL_POLL_S = float(os.environ.get("PERF_MCP_COOL_POLL_S", "5") or "5")
+_COOL_MAX_S = float(os.environ.get("PERF_MCP_COOL_MAX_S", "120") or "120")
+
+
+def detect_overheat(log_text: str) -> str | None:
+    """A run's log carrying the device's OWN thermal-distress signal (AICLK failed to settle / clamped /
+    possible overheating). Returns the matched phrase, else None. Distinct from a crash: the run may
+    complete, but the chip is throttling and the next run should let it cool first."""
+    if not log_text:
+        return None
+    m = _DEVICE_OVERHEAT_RE.search(log_text)
+    return m.group(0) if m else None
+
+
+def _max_asic_temp(data) -> float | None:
+    temps: list[float] = []
+
+    def _walk(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if k == "asic_temperature":
+                    try:
+                        temps.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+                else:
+                    _walk(v)
+        elif isinstance(o, list):
+            for x in o:
+                _walk(x)
+
+    _walk(data)
+    return max(temps) if temps else None
+
+
+def _read_asic_temp():
+    """Max ASIC temperature (deg C) across chips from `tt-smi -s`, or None if unavailable. Only safe at a
+    run boundary (device idle) -- tt-smi contends with an active profiler run."""
+    tt_smi = shutil.which("tt-smi") or "/home/ttuser/.tenstorrent-venv/bin/tt-smi"
+    try:
+        proc = subprocess.run([tt_smi, "-s"], capture_output=True, text=True, timeout=30)
+        return _max_asic_temp(json.loads(proc.stdout))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _await_cool(read_temp=_read_asic_temp, sleeper=time.sleep) -> None:
+    """Idle-wait until the chip sheds heat, keeping the device OPEN (no reset, no close) -- passive
+    cooling while it does no work. Target is RELATIVE (entry temp minus a margin) so there is no absolute
+    magic threshold; best-effort -- returns immediately if temp is unreadable and never blocks past the
+    max wait. Call only at a run boundary (device idle)."""
+    entry = read_temp()
+    if entry is None:
+        return
+    target = entry - _COOL_MARGIN_C
+    waited = 0.0
+    while waited < _COOL_MAX_S:
+        sleeper(_COOL_POLL_S)
+        waited += _COOL_POLL_S
+        t = read_temp()
+        if t is None or t <= target:
+            return
+
+
 def _execute(
     cmd: list[str],
     cwd: Path,
@@ -739,6 +805,8 @@ def make_run_profiled(
                 tail = _salient_tail(log_path.read_text()) if log_path.is_file() else ""
                 raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")
             log_text = log_path.read_text() if log_path.is_file() else ""
+            if detect_overheat(log_text):
+                _await_cool()
             # `python -m tracy -m pytest` exits 0 even when the inner test FAILS, so a device-op
             # crash (the edit broke the model) leaves a PARTIAL CSV that would be misread as an
             # op_count_mismatch measurement. Detect the runtime crash here and raise PerfRunFailed
@@ -747,6 +815,7 @@ def make_run_profiled(
             if crash:
                 if _DEVICE_CRASH_RE.search(log_text) and heal_attempt < _MAX_HEAL_ATTEMPTS:
                     heal_attempt += 1
+                    _await_cool()
                     device_reset()
                     with open(log_path, "a") as fh:
                         fh.write(
