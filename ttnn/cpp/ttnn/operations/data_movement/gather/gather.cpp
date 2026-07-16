@@ -13,6 +13,32 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
+
+#include <tt-metalium/constants.hpp>
+
+namespace ttnn::detail {
+
+// Fires if either input or index is RM B/W-sharded with non-tile-aligned W; the composite arm then
+// round-trips BOTH tensors through TILE to dodge the noc_async_*_sharded misread. Retires with #47299.
+inline bool needs_rm_irregular_composite(const ttnn::Tensor& input_tensor, const ttnn::Tensor& index_tensor) {
+    if (input_tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
+        return false;
+    }
+    auto is_bw_sharded = [](const ttnn::Tensor& t) {
+        const auto& mc = t.memory_config();
+        return mc.is_sharded() && (mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
+                                   mc.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
+    };
+    auto last_dim_not_tile = [](const ttnn::Tensor& t) {
+        const auto& s = t.logical_shape();
+        return s.rank() >= 1 && s[-1] % tt::constants::TILE_WIDTH != 0;
+    };
+    return (is_bw_sharded(input_tensor) && last_dim_not_tile(input_tensor)) ||
+           (is_bw_sharded(index_tensor) && last_dim_not_tile(index_tensor));
+}
+
+}  // namespace ttnn::detail
 
 namespace ttnn::operations::data_movement {
 namespace {
@@ -57,9 +83,12 @@ Tensor pre_gather_transform_tensor(
     // If input is not rank 4 transform it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
+    // fill_implicit_tile_padding is TILE-only; RM has no tile-face padding so skip it.
+    const bool is_tile = transformed_tensor.layout() == tt::tt_metal::Layout::TILE;
+
     if (padding_index_tensor) {
         // Index tensor padding
-        return ttnn::fill_implicit_tile_padding(transformed_tensor, 0.0f);
+        return is_tile ? ttnn::fill_implicit_tile_padding(transformed_tensor, 0.0f) : transformed_tensor;
     }
 
     // Input tensor processing
@@ -77,7 +106,7 @@ Tensor pre_gather_transform_tensor(
     const Tensor sliced_tensor =
         ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());
 
-    return ttnn::fill_implicit_tile_padding(sliced_tensor, std::numeric_limits<float>::min());
+    return is_tile ? ttnn::fill_implicit_tile_padding(sliced_tensor, std::numeric_limits<float>::min()) : sliced_tensor;
 }
 
 /**
@@ -127,8 +156,7 @@ Tensor post_gather_transform_tensor(
         // First transpose while still in 4D, then reshape to original higher-dimensional form
         if (!is_dim_last_idx) {
             const auto index_dim = (dim < 0) ? (orig_rank + dim) : dim;
-            const auto dim_adj =
-                (orig_rank <= 4) ? index_dim : (index_dim + (output_tensor.padded_shape().rank() - orig_rank));
+            const auto dim_adj = index_dim + (output_tensor.padded_shape().rank() - orig_rank);
             output_tensor = ttnn::transpose(output_tensor, dim_adj, -1, index_tensor.memory_config());
         }
         ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
@@ -173,6 +201,37 @@ Tensor gather(
     }
     if (original_index_tensor_lshape == ttnn::Shape{}) {
         return input_index_tensor;
+    }
+
+    // Narrow composite hop for RM B/W-sharded inputs with non-tile-aligned W. Retire when #47299 lands.
+    if (ttnn::detail::needs_rm_irregular_composite(input_tensor, input_index_tensor)) {
+        // Snapshot orientation before the staging hop drops shard_spec (mirrors #48025); prefer index.
+        std::optional<tt::tt_metal::ShardOrientation> orientation_hint;
+        const auto& idx_mc = input_index_tensor.memory_config();
+        if (idx_mc.is_sharded() && idx_mc.shard_spec().has_value()) {
+            orientation_hint = idx_mc.shard_spec()->orientation;
+        } else if (input_tensor.memory_config().is_sharded() && input_tensor.memory_config().shard_spec().has_value()) {
+            orientation_hint = input_tensor.memory_config().shard_spec()->orientation;
+        }
+        const auto l1_interleaved =
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+        const auto tile_input =
+            ttnn::to_layout(ttnn::to_memory_config(input_tensor, l1_interleaved), tt::tt_metal::Layout::TILE);
+        const auto tile_index =
+            ttnn::to_layout(ttnn::to_memory_config(input_index_tensor, l1_interleaved), tt::tt_metal::Layout::TILE);
+        auto requested_mc = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
+        const auto tile_out =
+            ttnn::gather(tile_input, dim, tile_index, sparse_grad, l1_interleaved, std::nullopt, sub_core_grids);
+        auto rm_out = ttnn::to_layout(tile_out, tt::tt_metal::Layout::ROW_MAJOR);
+        // Sharded-no-spec requested_mc: synthesize a shard_spec via the same helper compute_output_specs
+        // uses, since to_memory_config does not derive a spec for the actual allocation call.
+        if (requested_mc.is_sharded() && !requested_mc.shard_spec().has_value()) {
+            const auto derived = ttnn::operations::data_movement::transpose::generate_transpose_shard_spec(
+                rm_out, rm_out.padded_shape(), requested_mc.memory_layout(), orientation_hint);
+            requested_mc =
+                tt::tt_metal::MemoryConfig(requested_mc.memory_layout(), requested_mc.buffer_type(), derived);
+        }
+        return ttnn::to_memory_config(rm_out, requested_mc);
     }
 
     // Normalize negative dimension to positive index with bounds check

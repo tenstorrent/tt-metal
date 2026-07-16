@@ -482,15 +482,19 @@ class TtPrefillBlock(LightweightModule):
         if d2h_service is not None:
             assert actual_end is not None, "actual_end required when d2h_service is set"
             assert record_dev is not None, "record_dev required when d2h_service is set"
-            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                kvpe_cache,
-                cache_user_id,
-                cache_layer_idx,
-                self.mla.layer_num,
-                actual_end,
-                seq_len_local * self.mla.sp_factor,
-                self.mla.sp_axis,
-            )
+            # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
+            # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
+            # sparse.
+            if kvpe_cache.layout == ttnn.TILE_LAYOUT:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    kvpe_cache,
+                    cache_user_id,
+                    cache_layer_idx,
+                    self.mla.layer_num,
+                    actual_end,
+                    seq_len_local * self.mla.sp_factor,
+                    self.mla.sp_axis,
+                )
             ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
 
         if self.kv_only:

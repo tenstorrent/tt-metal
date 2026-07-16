@@ -15,7 +15,7 @@ namespace ckernel {
 namespace sfpu {
 
 // Full-range unsigned clamp against a threshold, shared by relu_min and relu_max/relu6.
-// IS_LOWER_BOUND selects the direction using the user-facing op's semantics:
+// IS_LOWER_BOUND selects the path:
 //   IS_LOWER_BOUND == true -> relu_min: result = max(x, threshold)
 //   IS_LOWER_BOUND == false -> relu_max/relu6: result = min(x, threshold)
 //
@@ -71,6 +71,71 @@ inline void relu_clamp_uint(uint threshold) {
             }
             dst_reg[0].mode<LAYOUT>() = x;
             dst_reg++;
+        }
+    }
+}
+
+// Signed int32 clamp against a threshold, shared by relu_min and relu_max/relu6.
+// IS_LOWER_BOUND selects the path:
+//   IS_LOWER_BOUND == true -> relu_min: result = max(x, threshold)
+//   IS_LOWER_BOUND == false -> relu_max/relu6: result = max(0, min(x, threshold))
+//
+// Load/store as signed 2's complement (DataLayout::I32). Since the sign-magnitude SFPSWAP path cannot
+// represent -2^31 (0x80000000 is -0), we use the plain int32 compare.
+template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, int ITERATIONS = 8>
+inline void relu_clamp_int(uint threshold) {
+    const vInt t = static_cast<int>(threshold);
+    const bool is_pos_threshold = static_cast<int>(threshold) >= 0;
+    if constexpr (IS_LOWER_BOUND) {
+        // relu_min: max(x, threshold)
+        if (is_pos_threshold) {
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                vInt x = dst_reg[0].mode<sfpi::DataLayout::I32>();
+                // v_if(x < 0) is NOT redundant: the SFPU signed compare subtracts and tests the sign,
+                // which overflows when x and t are >= 2^31 apart and wrongly gives x>=t. Lifting negatives
+                // up to t first leaves only non-negative lanes for the x < t compare, which then cannot overflow.
+                v_if(x < 0) { x = t; }
+                v_endif;
+                v_if(x < t) { x = t; }
+                v_endif;
+                dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
+                dst_reg++;
+            }
+        } else {
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                vInt x = dst_reg[0].mode<sfpi::DataLayout::I32>();
+                v_if(x < 0) {
+                    v_if(x < t) { x = t; }
+                    v_endif;
+                }
+                v_endif;
+                dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
+                dst_reg++;
+            }
+        }
+    } else {
+        // relu_max/relu6: max(0, min(x, threshold))
+        if (is_pos_threshold) {
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                vInt x = dst_reg[0].mode<sfpi::DataLayout::I32>();
+                v_if(x < 0) { x = 0; }
+                v_endif;
+                v_if(x > t) { x = t; }
+                v_endif;
+                dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
+                dst_reg++;
+            }
+        } else {
+            // threshold < 0: max(0, min(x, threshold)) == 0 for every lane
+            const vInt zero = 0;
+#pragma GCC unroll 8
+            for (int d = 0; d < ITERATIONS; d++) {
+                dst_reg[0].mode<sfpi::DataLayout::I32>() = zero;
+                dst_reg++;
+            }
         }
     }
 }

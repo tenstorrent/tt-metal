@@ -66,7 +66,6 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_to_fp8: input dtype must be BFLOAT16 or FLOAT32, got {}",
         static_cast<int>(input.dtype()));
-
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
@@ -170,9 +169,12 @@ ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
 namespace ttnn::prim {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> per_token_cast_to_fp8(
-    const Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_memory_config) {
+    const Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    bool round_scale_to_power_of_two) {
     using OperationType = ttnn::experimental::prim::per_token_cast_to_fp8::PerTokenCastToFp8DeviceOperation;
-    auto operation_attributes = OperationType::operation_attributes_t{.output_memory_config = output_memory_config};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .output_memory_config = output_memory_config, .round_scale_to_power_of_two = round_scale_to_power_of_two};
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

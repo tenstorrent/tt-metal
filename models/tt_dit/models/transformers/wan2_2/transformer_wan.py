@@ -774,5 +774,6 @@ class WanCheckpoint:
             subfolder=self._subfolder,
             parallel_config=parallel_config,
             mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
             is_fsdp=is_fsdp,
         )
