@@ -731,7 +731,7 @@
     exit $exit_code
   model: sdxl-nightly
   skus:
-    bh_p150b_civ2:
+    bh_p150:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -779,7 +779,7 @@
     pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
   model: sdxl-nightly
   skus:
-    bh_p150b_civ2:
+    bh_p150:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
