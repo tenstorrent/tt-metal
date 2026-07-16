@@ -102,3 +102,5 @@ void fds_clear_de_status(uint32_t dispatch_inst) {
 // Configure interrupts for groupIDs: set bit for the groupIDs to generate interrupts
 void fds_config_interrupt_en(uint32_t mask) { FDS_INTF_WRITE(TT_FDS_TENSIXNEO_INTERRUPT_ENABLE_REG_OFFSET, mask); }
 }  // namespace overlay::FdsNeo
+
+// TEMP(revert): no-op to trigger qsr simulator selection for RTL Sim CI check-output test
