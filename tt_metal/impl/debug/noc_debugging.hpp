@@ -78,11 +78,10 @@ struct NocFullBarrierEvent {
     uint8_t noc;
 };
 
-// A unicast remote atomic increment (noc_semaphore_inc). Unlike a write it carries no source buffer (the increment
-// value is immediate) and does not advance the NIU write counter, so the source-reuse and counter-monotonicity
-// checks do not apply. Only a non-posted increment must be flushed before kernel end. (Multicast increments are not
-// modeled yet: SEMAPHORE_INC_MULTICAST is emitted via the unicast record path on device, so its coordinates are not
-// populated correctly — that needs a device-side fix first.)
+// A remote atomic increment (noc_semaphore_inc / noc_semaphore_inc_multicast). Unlike a write it carries no source
+// buffer (the increment value is immediate) and does not advance the NIU write counter, so the source-reuse and
+// counter-monotonicity checks do not apply. Only a non-posted increment must be flushed before kernel end. For a
+// multicast increment dst_x/dst_y are the rectangle start and mcast_end_dst_x/y the end.
 struct NocSemaphoreIncEvent {
     uint32_t dst_addr;
     int8_t src_x;
@@ -91,6 +90,9 @@ struct NocSemaphoreIncEvent {
     int8_t dst_y;
     bool posted;
     uint8_t noc;
+    bool is_mcast;
+    int8_t mcast_end_dst_x;
+    int8_t mcast_end_dst_y;
 };
 
 // An atomic barrier (noc_async_atomic_barrier) waits only for outstanding atomics; on device it uses a counter

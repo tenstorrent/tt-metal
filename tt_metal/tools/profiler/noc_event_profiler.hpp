@@ -68,7 +68,8 @@ FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t sr
         ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<true, posted>(noc_index);
     } else if constexpr (
         noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ ||
-        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE) {
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE ||
+        noc_event_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE_AND_TRID) {
         ev_md.data.local_event_dst_trailer.counter_value = get_noc_counter_for_debug<false, posted>(noc_index);
     } else {
         ev_md.data.local_event_dst_trailer.counter_value = 0;
@@ -201,7 +202,8 @@ FORCE_INLINE void recordNocEventWithAddr(
     {                                                                                                                 \
         using NocEventType = KernelProfilerNocEventMetadata::NocEventType;                                            \
         if constexpr (                                                                                                \
-            event_type != NocEventType::WRITE_MULTICAST && event_type != NocEventType::SEMAPHORE_SET_MULTICAST) {     \
+            event_type != NocEventType::WRITE_MULTICAST && event_type != NocEventType::SEMAPHORE_SET_MULTICAST &&     \
+            event_type != NocEventType::SEMAPHORE_INC_MULTICAST) {                                                    \
             noc_event_profiler::recordNocEventWithAddr<event_type, posted>(local_addr, noc_addr, num_bytes, vc, noc); \
         } else {                                                                                                      \
             auto [mcast_dst_start_x, mcast_dst_start_y, mcast_dst_end_x, mcast_dst_end_y] =                           \

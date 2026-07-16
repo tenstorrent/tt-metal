@@ -121,6 +121,7 @@ NOCDebugEvent make_noc_debug_event(
     int8_t src_y = static_cast<int8_t>(src_core.y);
     switch (event.noc_xfer_type) {
         case EMD::NocEventType::READ_WITH_STATE: [[fallthrough]];
+        case EMD::NocEventType::READ_WITH_STATE_AND_TRID: [[fallthrough]];
         case EMD::NocEventType::READ:
             return NOCDebugEvent(NocReadEvent{
                 trailer.getDstAddr(),
@@ -188,11 +189,14 @@ NOCDebugEvent make_noc_debug_event(
             // barrier is treated as a full read barrier (may under-report a same-address read racing across
             // different trids, but never false-positives).
             return NOCDebugEvent(NocReadBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::WRITE_BARRIER_END: [[fallthrough]];
-        case EMD::NocEventType::WRITE_FLUSH:
-            // Non-posted barrier/flush. event.posted should always be false; if true, data was corrupted
-            // during read.
+        case EMD::NocEventType::WRITE_BARRIER_END:
+            // A regular write barrier waits for outstanding non-posted writes only.
             TT_ASSERT(!event.posted);
+            return NOCDebugEvent(
+                NocWriteFlushEvent{src_x, src_y, /*posted=*/false, event.noc_type == EMD::NocType::NOC_1});
+        case EMD::NocEventType::WRITE_FLUSH:
+            // A write flush: non-posted (noc_async_writes_flushed) clears the non-posted pending set; posted
+            // (noc_async_posted_writes_flushed) clears the posted pending set. The posted flag selects which.
             return NOCDebugEvent(NocWriteFlushEvent{
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::WRITE_FLUSH_WITH_TRID: [[fallthrough]];
@@ -202,7 +206,12 @@ NOCDebugEvent make_noc_debug_event(
                 src_x, src_y, static_cast<bool>(event.posted), event.noc_type == EMD::NocType::NOC_1});
         case EMD::NocEventType::FULL_BARRIER:
             return NOCDebugEvent(NocFullBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
-        case EMD::NocEventType::SEMAPHORE_INC:
+        case EMD::NocEventType::SEMAPHORE_INC: [[fallthrough]];
+        case EMD::NocEventType::SEMAPHORE_INC_MULTICAST: {
+            // A remote atomic increment (unicast or multicast). It has no source buffer (immediate increment value)
+            // and does not advance the NIU write counter, so it is modeled distinctly from a write. For the
+            // multicast variant dst_x/dst_y are the rectangle start and mcast_end_dst_x/y the end.
+            bool is_mcast = event.noc_xfer_type == EMD::NocEventType::SEMAPHORE_INC_MULTICAST;
             return NOCDebugEvent(NocSemaphoreIncEvent{
                 trailer.getDstAddr(),
                 src_x,
@@ -210,7 +219,11 @@ NOCDebugEvent make_noc_debug_event(
                 event.dst_x,
                 event.dst_y,
                 static_cast<bool>(event.posted),
-                event.noc_type == EMD::NocType::NOC_1});
+                event.noc_type == EMD::NocType::NOC_1,
+                is_mcast,
+                event.mcast_end_dst_x,
+                event.mcast_end_dst_y});
+        }
         case EMD::NocEventType::ATOMIC_BARRIER:
             return NOCDebugEvent(NocAtomicBarrierEvent{src_x, src_y, event.noc_type == EMD::NocType::NOC_1});
         default: return NOCDebugEvent(UnknownNocEvent{});

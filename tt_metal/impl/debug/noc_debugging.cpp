@@ -225,7 +225,7 @@ void NOCDebugState::handle_semaphore_inc_event(
     // source-reuse nor the counter-monotonicity check applies. Only a non-posted increment expects an ack and must
     // be flushed (via an atomic/full barrier) before kernel end; a posted increment is fire-and-forget.
     if (!event.posted) {
-        state.atomics_pending[noc_id][event.dst_addr] = {processor_id, /*is_semaphore=*/true, /*is_mcast=*/false};
+        state.atomics_pending[noc_id][event.dst_addr] = {processor_id, /*is_semaphore=*/true, event.is_mcast};
     }
 }
 

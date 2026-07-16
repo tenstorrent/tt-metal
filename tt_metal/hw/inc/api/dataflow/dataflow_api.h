@@ -1827,6 +1827,7 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
  */
 FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH, /*posted=*/true, noc);
     WAYPOINT("NPWW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         do {
@@ -2350,7 +2351,8 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 template <bool skip_ptr_update = false, bool skip_cmdbuf_chk = false>
 FORCE_INLINE void noc_async_read_one_packet_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID, false, noc);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::READ_WITH_STATE_AND_TRID, dest_addr, static_cast<uint64_t>(src_addr), 0, -1, false, noc);
 
     WAYPOINT("NRDW");
     ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update, skip_cmdbuf_chk>(

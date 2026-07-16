@@ -141,6 +141,71 @@ void RunWritesTest(
         "write barrier");
 }
 
+// Every core issues repeated posted writes from the same source to one destination core. Posted writes are drained
+// by a posted-writes flush (noc_async_posted_writes_flushed), not a regular write barrier; without an in-loop flush
+// the source-reuse hazard is reported. Exercises the posted-flush device emission + the WRITE_FLUSH posted mapping.
+void RunPostedWriteTest(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_flush) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+
+    CoreCoord grid_start = {0, 0};
+    CoreCoord grid_end = {compute_grid_size.x - 1, compute_grid_size.y - 1};
+    CoreRange core_range(grid_start, grid_end);
+
+    auto dest_core_virtual = mesh_device->worker_core_from_logical_core(grid_end);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    constexpr uint32_t buffer_page_size = 4096;
+    constexpr uint32_t buffer_size = buffer_page_size * 4;
+
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"L1_BUFFER_ADDR", std::to_string(l1_buffer->address())},
+        {"OTHER_CORE_X", std::to_string(dest_core_virtual.x)},
+        {"OTHER_CORE_Y", std::to_string(dest_core_virtual.y)},
+        {"DST_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", "10"},
+    };
+
+    if (use_flush) {
+        defines["USE_POSTED_FLUSH"] = "1";
+    }
+
+    for (auto processor : {tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1}) {
+        auto noc = processor == tt_metal::DataMovementProcessor::RISCV_0 ? tt_metal::NOC::RISCV_0_default
+                                                                         : tt_metal::NOC::RISCV_1_default;
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_posted_writes.cpp",
+            core_range,
+            tt_metal::DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+    }
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    VerifyIssuesOnAllCores(
+        mesh_device,
+        grid_start,
+        grid_end,
+        /*expect_issue=*/!use_flush,
+        [fixture](ChipId chip_id, CoreCoord core, int processor_id) {
+            return fixture->has_write_barrier_issue(chip_id, core, processor_id);
+        },
+        "posted write flush");
+}
+
 // Every core issues repeated non-posted remote atomic increments (noc_semaphore_inc) to one destination core.
 // Atomics are released only by an atomic/full barrier (they use a NIU counter separate from writes), so without a
 // barrier they remain outstanding at kernel end and the tool reports an unflushed-semaphore issue; an atomic
@@ -217,6 +282,83 @@ void RunSemaphoreIncTest(
             return fixture->has_unflushed_semaphore_issue(chip_id, core, processor_id);
         },
         "unflushed semaphore inc");
+}
+
+// A single sender issues repeated multicast atomic increments (noc_semaphore_inc_multicast) to a rectangle of
+// cores (excluding itself, since the atomic-inc multicast sender cannot be a destination). Without an atomic/full
+// barrier they remain outstanding at kernel end -> unflushed (multicast) semaphore issue. Exercises the
+// SEMAPHORE_INC_MULTICAST host mapping + the multicast device record path.
+void RunSemaphoreIncMulticastTest(
+    NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+    if (compute_grid_size.x < 2) {
+        return;  // need at least one column besides the sender's for a sender-excluding multicast rectangle
+    }
+
+    CoreCoord sender_core = {0, 0};
+    CoreRange sender_range(sender_core, sender_core);
+
+    // Multicast rectangle starts at column 1 so the sender (0,0) is not one of the destinations.
+    CoreCoord mcast_start = {1, 0};
+    CoreCoord mcast_end = {compute_grid_size.x - 1, compute_grid_size.y - 1};
+    auto mcast_start_virtual = mesh_device->worker_core_from_logical_core(mcast_start);
+    auto mcast_end_virtual = mesh_device->worker_core_from_logical_core(mcast_end);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    tt_metal::Program program = tt_metal::CreateProgram();
+
+    uint32_t num_dest_cores =
+        (mcast_end_virtual.x - mcast_start_virtual.x + 1) * (mcast_end_virtual.y - mcast_start_virtual.y + 1);
+
+    constexpr uint32_t buffer_page_size = 64;
+    distributed::DeviceLocalBufferConfig l1_config{
+        .page_size = buffer_page_size, .buffer_type = tt::tt_metal::BufferType::L1};
+    distributed::ReplicatedBufferConfig buffer_config{.size = buffer_page_size};
+    auto l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+
+    std::map<std::string, std::string> defines = {
+        {"USE_MULTICAST", "1"},
+        {"MCAST_START_X", std::to_string(mcast_start_virtual.x)},
+        {"MCAST_START_Y", std::to_string(mcast_start_virtual.y)},
+        {"MCAST_END_X", std::to_string(mcast_end_virtual.x)},
+        {"MCAST_END_Y", std::to_string(mcast_end_virtual.y)},
+        {"NUM_DEST_CORES", std::to_string(num_dest_cores)},
+        {"DST_ADDR", std::to_string(l1_buffer->address())},
+        {"NUM_ITERATIONS", "10"},
+    };
+
+    if (use_barrier) {
+        defines["USE_ATOMIC_BARRIER"] = "1";
+    }
+
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/noc_debugging/async_semaphore_inc.cpp",
+        sender_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    workload.add_program(device_range, std::move(program));
+
+    fixture->RunProgram(mesh_device, workload);
+
+    ReadMeshDeviceProfilerResults(*mesh_device);
+
+    auto* device = mesh_device->get_devices()[0];
+    auto device_id = device->id();
+    auto sender_core_virtual = mesh_device->worker_core_from_logical_core(sender_core);
+
+    bool has_issue = fixture->has_unflushed_semaphore_mcast_issue(device_id, sender_core_virtual, BRISC_PROCESSOR_ID);
+    if (use_barrier) {
+        EXPECT_FALSE(has_issue) << "With atomic barrier, should NOT have unflushed multicast semaphore issue at device "
+                                << device_id << " core " << sender_core_virtual.str();
+    } else {
+        EXPECT_TRUE(has_issue) << "Without atomic barrier, should have unflushed multicast semaphore issue at device "
+                               << device_id << " core " << sender_core_virtual.str();
+    }
 }
 
 // Every core issues repeated inline dword writes (4-byte immediate value, no L1 source buffer) to one destination
@@ -710,6 +852,27 @@ TEST_F(NOCDebuggingFixture, TridWritesWithTridBarrier) {
     }
 }
 
+// Posted writes reusing the same source without a posted flush must still be flagged; a posted flush clears them.
+TEST_F(NOCDebuggingFixture, PostedWritesNoFlush) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunPostedWriteTest(fixture, mesh_device, /*use_flush=*/false);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, PostedWritesWithFlush) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunPostedWriteTest(fixture, mesh_device, /*use_flush=*/true);
+            },
+            mesh_device);
+    }
+}
+
 // Non-posted semaphore increments with no barrier stay outstanding at kernel end -> unflushed-semaphore issue.
 TEST_F(NOCDebuggingFixture, SemaphoreIncNoBarrier) {
     for (auto& mesh_device : this->devices_) {
@@ -738,6 +901,27 @@ TEST_F(NOCDebuggingFixture, SemaphoreIncWithFullBarrier) {
         this->RunTestOnDevice<NOCDebuggingFixture>(
             [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunSemaphoreIncTest(fixture, mesh_device, /*use_barrier=*/false, /*use_full_barrier=*/true);
+            },
+            mesh_device);
+    }
+}
+
+// Multicast atomic increments with no barrier stay outstanding at kernel end -> unflushed multicast semaphore issue.
+TEST_F(NOCDebuggingFixture, SemaphoreIncMulticastNoBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunSemaphoreIncMulticastTest(fixture, mesh_device, /*use_barrier=*/false);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(NOCDebuggingFixture, SemaphoreIncMulticastWithBarrier) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice<NOCDebuggingFixture>(
+            [](NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunSemaphoreIncMulticastTest(fixture, mesh_device, /*use_barrier=*/true);
             },
             mesh_device);
     }
