@@ -334,8 +334,8 @@ def _bmm_progcfg(device, mt, nt, kt):
             per_core_M=per_core_M,
             per_core_N=per_core_N,
         )
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError("Failed to build the batched matmul program configuration") from exc
 
 
 def chunk_gated_delta_rule_seq(
