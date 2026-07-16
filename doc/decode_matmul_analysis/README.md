@@ -98,6 +98,7 @@ the advisor residual/exact chain was handled, and whether Patterns A/B appear.
 | Model | Decode strat shipped | Decode speedup | Advisor resid-chain | Pattern A (boundary revert) | Pattern B (strategy×precision) |
 | --- | --- | ---: | --- | --- | --- |
 | [Llama-3.1-8B](llama-3.1-8b.md) | **advisor 1D-mcast** | 49× | rejected (~5% slower) | present; bites in rejected variant (~33 µs copy) | ❌ **stale — DRAM-sharded ~2% faster at BFP4** |
+| [Llama-3.1-70B](llama-3.1-70b.md) | **advisor 1D-mcast** (TP→dense) | 2.7× (b1) | rejected (~3.7% slower) | present; ~171 µs reshape (~8%) | ❌ **partial — strategy frozen at BFP8; O row 38.7%** |
 | [Mistral-Small-24B](mistral-small-24b.md) | DRAM-sharded | 72× | applied (L1 chain, +helped) | present; no copy, ~119 µs reshape (~9%) | ✅ re-decided at final precision |
 | [GPT-OSS-20B](gpt-oss-20b.md) (MoE) | 1D-mcast attn + `sparse_matmul` experts | 6.6× | dense advisor chain rejected | present; **does not bite** (0 copies) | ✅ (attn 1D is correctness-bounded, not stale) |
 | [Qwen3-32B](qwen3-32b.md) | DRAM-sharded | 67× | rejected (PCC + slower) | present; no copy, ~118 µs reshape (~10%) | ✅ re-decided at final precision |
@@ -119,12 +120,18 @@ the advisor residual/exact chain was handled, and whether Patterns A/B appear.
      of the mechanism.
    - **GPT-OSS** ships 1D attention for a documented **correctness** reason
      (sliding-window PCC), not a stale A/B.
-   - Only **Llama-3.1-8B** shipped 1D-mcast without re-checking at its final BFP4
-     precision, where DRAM-sharded is ~2% faster. That is the single real miss.
+   - **Both Llama-family runs (8B and 70B)** shipped 1D-mcast without a clean
+     final-precision DRAM-sharded re-check: 8B is ~2% slower than an all-BFP4
+     DRAM-sharded path; 70B adjudicated the choice at BFP8-attention and swept
+     all-BFP4 only on the 1D family (O matmul left at 38.7% DRAM), though its
+     lower-core DRAM-sharded is L1-infeasible so the residual risk is smaller.
 
    So the choice itself (1D vs DRAM-sharded) is legitimately model/precision/batch
    specific; the OPT-014/OPT-015 fix targets the *process* error — freezing the
-   strategy before the precision is final — which only Llama-8B committed.
+   strategy before the precision is final. **Interestingly the two misses are
+   both Llama-family bring-ups**; the Mistral/Qwen/Falcon runs re-decided cleanly,
+   which suggests the gap is a per-family workflow habit rather than a universal
+   pipeline flaw.
 
 2. **Pattern A (the advisor's DRAM in/out segment boundary) is universal.** Every
    model's `final_ir.mlir` ends with an `(output revert)` shard→DRAM at
@@ -155,6 +162,13 @@ the advisor residual/exact chain was handled, and whether Patterns A/B appear.
    keeps **BF16/HiFi4 attention** and **BFP8 experts** (BFP4 and BFP8-cache both
    failed its PCC gate — sliding window + sinks are precision-sensitive).
 
+6. **Every shipped decoder is single-device dense** — this stage is a per-layer
+   study on one Blackhole P300. Llama-3.1-70B is the tell: its source IR was
+   captured at TP=4 / 2×2 mesh with all-reduces, but the stage **collapsed the TP
+   projections into dense full-weight matmuls** (1×1 mesh), so no collective /
+   fused-CCL / persistent-buffer work exists yet. Multi-device decode is deferred
+   to a later stage across the fleet.
+
 ### Branch status (8 model branches)
 
 | Model branch | optimized_decoder step | analyzed |
@@ -166,7 +180,9 @@ the advisor residual/exact chain was handled, and whether Patterns A/B appear.
 | tiiuae-falcon3-10b-base | ✅ done | ✅ |
 | tiiuae-falcon3-7b-base | ✅ done | ✅ |
 | qwen-qwen2.5-coder-32b-instruct | ✅ done | ✅ |
-| meta-llama-llama-3.1-70b-instruct | ⏳ not yet pushed | pending (poller watching) |
+| meta-llama-llama-3.1-70b-instruct | ✅ done | ✅ |
+
+**All 8 model branches analyzed.**
 
 _Method note: Llama-3.1-8B is on-device-verified; the other models are analyzed
 read-only from each branch's committed artifacts (`README.md`, `work_log.md`,
