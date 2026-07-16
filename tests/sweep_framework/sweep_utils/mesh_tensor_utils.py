@@ -323,6 +323,29 @@ if _orig_set_fabric_config is not None:
     ttnn.set_fabric_config = _guarded_set_fabric_config
 
 
+_orig_open_mesh_device = ttnn.open_mesh_device
+
+
+def _guarded_open_mesh_device(*args, **kwargs):
+    """Some modules (linear/matmul gather_in0 ring, batched DRAM-sharded) open their
+    OWN mesh device directly via ttnn.open_mesh_device instead of create_mesh_device,
+    so they bypass the job-device cache. With the deferred-close guard the cached job
+    device stays open, so a direct open would run a SECOND device alongside it — on
+    Galaxy that corrupts device/context state (TT_FATAL metal_context.cpp:74
+    'context_id ... is invalid', kernel.cpp:443 'binary not found', dispatch.cpp:254
+    event-order). Really close the cached job device first so only ONE device is ever
+    open; the next create_mesh_device reopens and re-caches it. Safe against the
+    cache-miss reopen path in create_mesh_device (which nulls _JOB_DEVICE before
+    calling _create_mesh_device_uncached -> here close_job_device is a no-op) and
+    calls _orig_open_mesh_device (not the wrapper), so no re-entrancy."""
+    if _job_device_enabled():
+        close_job_device()
+    return _orig_open_mesh_device(*args, **kwargs)
+
+
+ttnn.open_mesh_device = _guarded_open_mesh_device
+
+
 def clear_job_device_program_cache() -> None:
     """Clear the cached job device's program cache — call at each module boundary
     so a new module doesn't collide with an earlier module's cached programs /
