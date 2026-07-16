@@ -86,7 +86,7 @@ jobs:
 
   find-changes:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
@@ -453,7 +453,7 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
     needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, llk-unit-tests]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main

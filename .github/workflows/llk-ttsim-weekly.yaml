@@ -65,7 +65,7 @@ jobs:
 
   ttsim-digest:
     name: "📊 Weekly ttsim digest"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Only broadcast on scheduled runs — manual triggers are typically
     # ad-hoc debugging and don't need Slack noise. `always()` so the job
     # still runs when the regression reports failures (it's expected to).

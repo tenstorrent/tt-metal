@@ -30,7 +30,7 @@ on:
 
 jobs:
   generate-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
     steps:
@@ -931,7 +931,7 @@ jobs:
     name: "AI Run Summary"
     needs: [generate-matrix, vllm-tests]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20

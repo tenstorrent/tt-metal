@@ -38,7 +38,7 @@ on:
 
 jobs:
   define-demo-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       demo-tests: ${{ steps.compute-tests.outputs.demo-tests }}
     strategy:

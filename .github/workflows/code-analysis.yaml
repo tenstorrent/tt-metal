@@ -92,7 +92,7 @@ jobs:
   # This workflow only needs to pass the platform string.
 
   determine-scan-type:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}

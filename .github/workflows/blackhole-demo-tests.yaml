@@ -88,7 +88,7 @@ on:
 
 jobs:
   generate-model-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:

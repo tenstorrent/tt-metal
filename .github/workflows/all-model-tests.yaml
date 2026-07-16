@@ -94,7 +94,7 @@ permissions:
 jobs:
   # ── Preflight: resolve SKUs and check which combos have tests ────
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
       has-t1-unit: ${{ steps.check.outputs.has-t1-unit }}

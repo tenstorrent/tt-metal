@@ -283,7 +283,7 @@ jobs:
     # always() is required: without it, GHA transitively skips this job when
     # fetch-data is skipped (e.g. the workflow is triggered with no data).
     if: ${{ always() && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_failed_workflows == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       slack_ts: ${{ steps.slack-report.outputs.slack_ts }}
       slack_ts_map: ${{ steps.slack-report.outputs.slack_ts_map }}
@@ -329,7 +329,7 @@ jobs:
   trigger-regression-analysis:
     needs: [analyze-data, handle-failures]
     if: ${{ always() && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_regressions == 'true' && needs.handle-failures.outputs.slack_notification_status == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       actions: write
       contents: read

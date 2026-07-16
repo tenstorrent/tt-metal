@@ -117,7 +117,7 @@ jobs:
   # Compute tool image tags for pre-built dependencies
   # These are the same tags computed in build-docker-artifact.yaml
   check-tool-images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
       sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
