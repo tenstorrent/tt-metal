@@ -353,5 +353,47 @@ def pick_backend_with_quality(
     return (None, "none")
 
 
+def rank_backends(
+    *,
+    category: str,
+    model_type: Optional[str] = None,
+    pipeline_tag: Optional[str] = None,
+    top_n: Optional[int] = 3,
+) -> List[Tuple[FamilyBackend, int, str]]:
+    """Rank candidate family backends best-first with a match score + reason.
+
+    Where :func:`pick_backend_with_quality` returns ONE locked pick, this exposes
+    the runners-up so scaffold can surface the top-N sibling candidates (and
+    compose per-component reuse across them) instead of one silent choice that
+    historically mapped a model onto the wrong family's tree (fixes-plan Point 2b).
+
+    Score: exact model_type = 100 (90 cross-category), pipeline_tag = 70 (60
+    cross-category), same-category generic default = 40, same-category other = 30.
+    Returns the top ``top_n`` (all if ``top_n`` is falsy), highest score first.
+    """
+    mt = (model_type or "").lower()
+    pt = (pipeline_tag or "").lower()
+    ranked: List[Tuple[FamilyBackend, int, str]] = []
+    for b in all_backends():
+        same_cat = b.category == category
+        mkeys = {k.lower() for k in b.model_type_keys}
+        pkeys = {t.lower() for t in b.pipeline_tags}
+        if mt and mt in mkeys:
+            score = 100 if same_cat else 90
+            reason = f"exact model_type '{mt}'" + ("" if same_cat else f" (cross-category {b.category})")
+        elif pt and pt in pkeys:
+            score = 70 if same_cat else 60
+            reason = f"pipeline_tag '{pt}'" + ("" if same_cat else f" (cross-category {b.category})")
+        elif same_cat:
+            generic = getattr(b, "routing_mode", "") == "generic"
+            score = 40 if generic else 30
+            reason = f"category '{category}' default" + (" (generic runner)" if generic else "")
+        else:
+            continue
+        ranked.append((b, score, reason))
+    ranked.sort(key=lambda x: (-x[1], x[0].name))
+    return ranked[:top_n] if top_n else ranked
+
+
 def canonical_hf_ids() -> List[str]:
     return [b.canonical_hf_id for b in _BACKENDS if b.canonical_hf_id]

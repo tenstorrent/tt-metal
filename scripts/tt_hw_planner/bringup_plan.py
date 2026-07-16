@@ -611,6 +611,19 @@ def build_bringup_plan(
             "expect attention + encoder stacks to be NEW even if other shapes line up."
         )
 
+    try:
+        from .family_backends import rank_backends
+
+        ranked = rank_backends(category=backend.category, model_type=new_model_type)
+        if len(ranked) > 1:
+            alts = "; ".join(f"{b.name} (score {s}: {r})" for b, s, r in ranked)
+            plan.notes.append(
+                "Top sibling candidates (pull each component's reuse target from whichever "
+                f"provides it, not only the first): {alts}"
+            )
+    except Exception:
+        pass
+
     return plan
 
 
