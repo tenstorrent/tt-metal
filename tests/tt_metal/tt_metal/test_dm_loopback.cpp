@@ -38,9 +38,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
-    // These addresses have been randomly chosen
-    uint32_t l1_address = 1000 * 1024;
-    uint32_t dram_address = 30000 * 1024;
+    uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    uint32_t dram_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     std::vector<uint32_t> value = {0x12345678};
 
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);
@@ -54,51 +54,49 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     // Reduced from 4+4=8 to 3+3=6 loopback stages to fit within the limit.
     constexpr uint32_t num_loopback_stages = 3;
 
-    constexpr const char* DRAM_TO_L1_0 = "dram_to_l1_0";
-    constexpr const char* DRAM_TO_L1_1 = "dram_to_l1_1";
-    constexpr const char* DRAM_TO_L1_2 = "dram_to_l1_2";
-    constexpr const char* L1_TO_DRAM_0 = "l1_to_dram_0";
-    constexpr const char* L1_TO_DRAM_1 = "l1_to_dram_1";
-    constexpr const char* L1_TO_DRAM_2 = "l1_to_dram_2";
+    const experimental::KernelSpecName DRAM_TO_L1_0{"dram_to_l1_0"};
+    const experimental::KernelSpecName DRAM_TO_L1_1{"dram_to_l1_1"};
+    const experimental::KernelSpecName DRAM_TO_L1_2{"dram_to_l1_2"};
+    const experimental::KernelSpecName L1_TO_DRAM_0{"l1_to_dram_0"};
+    const experimental::KernelSpecName L1_TO_DRAM_1{"l1_to_dram_1"};
+    const experimental::KernelSpecName L1_TO_DRAM_2{"l1_to_dram_2"};
 
-    auto make_dram_to_l1_spec = [](const char* id) {
+    auto make_dram_to_l1_spec = [](const experimental::KernelSpecName& id) {
         return experimental::KernelSpec{
             .unique_id = id,
             .source =
 
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_to_l1.cpp",
             .num_threads = 1,
-            .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
             .runtime_arg_schema =
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 
-    auto make_l1_to_dram_spec = [](const char* id) {
+    auto make_l1_to_dram_spec = [](const experimental::KernelSpecName& id) {
         return experimental::KernelSpec{
             .unique_id = id,
             .source =
 
                 OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/l1_to_dram.cpp",
             .num_threads = 1,
-            .semaphore_bindings = {{.semaphore_spec_name = "sem", .accessor_name = "sem"}},
+            .semaphore_bindings =
+                {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem"}, .accessor_name = "sem"}},
             .runtime_arg_schema =
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 
     experimental::SemaphoreSpec sem{
-        .unique_id = "sem",
+        .unique_id = experimental::SemaphoreSpecName{"sem"},
         .target_nodes = node,
     };
 
@@ -122,35 +120,33 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     };
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    const char* dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
-    const char* l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};
+    const experimental::KernelSpecName dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
+    const experimental::KernelSpecName l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};
 
     experimental::ProgramRunArgs params;
     uint32_t signal_value = 0;
     for (uint32_t i = 0; i < num_loopback_stages; i++) {
-        params.kernel_run_args.push_back(
-            {.kernel_spec_name = dram_to_l1_names[i],
-             .runtime_arg_values = {
-                 {.node = node,
-                  .args = {
-                      {"dram_addr", dram_address},
-                      {"l1_addr", l1_address},
-                      {"dram_buffer_size", 4u},
-                      {"dram_bank_id", 0u},
-                      {"signal_value", signal_value}}}}});
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = dram_to_l1_names[i],
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dram_addr", dram_address},
+                 {"l1_addr", l1_address},
+                 {"dram_buffer_size", 4u},
+                 {"dram_bank_id", 0u},
+                 {"signal_value", signal_value}})});
         dram_address += 1024;
         signal_value++;
 
-        params.kernel_run_args.push_back(
-            {.kernel_spec_name = l1_to_dram_names[i],
-             .runtime_arg_values = {
-                 {.node = node,
-                  .args = {
-                      {"dram_addr", dram_address},
-                      {"l1_addr", l1_address},
-                      {"dram_buffer_size", 4u},
-                      {"dram_bank_id", 0u},
-                      {"signal_value", signal_value}}}}});
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = l1_to_dram_names[i],
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dram_addr", dram_address},
+                 {"l1_addr", l1_address},
+                 {"dram_buffer_size", 4u},
+                 {"dram_bank_id", 0u},
+                 {"signal_value", signal_value}})});
         l1_address += sizeof(uint32_t);
         signal_value++;
     }

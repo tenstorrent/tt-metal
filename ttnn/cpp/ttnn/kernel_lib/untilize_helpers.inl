@@ -28,9 +28,15 @@ constexpr bool has_supported_fast_untilize_format() {
     // Production untilize is bit-exact for Float32 today. The fast fp32 LLK path
     // is native fp32 DEST but still narrows input through the current SrcA route,
     // so keep fp32 out of automatic selection until that path is lossless.
-    constexpr bool supported_input = input_format == static_cast<uint32_t>(DataFormat::Float16_b) ||
-                                     input_format == static_cast<uint32_t>(DataFormat::Bfp8_b) ||
-                                     input_format == static_cast<uint32_t>(DataFormat::Bfp4_b);
+    constexpr bool supported_input = input_format == static_cast<uint32_t>(DataFormat::Float16_b)
+#ifndef ARCH_QUASAR
+                                     // Block-float formats (Bfp8_b/Bfp4_b) don't exist in the Quasar
+                                     // DataFormat enum; guard the references (fast untilize is disabled
+                                     // on Quasar anyway via can_use_fast_untilize -> false below).
+                                     || input_format == static_cast<uint32_t>(DataFormat::Bfp8_b) ||
+                                     input_format == static_cast<uint32_t>(DataFormat::Bfp4_b)
+#endif
+        ;
     constexpr bool supported_output = output_format == static_cast<uint32_t>(DataFormat::Float16_b);
 
     return supported_input && supported_output;

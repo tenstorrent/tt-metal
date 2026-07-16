@@ -7,7 +7,7 @@ name: "Build tt-metal docker artifact"
 #   - tool-tags: JSON with all tool image tags (from build-docker-tools)
 #   - platform-data: JSON with all platform tags, exists flags, version info
 #
-# Outputs use the "-tag" suffix (e.g., ci-build-tag, dev-tag).
+# Outputs use the "-tag" suffix (e.g., ci-build-tag, dev-light-tag, dev-tag).
 #
 # Bake steps use the checked harbor-prefix input for docker-image:// layer contexts;
 # runtime pull strings for test jobs use check-harbor + resolve-docker-pull-refs
@@ -19,9 +19,6 @@ permissions:
   packages: write
 
 env:
-  # zstd level 22 (max) produces ~5-15% smaller images vs level 3 but compresses ~10-20x slower.
-  # Acceptable for tool/venv images (built infrequently). For ci-test/dev images (built on every
-  # Dockerfile change), monitor push duration and lower to level 3 if it becomes a bottleneck.
   BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
 
 on:
@@ -70,10 +67,16 @@ on:
         default: ""
         description: "Checked Harbor pull-through prefix from check-harbor; empty to pull GHCR directly"
     outputs:
+      ci-build-light-tag:
+        value: ${{ jobs.metadata.outputs.ci_build_light_tag }}
       ci-build-tag:
         value: ${{ jobs.metadata.outputs.ci_build_tag }}
+      ci-test-light-tag:
+        value: ${{ jobs.metadata.outputs.ci_test_light_tag }}
       ci-test-tag:
         value: ${{ jobs.metadata.outputs.ci_test_tag }}
+      dev-light-tag:
+        value: ${{ jobs.metadata.outputs.dev_light_tag }}
       dev-tag:
         value: ${{ jobs.metadata.outputs.dev_tag }}
       basic-dev-tag:
@@ -120,8 +123,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       platform_data: ${{ steps.metadata.outputs.platform_data }}
+      ci_build_light_tag: ${{ steps.metadata.outputs.ci_build_light_tag }}
       ci_build_tag: ${{ steps.metadata.outputs.ci_build_tag }}
+      ci_test_light_tag: ${{ steps.metadata.outputs.ci_test_light_tag }}
       ci_test_tag: ${{ steps.metadata.outputs.ci_test_tag }}
+      dev_light_tag: ${{ steps.metadata.outputs.dev_light_tag }}
       dev_tag: ${{ steps.metadata.outputs.dev_tag }}
       basic_dev_tag: ${{ steps.metadata.outputs.basic_dev_tag }}
       basic_ttnn_tag: ${{ steps.metadata.outputs.basic_ttnn_tag }}
@@ -135,6 +141,7 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
@@ -175,11 +182,36 @@ jobs:
             PLATFORM_DATA=$(echo "$PLATFORM_DATA" | jq -ce '.')
           fi
 
+          FINAL_IMAGES_MISSING=$(echo "$PLATFORM_DATA" | jq -r '
+            [
+              .ci_build_light_exists,
+              .ci_build_exists,
+              .ci_test_light_exists,
+              .ci_test_exists,
+              .dev_light_exists,
+              .dev_exists,
+              .basic_dev_exists,
+              .basic_ttnn_exists,
+              .manylinux_exists
+            ] | any(. != "true")
+          ')
+
           if [ -n "$TOOL_TAGS_INPUT" ]; then
             # Tool-tags supplied by caller (e.g. build-all-docker-images already ran
             # compute-tool-data + build-docker-tools) — use as-is, skip existence check.
             TOOL_TAGS=$(echo "$TOOL_TAGS_INPUT" | jq -ce '.')
             echo "tool_data=" >> "$GITHUB_OUTPUT"
+          elif [ "$FINAL_IMAGES_MISSING" != "true" ]; then
+            # All final images are already present. Only compute canonical tool tags
+            # for outputs; avoid per-tool manifest checks on the registry.
+            TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$GITHUB_REPOSITORY_VALUE" | jq -ce '.')
+            TOOL_DATA=$(jq -cn --argjson tool_tags "$TOOL_TAGS" \
+              '{tool_tags: $tool_tags, any_missing: "false"}')
+            {
+              echo "tool_data<<EOJSON"
+              echo "$TOOL_DATA"
+              echo "EOJSON"
+            } >> "$GITHUB_OUTPUT"
           else
             # Standalone call: check which tool images are missing so build-tools can
             # build only what's needed before the bake jobs run.
@@ -193,8 +225,11 @@ jobs:
           fi
 
           echo "platform_data=$PLATFORM_DATA" >> "$GITHUB_OUTPUT"
+          echo "ci_build_light_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_light_tag')" >> "$GITHUB_OUTPUT"
           echo "ci_build_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_tag')" >> "$GITHUB_OUTPUT"
+          echo "ci_test_light_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_light_tag')" >> "$GITHUB_OUTPUT"
           echo "ci_test_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_tag')" >> "$GITHUB_OUTPUT"
+          echo "dev_light_tag=$(echo "$PLATFORM_DATA" | jq -r '.dev_light_tag')" >> "$GITHUB_OUTPUT"
           echo "dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')" >> "$GITHUB_OUTPUT"
           echo "basic_dev_tag=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_tag')" >> "$GITHUB_OUTPUT"
           echo "basic_ttnn_tag=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_tag')" >> "$GITHUB_OUTPUT"
@@ -209,7 +244,8 @@ jobs:
           set -euo pipefail
           LLK="tt_metal/tt-llk"
           if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
-            echo "::error::LLK source missing (expected $LLK with .github/Dockerfile.base). Ensure the repository is fully checked out."
+            echo "::error::LLK source missing (expected $LLK with .github/Dockerfile.base)." \
+              "Ensure the repository is fully checked out."
             exit 1
           fi
           DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
@@ -235,38 +271,47 @@ jobs:
       tool-data: ${{ needs.metadata.outputs.tool_data }}
     secrets: inherit
 
-  # Build venv images if needed (required by main images)
+  # Build venv images only if missing final images require them.
   venvs:
     name: "🐍 Python venvs"
     needs: [metadata]
     if: |
-      fromJson(needs.metadata.outputs.platform_data).ci_build_venv_exists != 'true' ||
-      fromJson(needs.metadata.outputs.platform_data).ci_test_venv_exists != 'true'
+      (fromJson(needs.metadata.outputs.platform_data).ci_build_venv_required == 'true' &&
+       fromJson(needs.metadata.outputs.platform_data).ci_build_venv_exists != 'true') ||
+      (fromJson(needs.metadata.outputs.platform_data).ci_test_venv_required == 'true' &&
+       fromJson(needs.metadata.outputs.platform_data).ci_test_venv_exists != 'true')
     uses: ./.github/workflows/build-docker-python-venvs.yaml
     with:
       platform-data: ${{ needs.metadata.outputs.platform_data }}
     secrets: inherit
 
-  # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
+  # Build Ubuntu images (ci-build-light, ci-build, ci-test-light, ci-test, dev-light, dev, basic-dev, basic-ttnn-runtime)
   ubuntu:
     name: "🐳 Ubuntu images"
     needs: [metadata, venvs, build-tools]
     if: |
       always() && !failure() && !cancelled() &&
       fromJson(needs.metadata.outputs.platform_data).distro == 'ubuntu' &&
-      (fromJson(needs.metadata.outputs.platform_data).ci_build_exists != 'true' ||
+      (fromJson(needs.metadata.outputs.platform_data).ci_build_light_exists != 'true' ||
+       fromJson(needs.metadata.outputs.platform_data).ci_build_exists != 'true' ||
+       fromJson(needs.metadata.outputs.platform_data).ci_test_light_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).ci_test_exists != 'true' ||
+       fromJson(needs.metadata.outputs.platform_data).dev_light_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).dev_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).basic_dev_exists != 'true' ||
        fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists != 'true')
     timeout-minutes: 90
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -301,13 +346,19 @@ jobs:
 
           CI_BUILD_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_venv_tag')
           CI_TEST_VENV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')
+          CI_BUILD_LIGHT_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_light_exists')
           CI_BUILD_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_exists')
+          CI_TEST_LIGHT_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_light_exists')
           CI_TEST_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_exists')
+          DEV_LIGHT_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.dev_light_exists')
           DEV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.dev_exists')
           BASIC_DEV_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_exists')
           BASIC_TTNN_EXISTS=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_exists')
+          CI_BUILD_LIGHT_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_light_tag')
           CI_BUILD_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_build_tag')
+          CI_TEST_LIGHT_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_light_tag')
           CI_TEST_TAG=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_tag')
+          DEV_LIGHT_TAG=$(echo "$PLATFORM_DATA" | jq -r '.dev_light_tag')
           DEV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.dev_tag')
           BASIC_DEV_TAG=$(echo "$PLATFORM_DATA" | jq -r '.basic_dev_tag')
           BASIC_TTNN_TAG=$(echo "$PLATFORM_DATA" | jq -r '.basic_ttnn_tag')
@@ -326,11 +377,12 @@ jobs:
             done
           }
 
-          # Add venv layer contexts with Harbor prefix for pull-through cache
-          add_venv_contexts() {
+          # Add one venv layer context with Harbor prefix for pull-through cache
+          add_venv_context() {
             local target="$1"
-            SET+="${target}.contexts.ci-build-venv-layer=docker-image://${HARBOR_PREFIX}${CI_BUILD_VENV_TAG}"$'\n'
-            SET+="${target}.contexts.ci-test-venv-layer=docker-image://${HARBOR_PREFIX}${CI_TEST_VENV_TAG}"$'\n'
+            local layer="$2"
+            local tag="$3"
+            SET+="${target}.contexts.${layer}=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
           }
 
           ALL_TOOLS=($(.github/scripts/get-target-tools.sh ci-build))
@@ -340,14 +392,25 @@ jobs:
             local tag="$2"
             TARGETS+="${target},"
             add_tool_contexts "$target" "${ALL_TOOLS[@]}"
-            add_venv_contexts "$target"
             SET+="${target}.tags=${tag}"$'\n'
             SET+="${target}.output=${BAKE_OUTPUT}"$'\n'
           }
 
-          [ "$CI_BUILD_EXISTS" != "true" ] && add_main_target "ci-build" "$CI_BUILD_TAG"
-          [ "$CI_TEST_EXISTS" != "true" ] && add_main_target "ci-test" "$CI_TEST_TAG"
-          [ "$DEV_EXISTS" != "true" ] && add_main_target "dev" "$DEV_TAG"
+          [ "$CI_BUILD_LIGHT_EXISTS" != "true" ] && add_main_target "ci-build-light" "$CI_BUILD_LIGHT_TAG"
+          if [ "$CI_BUILD_EXISTS" != "true" ]; then
+            add_main_target "ci-build" "$CI_BUILD_TAG"
+            add_venv_context "ci-build" "ci-build-venv-layer" "$CI_BUILD_VENV_TAG"
+          fi
+          [ "$CI_TEST_LIGHT_EXISTS" != "true" ] && add_main_target "ci-test-light" "$CI_TEST_LIGHT_TAG"
+          if [ "$CI_TEST_EXISTS" != "true" ]; then
+            add_main_target "ci-test" "$CI_TEST_TAG"
+            add_venv_context "ci-test" "ci-test-venv-layer" "$CI_TEST_VENV_TAG"
+          fi
+          [ "$DEV_LIGHT_EXISTS" != "true" ] && add_main_target "dev-light" "$DEV_LIGHT_TAG"
+          if [ "$DEV_EXISTS" != "true" ]; then
+            add_main_target "dev" "$DEV_TAG"
+            add_venv_context "dev" "ci-test-venv-layer" "$CI_TEST_VENV_TAG"
+          fi
 
           BASIC_TOOLS=($(.github/scripts/get-target-tools.sh basic-dev))
           if [ "$BASIC_DEV_EXISTS" != "true" ]; then
@@ -380,6 +443,7 @@ jobs:
           set-lines: ${{ steps.bake.outputs.set }}
           ubuntu-version: ${{ fromJson(needs.metadata.outputs.platform_data).version }}
           python-version: ${{ fromJson(needs.metadata.outputs.platform_data).python_version }}
+          harbor-prefix: ${{ inputs.harbor-prefix }}
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
   manylinux:
@@ -390,13 +454,17 @@ jobs:
       inputs.build-manylinux == true &&
       fromJson(needs.metadata.outputs.platform_data).manylinux_exists != 'true'
     timeout-minutes: 90
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -453,6 +521,7 @@ jobs:
         with:
           targets: manylinux
           set-lines: ${{ steps.bake.outputs.set }}
+          harbor-prefix: ${{ inputs.harbor-prefix }}
 
   build-llk-images:
     name: "🐳️ Build LLK Docker images"
@@ -461,10 +530,11 @@ jobs:
       needs.metadata.outputs.llk-ci-exists != 'true' &&
       inputs.skip-llk-build != true
     timeout-minutes: 90
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -492,6 +562,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions/push-latest-image-to-ghcr
           sparse-checkout-cone-mode: false
@@ -503,11 +574,25 @@ jobs:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_build_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: "Push latest CI Build Light tag"
+        if: fromJson(needs.metadata.outputs.platform_data).ci_build_light_exists == 'true' || needs.ubuntu.result == 'success'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_build_light_tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: "Push latest CI Test tag"
         if: fromJson(needs.metadata.outputs.platform_data).ci_test_exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_test_tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest CI Test Light tag"
+        if: fromJson(needs.metadata.outputs.platform_data).ci_test_light_exists == 'true' || needs.ubuntu.result == 'success'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_test_light_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Dev tag"
@@ -517,15 +602,26 @@ jobs:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).dev_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: "Push latest Dev Light tag"
+        if: fromJson(needs.metadata.outputs.platform_data).dev_light_exists == 'true' || needs.ubuntu.result == 'success'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).dev_light_tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: "Push latest Basic Dev tag"
-        if: fromJson(needs.metadata.outputs.platform_data).basic_dev_exists == 'true' || needs.ubuntu.result == 'success'
+        if: >-
+          fromJson(needs.metadata.outputs.platform_data).basic_dev_exists == 'true' ||
+          needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).basic_dev_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic TTNN Runtime tag"
-        if: fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists == 'true' || needs.ubuntu.result == 'success'
+        if: >-
+          fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists == 'true' ||
+          needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).basic_ttnn_tag }}
@@ -534,7 +630,8 @@ jobs:
       - name: "Push latest Manylinux tag"
         if: |
           inputs.build-manylinux == true &&
-          (fromJson(needs.metadata.outputs.platform_data).manylinux_exists == 'true' || needs.manylinux.result == 'success')
+          (fromJson(needs.metadata.outputs.platform_data).manylinux_exists == 'true' ||
+           needs.manylinux.result == 'success')
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).manylinux_tag }}

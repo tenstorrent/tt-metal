@@ -93,6 +93,49 @@ def _model_key():
     return os.path.basename(_get_model_path().rstrip("/"))
 
 
+def _lookup_model_entry(table, model_key):
+    """Resolve a model entry from pcc_thresholds.json, case-insensitively.
+
+    HF_MODEL may use ``google/gemma-4-31b-it`` while the table keys use
+    ``gemma-4-31B-it``; basename casing must not force the 0.99 default.
+    """
+    if model_key in table:
+        return table[model_key]
+    key_lower = model_key.lower()
+    for entry_key, entry in table.items():
+        if entry_key.lower() == key_lower:
+            return entry
+    return {}
+
+
+@lru_cache(maxsize=1)
+def _model_key_candidates():
+    """Return possible threshold-table keys for the active HF_MODEL.
+
+    Local runs sometimes point HF_MODEL at a HuggingFace cache/snapshot path
+    whose basename is a hash, not "gemma-4-31B-it". Keep the fast basename path,
+    then infer well-known Gemma4 variants from the loaded config as a fallback.
+    """
+    candidates = [_model_key()]
+    try:
+        from transformers import AutoConfig
+
+        config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+        tc = getattr(config, "text_config", config)
+        hidden = getattr(tc, "hidden_size", None)
+        is_moe = bool(getattr(tc, "enable_moe_block", False))
+        if hidden == 5376 and not is_moe:
+            candidates.append("gemma-4-31B-it")
+        elif hidden == 3840 and not is_moe:
+            candidates.append("gemma-4-12B-it")
+        elif is_moe:
+            candidates.append("gemma-4-26B-A4B-it")
+    except Exception:
+        # Config inference is best-effort; fall back to the HF_MODEL basename.
+        return tuple(dict.fromkeys(candidates))
+    return tuple(dict.fromkeys(candidates))
+
+
 def _mesh_key_from_node_name(node_name):
     """Extract the mesh-shape suffix (e.g. "1x1") from a pytest node name.
 
@@ -124,21 +167,72 @@ def get_pcc_threshold(request, default=0.99):
     table = _load_pcc_thresholds()
     node_name = request.node.name
     mesh_key = _mesh_key_from_node_name(node_name)
-    model_entry = table.get(_model_key(), {})
-    mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
-    return mesh_entry.get(node_name, default)
+    # Try each candidate model key (HF_MODEL basename first, then the canonical
+    # names inferred from the loaded config) so a HF_MODEL that drops the "-it"
+    # suffix (e.g. google/gemma-4-26B-A4B) or points at a hashed cache snapshot
+    # still resolves to the right entry instead of falling back to 0.99.
+    # _lookup_model_entry matches case-insensitively.
+    for model_key in _model_key_candidates():
+        model_entry = _lookup_model_entry(table, model_key)
+        mesh_entry = model_entry.get(mesh_key, {}) if mesh_key else {}
+        if node_name in mesh_entry:
+            return mesh_entry[node_name]
+    return default
 
 
 def is_moe_model():
     """Check if the current model has MoE enabled."""
     from transformers import AutoConfig
 
-    config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    try:
+        config = AutoConfig.from_pretrained(_get_model_path(), trust_remote_code=True)
+    except Exception as e:
+        # IMPORTANT: this helper is evaluated at import time (see skip_if_not_moe),
+        # so any failure here breaks *collection* for the whole Gemma4 unit-test suite.
+        #
+        # In environments where the HF checkpoint's `model_type="gemma4"` is not
+        # recognized by the installed Transformers version (or where the model's
+        # remote code isn't available offline), default to "not MoE" so only the
+        # MoE-specific tests are skipped rather than crashing collection.
+        import warnings
+
+        warnings.warn(f"Unable to load HF config for is_moe_model(): {e}. Treating model as non-MoE.")
+        return False
+
     tc = getattr(config, "text_config", config)
     return getattr(tc, "enable_moe_block", False)
 
 
 skip_if_not_moe = pytest.mark.skipif(not is_moe_model(), reason="Model does not use MoE")
+
+_GEMMA4_CONFIGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "configs"))
+_CONFIG_ONLY_SKIP_REASON = (
+    "Real HF checkpoint required (weights + tokenizer); "
+    "CI unit job uses config-only HF_MODEL under models/demos/gemma4/configs/"
+)
+
+
+def uses_ci_config_only_checkpoint():
+    """True when HF_MODEL points at a checked-in config stub without weight files."""
+    model_path = _get_model_path()
+    if not os.path.isdir(model_path):
+        return False
+    resolved = os.path.abspath(model_path)
+    if not resolved.startswith(_GEMMA4_CONFIGS_DIR + os.sep):
+        return False
+    if os.path.isfile(os.path.join(resolved, "model.safetensors")):
+        return False
+    if os.path.isfile(os.path.join(resolved, "pytorch_model.bin")):
+        return False
+    if any(name.startswith("model") and name.endswith(".safetensors") for name in os.listdir(resolved)):
+        return False
+    return True
+
+
+def skip_if_config_only_checkpoint():
+    """Skip tests that load HF weights or tokenizers when only config.json is available."""
+    if uses_ci_config_only_checkpoint():
+        pytest.skip(_CONFIG_ONLY_SKIP_REASON)
 
 
 class TestFactory:
@@ -250,6 +344,33 @@ class TestFactory:
         )
         return cos_tt, sin_tt
 
+    @staticmethod
+    def create_tt_rope_cache_2d(device, hf_text_config, max_seq_len, layer_idx):
+        """Create the 2D cos/sin cache used by the decode embedding-lookup RoPE path.
+
+        Returns (cos_cache, sin_cache) each [max_seq_len, head_dim] on device,
+        matching the layout of ``Gemma4Model.rope_caches_2d``. Decode attention
+        detects the 2D shape and gathers per-user cos/sin via ``ttnn.embedding``
+        (one row per user position), which is the path true batched decode takes.
+        """
+        from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
+
+        rope = Gemma4TextRotaryEmbedding(hf_text_config)
+        x_dummy = torch.randn(1, max_seq_len, hf_text_config.hidden_size)
+        pos_ids = torch.arange(max_seq_len).unsqueeze(0)
+        layer_type = hf_text_config.layer_types[layer_idx]
+        cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)  # [1, max_seq_len, head_dim]
+
+        is_mesh = hasattr(device, "shape")
+        replicate = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
+        cos_tt = ttnn.from_torch(
+            cos.squeeze(0), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+        )
+        sin_tt = ttnn.from_torch(
+            sin.squeeze(0), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
+        )
+        return cos_tt, sin_tt
+
 
 def compare_tensors(tt_tensor, torch_tensor, mesh_device=None, pcc_threshold=0.99):
     """Compare TT and torch tensors using PCC. Logs the PCC value."""
@@ -280,11 +401,31 @@ def parametrize_batch_seq(configs=None, ids=None):
     return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)
 
 
-def parametrize_mesh_with_fabric(mesh_shapes=None):
+# UMD device-enumeration failures that mean the *runner* is unhealthy (a dead
+# ETH core, failed topology discovery, etc.) rather than a bug in our code. When
+# `ttnn.get_num_devices()` raises one of these at import/collection time, there
+# is no device to test on, so the honest outcome is a skip — not a fatal pytest
+# collection error (exit 4) that masks which test was even meant to run.
+_DEVICE_DISCOVERY_FAILURE_MARKERS = (
+    "eth core heartbeat check failed",
+    "topology discovery",
+    "cluster initialization",
+)
+
+
+def _is_device_discovery_failure(exc):
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _DEVICE_DISCOVERY_FAILURE_MARKERS)
+
+
+def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     """Universal mesh parametrization with FABRIC_1D.
 
     Generates paired mesh_device + device_params parametrization for tests at
     any TP factor. Only includes mesh shapes that fit on the current system.
+
+    ``device_params_extra`` (dict) is merged into every param's device_params —
+    e.g. ``{"trace_region_size": 256_000_000}`` for tests that capture a trace.
 
     Fabric is enabled (FABRIC_1D) for multi-device shapes, and disabled for
     (1, 1). Launching fabric on a 1x1 mesh on a multi-device system fails the
@@ -307,7 +448,26 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         pytest -k "1x2"   # N300 (TP=2)                (manual / non-CI)
         pytest -k "1x8"   # T3K (TP=8)                 (manual / non-CI)
     """
-    num_devices = ttnn.get_num_devices()
+    try:
+        num_devices = ttnn.get_num_devices()
+    except RuntimeError as e:
+        # Only swallow genuine hardware-enumeration failures (bad runner); let any
+        # other RuntimeError propagate so real software regressions stay visible.
+        if not _is_device_discovery_failure(e):
+            raise
+        params = [
+            pytest.param(
+                (1, 1),
+                {"fabric_config": None, **dict(device_params_extra or {})},
+                id="device-unavailable",
+                marks=pytest.mark.skip(reason=f"Device discovery failed (unhealthy runner): {e}"),
+            )
+        ]
+
+        def decorator(func):
+            return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)(func)
+
+        return decorator
 
     if mesh_shapes is None:
         all_shapes = [(1, 1), (1, 2), (1, 4), (1, 8), (1, 32)]
@@ -322,11 +482,12 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
     if os.getenv("CI") == "true" and len(mesh_shapes) > 1:
         mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
+    extra = dict(device_params_extra or {})
     if not mesh_shapes:
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None},
+                {"fabric_config": None, **extra},
                 id="1x1",
                 marks=pytest.mark.skip(reason="Not enough devices"),
             )
@@ -335,7 +496,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
         params = [
             pytest.param(
                 s,
-                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D},
+                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D, **extra},
                 id=f"{s[0]}x{s[1]}",
             )
             for s in mesh_shapes

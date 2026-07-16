@@ -102,9 +102,10 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);
 }
 
-}  // namespace
-
-tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descriptor(
+// Per-coord ProgramDescriptor build. Kept inside the anonymous namespace so
+// create_workload_descriptor() below can loop coords and reuse this body verbatim.
+// Op-specific name suffix avoids Unity-build collisions with sibling ring sdpa factories.
+tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const ExpRingJointSDPAParams& operation_attributes,
     const ExpRingJointSDPAInputs& tensor_args,
     ExpRingJointSDPAResult& tensor_return_value,
@@ -113,7 +114,7 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
     auto& output_tensors = tensor_return_value;
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
-        "ExpRingJointSDPAProgramFactory::create_descriptor requires mesh_dispatch_coordinate");
+        "build_exp_ring_joint_sdpa_program_descriptor requires mesh_dispatch_coordinate");
     const auto& coord = mesh_dispatch_coordinate.value();
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
@@ -164,9 +165,14 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
     const auto& input_tensor_k = tensor_args.input_k;
     const auto& input_tensor_v = tensor_args.input_v;
 
-    const auto& joint_tensor_q = tensor_args.joint_q;
-    const auto& joint_tensor_k = tensor_args.joint_k;
-    const auto& joint_tensor_v = tensor_args.joint_v;
+    // Joint inputs are optional. The kernel's joint accessor CT args + address RT args sit at fixed
+    // positions (and the semaphore CT-arg offset derives from joint_v_args), so the arg layout must
+    // stay identical whether or not joints are present. When absent, source the joint placeholder
+    // from input_q; L is forced to 0 below, so zero joint chunks run and the placeholder is never read.
+    const bool has_joint = tensor_args.joint_q.has_value();
+    const auto& joint_tensor_q = has_joint ? tensor_args.joint_q.value() : input_tensor_q;
+    const auto& joint_tensor_k = has_joint ? tensor_args.joint_k.value() : input_tensor_q;
+    const auto& joint_tensor_v = has_joint ? tensor_args.joint_v.value() : input_tensor_q;
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
@@ -205,10 +211,10 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
-    const auto& joint_q_shape = joint_tensor_q.logical_shape();
     const uint32_t B = q_shape[0], NH = q_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
     const uint32_t padded_N = k_shape[2];
-    const uint32_t L = joint_q_shape[2];
+    // Zero joint sequence length when there are no joint inputs (placeholder joint == input_q).
+    const uint32_t L = has_joint ? joint_tensor_q.logical_shape()[2] : 0;
 
     const uint32_t local_padded_Nt = local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
@@ -1537,10 +1543,17 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
         }
         reader_args.push_back(static_cast<uint32_t>(is_mux_writer_valid));
 
-        // Per-link semaphore addresses for chunk-level sync
+        // Per-link semaphore addresses for chunk-level sync. These occupy per-core reader slots
+        // exp_ring_joint_sdpa_dynamic::kReaderSemaphoreArgBase .. +num_links-1. They are hash-excluded, so
+        // they are baked here for the cache-miss build and re-applied every dispatch by
+        // get_dynamic_runtime_args(); if you reorder the args above, update kReaderSemaphoreArgBase (and
+        // thus the re-apply target) accordingly.
         reader_args.push_back(args.num_links);
         for (uint32_t lnk = 0; lnk < args.num_links; ++lnk) {
-            reader_args.push_back(static_cast<uint32_t>(args.semaphore[lnk].address()));
+            reader_args.push_back(static_cast<uint32_t>(
+                args.semaphore[lnk]
+                    .address()));  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every dispatch
+                                   // via ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args
         }
 
         // Inject fused-op synchronization RT args: ring_size, ring_index, direction (3 values)
@@ -1553,6 +1566,7 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
         // Writer args
         KernelDescriptor::RTArgList writer_args;
         writer_args.push_back(out_buf);
+        // Zero-seq when no joint; address unused at runtime (L=0 => no joint writes).
         writer_args.push_back(joint_out_buf);
         writer_args.push_back(stats_buf);
         writer_args.push_back(global_q_start);
@@ -1614,10 +1628,17 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
             }
             writer_args.append(mux_writer_args);
 
-            // MUX writer RT args: out_ready_sem, injector coords, AG params, op signaler
+            // MUX writer RT args: out_ready_sem, injector coords, AG params, op signaler.
             if (link_in_range) {
+                // out_ready_sem_addr occupies per-core fabric-writer slot
+                // exp_ring_joint_sdpa_dynamic::kWriterFabricOutReadySemArg. It is a hash-excluded
+                // global-semaphore address, so it is baked here for the cache-miss build and re-applied
+                // every dispatch by get_dynamic_runtime_args(); if you reorder the args above, update
+                // kWriterFabricOutReadySemArg (and thus the re-apply target) accordingly.
                 const uint32_t out_ready_sem_addr = args.semaphore[link].address();
-                writer_args.push_back(out_ready_sem_addr);
+                writer_args.push_back(
+                    out_ready_sem_addr);  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every
+                                          // dispatch via ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args
 
                 // Find the injector core for this MUX writer's (batch, head)
                 const auto& mux_head_work = core_work.at(i).head_work;
@@ -1722,6 +1743,27 @@ tt::tt_metal::ProgramDescriptor ExpRingJointSDPAProgramFactory::create_descripto
     }
 
     return desc;
+}
+
+}  // namespace
+
+// Exp ring-joint SDPA returns a WorkloadDescriptor with one ProgramDescriptor per coord:
+// device_index / forward_coord / backward_coord / DEST_CHIP_ID-style fabric routing all
+// depend on the mesh coordinate, so descriptors cannot be shared across coords.
+tt::tt_metal::WorkloadDescriptor ExpRingJointSDPAProgramFactory::create_workload_descriptor(
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc =
+            build_exp_ring_joint_sdpa_program_descriptor(operation_attributes, tensor_args, tensor_return_value, coord);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
 }
 
 }  // namespace ttnn::prim

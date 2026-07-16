@@ -11,7 +11,7 @@ flowchart TB
     subgraph GHCR [GHCR Container Registry]
         ToolImages[Tool Images<br/>ccache, mold, doxygen, clangbuildanalyzer,<br/>gdb, cmake, yq, zstd, sfpi, openmpi]
         VenvImages[Python Venv Images<br/>ci-build-venv, ci-test-venv]
-        MainImages[Main Images<br/>ci-build, ci-test, dev]
+        MainImages[Main Images<br/>ci-build-light, ci-build,<br/>ci-test-light, ci-test,<br/>dev-light, dev]
         BasicImages[Basic Images<br/>basic-dev, basic-ttnn-runtime]
         ManylinuxImage[ManyLinux Image]
         EvalImage[Evaluation Image]
@@ -45,9 +45,24 @@ flowchart TB
 ```
 
 - **Tool images** are built once by `Dockerfile.tools` and pushed to GHCR. They contain pre-built binaries (ccache, mold, doxygen, etc.) to avoid repeated downloads and compilations.
-- **Python venv images** are built by `Dockerfile.python` and contain pre-installed Python dependencies for ci-build and ci-test environments.
-- **Main images** pull these pre-built layers via Bake `contexts` which resolve to either local builds or GHCR images, dramatically reducing build times.
+- **Python venv images** are built by `Dockerfile.python` and contain pre-installed Python dependencies for ci-build, ci-test, and the full dev environment.
+- **Main images** pull pre-built layers via Bake `contexts` which resolve to either local builds or GHCR images, dramatically reducing build times. The `*-light` images intentionally consume only tool contexts and skip venv contexts; their non-light counterparts add the matching pre-built venv layer.
+- **Final image tags are dependency-aware.** Platform image hashes include the canonical tool tag bundle and any consumed venv hash. The `dev` tag also includes the preceding main image hashes, making the `dev` image a registry canary for the main Docker image chain.
 - **docker-bake.hcl** is the **true** single source of truth for all build targets, dependencies, and configuration — not just for local builds, but also for CI. CI scripts and workflows derive tool lists from `docker buildx bake --print` at runtime rather than maintaining parallel hardcoded lists.
+
+Main `Dockerfile` stage inheritance:
+
+```mermaid
+flowchart LR
+    base --> ci-build-light
+    ci-build-light --> ci-build
+    ci-build-light --> ci-test-light
+    ci-test-light --> ci-test
+    ci-test-light --> dev-light
+    dev-light --> dev
+    base --> release
+    base --> release-models
+```
 
 ### How Bake Contexts Work
 
@@ -122,7 +137,10 @@ The result is: same Bake targets and contexts, but a more controllable execution
 
 ### Manual Bake Command Pattern (CI)
 
-Workflows build a newline-delimited `set` payload, then run bake manually:
+Workflows build a newline-delimited `set` payload, then run bake manually. Venv
+contexts are added per target: `ci-build` uses `ci-build-venv-layer`, `ci-test`
+and `dev` use `ci-test-venv-layer`, and `ci-build-light`, `ci-test-light`,
+and `dev-light` use no venv layer.
 
 ```bash
 docker buildx bake -f dockerfile/docker-bake.hcl \
@@ -131,6 +149,19 @@ docker buildx bake -f dockerfile/docker-bake.hcl \
   --set "ci-build.tags=ghcr.io/.../ubuntu-22.04-ci-build-amd64:<hash>" \
   --set "ci-build.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true" \
   ci-build
+
+docker buildx bake -f dockerfile/docker-bake.hcl \
+  --set "dev-light.contexts.cmake-layer=docker-image://ghcr.io/.../tools/cmake:tag" \
+  --set "dev-light.tags=ghcr.io/.../ubuntu-22.04-dev-light-amd64:<hash>" \
+  --set "dev-light.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true" \
+  dev-light
+
+docker buildx bake -f dockerfile/docker-bake.hcl \
+  --set "dev.contexts.cmake-layer=docker-image://ghcr.io/.../tools/cmake:tag" \
+  --set "dev.contexts.ci-test-venv-layer=docker-image://ghcr.io/.../python-venv/ci-test:tag" \
+  --set "dev.tags=ghcr.io/.../ubuntu-22.04-dev-amd64:<hash>" \
+  --set "dev.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true" \
+  dev
 ```
 
 The same pattern is used for tools, venvs, main images, basic images, and manylinux.
@@ -158,7 +189,7 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
 ## When to Use CI vs Local Builds
 
 - **CI (GitHub Actions)**: The `build-docker-artifact.yaml` workflow builds tool images, Python venv images, and main images automatically using manual `docker buildx bake` with GHCR context overrides. Used by merge-gate, pr-gate, and build-artifact.
-- **Local development**: Use `docker buildx bake -f dockerfile/docker-bake.hcl <target>` directly. Bake automatically builds tool and venv dependencies first.
+- **Local development**: Use `docker buildx bake -f dockerfile/docker-bake.hcl <target>` directly. Bake automatically builds required tool and venv dependencies first.
 
 ## Local Builds
 
@@ -167,6 +198,9 @@ Tool image tags are passed between workflows as a single JSON bundle instead of 
 ```bash
 # Build the development image (tools+venvs built automatically)
 docker buildx bake -f dockerfile/docker-bake.hcl dev
+
+# Build the development image without pre-built venv layers
+docker buildx bake -f dockerfile/docker-bake.hcl dev-light
 
 # Ubuntu 24.04 variant — PYTHON_VERSION must match: 22.04→3.10, 24.04→3.12
 UBUNTU_VERSION=24.04 PYTHON_VERSION=3.12 docker buildx bake -f dockerfile/docker-bake.hcl dev
@@ -185,9 +219,12 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 
 | Target | Description |
 |--------|-------------|
-| `dev` | Development image (default) |
-| `ci-build` | CI build image |
-| `ci-test` | CI test image |
+| `dev` | Development image (default), built from `dev-light` plus `ci-test-venv-layer` |
+| `dev-light` | Development image without pre-built Python venv layers |
+| `ci-build` | CI build image, built from `ci-build-light` plus `ci-build-venv-layer` |
+| `ci-build-light` | CI build image without pre-built Python venv layers |
+| `ci-test` | CI test image, built from `ci-test-light` plus `ci-test-venv-layer` |
+| `ci-test-light` | CI test image without pre-built Python venv layers |
 | `release` | Release image |
 | `release-models` | Release models image |
 | `basic-dev` | Basic dev image |
@@ -202,7 +239,7 @@ docker buildx bake -f dockerfile/docker-bake.hcl --no-cache dev
 
 | Dockerfile | Purpose | Targets |
 |------------|---------|---------|
-| `Dockerfile` | Main CI/build/dev images | ci-build, ci-test, dev, release, release-models |
+| `Dockerfile` | Main CI/build/dev images | ci-build-light, ci-build, ci-test-light, ci-test, dev-light, dev, release, release-models |
 | `Dockerfile.basic-dev` | Minimal dev environment | base, basic-ttnn-runtime |
 | `Dockerfile.evaluation` | Evaluation builds | evaluation |
 | `Dockerfile.manylinux` | ManyLinux wheel builds | manylinux |
@@ -235,7 +272,7 @@ These utilities are part of the build architecture even though they are not Dock
 |---------|---------|--------------------|
 | `.github/scripts/compute-tool-tags.sh` | Computes deterministic `tool-tags` JSON such as `ccache-tag` or `sfpi-tag` from the tool version source of truth plus install-script content hashes | This script is pure tag computation. It does not check the registry. Keeping it pure makes the tag format reusable anywhere a workflow needs the canonical tag values |
 | `.github/scripts/compute-tool-data.sh` | Wraps `compute-tool-tags.sh`, checks whether each tool image already exists, and emits `*_exists` booleans plus `any_missing` | CI needs both the tag values and the build/no-build decision. Separating this from `compute-tool-tags.sh` avoids duplicating tag logic while keeping registry access optional |
-| `.github/scripts/compute-platform-data.sh` | Computes tags and existence metadata for platform images and Python venv images | Tool changes affect downstream image hashes. This script keeps platform metadata computation centralized instead of scattering tag logic across workflows |
+| `.github/scripts/compute-platform-data.sh` | Computes tags, existence metadata, and venv required flags for platform images and Python venv images, including all `*-light` images | Tool and venv changes affect downstream image hashes. This script checks the dependency-aware `dev` image first as a canary, then inspects light image manifests and only checks dependency manifests when a missing final image needs them |
 | `.github/scripts/dockerfile-hash.sh` | Hashes a Dockerfile together with its `COPY` inputs and selected extra files | This is the cache-drift guardrail for content-addressed image tags. When tool-related files change, downstream image tags change automatically |
 | `.github/actions/manual-docker-bake` | Shared wrapper that runs `docker buildx bake` via CLI with retries, env setup, and post-build validation | CI intentionally uses manual Bake instead of `docker/bake-action`, so this action centralizes the reliable invocation pattern in one place |
 | `.github/scripts/get-target-tools.sh` | Queries `docker buildx bake --print <target>` and returns space-separated tool names by extracting `-layer` context keys. For groups (e.g. `tools`), returns the group's targets array. Used by workflows to derive tool lists without hardcoding them | Centralizes the bake `--print` query pattern so all callers (`build-docker-artifact.yaml`, `build-docker-tools.yaml`, `validate-docker-bake-ci.py`) get tool lists from the same source |
@@ -261,8 +298,8 @@ Use this checklist when adding a new tool. All listed files must be updated to a
 | 5 | `.github/scripts/compute-tool-tags.sh` | Add version extraction from the real source of truth, compute the content hash from the install script and any version file(s), then add the new `--arg` and `"<tool>-tag"` JSON entry |
 | 6 | `.github/scripts/compute-tool-data.sh` | **No changes needed.** The `TOOLS` list and per-tool existence flags are now derived automatically from `docker buildx bake --print tools` |
 | 7 | `.github/workflows/build-docker-tools.yaml` | **No changes needed.** The `add_if_missing` loop now iterates over bake group targets automatically |
-| 8 | `.github/workflows/build-docker-artifact.yaml` | **No changes needed.** `ALL_TOOLS`, `BASIC_TOOLS`, and the manylinux tool loop are now derived automatically from `docker buildx bake --print` via `get-target-tools.sh`. The validation script (`.github/scripts/validate-docker-bake-ci.py`) also self-derives tool lists from bake |
-| 9 | `.github/scripts/get-target-tools.sh` | **No changes needed.** Tool lists are derived from bake at runtime |
+| 8 | `.github/workflows/build-docker-artifact.yaml` | **No changes needed for tool-only additions.** `ALL_TOOLS`, `BASIC_TOOLS`, and the manylinux tool loop are derived automatically from `docker buildx bake --print` via `get-target-tools.sh`. Update this workflow when adding/removing image targets or changing per-target venv context wiring |
+| 9 | `.github/scripts/get-target-tools.sh` | **No changes needed for tool-only additions.** Tool lists are derived from bake at runtime. Update comments/examples if target names or groups change |
 | 10 | `.github/workflows/build-evaluation-image.yaml` | If `dockerfile/Dockerfile.evaluation` uses the tool, expose `<tool>-tag` from `check-tool-images` and add `<tool>-layer=docker-image://...` to `build-contexts` |
 | 11 | Other explicit `tool-tags` consumers (currently `build-all-docker-images.yaml`) | If a workflow enumerates JSON keys explicitly, add the new `"<tool>-tag"` key there too so prewarming/reporting includes the new image |
 
@@ -298,7 +335,7 @@ Requirements:
 - In `.github/scripts/compute-tool-tags.sh`, add version extraction and hash computation for the new tool.
 - If evaluation uses the tool, update `.github/workflows/build-evaluation-image.yaml`.
 - If `build-all-docker-images.yaml` enumerates tool-tags keys explicitly, add the new key there.
-- DO NOT edit `build-docker-artifact.yaml`, `build-docker-tools.yaml`, `compute-tool-data.sh`, `validate-docker-bake-ci.py`, or `get-target-tools.sh` — these derive tool lists automatically from `docker buildx bake --print` at runtime.
+- For tool-only additions, do not edit `build-docker-artifact.yaml`, `build-docker-tools.yaml`, `compute-tool-data.sh`, `validate-docker-bake-ci.py`, or `get-target-tools.sh` unless validation shows a mismatch; these derive tool lists automatically from `docker buildx bake --print` at runtime. For image target or venv wiring changes, update the affected workflow and validation logic explicitly.
 - Match the style of existing tools such as `ccache`, `cmake`, `openmpi`, or `sfpi`, whichever is structurally closest.
 
 Validation:

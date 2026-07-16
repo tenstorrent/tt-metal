@@ -48,9 +48,11 @@ RUN --mount=from=mold-layer,source=/install,target=/mold-staging \
     cp -a /mold-staging/lib/* /usr/local/lib/ && \
     mold --version
 
-# Copy ccache from pre-built tool image
 RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
     cp -a /ccache-staging/bin/ccache /usr/local/bin/ && \
+    mkdir -p /usr/local/libexec && \
+    cp -a /ccache-staging/libexec/. /usr/local/libexec/ && \
+    test -x /usr/local/libexec/ccache-storage-s3 || { echo "ERROR: ccache-storage-s3 helper missing from ccache-layer" >&2; exit 1; } && \
     ccache --version
 
 # Copy zstd from pre-built tool image

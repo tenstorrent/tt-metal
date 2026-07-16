@@ -4,11 +4,7 @@
 
 import pytest
 
-import os
-import pathlib
-
 import torch
-import numpy as np
 import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
@@ -51,27 +47,24 @@ def test_indexed_slice(seed, B, b, tt_dtype, device):
         non_zero_tensor = torch.rand((1, 1, 1, B - b), dtype=dtype)
         non_zero_tensor.add(1, alpha=1)
     torch_input_tensor = torch.concat((zero_tensor, non_zero_tensor), dim=3)
-    torch_input_tensor = torch_input_tensor[torch.randperm(torch_input_tensor.size()[2])]
 
     input_tt = ttnn.Tensor(torch_input_tensor, tt_dtype).to(device)
 
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
-    num_indices_tt, indices_tt = ttnn.nonzero(input_tt, memory_config=mem_config, queue_id=0)
-    torch_num_indices = num_indices_tt.cpu().to_torch()
-    torch_indices = indices_tt.cpu().to_torch()
+    output = ttnn.nonzero(input_tt, memory_config=mem_config)
 
-    num_non_zeros = torch_num_indices[0, 0, 0, 0].item()
+    count_tensor = ttnn.to_torch(ttnn.from_device(output[0]))
+    num_non_zeros = int(count_tensor[0, 0, 0, 0].item())
     assert num_non_zeros == B - b
 
-    a_pt = (
-        ttnn.slice(indices_tt, (0, 0, 0, 0), (1, 1, 1, num_non_zeros), memory_config=mem_config)
-        .cpu()
-        .to(ttnn.ROW_MAJOR_LAYOUT)
-        .to_torch()
-        .to(torch.int32)
-    )
+    indices_tensor = ttnn.to_torch(ttnn.from_device(output[1]))
 
-    golden_output = torch.arange(start=b, end=B, step=1, dtype=torch.int32)
-    golden_output = torch.reshape(golden_output, (1, 1, 1, B - b))
-    assert torch.allclose(golden_output, a_pt)
+    # output[1] has shape [1, 1, 1, N*4]: N packed (b,n,h,c) uint32 4-tuples.
+    # Flatten across the page dims so the slice works for any page layout.
+    flat_coords = indices_tensor.reshape(-1)
+    tt_coords = flat_coords[: num_non_zeros * 4].reshape(num_non_zeros, 4).int()
+
+    ref_coords = torch.nonzero(torch_input_tensor.float(), as_tuple=False).int()
+
+    assert torch.equal(tt_coords, ref_coords)

@@ -3,16 +3,16 @@ name: "[internal] Produce data for external analysis"
 on:
   workflow_call:
     inputs:
-      test_workflow_run_id:
+      workflow_run_id:
         description: "Unique GitHub workflow run ID to use for data"
         required: false
-        type: number
-        default: 0
-      test_workflow_run_attempt:
+        type: string
+        default: "0"
+      workflow_run_attempt:
         description: "Run attempt of the workflow run"
         required: false
-        type: number
-        default: 1
+        type: string
+        default: "1"
       upload_data:
         description: "Upload data to datastore cluster for our dashboard"
         required: false
@@ -20,14 +20,14 @@ on:
         default: false
   workflow_dispatch:
     inputs:
-      test_workflow_run_id:
+      workflow_run_id:
         description: "Unique GitHub workflow run ID to use for data"
-        default: 12788722730
-        type: number
-      test_workflow_run_attempt:
+        default: "12788722730"
+        type: string
+      workflow_run_attempt:
         description: "Run attempt of the workflow run"
-        default: 1
-        type: number
+        default: "1"
+        type: string
       upload_data:
         description: "Upload data to datastore cluster for our dashboard"
         default: false
@@ -42,15 +42,13 @@ on:
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"
-      - "(Single-card) Tests for new models"
-      - "(Single-card) Fast dispatch frequent tests"
       - "(Single-card) Frequent model and ttnn tests"
       - "(Single) Choose your pipeline"
       - "(T3K) T3000 demo tests"
       - "(T3K) T3000 integration tests"
       - "(T3K) T3000 perf tests"
       - "(T3K) T3000 e2e tests"
-      - "(T3K) T3000 profiler tests"
+      - "(T3K) Profiler tests"
       - "(T3K) T3000 unit tests"
       - "(T3K) T3000 fast tests"
       - "(T3K) Choose your pipeline"
@@ -61,9 +59,8 @@ on:
       - "(Tier 3) Models End-To-End Tests"
       - "(Tier 3) Models Unit Tests"
       - "(Galaxy) Choose your pipeline"
-      - "ttnn - Run sweeps"
-      - "ttnn stress tests"
-      - "Blackhole post-commit tests"
+      - "ttnn - run sweeps"
+      - "Blackhole sanity tests"
       - "(Blackhole) e2e tests"
       - "(Blackhole) Demo tests"
       - "PR Gate"
@@ -89,10 +86,11 @@ on:
       - "(Release) Model Status for Console Deployment"
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
-      - "Profiler CI"
+      - "(Profiler) Choose your pipeline"
       - "Git bisect dispatch"
       - "Custom test dispatch"
       - "Validate installation step from instructions"
+      - "LLK perf"
     types:
       - completed
 
@@ -103,7 +101,7 @@ jobs:
     # Skip on forks — secrets (SFTP, Slack) are unavailable there and would
     # cause failures that spam fork owners with email notifications.
     if: >-
-      ${{ github.repository == 'tenstorrent/tt-metal' &&
+      ${{ (github.repository == 'tenstorrent/tt-metal' || github.repository == 'tenstorrent/tt-blaze') &&
           ((github.event_name == 'workflow_run' &&
             (github.event.workflow_run.conclusion == 'success' ||
              github.event.workflow_run.conclusion == 'failure' ||
@@ -113,7 +111,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
+          repository: ${{ job.workflow_repository || 'tenstorrent/tt-metal' }}
+          ref: ${{ job.workflow_sha || 'main' }}
           sparse-checkout: |
             .github
             infra
@@ -136,25 +137,25 @@ jobs:
         id: get-run-id-and-attempt
         shell: bash
         run: |
-          event_name="${{ github.event_name }}"
-          if [[ "$event_name" == "workflow_dispatch" ]]; then
-            run_id="${{ inputs.test_workflow_run_id }}"
-            attempt_number="${{ inputs.test_workflow_run_attempt }}"
-          elif [[ "$event_name" == "workflow_run" ]]; then
+          # Prefer explicit inputs (workflow_call / workflow_dispatch); fall back to the
+          # triggering run from the workflow_run event payload. github.event_name is
+          # unreliable inside a reusable workflow (it reflects the caller's event), so we
+          # don't switch on it here.
+          run_id="${{ inputs.workflow_run_id }}"
+          attempt_number="${{ inputs.workflow_run_attempt }}"
+          if [[ -z "$run_id" || "$run_id" == "0" ]]; then
             run_id="${{ github.event.workflow_run.id }}"
             attempt_number="${{ github.event.workflow_run.run_attempt }}"
-            [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
-            [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
-          else
-            echo "Unknown event name" && exit 1
           fi
+          [[ -z "$run_id" || "$run_id" == "0" ]] && { echo "run_id is empty" ; exit 1; }
+          [[ -z "$attempt_number" ]] && attempt_number=1
 
           echo $run_id
           echo $attempt_number
           echo "run-id=$run_id" >> "$GITHUB_OUTPUT"
           echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
 
-          echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/${run_id}/attempts/${attempt_number}"
+          echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/${{ github.repository }}/actions/runs/${run_id}/attempts/${attempt_number}"
       - name: Get API rate limit status
         env:
           GH_TOKEN: ${{ github.token }}
@@ -168,15 +169,15 @@ jobs:
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
+          gh api /repos/${{ github.repository }}/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --repo ${{ github.repository }} --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
           find generated/cicd/ -type f
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
           cache: "pip"
@@ -230,12 +231,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
             infra
           sparse-checkout-cone-mode: true
-      - uses: actions/setup-python@v5.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
           cache: "pip"

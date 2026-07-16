@@ -49,10 +49,6 @@ std::string read_file_to_string(const std::filesystem::path& file_path) {
 std::string get_grouping_name_string(const proto::Grouping& grouping) {
     if (grouping.has_preset_type()) {
         switch (grouping.preset_type()) {
-            case proto::TRAY_1: return "TRAY_1";
-            case proto::TRAY_2: return "TRAY_2";
-            case proto::TRAY_3: return "TRAY_3";
-            case proto::TRAY_4: return "TRAY_4";
             case proto::HOSTS: return "HOSTS";
             case proto::MESH: return "MESH";
             default: return "";
@@ -77,16 +73,19 @@ bool grouping_exists(const proto::PhysicalGroupings& proto, const std::string& g
 
 namespace tt::tt_fabric {
 
+GroupingInfo::GroupingInfo() = default;
+GroupingInfo::~GroupingInfo() = default;
+GroupingInfo::GroupingInfo(const GroupingInfo&) = default;
+GroupingInfo::GroupingInfo(GroupingInfo&&) noexcept = default;
+GroupingInfo& GroupingInfo::operator=(const GroupingInfo&) = default;
+GroupingInfo& GroupingInfo::operator=(GroupingInfo&&) noexcept = default;
+
 // Static helper functions to access grouping name and type from proto
 std::string PhysicalGroupingDescriptor::get_grouping_name(const proto::Grouping& grouping) { return grouping.name(); }
 
 std::string PhysicalGroupingDescriptor::get_grouping_type_string(const proto::Grouping& grouping) {
     if (grouping.has_preset_type()) {
         switch (grouping.preset_type()) {
-            case proto::TRAY_1: return "TRAY_1";
-            case proto::TRAY_2: return "TRAY_2";
-            case proto::TRAY_3: return "TRAY_3";
-            case proto::TRAY_4: return "TRAY_4";
             case proto::HOSTS: return "HOSTS";
             case proto::MESH: return "MESH";
             default: return "";
@@ -264,7 +263,7 @@ uint32_t PhysicalGroupingDescriptor::calculate_dependent_grouping_asic_count(
     uint32_t total_asics = 0;
 
     // Set of preset names that don't need to exist (can be auto-populated)
-    std::unordered_set<std::string> preset_names = {"TRAY_1", "TRAY_2", "TRAY_3", "TRAY_4", "HOSTS", "MESH", "meshes"};
+    std::unordered_set<std::string> preset_names = {"HOSTS", "MESH", "meshes"};
 
     for (const auto& item : grouping.items) {
         if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
@@ -307,7 +306,7 @@ void PhysicalGroupingDescriptor::populate() {
     std::unordered_map<std::string, std::set<std::string>> dependencies;
 
     // Set of preset names that don't need to exist (can be auto-populated)
-    std::unordered_set<std::string> preset_names = {"TRAY_1", "TRAY_2", "TRAY_3", "TRAY_4", "HOSTS", "MESH", "meshes"};
+    std::unordered_set<std::string> preset_names = {"HOSTS", "MESH", "meshes"};
 
     for (const auto& grouping : proto_->groupings()) {
         GroupingInfo info = convert_grouping_to_info(grouping);
@@ -323,7 +322,10 @@ void PhysicalGroupingDescriptor::populate() {
                 }
             }
         }
-        dependencies[info.type] = deps;
+        // Merge deps across all groupings of the same type (multiple MESH/HOSTS definitions share a type key).
+        for (const auto& dep : deps) {
+            dependencies[info.type].insert(dep);
+        }
         groupings_by_name[info.type].push_back(std::move(info));
     }
 
@@ -577,7 +579,7 @@ void PhysicalGroupingDescriptor::validate_no_cycles(std::vector<std::string>& er
 
 void PhysicalGroupingDescriptor::validate_instance_counts(std::vector<std::string>& errors) const {
     // Set of preset names that don't need to exist (can be auto-populated)
-    std::unordered_set<std::string> preset_names = {"TRAY_1", "TRAY_2", "TRAY_3", "TRAY_4", "HOSTS", "MESH", "meshes"};
+    std::unordered_set<std::string> preset_names = {"HOSTS", "MESH", "meshes"};
 
     // Validation: all groupings should have ASIC counts > 0
     // Exception: groupings that only reference preset names (which can be auto-populated) may have 0 count
@@ -644,7 +646,7 @@ void PhysicalGroupingDescriptor::validate_grouping_references(
     }
 
     // Set of preset types that don't need to exist (can be auto-populated)
-    std::unordered_set<std::string> preset_types = {"TRAY_1", "TRAY_2", "TRAY_3", "TRAY_4", "HOSTS", "MESH", "meshes"};
+    std::unordered_set<std::string> preset_types = {"HOSTS", "MESH", "meshes"};
 
     // Validate all grouping references
     for (int i = 0; i < proto.groupings_size(); ++i) {
@@ -660,12 +662,7 @@ void PhysicalGroupingDescriptor::validate_grouping_references(
                 bool is_preset_type = false;
 
                 if (ref.has_preset_type()) {
-                    // Convert preset_type enum to string
                     switch (ref.preset_type()) {
-                        case proto::TRAY_1: ref_type = "TRAY_1"; break;
-                        case proto::TRAY_2: ref_type = "TRAY_2"; break;
-                        case proto::TRAY_3: ref_type = "TRAY_3"; break;
-                        case proto::TRAY_4: ref_type = "TRAY_4"; break;
                         case proto::HOSTS: ref_type = "HOSTS"; break;
                         case proto::MESH: ref_type = "MESH"; break;
                         default: ref_type = ""; break;
@@ -734,18 +731,18 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
         for (int j = 0; j < grouping.instances_size(); ++j) {
             const auto& instance = grouping.instances(j);
 
-            // Check that exactly one of asic_location or grouping_ref is set (enforced by oneof, but validate anyway)
-            bool has_asic_location = instance.has_asic_location();
+            // Check that exactly one of location or grouping_ref is set (enforced by oneof, but validate anyway)
+            bool has_location = instance.has_location();
             bool has_grouping_ref = instance.has_grouping_ref();
 
-            if (!has_asic_location && !has_grouping_ref) {
+            if (!has_location && !has_grouping_ref) {
                 errors.push_back(
-                    fmt::format("Grouping '{}' instance {} must have either asic_location or grouping_ref", name, j));
+                    fmt::format("Grouping '{}' instance {} must have either location or grouping_ref", name, j));
             }
 
             // Validate ASIC location enum value
-            if (has_asic_location) {
-                const proto::AsicLocation loc = instance.asic_location();
+            if (has_location) {
+                const proto::AsicLocation loc = instance.location().asic_location();
                 // ASIC_LOCATION_UNSPECIFIED means "any ASIC ID" (no constraint)
                 const bool is_unspecified = (loc == proto::AsicLocation::ASIC_LOCATION_UNSPECIFIED);
                 const bool is_valid_location =

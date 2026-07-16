@@ -40,7 +40,7 @@ void barrier_across_send_recv_ranks(
     sub_context->barrier();
 }
 
-void validate_device_ownership(
+[[maybe_unused]] void validate_device_ownership(
     multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -130,7 +130,11 @@ void MeshSocket::process_host_ranks() {
 
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-    validate_device_ownership(sender_rank, receiver_rank, config_);
+    // Skip coordinate validation for rank-addressed sockets (this path): the socket cores are
+    // expressed in submesh-local space, which doesn't match the parent-mesh coord range that
+    // validate_device_ownership / get_coord_range expect. This holds for cross-mesh rank-
+    // addressed sockets too — they use the same submesh-local cores. Role correctness is
+    // enforced by the rank-based check in the constructor.
 }
 
 void MeshSocket::process_mesh_ids() {
@@ -367,12 +371,12 @@ namespace std {
 
 std::size_t hash<tt::tt_metal::distributed::SocketConnection>::operator()(
     const tt::tt_metal::distributed::SocketConnection& conn) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
+    return ttsl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
 }
 
 std::size_t hash<tt::tt_metal::distributed::MeshCoreCoord>::operator()(
     const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
+    return ttsl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
 }
 
 std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
@@ -383,7 +387,7 @@ std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
         distributed_context_rank = config.distributed_context->rank();
         distributed_context_size = config.distributed_context->size();
     }
-    return tt::stl::hash::hash_objects_with_default_seed(
+    return ttsl::hash::hash_objects_with_default_seed(
         config.socket_connection_config,
         config.socket_mem_config,
         config.sender_rank,
@@ -394,7 +398,7 @@ std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
 
 std::size_t hash<tt::tt_metal::distributed::MeshSocket>::operator()(
     const tt::tt_metal::distributed::MeshSocket& socket) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(socket.attribute_values());
+    return ttsl::hash::hash_objects_with_default_seed(socket.attribute_values());
 }
 
 }  // namespace std

@@ -45,7 +45,7 @@ class TorchDispatchModule(torch.nn.Module):
             dispatch_group_size: Number of chips in each dispatch group
             experts_per_chip: Number of experts per chip
             num_routed_experts: Total number of routed experts across all chips
-            metadata_len: Length of metadata per token (stores: chip, token, topk_idx, routed_expert, weight)
+            metadata_len: Length of metadata per token (3 fields: chip, token, topk_idx)
             max_dispatched_tokens_per_expert: Per-expert theoretical upper bound on the number of tokens any
                 single expert may receive (full sequence length of the dispatch group).
             max_dispatch_buffer_token_size: Total token capacity of the flat dispatch buffer per chip
@@ -79,9 +79,6 @@ class TorchDispatchModule(torch.nn.Module):
             self.max_dispatch_buffer_token_size,
             self.metadata_len,
         )
-
-        self.dispatched_buffer = torch.zeros(self.dispatched_shape, dtype=torch.float32)
-        self.dispatched_metadata = torch.ones(self.dispatched_metadata_shape, dtype=torch.int32) * -1
 
     def forward(
         self,
@@ -166,16 +163,7 @@ class TorchDispatchModule(torch.nn.Module):
                             chip, group, self.num_dispatch_groups
                         )
                         dispatched_metadata[group, expert_chip, dst_index] = torch.tensor(
-                            [
-                                linearized_coord,
-                                token,
-                                topk_idx,
-                                routed_expert,
-                                torch.tensor(weights[chip, token, topk_idx].item(), dtype=torch.bfloat16)
-                                .view(torch.int16)
-                                .item(),
-                            ]
-                            + [0] * (self.metadata_len - 5),
+                            [linearized_coord, token, topk_idx],
                             dtype=dispatched_metadata.dtype,
                         )
                         offset_copy[chip, routed_expert] += 1

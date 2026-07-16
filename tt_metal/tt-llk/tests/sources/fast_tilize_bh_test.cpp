@@ -114,8 +114,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             ZONE_SCOPED("INIT")
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
-            _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
+                formats.unpack_A_src,
+                formats.unpack_B_src,
+                formats.unpack_A_dst,
+                formats.unpack_B_dst,
+                FACE_R_DIM,
+                FACE_R_DIM,
+                4 /* unpA_num_faces */,
+                4 /* unpB_num_faces */);
+            _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
         }
         {
             ZONE_SCOPED("TILE_LOOP")
@@ -124,13 +131,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
                 {
                     _llk_unpack_tilize_dispatch_(
-                        _llk_unpack_tilize_, L1_ADDRESS(buffer_A[0]), 0, formats.unpack_A_src, formats.unpack_A_dst, FACE_R_DIM, 4, false);
+                        _llk_unpack_tilize_,
+                        L1_ADDRESS(buffer_A[0]),
+                        0,
+                        formats.unpack_A_src,
+                        formats.unpack_A_dst,
+                        FACE_R_DIM,
+                        4 /* num_faces */,
+                        false /* narrow_tile */);
                 }
             }
         }
         {
             ZONE_SCOPED("UNINIT")
-            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, 4, FACE_R_DIM);
+            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, 4 /* num_faces */));
         }
         return;
     }
@@ -144,13 +158,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             const std::uint32_t compat_dst = ckernel::to_underlying(DataFormat::Float16_b);
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src, formats.unpack_B_src, compat_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
+                formats.unpack_A_src,
+                formats.unpack_B_src,
+                compat_dst,
+                formats.unpack_B_dst,
+                FACE_R_DIM,
+                FACE_R_DIM,
+                4 /* unpA_num_faces */,
+                4 /* unpB_num_faces */);
             _llk_unpack_fast_tilize_init_(compat_dst, BLOCK_CT_DIM, unit_dims[0]);
         }
         else
         {
             _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-                formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4, 4);
+                formats.unpack_A_src,
+                formats.unpack_B_src,
+                formats.unpack_A_dst,
+                formats.unpack_B_dst,
+                FACE_R_DIM,
+                FACE_R_DIM,
+                4 /* unpA_num_faces */,
+                4 /* unpB_num_faces */);
             _llk_unpack_fast_tilize_init_(formats.unpack_A_dst, BLOCK_CT_DIM, unit_dims[0]);
         }
         // Base address is programmed per-call inside _llk_unpack_fast_tilize_block_
@@ -183,7 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     const std::uint32_t col_datum_offset = col_offset * TILE_C_DIM;
                     const std::uint32_t chunk_base       = L1_ADDRESS(buffer_A[0]) + (SCALE_DATUM_SIZE(formats.unpack_A_src, col_datum_offset) >> 4);
-                    _llk_unpack_fast_tilize_block_(chunk_base, 0, formats.unpack_A_src, chunk, 4);
+                    _llk_unpack_fast_tilize_block_(chunk_base, 0 /* tile_index */, formats.unpack_A_src, chunk, 4 /* num_faces */);
                     col_offset += chunk;
                 }
             }
@@ -224,14 +252,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("INIT")
             _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Tilize>(4, formats.math);
+            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Tilize>(
+                4 /* num_faces */, formats.math);
         }
         {
             ZONE_SCOPED("TILE_LOOP")
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.math, formats.math, 4);
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                    0 /* dst_index */, formats.math, formats.math, 4 /* num_faces */);
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
@@ -358,7 +388,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                 formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-            _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4, formats.pack_src);
+            _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                0 /* use_32bit_dest */, formats.pack_dst, unit_dims[0], 4 /* num_faces */, formats.pack_src);
         }
         {
             ZONE_SCOPED("TILE_LOOP")
@@ -395,7 +426,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
 
                         _llk_packer_wait_for_math_done_();
-                        _llk_pack_fast_tilize_row_chunk_(0, udim, 4);
+                        _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
                         _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                     }
 
@@ -405,7 +436,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("UNINIT")
-            _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4, formats.pack_src);
+            _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, formats.pack_src);
         }
 
     } // end else (fast tilize path)

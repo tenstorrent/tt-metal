@@ -5,9 +5,10 @@
 #include <cstdint>
 
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
@@ -23,6 +24,34 @@
 // SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
 // SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
 // SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+
+// Largest pack_untilize block width (<= DEST tile capacity) dividing full_ct_dim.
+constexpr uint32_t untilize_pack_block_ct(uint32_t full_ct_dim) {
+    const uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
+    for (uint32_t bct = max_bct; bct >= 1; --bct) {
+        if (full_ct_dim % bct == 0) {
+            return bct;
+        }
+    }
+    return 1;
+}
+
+// Untilize `full_ct_dim` tiles from icb to ocb using pack_untilize (replaces the removed
+// unpack-based untilize op). Handles the full cb hand-off (wait/reserve/pop/push).
+template <uint32_t full_ct_dim>
+ALWI void untilize_to_cb(uint32_t icb, uint32_t ocb) {
+    constexpr uint32_t block_ct = untilize_pack_block_ct(full_ct_dim);
+    constexpr uint32_t num_blocks = full_ct_dim / block_ct;
+    pack_untilize_init<block_ct, full_ct_dim>(icb, ocb);
+    cb_wait_front(icb, full_ct_dim);
+    cb_reserve_back(ocb, full_ct_dim);
+    for (uint32_t b = 0; b < num_blocks; ++b) {
+        pack_untilize_block<block_ct, full_ct_dim>(icb, 1, ocb, b);
+        cb_pop_front(icb, block_ct);
+    }
+    cb_push_back(ocb, full_ct_dim);
+    pack_untilize_uninit(ocb);
+}
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
@@ -42,12 +71,12 @@ inline void tilize_in(
 // NOTE: Bias is not supported with the untilize option
 #ifndef FUSE_BIAS
 
+template <uint32_t out_block_w>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
-    uint32_t out_block_w,
     uint32_t interm_cb_id,
     uint32_t reblock_cb_id,
     uint32_t out_cb_id) {
@@ -76,13 +105,7 @@ inline void reblock_and_untilize(
         cb_push_back(reblock_cb_id, out_block_w);
 
         // Untilize
-        untilize_init(reblock_cb_id);
-        cb_wait_front(reblock_cb_id, out_block_w);
-        cb_reserve_back(out_cb_id, out_block_w);
-        untilize_block(reblock_cb_id, out_block_w, out_cb_id);
-        cb_pop_front(reblock_cb_id, out_block_w);
-        cb_push_back(out_cb_id, out_block_w);
-        untilize_uninit(reblock_cb_id);
+        untilize_to_cb<out_block_w>(reblock_cb_id, out_cb_id);
 
         within_block_index += out_subblock_w;
     }
@@ -118,7 +141,7 @@ void kernel_main() {
     bool tilize_in0 = get_compile_time_arg_val(14);
     bool untilize_out = get_compile_time_arg_val(15);
 
-    uint32_t out_block_w = in1_block_w;
+    constexpr uint32_t out_block_w = get_compile_time_arg_val(7);  // == in1_block_w
     bool spill = in0_num_blocks_w > 1;
 
     // CB indices
@@ -134,10 +157,13 @@ void kernel_main() {
     uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t out_for_bias_cb_id = tt::CBIndex::c_28;
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
 #endif
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    // compute_kernel_hw_startup must be the first compute API call. The bias broadcast-add is
+    // initialized by add_bcast_rows_init_short right before it in the loop, so the full init_bcast
+    // here is redundant and was removed.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
+    matmul_init(in0_cb_id, in1_cb_id);
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
 #ifdef FUSE_BIAS
         uint32_t bias_block_offset = 0;
@@ -148,7 +174,7 @@ void kernel_main() {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    mm_init_short(tilized_in0_cb_id, in1_cb_id);
+                    matmul_init(tilized_in0_cb_id, in1_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
@@ -168,8 +194,8 @@ void kernel_main() {
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_init_short_with_dt(
-                                tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id, matmul_partials_cb);
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                         }  // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
                         int dst_index = 0;
@@ -220,7 +246,7 @@ void kernel_main() {
                             // do not pop front bias as it may be used again for subsequent blocks
                             cb_pop_front(out_for_bias_cb_id, out_subblock_num_tiles);
                             // reconfig for matmul
-                            mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
+                            matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                             // reconfig unpacker df for srcB
                             // reconfig_data_format(in1_cb_id, in0_cb_id);
                         }
@@ -247,16 +273,15 @@ void kernel_main() {
 #ifndef FUSE_BIAS
                        // untilizing is only supported if there is no bias
                     if (last_out && untilize_out) {
-                        reblock_and_untilize(
+                        reblock_and_untilize<out_block_w>(
                             in1_num_subblocks,
                             out_subblock_num_tiles,
                             out_subblock_h,
                             out_subblock_w,
-                            out_block_w,
                             untilize_mode_final_matmul_partials_cb,
                             untilize_mode_reblock_cb,
                             out_cb_id);
-                        mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
+                        matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                     }  // last_out
 #endif
                     in0_index_subblock_offset += in0_subblock_num_tiles;

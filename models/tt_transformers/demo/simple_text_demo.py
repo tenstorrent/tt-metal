@@ -18,8 +18,8 @@ from loguru import logger
 import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
-from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
+from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
@@ -74,54 +74,23 @@ class TokenAccuracy:
         return accuracy_top1, accuracy_top5
 
 
-def get_accuracy_thresholds(model_args):
-    """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
+def get_accuracy_thresholds(model_args, seq_len: int, batch_size: int = 1):
+    """Resolve accuracy thresholds from centralized model targets."""
     centralized_targets = resolve_accuracy_targets(
         model_name=model_args.base_model_name,
         sku=model_args.device_name,
+        batch_size=batch_size,
+        seq_len=seq_len,
     )
-    if centralized_targets and "top1" in centralized_targets and "top5" in centralized_targets:
-        return float(centralized_targets["top1"]), float(centralized_targets["top5"])
-
-    # Read PERF.md
-    perf_file = "models/tt_transformers/PERF.md"
-    with open(perf_file, "r") as f:
-        content = f.read()
-
-    # Split into sections based on optimization mode
-    sections = content.split("## ")
-    optimizations = model_args.optimizations
-    target_section = next(s for s in sections if s.lower().startswith(f"{optimizations.__name__}\n"))
-
-    # Parse the table and find the row for our model and device
-    # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
-    base_model_name = model_args.base_model_name
-    device_name = model_args.device_name
-    correct_line = (
-        lambda line: "|" in line
-        and base_model_name.lower() in line.split("|")[1].strip().lower()
-        and device_name.lower() in line.split("|")[2].strip().lower()
-        and not "(DP=".lower() in line.lower()  # ignore DP/HP report for now
-    )
-    rows = [
-        line.split("|")[1:]  # Each row starts with a separator
-        for line in target_section.split("\n")
-        if correct_line(line)
-    ]
-    if not rows:
+    if not centralized_targets or "top1" not in centralized_targets or "top5" not in centralized_targets:
         raise ValueError(
-            f"Could not find accuracy data for {base_model_name} on {device_name} in {optimizations.__name__} mode"
+            "Could not find centralized accuracy targets for "
+            f"{model_args.base_model_name} on {model_args.device_name} "
+            f"(batch_size={batch_size}, seq_len={seq_len})"
         )
 
-    assert (
-        len(rows) == 1
-    ), f"Found multiple rows for {base_model_name} on {device_name} in {optimizations.__name__} mode in PERF.md"
-    row = rows[0]
-    top1_acc = float(row[2].strip())
-    top5_acc = float(row[3].strip())
-
-    # Allow for rounding
-    return top1_acc - 0.5, top5_acc - 0.5
+    # Preserve previous behavior for integer-rounded CI checks.
+    return float(centralized_targets["top1"]) - 0.5, float(centralized_targets["top5"]) - 0.5
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -361,13 +330,6 @@ def prepare_generator_args(
 # mode (str): Mode to run the demo in (full, prefill, decode), full will run both prefill and decode
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
-_trace_region_size = (
-    100000000
-    if (is_blackhole() and os.environ.get("HF_MODEL", "").endswith(("Qwen2.5-72B-Instruct", "Qwen2.5-32B-Instruct")))
-    else 50000000
-)
-
-
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace, num_layers, mode",
     [
@@ -804,6 +766,37 @@ _trace_region_size = (
             10,  # num_layers, if None -> defaults to all layers
             "prefill",  # mode
         ),
+        (  # seqlen-sweep - Sweeps all powers-of-two seqlens up to model's max, one prefill per batch
+            [
+                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts (list of files, one per sweep step)
+            True,  # instruct mode
+            8,  # repeat_batches (one per seqlen step)
+            128 * 1024,  # max_seq_len (matches ci-1 config for N150; Galaxy overrides via --max_seq_len)
+            1,  # batch_size
+            32,  # max_generated_tokens (minimal decode to verify prefill works)
+            True,  # paged_attention
+            {
+                "page_block_size": 64,
+                "page_max_num_blocks_per_dp": 2048,
+            },  # page_params (fits N150; Galaxy overrides via --page_params)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -828,6 +821,7 @@ _trace_region_size = (
         "ci-eval-32",  # CI batch 32 with 3 repeat batches and output comparison
         "ci-long-context-16k",  # 16k context, max_seq_len=32k, used for testing --max_seq_len=16k override
         "device-perf",  # Device perf
+        "seqlen-sweep",  # Sweep prefill across all powers-of-two seqlens up to model's max
     ],
 )
 # NOTE: Please do not add new pytest parameters between optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
@@ -845,7 +839,7 @@ _trace_region_size = (
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": _trace_region_size, "num_command_queues": 1}],
+    [{"fabric_config": True, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -937,6 +931,7 @@ def test_demo_text(
         enable_trace = arg_enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
+    skip_perf_report = request.config.getoption("--skip_perf_report")
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
     if use_prefetcher and not is_blackhole():
         logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
@@ -985,7 +980,7 @@ def test_demo_text(
 
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
-        if num_devices == 32 and not tg_enabled:
+        if num_devices == 32 and not tg_enabled and "seqlen-sweep" not in test_id:
             pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
         if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b) and is_wormhole_b0():
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
@@ -1012,9 +1007,40 @@ def test_demo_text(
     profiler = BenchmarkProfiler()
     profiler.start("run")
 
+    is_seqlen_sweep = "seqlen-sweep" in test_id
+
+    # The paged KV-cache pool is sized by page_max_num_blocks_per_dp, independent of max_seq_len, so a
+    # capped sweep (e.g. --max_seq_len on a single-N150 SKU) would still allocate the full 128k-capacity
+    # pool and OOM. Shrink the pool to the swept context so the cache fits smaller-DRAM SKUs. min() only
+    # ever reduces it, so multi-device SKUs running the full 128k keep their original pool.
+    if is_seqlen_sweep:
+        block_size = page_params["page_block_size"]
+        blocks_needed = -(-(max_seq_len + max_generated_tokens) // block_size)  # ceil div
+        if blocks_needed < page_params["page_max_num_blocks_per_dp"]:
+            # Capped sweep (small-DRAM single-device SKU, e.g. N150). Mirror the proven N150 config
+            # (block_size=32): the larger block_size=64 inflates the prefill circular buffers and clashes
+            # with L1 at prefill. Smaller blocks keep CBs within L1; size the pool to the swept context.
+            block_size = 32
+            blocks_needed = -(-(max_seq_len + max_generated_tokens) // block_size)
+            page_params = {
+                **page_params,
+                "page_block_size": block_size,
+                "page_max_num_blocks_per_dp": blocks_needed,
+            }
+            logger.info(
+                f"Seqlen sweep: capped page params for small SKU — block_size={block_size}, "
+                f"page_max_num_blocks_per_dp={blocks_needed} (max_seq_len={max_seq_len})"
+            )
+
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(input_prompts) == 1:  # Manual input
+    sweep_prompt_files = None
+    if is_seqlen_sweep:
+        # In seqlen-sweep mode, input_prompts is a list of file paths (one per sweep step).
+        # Load the first file for initial setup; per-batch loading happens later.
+        sweep_prompt_files = input_prompts
+        input_prompts, all_prompts = load_inputs(sweep_prompt_files[0], global_batch_size, instruct)
+    elif len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
         all_prompts = input_prompts
     else:  # Inputs from file
@@ -1063,9 +1089,14 @@ def test_demo_text(
 
     for m_args in model_args:
         if m_args.max_context_len < max_seq_len:
-            pytest.skip(
-                f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
-            )
+            if is_seqlen_sweep:
+                # For sweep mode, cap max_seq_len to model's max instead of skipping entirely
+                max_seq_len = m_args.max_context_len
+                logger.info(f"Seqlen sweep: capping max_seq_len to model's max_context_len={max_seq_len}")
+            else:
+                pytest.skip(
+                    f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
+                )
 
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
@@ -1073,19 +1104,41 @@ def test_demo_text(
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        # For token accuracy, use input_prompts without rotation
-        if token_accuracy:
-            repeat_batch_prompts.append(input_prompts)
-        else:
-            global_prompts_for_batch = [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][
-                : batch_size * data_parallel
-            ]
+    if is_seqlen_sweep:
+        # Seqlen sweep: load each prompt file separately, filtering by model's max context.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384).
+        filtered_files = []
+        for f in sweep_prompt_files:
+            label = Path(f).stem.split("_")[-1]  # e.g. "16k"
+            if label.endswith("k") and label[:-1].isdigit():
+                min_seqlen = int(label[:-1]) * 1024
+                if min_seqlen <= max_seq_len:
+                    filtered_files.append(f)
+        if not filtered_files:
+            pytest.skip(f"No sweep prompt files fit within model's max context length ({max_seq_len})")
+        repeat_batches = len(filtered_files)
+        logger.info(
+            f"Seqlen sweep: running {repeat_batches} steps with files: {[Path(f).name for f in filtered_files]}"
+        )
+        for f in filtered_files:
+            batch_prompts, _ = load_inputs(f, global_batch_size, instruct)
             repeat_batch_prompts.append(
-                select_local_data_parallel_items(
-                    global_prompts_for_batch, batch_size, data_parallel, local_submesh_indices
-                )
+                select_local_data_parallel_items(batch_prompts, batch_size, data_parallel, local_submesh_indices)
             )
+    else:
+        for i in range(repeat_batches):
+            # For token accuracy, use input_prompts without rotation
+            if token_accuracy:
+                repeat_batch_prompts.append(input_prompts)
+            else:
+                global_prompts_for_batch = [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][
+                    : batch_size * data_parallel
+                ]
+                repeat_batch_prompts.append(
+                    select_local_data_parallel_items(
+                        global_prompts_for_batch, batch_size, data_parallel, local_submesh_indices
+                    )
+                )
 
     num_tokens_generated_decode = []
 
@@ -1483,105 +1536,79 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "N150x4", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
-
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
-    model_device_key = f"{tt_device_name}_{model_name}"
-
-    if model_name in supported_models:
-        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
-
-        # Set the target prefill t/s for every combination of device and model (optional - for tracking benchmark data)
-        dict_target_prefill_tok_s = {}  # TODO: add prefill targets for model-device combinations
-        if model_device_key in dict_target_prefill_tok_s:
-            target_prefill_tok_s = dict_target_prefill_tok_s[model_device_key]
-        else:
-            target_prefill_tok_s = None
-            logger.info(f"Model {model_name} does not have prefill targets set for device {tt_device_name}")
-
-        # Set the target decode t/s/u for every combination of device and model (optional - for tracking benchmark data)
-        dict_target_decode_tok_s_u = {
-            "N150_Llama-3.2-1B": 160,
-            "N300_Llama-3.2-1B": 250,  # TODO Update target
-            "T3K_Llama-3.2-1B": 300,  # TODO Update target
-            "TG_Llama-3.2-1B": 300,  # TODO Update target
-            #
-            "N150_Llama-3.2-3B": 60,
-            "N300_Llama-3.2-3B": 100,  # TODO Update target
-            "T3K_Llama-3.2-3B": 150,  # TODO Update target
-            "TG_Llama-3.2-3B": 150,  # TODO Update target
-            #
-            "N150_Llama-3.1-8B": 23,
-            "P150_Llama-3.1-8B": 23,  # TODO Update target
-            "N300_Llama-3.1-8B": 38,
-            "P300_Llama-3.1-8B": 38,
-            "T3K_Llama-3.1-8B": 45,
-            "TG_Llama-3.1-8B": 45,  # TODO Update target
-            #
-            "N150_Llama-3.2-11B": 23,
-            "N300_Llama-3.2-11B": 38,  # TODO Update target
-            "T3K_Llama-3.2-11B": 45,  # TODO Update target
-            "TG_Llama-3.2-11B": 45,  # TODO Update target
-            #
-            "T3K_Llama-3.1-70B": 20,  # TODO Update target
-            "TG_Llama-3.1-70B": 20,  # TODO Update target
-            #
-            "N150_Mistral-7B": 23,
-            "N300_Mistral-7B": 38,  # TODO Update target
-            "T3K_Mistral-7B": 45,  # TODO Update target
-            "TG_Mistral-7B": 45,  # TODO Update target
-        }
-        if model_device_key in dict_target_decode_tok_s_u:
-            target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
-        else:
-            target_decode_tok_s_u = None
-            logger.info(f"Model {model_name} does not have decode targets set for device {tt_device_name}")
-
-        target_decode_tok_s = target_decode_tok_s_u * global_batch_size if target_decode_tok_s_u else None
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
-
-    else:
-        logger.info(f"Model {model_name} does not have performance targets set")
+    resolved_perf_targets = resolve_perf_targets(
+        model_name=model_name,
+        sku=tt_device_name,
+        batch_size=global_batch_size,
+        seq_len=max_seq_len,
+    )
+    if not resolved_perf_targets:
+        logger.info(
+            f"Model {model_name} does not have centralized performance targets set for "
+            f"device {tt_device_name}, batch_size={global_batch_size}, seq_len={max_seq_len}"
+        )
         targets = {}
+    else:
+        targets = {
+            "prefill_t/s": resolved_perf_targets.get("prefill_t/s"),
+            "decode_t/s": resolved_perf_targets.get("decode_t/s"),
+            "decode_t/s/u": resolved_perf_targets.get("decode_t/s/u"),
+        }
 
-    # Save benchmark data for CI dashboard
-    if is_ci_env:
+    # Save benchmark data for CI dashboard.
+    # `--skip_perf_report` suppresses perf reporting + the CI perf-target check for this run, so
+    # that when the same test runs in more than one configuration only the intended one reports
+    # perf (e.g. Llama-8B runs ci-eval-32 without the prefetcher for repeat-batch coverage AND
+    # with the prefetcher on a single batch for perf — only the latter should report). #47820
+    if is_ci_env and not skip_perf_report:
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
-        # Save the decode performance of every iteration for plotting in superset
-        for i in range(1, num_tokens_generated_decode[0]):
+        if not token_accuracy:
+            # Save the decode performance of every iteration for plotting in superset
+            for i in range(1, num_tokens_generated_decode[0]):
+                benchmark_data.add_measurement(
+                    profiler,
+                    0,
+                    "inference_decode",
+                    f"time_to_token_{i}",
+                    profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                    step_warm_up_num_iterations=None,
+                    target=None,
+                )
+
+            # Named decode checkpoints for easy Superset querying
+            for token_pos in [1, 128, 1024, 2048, 4096, 8192]:
+                step_key = token_pos  # iteration index (1-based), matching time_to_token_{i}
+                if step_key < num_tokens_generated_decode[0]:
+                    benchmark_data.add_measurement(
+                        profiler,
+                        0,
+                        "inference_decode",
+                        f"decode_latency_ms_token_{token_pos}",
+                        profiler.get_duration(f"inference_decode_time_{step_key}") * 1000,
+                        step_warm_up_num_iterations=None,
+                        target=None,
+                    )
+
+            # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+            num_iterations_for_avg = min(128, num_tokens_generated_decode[0])
+            inference_decode_time_first_128 = sum(
+                profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
+            )
             benchmark_data.add_measurement(
                 profiler,
                 0,
                 "inference_decode",
-                f"time_to_token_{i}",
-                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                "avg_decode_time_first_128",
+                inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
                 step_warm_up_num_iterations=None,
                 target=None,
             )
 
-        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
-        num_iterations_for_avg = min(128, num_tokens_generated_decode[0])
-        inference_decode_time_first_128 = sum(
-            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, num_iterations_for_avg)
-        )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "avg_decode_time_first_128",
-            inference_decode_time_first_128 * 1000 / max(1, num_iterations_for_avg - 1),
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
         if token_accuracy:
             benchmark_data.add_measurement(
                 profiler,
@@ -1603,7 +1630,7 @@ def test_demo_text(
             )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_accuracy" if token_accuracy else "demo_perf",
             ml_model_name=model_name,
             ml_model_type="llm",
             device_name=tt_device_name,
@@ -1619,91 +1646,33 @@ def test_demo_text(
             logger.info(
                 f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
             )
-            # Targets set to 0.95x observed values for decode rates (higher is better)
-            # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
-            ci_target_ttft = {
-                # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 25,
-                "N150_Llama-3.2-3B": 62,
-                "N150_Llama-3.1-8B": 120,
-                "N150_Mistral-7B": 35,
-                # N300 targets
-                # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
-                "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)
-                # T3K targets
-                "T3K_Llama-3.1-70B": (73, 1.25),
-                # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
-                "T3K_Qwen2.5-72B": (240, 1.40),  # (value, high_tolerance_ratio)
-                # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
-                "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
-                "T3K_Qwen3-32B": 43,
-                # P150x4 == bh_quietbox_2 (2x P300, 4 dies). Today's
-                # determine_device_name labels this hardware "P150x4"; the
-                # canonical name is P300x2. Numbers from workflow 26664009397.
-                "P150x4_Llama-3.1-8B": 53,
-                "P150x4_Llama-3.3-70B": 136,
-                "P150x4_Qwen3-32B": 207,
-            }
-            ci_target_decode_tok_s_u = {
-                # N150 targets - higher is better
-                "N150_Llama-3.2-1B": 66,
-                "N150_Llama-3.2-3B": 35,
-                "N150_Llama-3.1-8B": 21,
-                "N150_Mistral-7B": 22,
-                # N300 targets
-                # Slightly relaxed to accommodate normal variance in CI while still flagging regressions
-                "N300_Qwen2.5-7B": 21.0,
-                # T3K targets
-                "T3K_Llama-3.1-70B": 16,
-                "T3K_Qwen2.5-72B": 13.25,
-                "T3K_Qwen2.5-Coder-32B": 20,
-                "T3K_Qwen3-32B": 24,
-                # P150x4 == bh_quietbox_2; see note above.
-                "P150x4_Llama-3.1-8B": 23.0,
-                "P150x4_Llama-3.3-70B": 16.30,
-                "P150x4_Qwen3-32B": 8.7,
-            }
-
-            # Only call verify_perf if the model_device_key exists in the targets
-            ci_targets = {}
-            if model_device_key in ci_target_ttft:
-                current_ttft_target = ci_target_ttft[model_device_key]
-                if isinstance(current_ttft_target, tuple):
-                    high_tol_percentage = current_ttft_target[1]
-                    current_ttft_target = current_ttft_target[0]
-                else:
-                    high_tol_percentage = 1.15
-                ci_targets["prefill_time_to_token"] = current_ttft_target / 1000  # convert to seconds
-            if model_device_key in ci_target_decode_tok_s_u:
-                ci_targets["decode_t/s/u"] = ci_target_decode_tok_s_u[model_device_key]
-                # calculate from per-user rate
-                ci_targets["decode_t/s"] = ci_target_decode_tok_s_u[model_device_key] * global_batch_size
-
-            if ci_targets:  # Only verify performance if we have targets for this model/device combination
-                verify_perf(
-                    measurements,
-                    ci_targets,
-                    high_tol_percentage=high_tol_percentage,
-                    expected_measurements={k: True for k in ci_targets.keys()},
-                )
-            else:
-                logger.warning(
-                    f"No CI performance targets found for {model_device_key}. Skipping performance verification."
-                )
+            verify_perf(
+                measurements,
+                expected_measurements={
+                    "prefill_time_to_token": True,
+                    "decode_t/s": True,
+                    "decode_t/s/u": True,
+                },
+                model_name=model_name,
+                sku=tt_device_name,
+                batch_size=global_batch_size,
+                seq_len=max_seq_len,
+            )
     if token_accuracy:
         total_top1_acc = math.ceil(acc[0] * 100)
         total_top5_acc = math.ceil(acc[1] * 100)
 
         if not json_config_file:
-            # Get accuracy thresholds from PERF.md, unless the configuration is from a json
-            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0])
-            assert (
-                total_top1_acc >= min_top1_acc
-            ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-            assert (
-                total_top5_acc >= min_top5_acc
-            ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
-            logger.info("Checks of top-1 and top-5 accuracy against PERF.md passed")
+            # Get accuracy thresholds from centralized model targets unless the config is loaded from json.
+            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0], seq_len=max(prefill_lens))
+            verify_accuracy(
+                measurements={
+                    "top1_token_accuracy": total_top1_acc,
+                    "top5_token_accuracy": total_top5_acc,
+                },
+                expected_accuracy_metrics={"top1": min_top1_acc, "top5": min_top5_acc},
+            )
+            logger.info("Checks of top-1 and top-5 accuracy against centralized model targets passed")
 
     if (
         "ci-eval-1" in test_id

@@ -201,6 +201,8 @@ void kernel_main() {
             cb_reduce_first_stage_obj.wait_front(num_tiles_per_partial_result * num_tiles_to_read);
             reduce_second_stage_sem.up(noc, remote_coords_second_stage[0].x, remote_coords_second_stage[0].y, 1);
         }
+
+        cb_partial_obj.pop_front(num_tiles_per_partial_result * block_h);
     };
     global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2);
     noc.async_atomic_barrier();

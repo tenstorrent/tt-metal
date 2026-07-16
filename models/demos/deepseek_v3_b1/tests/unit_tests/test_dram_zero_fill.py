@@ -51,6 +51,31 @@ def _build_reference_kv_tensor(submesh, num_users, max_seq_len):
 
 
 @pytest.mark.parametrize(
+    "dtype,layout",
+    [
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["bf16_row_major", "fp8_e4m3_row_major"],
+)
+def test_dram_zero_fill_row_major_formats(bh_2d_mesh_device, dtype, layout):
+    """Exercise native row pages directly; FP8 is widened only for host readback."""
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 128, KVPE_DIM]),
+        dtype,
+        layout,
+        bh_2d_mesh_device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    DRAMZeroFill.op(output)
+    ttnn.synchronize_device(bh_2d_mesh_device)
+
+    result = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(bh_2d_mesh_device, dim=0))
+    assert torch.equal(result.float(), torch.zeros_like(result, dtype=torch.float32))
+
+
+@pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,

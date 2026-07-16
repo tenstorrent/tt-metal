@@ -32,7 +32,7 @@ bool run_addrgen_test(
     uint32_t src_stride_en,
     uint32_t dst_stride_en,
     uint32_t num_of_addresses) {
-    constexpr const char* DM_KERNEL = "addrgen";
+    const experimental::KernelSpecName DM_KERNEL{"addrgen"};
     const experimental::NodeCoord node{0, 0};
 
     experimental::KernelSpec dm_kernel_spec{
@@ -43,9 +43,7 @@ bool run_addrgen_test(
             {{"src_stride_en", src_stride_en},
              {"dst_stride_en", dst_stride_en},
              {"num_of_addresses", num_of_addresses}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -62,9 +60,7 @@ bool run_addrgen_test(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = DM_KERNEL,
-    }};
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;

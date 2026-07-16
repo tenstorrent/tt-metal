@@ -15,6 +15,9 @@ from loguru import logger
 import models.experimental.bloom.tt.bloom_causal_lm as bloom_causal_lm
 import models.experimental.bloom.bloom_utils as bloom_utils
 
+# NOTE(transformers-5.x): HammingDiversityLogitsProcessor (and ForceTokensLogitsProcessor)
+# were removed in transformers 5.x. This experimental Bloom test isn't run on CI, so it's
+# left as-is; drop those imports / the diverse-beam-search branch when bumping it to 5.x.
 from transformers.generation.logits_process import (
     EncoderNoRepeatNGramLogitsProcessor,
     EncoderRepetitionPenaltyLogitsProcessor,
@@ -186,6 +189,7 @@ def get_logits_processor(input_ids, config):
 
 def run_generate(input_sentance, run_tt_model, device):
     tokenizer = BloomTokenizerFast.from_pretrained("bigscience/bloom-560m")
+    # NOTE(transformers-5.x): `torchscript=` was removed from transformers configs in 5.x; drop it (a default no-op) when running this experimental model under 5.x.
     hf_reference_model = BloomForCausalLM.from_pretrained("bigscience/bloom-560m", torchscript=False)
     hf_reference_model.eval()
 

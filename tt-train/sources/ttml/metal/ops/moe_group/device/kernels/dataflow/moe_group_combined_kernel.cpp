@@ -48,6 +48,7 @@
 //   8: my_core_idx           9: my_slice_start      10: my_slice_end
 //   11: scores_addr         12: grouped_scores_addr 13: k_slot_addr
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
@@ -547,8 +548,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* plan_l1_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_l1_addr);
 
     uint32_t tile_row = my_worker_start;
-    const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
-    constexpr uint32_t zero_chunk_bytes = MEM_ZEROS_SIZE;
+    Noc noc;
+    CircularBuffer src0_cb(cb_src0);
     for (uint32_t step = 0; step < my_active_count; ++step, tile_row += worker_stride) {
         uint64_t plan_noc = plan_addrgen.get_noc_addr(0, tile_row * tt::constants::TILE_HEIGHT * sizeof(uint32_t));
         noc_async_read(plan_noc, plan_l1_addr, tt::constants::TILE_HEIGHT * sizeof(uint32_t));
@@ -556,7 +557,7 @@ void kernel_main() {
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
             cb_reserve_back(cb_src0, tiles_per_chunk);
-            uint32_t dst = get_write_ptr(cb_src0);
+            uint32_t dst = src0_cb.get_write_ptr();
             uint32_t chunk_off_bytes = chunk * hidden_chunk_bytes;
             bool is_last_chunk = (chunk == num_chunks - 1U);
             uint32_t read_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
@@ -564,32 +565,19 @@ void kernel_main() {
 
             for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                 uint32_t src = plan_l1_buf[r];
-                uint32_t row_dst = dst + r * hidden_chunk_bytes;
+                uint32_t row_off = r * hidden_chunk_bytes;
                 if (src == SENTINEL) {
-                    uint32_t remaining = hidden_chunk_bytes;
-                    uint32_t off = 0;
-                    while (remaining > 0U) {
-                        uint32_t n = remaining > zero_chunk_bytes ? zero_chunk_bytes : remaining;
-                        noc_async_read(zeros_noc, row_dst + off, n);
-                        off += n;
-                        remaining -= n;
-                    }
+                    noc.async_write_zeros(src0_cb, hidden_chunk_bytes, {.offset_bytes = row_off});
                 } else {
                     uint64_t row_noc = dispatched_addrgen.get_noc_addr(src, chunk_off_bytes);
-                    noc_async_read(row_noc, row_dst, read_bytes);
+                    noc_async_read(row_noc, dst + row_off, read_bytes);
                     if (pad_bytes > 0U) {
-                        uint32_t remaining = pad_bytes;
-                        uint32_t off = 0;
-                        while (remaining > 0U) {
-                            uint32_t n = remaining > zero_chunk_bytes ? zero_chunk_bytes : remaining;
-                            noc_async_read(zeros_noc, row_dst + read_bytes + off, n);
-                            off += n;
-                            remaining -= n;
-                        }
+                        noc.async_write_zeros(src0_cb, pad_bytes, {.offset_bytes = row_off + read_bytes});
                     }
                 }
             }
             noc_async_read_barrier();
+            noc.write_zeros_l1_barrier();
             cb_push_back(cb_src0, tiles_per_chunk);
         }
     }

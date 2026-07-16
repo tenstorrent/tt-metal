@@ -35,3 +35,8 @@ struct KCausalStraddleInfo {
     static constexpr uint32_t straddle_num_padded_tiles =
         has_straddle ? (Sk_chunk_t - (coarse_chunk_size_t % Sk_chunk_t)) : 0;
 };
+
+inline bool is_last_active_ring_iter(uint32_t active_ring_iter_mask, uint32_t ring_iter) {
+    constexpr uint32_t uint32_bits = 32;
+    return (ring_iter + 1 >= uint32_bits) || ((active_ring_iter_mask >> (ring_iter + 1)) == 0);
+}

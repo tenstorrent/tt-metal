@@ -212,7 +212,7 @@ TEST(PartitionTest, EmptyInput) {
 }
 
 TEST(PartitionTest, ChunkDoesNotAccessData) {
-    //  Create a read-protected memory region, and point `tt::stl::Span` to it.
+    //  Create a read-protected memory region, and point `ttsl::Span` to it.
     //  `chunk` should not access the data, and should only calculate offsets and shapes.
     const long page_size = sysconf(_SC_PAGESIZE);
     ASSERT_NE(page_size, -1);
@@ -240,7 +240,7 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     new_action.sa_flags = 0;
     ASSERT_EQ(sigaction(SIGSEGV, &new_action, &old_action), 0);
 
-    tt::stl::Span<const uint8_t> protected_span(static_cast<uint8_t*>(mapped_mem), total_size);
+    ttsl::Span<const uint8_t> protected_span(static_cast<uint8_t*>(mapped_mem), total_size);
     auto xexpr = xt::adapt(
         protected_span.data(), total_size, xt::no_ownership(), std::vector<size_t>(shape.cbegin(), shape.cend()));
 

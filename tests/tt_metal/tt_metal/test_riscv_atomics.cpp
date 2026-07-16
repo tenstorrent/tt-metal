@@ -67,7 +67,7 @@ protected:
         distributed::MeshCoordinate zero_coord{0, 0};
         distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-        experimental::KernelSpec::CompilerOptions::Defines defines_vec(dm_defines.begin(), dm_defines.end());
+        experimental::KernelSpec::CompilerOptions::Defines defines_vec(dm_defines);
 
         // Quasar: one multi-threaded DM kernel spans the user DMs (DM2..DM7).
         // Gen1 (BH): one KernelSpec per DM processor (BRISC, NCRISC), each single-threaded with its
@@ -75,33 +75,30 @@ protected:
         // (Gen1) — see riscv_atomics.cpp.
         std::vector<experimental::KernelSpec> kernel_specs;
         std::vector<experimental::KernelSpecName> kernel_names;
-        std::vector<experimental::ProgramRunArgs::KernelRunArgs> kernel_run_args;
-        const auto make_run_params = [&](const std::string& name) {
+        experimental::ProgramRunArgs params;
+        const auto make_run_params = [&](const experimental::KernelSpecName& kernel_name) {
             return experimental::ProgramRunArgs::KernelRunArgs{
-                .kernel_spec_name = name,
-                .runtime_arg_values =
-                    {{.node = core,
-                      .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
+                .kernel = kernel_name,
+                .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                    core, {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}),
             };
         };
 
         if (is_quasar) {
-            const std::string DM_KERNEL = "dm_kernel";
+            const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
             kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = kernel_path,
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = defines_vec},
                 .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
-                .hw_config =
-                    experimental::DataMovementHardwareConfig{
-                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+                .hw_config = experimental::DataMovementGen2Config{},
             });
             kernel_names.push_back(DM_KERNEL);
-            kernel_run_args.push_back(make_run_params(DM_KERNEL));
+            params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
         } else {
             for (uint32_t dm_id = 0; dm_id < num_dms_; dm_id++) {
-                const std::string name = "dm_kernel_" + std::to_string(dm_id);
+                const experimental::KernelSpecName name{"dm_kernel_" + std::to_string(dm_id)};
                 kernel_specs.push_back(experimental::KernelSpec{
                     .unique_id = name,
                     .source = kernel_path,
@@ -109,15 +106,13 @@ protected:
                     .compiler_options = {.defines = defines_vec},
                     .runtime_arg_schema = {.runtime_arg_names = {"l1_counter_addr", "increment_times"}},
                     .hw_config =
-                        experimental::DataMovementHardwareConfig{
-                            .gen1_config =
-                                experimental::DataMovementHardwareConfig::Gen1Config{
-                                    .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
-                                    .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
-                                }},
+                        experimental::DataMovementGen1Config{
+                            .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
+                            .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                        },
                 });
                 kernel_names.push_back(name);
-                kernel_run_args.push_back(make_run_params(name));
+                params.kernel_run_args.push_back(make_run_params(name));
             }
         }
 
@@ -132,9 +127,6 @@ protected:
             .work_units = {main_wu},
         };
         program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
-
-        experimental::ProgramRunArgs params;
-        params.kernel_run_args = std::move(kernel_run_args);
         experimental::SetProgramRunArgs(program, params);
 
         workload.add_program(device_range, std::move(program));

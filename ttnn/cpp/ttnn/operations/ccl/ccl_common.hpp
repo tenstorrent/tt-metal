@@ -99,7 +99,7 @@ class EriscDatamoverBuilder;
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     uint32_t num_devices,
-    const ttnn::SmallVector<uint32_t>& unpad_elements,
+    const ttsl::SmallVector<uint32_t>& unpad_elements,
     int dim);
 
 class LineTopology {
@@ -804,13 +804,18 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     std::optional<uint32_t> termination_master_semaphore_id = std::nullopt);
 
-// Estimate fabric transfer time (nanoseconds).
+// Fabric transfer time in device clock cycles, as a {bandwidth_cycles, latency_cycles} pair.
+// bandwidth_cycles represents steady-state, latency_cycles is pipeline fill.
 //   arch:          Wormhole or Blackhole
-//   data_bytes:    total bytes that must traverse the bottleneck link
+//   fabric_config: fabric config
+//   clock_rate_mhz: device AICLK, used to convert ns -> cycles
+//   data_bytes:    total bytes traversing the link
 //   num_links:     number of parallel ethernet links
-//   num_hops:      number of fabric hops (for latency)
-double estimate_fabric_transfer_ns(
+//   num_hops:      number of device hops
+std::pair<int, int> estimate_fabric_transfer_cycles(
     tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
     uint64_t data_bytes,
     uint32_t num_links,
     uint32_t num_hops);

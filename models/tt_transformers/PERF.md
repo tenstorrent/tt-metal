@@ -1,3 +1,5 @@
+Note: DEPRECATED. PLEASE CHECK THE YAML FILE [models/model_targets.yaml](models/model_targets.yaml)
+
 # Model performance and accuracy
 
 Performance and token accuracy using teacher forcing is collected from [demo/simple_text_demo.py](demo/simple_text_demo.py) with the `ci-token-matching` test case. You can generate this table by running these tests with the `lt` tool (tell it to run `table` or `pareto`) and pressing `m` whilst in the results section to export to markdown.

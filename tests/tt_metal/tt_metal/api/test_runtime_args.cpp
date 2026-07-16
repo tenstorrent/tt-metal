@@ -64,9 +64,6 @@ uint32_t get_runtime_arg_addr(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t num_dm = hal.get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(tt::tt_metal::HalProcessorClassType::DM));
-    const uint32_t uncached_l1_offset = (hal.get_arch() == tt::ARCH::QUASAR)
-                                            ? hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE)
-                                            : 0;
 
     switch (processor_class) {
         case tt::tt_metal::HalProcessorClassType::DM:
@@ -86,7 +83,9 @@ uint32_t get_runtime_arg_addr(
     // Common args go after all unique arg slots
     uint32_t total_processors = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
     uint32_t offset = is_common ? total_processors * runtime_args_space : 0;
-    return (result_base + offset + uncached_l1_offset);
+    // Always return the cached L1 address. Host reads/writes go over the NOC (no cache) and must use
+    // the cached address; only DM cores access the uncached alias, which they add device-side.
+    return (result_base + offset);
 };
 
 distributed::MeshWorkload initialize_program_data_movement_rta(
@@ -114,20 +113,21 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
         {"RESULTS_ADDR", std::to_string(rta_base_dm)},
         {"MAX_DMS", std::to_string(max_dms)}};
     if (common_rtas) {
-        dm_defines.push_back({"COMMON_RUNTIME_ARGS", "1"});
+        dm_defines.emplace("COMMON_RUNTIME_ARGS", "1");
     }
 
-    constexpr const char* KERNEL = "dm_runtime_args";
+    const experimental::KernelSpecName KERNEL{"dm_runtime_args"};
 
     // Both gen1 and gen2 DM configs are populated; the runtime selects the one
     // matching the active arch. On Quasar all 6 user DMs (DM2..DM7) run the
     // kernel; on WH/BH the legacy DM was a single RISCV_0 thread.
-    experimental::DataMovementHardwareConfig dm_cfg{
-        .gen1_config =
-            experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
-    };
+    experimental::DataMovementHardwareConfig dm_cfg;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        dm_cfg = experimental::DataMovementGen2Config{};
+    } else {
+        dm_cfg = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    }
     const bool is_quasar = MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR;
     const uint32_t num_threads = is_quasar ? kQuasarNumUserDms : 1u;
 
@@ -198,34 +198,32 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
         {"RESULTS_ADDR", std::to_string(rta_base)},
         {"MAX_DMS", std::to_string(max_dms)}};
     if (common_rtas) {
-        defines_vec.push_back({"COMMON_RUNTIME_ARGS", "1"});
+        defines_vec.emplace("COMMON_RUNTIME_ARGS", "1");
     }
 
     std::vector<std::string> kernel_names(num_kernels);
     std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<std::string> wu_kernel_names;
+    std::vector<experimental::KernelSpecName> wu_kernel_names;
     kernel_specs.reserve(num_kernels);
     wu_kernel_names.reserve(num_kernels);
 
     for (uint32_t k = 0; k < num_kernels; k++) {
         kernel_names[k] = "dm_kernel_" + std::to_string(k);
         kernel_specs.push_back(experimental::KernelSpec{
-            .unique_id = kernel_names[k],
+            .unique_id = experimental::KernelSpecName{kernel_names[k]},
             .source =
 
                 "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp",
             .num_threads = dm_processors_per_kernel,
             .compiler_options = {.defines = defines_vec},
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
             .advanced_options =
                 experimental::KernelAdvancedOptions{
                     .num_runtime_varargs = num_runtime_args,
                     .num_common_runtime_varargs = common_rtas ? static_cast<size_t>(num_runtime_args) : size_t{0},
                 },
         });
-        wu_kernel_names.push_back(kernel_names[k]);
+        wu_kernel_names.push_back(experimental::KernelSpecName{kernel_names[k]});
     }
 
     experimental::WorkUnitSpec main_wu{
@@ -719,16 +717,22 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
             mesh_device, core_range_set, 0, 0);  // Kernel isn't run here.
         auto& program = workload.get_programs().at(device_range);
 
-        // Set 100 unique args, then try to set max_runtime_args + 1 common args and fail.
+        // A count comfortably above the enforced TENSIX ceiling (see Kernel::validate_runtime_args_size).
+        // The RTA-offset field is a uint16_t region size in bytes, so its hard maximum is 65535 B = 16383 words;
+        // 16384 words (65536 B) is one word past that, so it exceeds any valid TENSIX ceiling regardless of the
+        // exact enforced cap.
+        constexpr uint32_t over_tensix_ceiling_rt_args = 16384;
+
+        // Set 100 unique args, then try to set enough common args to overflow the combined ceiling and fail.
         std::vector<uint32_t> initial_runtime_args(100);
         SetRuntimeArgs(program, kernel, core_range_set, initial_runtime_args);
-        std::vector<uint32_t> common_runtime_args(tt::tt_metal::max_runtime_args + 1);
+        std::vector<uint32_t> common_runtime_args(over_tensix_ceiling_rt_args);
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, common_runtime_args));
 
-        // Set 100 common args, then try to set another tt::tt_metal::max_runtime_args + 1 unique args and fail.
+        // Set 100 common args, then try to set enough unique args to overflow the combined ceiling and fail.
         std::vector<uint32_t> more_common_runtime_args(100);
         SetCommonRuntimeArgs(program, kernel, more_common_runtime_args);
-        std::vector<uint32_t> more_unique_args(tt::tt_metal::max_runtime_args + 1);
+        std::vector<uint32_t> more_unique_args(over_tensix_ceiling_rt_args);
         EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core_range_set, more_unique_args));
     }
 }
@@ -812,8 +816,13 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 // Test that active ethernet cores correctly validate max runtime args
 TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    // Mirror the enforced ceiling in Kernel::validate_runtime_args_size: 2 words are reserved for the watcher
+    // count words (one for the unique RTA region, one for the common) unconditionally, whether or not watcher
+    // asserts are enabled, so the usable max is the kernel-config size minus those 2 words.
+    constexpr uint32_t watcher_reserved_count_words = 2;
     uint32_t active_eth_max_runtime_args =
-        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
+        watcher_reserved_count_words;
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];
@@ -893,8 +902,13 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
 // Test that idle ethernet cores correctly validate max runtime args using IDLE_ETH kernel config size
 TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    // Mirror the enforced ceiling in Kernel::validate_runtime_args_size: 2 words are reserved for the watcher
+    // count words (one for the unique RTA region, one for the common) unconditionally, whether or not watcher
+    // asserts are enabled, so the usable max is the kernel-config size minus those 2 words.
+    constexpr uint32_t watcher_reserved_count_words = 2;
     uint32_t idle_eth_max_runtime_args =
-        hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+        hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
+        watcher_reserved_count_words;
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];
@@ -999,8 +1013,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     auto& program = workload.get_programs().at(device_range);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = kernel_names[0],
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = experimental::KernelSpecName{kernel_names[0]},
         .advanced_options =
             experimental::AdvancedKernelRunArgs{
                 .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
@@ -1041,8 +1055,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     for (uint32_t i = 0; i < num_kernels; i++) {
         std::vector<uint32_t> kernel_crtas = {base_crtas[0] + i, base_crtas[1] + i, base_crtas[2] + i};
         all_crtas[i] = kernel_crtas;
-        params.kernel_run_args.push_back({
-            .kernel_spec_name = kernel_names[i],
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{kernel_names[i]},
             .advanced_options =
                 experimental::AdvancedKernelRunArgs{
                     .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
@@ -1055,6 +1069,130 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // Verify each user DM (DM2..DM7) has a unique CRTA L1 address
     unit_tests::runtime_args::verify_quasar_crtas(mesh_device, core, all_crtas, /*expect_shared_address*/ false);
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
+    auto mesh_device = devices_[0];
+    const experimental::NodeCoord node{0, 0};
+    CoreRange core_range(CoreCoord{0, 0});
+    CoreRangeSet core_range_set(std::vector{core_range});
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+
+    const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t address_2 = address_1 + sizeof(uint32_t);
+    const uint32_t value_1 = 0xaaaabbbb;
+    const uint32_t value_2 = 0xccccdddd;
+
+    // Zero-init both output slots.
+    std::vector<uint32_t> zeros(2, 0);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, address_1, zeros);
+
+    // Two kernels, each using one DM thread, writing to distinct L1 addresses.
+    const experimental::KernelSpecName K1{"k1"}, K2{"k2"};
+    auto make_dm_spec = [&](const experimental::KernelSpecName& id) {
+        return experimental::KernelSpec{
+            .unique_id = id,
+            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
+            .num_threads = 1,
+            .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
+            .hw_config = experimental::DataMovementGen2Config{},
+        };
+    };
+    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {K1, K2}, .target_nodes = core_range_set};
+    experimental::ProgramSpec spec{
+        .name = "merge_test", .kernels = {make_dm_spec(K1), make_dm_spec(K2)}, .work_units = {main_wu}};
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    // Build two partial ProgramRunArgs, one per kernel.
+    experimental::ProgramRunArgs part1;
+    part1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = K1,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
+        .common_runtime_arg_values = {{"value", value_1}},
+    }};
+    experimental::ProgramRunArgs part2;
+    part2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = K2,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
+        .common_runtime_arg_values = {{"value", value_2}},
+    }};
+
+    // Merge and set.
+    std::vector<experimental::ProgramRunArgs> rest = {part2};
+    experimental::ProgramRunArgs merged = experimental::MergeProgramRunArgs(std::move(part1), rest);
+    experimental::SetProgramRunArgs(program, merged);
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    std::vector<uint32_t> out(2, 0);
+    tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], node, address_1, 2 * sizeof(uint32_t), out);
+    ASSERT_EQ(out, std::vector<uint32_t>({value_1, value_2}));
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
+    auto mesh_device = devices_[0];
+    const experimental::NodeCoord node{0, 0};
+    CoreRange core_range(CoreCoord{0, 0});
+    CoreRangeSet core_range_set(std::vector{core_range});
+
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+
+    const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t address_2 = address_1 + sizeof(uint32_t);
+    const uint32_t value_1 = 0x11223344;
+    const uint32_t value_2 = 0x99aabbcc;
+
+    const experimental::KernelSpecName DM_KERNEL{"dm_kernel"};
+    experimental::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
+        .num_threads = unit_tests::runtime_args::kQuasarNumUserDms,
+        .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+    experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core_range_set};
+    experimental::ProgramSpec spec{
+        .name = "update_run_args_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
+
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, experimental::MakeProgramFromSpec(*mesh_device, spec));
+    Program& prog = workload.get_programs().at(device_range);
+
+    std::vector<uint32_t> zeros(2, 0);
+    tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, address_1, zeros);
+
+    // First enqueue: write value_1 to address_1.
+    experimental::ProgramRunArgs params1;
+    params1.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_1}}),
+        .common_runtime_arg_values = {{"value", value_1}},
+    }};
+    experimental::SetProgramRunArgs(prog, params1);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    // Second enqueue: update to value_2 and re-dispatch to address_2.
+    experimental::ProgramRunArgs params2;
+    params2.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = DM_KERNEL,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address_2}}),
+        .common_runtime_arg_values = {{"value", value_2}},
+    }};
+    experimental::UpdateProgramRunArgs(prog, params2);
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+
+    std::vector<uint32_t> outputs(2, 0);
+    tt_metal::detail::ReadFromDeviceL1(mesh_device->get_devices()[0], node, address_1, 2 * sizeof(uint32_t), outputs);
+    ASSERT_EQ(outputs, std::vector<uint32_t>({value_1, value_2}));
 }
 
 }  // namespace tt::tt_metal

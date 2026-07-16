@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - tt-training-models
           #          - cnn
           - sd35
           - flux1-dev
@@ -19,6 +20,10 @@ on:
           - mochi
           - qwenimage
           - deepseek_v3
+          - tinyllama_1_1b_ddp32_shakespeare
+          - llama_8b_tp8_ddp4_shakespeare
+          - llama_8b_tp4_ddp8_shakespeare
+
       build-type:
         required: false
         type: choice
@@ -62,15 +67,15 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
       build-wheel: true
+      skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-perf-tests:
     needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:
-      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       model: ${{ inputs.model || 'all' }}

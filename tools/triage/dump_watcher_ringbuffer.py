@@ -53,8 +53,9 @@ def read_ring_buffer(
 
     fw_elf = elf_cache[fw_path]
     mailboxes = dispatcher_data.get_cached_core_data(location, risc_name).mailboxes
+    assert mailboxes is not None, "mailboxes could not be read for this core"
 
-    current_ptr = mailboxes.watcher.debug_ring_buf.current_ptr
+    current_ptr = int(mailboxes.watcher.debug_ring_buf.current_ptr)
     if current_ptr == 65535:
         # Nothing pushed
         return None

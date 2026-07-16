@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_binary_sfpu_isclose.h"
+#include "ckernel_sfpu_isclose.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -57,12 +58,22 @@ namespace ckernel {
 // clang-format on
 template <bool EQUAL_NAN = false>
 ALWI void isclose_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, uint32_t rtol_bits, uint32_t atol_bits) {
-    MATH((llk_math_eltwise_binary_sfpu_isclose<APPROX, EQUAL_NAN>(idst0, idst1, odst, rtol_bits, atol_bits)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_isclose,
+        (APPROX, 8 /* ITERATIONS */, EQUAL_NAN),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC,
+        rtol_bits,
+        atol_bits)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void isclose_binary_tile_init() { MATH((llk_math_eltwise_binary_sfpu_isclose_init<APPROX>())); }
+ALWI void isclose_binary_tile_init() { MATH((SFPU_BINARY_INIT(isclose))); }
 
 }  // namespace ckernel

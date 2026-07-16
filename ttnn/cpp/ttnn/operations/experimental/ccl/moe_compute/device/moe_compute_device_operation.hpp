@@ -57,9 +57,11 @@ std::vector<Tensor> moe_compute(
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt,
     bool compute_only = false,
-    const std::optional<uint32_t>& bh_ring_size = std::nullopt);
+    const std::optional<uint32_t>& bh_ring_size = std::nullopt,
+    const std::optional<uint32_t>& num_shared_experts_per_device = std::nullopt);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 using ttnn::experimental::prim::get_moe_worker_mcast_bounding_box;
+using ttnn::experimental::prim::get_moe_tilize_drain_core;
 
 }  // namespace ttnn::prim

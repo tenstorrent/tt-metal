@@ -1,0 +1,47 @@
+include "hd_socket_descriptor.fbs";
+
+namespace tt.tt_metal.distributed.flatbuffer;
+
+enum D2HPlacementKind : uint8 {
+    Replicate = 0,
+    Shard     = 1,
+}
+
+table D2HPlacement {
+    kind: D2HPlacementKind;
+    dim:  int32 = 0;
+}
+
+table D2HTensorSpecLite {
+    shape: [uint32];
+    dtype: uint32;
+}
+
+table D2HPerCoordEntry {
+    coord:             [uint32];
+    socket_descriptor: HDSocketDescriptor;
+}
+
+table D2HStreamServiceDescriptor {
+    version: uint32;
+
+    global_spec: D2HTensorSpecLite;
+
+    mesh_shape: [uint32];
+
+    mapper_placements:     [D2HPlacement];
+    mapper_shape_override: [uint32];
+
+    socket_page_size: uint32;
+    num_socket_pages: uint32;
+
+    metadata_size_bytes: uint32;
+
+    // MeshComposerConfig snapshot for the connector bytes path.
+    composer_dims:            [int32];
+    composer_shape_override:  [uint32];
+
+    per_coord_entries: [D2HPerCoordEntry];
+}
+
+root_type D2HStreamServiceDescriptor;

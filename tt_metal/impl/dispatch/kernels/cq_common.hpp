@@ -8,12 +8,14 @@
 #include "internal/risc_attribs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "cq_commands.hpp"
 #include "cq_helpers.hpp"
 #include "telemetry.hpp"
 
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 #include <limits>
+#include <array>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -43,25 +45,6 @@ FORCE_INLINE T round_up_pow2(T v, uint32_t pow2_size) {
 FORCE_INLINE
 uint32_t div_up(uint32_t n, uint32_t d) { return (n + d - 1) / d; }
 
-// Copy a datatype that can be divisible by uint32_t to L1 memory
-template <typename T>
-FORCE_INLINE volatile tt_l1_ptr T* write_to_l1(uint32_t dst_addr, const T& src_object) {
-    static_assert(sizeof(T) % sizeof(uint32_t) == 0);
-    auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
-
-    // Casting to uint8_t* instead of uint32_t* to avoid undefined behavior
-    const auto* src = reinterpret_cast<const uint8_t*>(&src_object);
-    for (uint32_t i = 0; i < sizeof(T) / sizeof(uint32_t); ++i) {
-        uint32_t word = 0;
-        auto* word_bytes = reinterpret_cast<uint8_t*>(&word);
-        for (uint32_t byte = 0; byte < sizeof(uint32_t); ++byte) {
-            word_bytes[byte] = src[i * sizeof(uint32_t) + byte];
-        }
-        dst[i] = word;
-    }
-    return reinterpret_cast<volatile tt_l1_ptr T*>(dst_addr);
-}
-
 FORCE_INLINE
 uint32_t wrap_ge(uint32_t a, uint32_t b) {
     // Careful below: have to take the signed diff for 2s complement to handle the wrap
@@ -90,10 +73,29 @@ constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #endif
 }
 
+// Inverse of l1_uncached_addr: maps an uncached-alias address back to its cached form.
+// Identity on non-Quasar. Used to store the host-visible (cached-form) prefetch_q_rd_ptr value.
+constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
+#ifdef ARCH_QUASAR
+    ASSERT(addr >= MEM_L1_UNCACHED_BASE);
+    return addr - MEM_L1_UNCACHED_BASE;
+#else
+    return addr;
+#endif
+}
+
 template <typename T>
 FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
+
+#ifdef ARCH_QUASAR
+// Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
+// into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers.
+FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(uint32_t stream, uint32_t first_stream_used) {
+    return uncached_l1_ptr<uint32_t>(DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (stream - first_stream_used));
+}
+#endif
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
@@ -684,4 +686,43 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
         l1_cache[n + 5] = v5;
         n += 6;
     }
+}
+
+template <bool telemetry_enabled, size_t max_num_worker_sems>
+FORCE_INLINE uint32_t set_sub_device_worker_counts(
+    uintptr_t cmd_ptr,
+    std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
+    volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
+    uintptr_t dispatch_telemetry_base) {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQDispatchCmd>(cmd_ptr);
+    uint32_t num_sub_devices = cmd->set_sub_device_worker_counts.num_sub_devices;
+    ASSERT(num_sub_devices <= max_num_worker_sems);
+    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
+
+    static uint32_t local_sub_device_worker_counts_update = 0;
+
+    for (uint32_t i = 0; i < num_sub_devices; ++i) {
+        uint32_t worker_count = *(data_ptr++);
+        workers_per_sub_device[i] = worker_count;
+        if constexpr (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
+                ->workers_per_sub_device[i] = worker_count;
+        }
+#if DEVICE_PRINT_DISPATCH_ENABLED
+        DPRINT("dispatch_s sub_device_idx={} num_workers={}\n", i, workers_per_sub_device[i]);
+#endif
+    }
+    for (uint32_t i = num_sub_devices; i < max_num_worker_sems; ++i) {
+        workers_per_sub_device[i] = 0;
+        if constexpr (telemetry_enabled) {
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base)
+                ->workers_per_sub_device[i] = 0;
+        }
+    }
+
+    *sub_device_worker_counts_update = ++local_sub_device_worker_counts_update;
+    uint32_t command_size = sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
+    return round_up_pow2(command_size, L1_ALIGNMENT);
 }

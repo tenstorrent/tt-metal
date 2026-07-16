@@ -105,8 +105,8 @@ def test_build_hybrid_page_tables_shapes_and_padding():
                 assert torch.equal(pt[u], expected)
 
 
-def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window():
-    with pytest.raises(ValueError, match="must be a multiple of block_size"):
+def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_error):
+    with expect_error(ValueError, "must be a multiple of block_size"):
         build_hybrid_page_tables(
             num_layers=1,
             sliding_layers_mask=[True],
@@ -251,7 +251,7 @@ def _build_sliding_window_mask(cache_len: int, sliding_window: int | None) -> to
     return mask
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
 @pytest.mark.parametrize("cache_len", [32, 512, 1500], ids=lambda c: f"cache{c}")
 def test_attention_decode_bounded_vs_unbounded_parity(cache_len, mesh_device, reset_seeds, request):
     """Drive a sliding-attention decode through both the unbounded path and the
@@ -434,7 +434,7 @@ def test_attention_decode_bounded_vs_unbounded_parity(cache_len, mesh_device, re
     assert passing_pair, f"bounded vs unbounded (cache_len={cache_len}): {msg_pair}"
 
 
-def test_bounded_pool_rejects_without_modulo(device):
+def test_bounded_pool_rejects_without_modulo(device, expect_error):
     """The relaxed paged_update_cache validation only allows page_table.shape[1] >
     cache.shape[0] when cache_position_modulo is set. Confirm the strict legacy
     check still fires when a caller forgets the kwarg — keeps the bounded layout
@@ -471,7 +471,7 @@ def test_bounded_pool_rejects_without_modulo(device):
 
     # page_table.shape[1] (max_blocks=16) > cache.shape[0] (sliding_blocks=4) → strict check fires
     assert max_blocks > cache_blocks
-    with pytest.raises(RuntimeError, match="max_num_blocks_per_seq must be less than max_num_blocks"):
+    with expect_error(RuntimeError, "max_num_blocks_per_seq must be less than max_num_blocks"):
         ttnn.experimental.paged_update_cache(
             cache_tt,
             xt,

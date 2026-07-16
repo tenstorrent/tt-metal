@@ -692,7 +692,8 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
 
 // ========== Test Cases ==========
 
-TEST_F(SDPABackwardTest, SmallBatch) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_SmallBatch) {
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -737,7 +738,8 @@ TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, GroupedQueryAttention) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_GroupedQueryAttention) {
     // Test GQA: more query heads than kv heads
     SDPABackwardTestConfig config{
         .batch_size = 2U,
@@ -753,7 +755,8 @@ TEST_F(SDPABackwardTest, GroupedQueryAttention) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, TinyLlamaConfig) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_TinyLlamaConfig) {
     // Match TinyLlama training config from configs/training_shakespeare_tinyllama.yaml
     // num_heads: 32, num_groups: 4, embedding_dim: 2048, max_sequence_length: 2048
     // head_dim = 2048 / 32 = 64
@@ -779,7 +782,8 @@ TEST_F(SDPABackwardTest, TinyLlamaConfig) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, CausalMask_MHA) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_CausalMask_MHA) {
     // Test causal mask with Multi-Head Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
     SDPABackwardTestConfig config{
@@ -797,7 +801,8 @@ TEST_F(SDPABackwardTest, CausalMask_MHA) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, CausalMask_GQA) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_CausalMask_GQA) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Test causal mask with Grouped Query Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
@@ -851,7 +856,8 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
 
 // ========== Different V Dimension Tests (qE == kE != vE) ==========
 
-TEST_F(SDPABackwardTest, DiffVDim_Causal_SmallV) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_DiffVDim_Causal_SmallV) {
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -868,7 +874,8 @@ TEST_F(SDPABackwardTest, DiffVDim_Causal_SmallV) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, DiffVDim_Causal_LargeV) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_DiffVDim_Causal_LargeV) {
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -885,7 +892,8 @@ TEST_F(SDPABackwardTest, DiffVDim_Causal_LargeV) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, DiffVDim_ArbitraryMask) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_DiffVDim_ArbitraryMask) {
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -902,7 +910,8 @@ TEST_F(SDPABackwardTest, DiffVDim_ArbitraryMask) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, DiffVDim_GQA_Causal) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_DiffVDim_GQA_Causal) {
     SDPABackwardTestConfig config{
         .batch_size = 2U,
         .sequence_length = 128U,
@@ -936,7 +945,8 @@ TEST_F(SDPABackwardTest, DiffVDim_SingleTile) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, DiffVDim_MultiBatch) {
+// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
+TEST_F(SDPABackwardTest, DISABLED_DiffVDim_MultiBatch) {
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 128U,

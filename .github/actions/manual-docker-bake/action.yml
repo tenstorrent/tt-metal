@@ -24,17 +24,65 @@ inputs:
   retries:
     description: "Number of attempts before failing"
     required: false
-    default: "3"
+    default: "1"
   retry-delay-seconds:
     description: "Delay between retries"
     required: false
     default: "5"
   use-default-builder:
-    description: "Select buildx default builder before invoking bake"
+    description: >-
+      Select the buildx 'default' builder before invoking bake. Every current
+      caller of this action runs docker/setup-buildx-action beforehand to
+      provision a docker-container builder capable of the zstd/OCI-mediatype
+      image exporter, so this must stay false or bake silently switches back
+      to the classic driver and loses that exporter support. Only set true if
+      a caller intentionally wants the classic default driver instead.
     required: false
-    default: "true"
+    default: "false"
   validate-images:
     description: "Validate that built images can be inspected after build"
+    required: false
+    default: "true"
+  enable-attestations:
+    description: >-
+      Request full (mode=max) build provenance and a real SBOM attestation for
+      every target, via the attest target field - buildx bake ignores unknown
+      keys placed inside a target's output= string (e.g. provenance=false),
+      so this must go through attest instead. Every pushed tag therefore
+      becomes a multi-manifest OCI Image Index (real per-platform image
+      manifest + a separate "unknown/unknown" attestation-manifest); GHCR's
+      package page does not render that shape and drops description/label
+      display for the tag as a result (reported to GitHub separately - see
+      tenstorrent/tt-metal#49882). That's a registry-UI limitation, not a
+      reason to skip attestations: pulls, containerd, and scanners all
+      handle the Index/attestation-manifest shape correctly. Set to "false"
+      to instead explicitly disable attestations for a caller that wants
+      neither (e.g. to skip the extra SBOM-generator build time).
+    required: false
+    default: "true"
+  harbor-prefix:
+    description: >-
+      Harbor pull-through cache prefix (e.g. 'harbor.example.com/'). If non-empty
+      and the first bake attempt fails, a second attempt is made with the prefix
+      stripped from all docker-image:// context URIs (GHCR direct fallback).
+    required: false
+    default: ""
+
+  enrich-sbom:
+    description: >-
+      After a successful attested push, replace BuildKit's SBOM attestation with
+      one enriched from the image's own OCI labels. BuildKit generates the SBOM
+      by mounting the image rootfs to the scanner as a plain directory (see
+      moby/buildkit sbom-protocol.md), so the scanner never sees the image
+      Config/Labels and the SBOM's describing package always reports
+      licenseDeclared/downloadLocation/supplier = NOASSERTION - even though the
+      real values live in the image's org.opencontainers.image.* labels one
+      manifest over. syft can't map those labels into SPDX on its own either
+      (anchore/syft#3098). When "true" (and enable-attestations is also true),
+      the manual-docker-bake action rescans each pushed image with syft, patches
+      the describing package from the labels, and rebuilds the attestation
+      manifest in place, preserving BuildKit's exact OCI shape. Set "false" to
+      keep BuildKit's raw (NOASSERTION) SBOM. See tenstorrent/tt-metal#49882.
     required: false
     default: "true"
 
@@ -53,123 +101,13 @@ runs:
         INPUT_RETRY_DELAY_SECONDS: ${{ inputs.retry-delay-seconds }}
         INPUT_USE_DEFAULT_BUILDER: ${{ inputs.use-default-builder }}
         INPUT_VALIDATE_IMAGES: ${{ inputs.validate-images }}
+        INPUT_ENABLE_ATTESTATIONS: ${{ inputs.enable-attestations }}
+        INPUT_ENRICH_SBOM: ${{ inputs.enrich-sbom }}
+        INPUT_HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
       run: |
         set -euo pipefail
-
-        if [ "${INPUT_USE_DEFAULT_BUILDER}" = "true" ]; then
-          docker buildx use default || true
-        fi
-
-        if [ -n "${INPUT_UBUNTU_VERSION}" ]; then
-          export UBUNTU_VERSION="${INPUT_UBUNTU_VERSION}"
-        fi
-        if [ -n "${INPUT_PYTHON_VERSION}" ]; then
-          export PYTHON_VERSION="${INPUT_PYTHON_VERSION}"
-        fi
-
-        mapfile -t SET_LINES < <(printf '%s\n' "${INPUT_SET_LINES}")
-
-        BAKE_SETS=()
-        for s in "${SET_LINES[@]}"; do
-          [ -n "$s" ] && BAKE_SETS+=(--set "$s")
-        done
-
-        IFS=',' read -r -a TARGETS <<< "${INPUT_TARGETS}"
-        CLEAN_TARGETS=()
-        for t in "${TARGETS[@]}"; do
-          trimmed="${t#"${t%%[![:space:]]*}"}"
-          trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-          [ -n "$trimmed" ] && CLEAN_TARGETS+=("$trimmed")
-        done
-        if [ "${#CLEAN_TARGETS[@]}" -eq 0 ]; then
-          echo "No bake targets provided."
-          exit 1
-        fi
-
-        retries="${INPUT_RETRIES}"
-        delay="${INPUT_RETRY_DELAY_SECONDS}"
-        attempt=1
-        bake_success=false
-        last_bake_exit=0
-        until [ "$attempt" -gt "$retries" ]; do
-          echo "docker buildx bake targets=${CLEAN_TARGETS[*]} attempt ${attempt}/${retries}"
-          docker buildx bake -f "${INPUT_BAKE_FILE}" "${BAKE_SETS[@]}" "${CLEAN_TARGETS[@]}" && last_bake_exit=0 || last_bake_exit=$?
-          if [ "$last_bake_exit" -eq 0 ]; then
-            bake_success=true
-            break
-          fi
-          if [ "$attempt" -lt "$retries" ]; then
-            echo "Bake failed, retrying in ${delay}s..."
-            sleep "$delay"
-          fi
-          attempt=$((attempt + 1))
-        done
-
-        if [ "$bake_success" != "true" ]; then
-          echo "ERROR: Bake failed after ${retries} attempts (last exit code: ${last_bake_exit})."
-          exit 1
-        fi
-
-        # Validate that images were actually built and are inspectable
-        validation_failed=false
-        if [ "${INPUT_VALIDATE_IMAGES}" = "true" ]; then
-          echo ""
-          echo "Validating built images..."
-          for target in "${CLEAN_TARGETS[@]}"; do
-            # Check if there's a tag override in the set-lines for this target
-            target_tag=""
-            target_output=""
-            for s in "${SET_LINES[@]}"; do
-              # Extract tag override: target.tags=xxx
-              if [[ "$s" =~ ^${target}\.tags=(.+)$ ]]; then
-                target_tag="${BASH_REMATCH[1]}"
-              fi
-              # Extract output override: target.output=xxx
-              if [[ "$s" =~ ^${target}\.output=(.+)$ ]]; then
-                target_output="${BASH_REMATCH[1]}"
-              fi
-            done
-
-            # Determine how to validate based on output configuration
-            # If output contains 'push=true' without 'type=docker', image is registry-only
-            if [[ "$target_output" =~ push=true ]] && [[ ! "$target_output" =~ type=docker ]]; then
-              # Registry-only image - validate by checking manifest
-              if [ -n "$target_tag" ]; then
-                echo "Checking registry image for target '$target' (tag: $target_tag)..."
-                if ! docker manifest inspect "$target_tag" > /dev/null 2>&1; then
-                  echo "ERROR: Registry image validation failed for target '$target' (tag: $target_tag)"
-                  echo "The build reported success but the image is not available in the registry."
-                  validation_failed=true
-                else
-                  echo "  Registry image validated: $target_tag"
-                fi
-              else
-                echo "  Skipping validation for target '$target' (no tag specified for registry check)"
-              fi
-            else
-              # Local image validation
-              local_tag="$target_tag"
-              if [ -z "$local_tag" ]; then
-                # Get the default image name from the bake file
-                local_tag=$(docker buildx bake -f "${INPUT_BAKE_FILE}" --print "$target" 2>/dev/null | jq -r '.target["'$target'"].tags[0]' 2>/dev/null || echo "")
-                if [ -z "$local_tag" ] || [ "$local_tag" = "null" ]; then
-                  local_tag="tt-metalium-${target}:local"
-                fi
-              fi
-              echo "Checking local image for target '$target' (tag: $local_tag)..."
-              if ! docker image inspect "$local_tag" > /dev/null 2>&1; then
-                echo "ERROR: Image validation failed for target '$target' (tag: $local_tag)"
-                echo "The build reported success but the image is not inspectable."
-                validation_failed=true
-              else
-                echo "  Local image validated: $local_tag"
-              fi
-            fi
-          done
-
-          if [ "$validation_failed" = "true" ]; then
-            echo "ERROR: One or more image validations failed."
-            exit 1
-          fi
-          echo "All images validated successfully."
-        fi
+        # All logic lives in .github/scripts/manual-docker-bake.sh (kept small
+        # and reviewable). ${GITHUB_ACTION_PATH} is this action's directory
+        # (.github/actions/manual-docker-bake), so ../../scripts reaches
+        # .github/scripts; the script resolves its sibling enrich-sbom.sh itself.
+        bash "${GITHUB_ACTION_PATH}/../../scripts/manual-docker-bake.sh"

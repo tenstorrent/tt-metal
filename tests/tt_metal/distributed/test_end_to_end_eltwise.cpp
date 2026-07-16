@@ -98,7 +98,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
     auto eltwise_binary_kernel = CreateKernel(
         *program,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary.cpp",
         cores_for_program,
         ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
 
@@ -521,8 +521,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EXPECT_THAT(add_dst_vec, Each(Bfloat16Eq(workload_0_src0_val + workload_0_src1_val)));
 
     std::size_t sub_or_mul_size = mul_sub_dst_vec.size() / 2;
-    tt::stl::Span<bfloat16> mul_dst_span(mul_sub_dst_vec.data(), sub_or_mul_size);
-    tt::stl::Span<bfloat16> sub_dst_span(mul_sub_dst_vec.data() + sub_or_mul_size, sub_or_mul_size);
+    ttsl::Span<bfloat16> mul_dst_span(mul_sub_dst_vec.data(), sub_or_mul_size);
+    ttsl::Span<bfloat16> sub_dst_span(mul_sub_dst_vec.data() + sub_or_mul_size, sub_or_mul_size);
 
     EXPECT_THAT(mul_dst_span, Each(Bfloat16Eq(workload_1_src0_val * workload_1_src1_val)));
     EXPECT_THAT(sub_dst_span, Each(Bfloat16Eq(workload_1_src0_val - workload_1_src1_val)));

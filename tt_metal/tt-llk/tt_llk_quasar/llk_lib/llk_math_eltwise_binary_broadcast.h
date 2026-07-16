@@ -15,18 +15,21 @@ using namespace ckernel::trisc;
 using namespace ckernel::math;
 
 /**
- * @brief Sets up mop config for elementwise binary broadcast operations
- * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = [ELWADD, ELWSUB, ELWMUL]
- * @tparam BROADCAST_TYPE: Sets the broadcast type, values = [NONE, COL, ROW, SCALAR]
- * BROADCAST only operates on SRCB register
- * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ * @brief Sets up mop config for elementwise binary broadcast operations.
+ *
+ * Broadcast only operates on the SrcB register.
+ *
+ * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    const std::uint32_t num_eltwise_instrn_per_face = (tensor_shape.face_r_dim >> math_rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t num_eltwise_instrn_per_face = (tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS));
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
                                              ? p_elwise::SRCB_BCAST_COL
@@ -79,7 +82,11 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
 }
 
 /**
- * @brief Sets up addrmods for elementwise binary broadcast operations
+ * @brief Sets up addrmods for elementwise binary broadcast operations.
+ *
+ * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ * values = <LoFi/HiFi2/HiFi3/HiFi4>
  */
 template <BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_addrmod_()
@@ -116,9 +123,10 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
 }
 
 /**
- * @brief Sets up Initialization for elementwise binary broadcast operation where Output = SrcA [+, -, *] SrcB
- * SrcB either has row, col or scalar datums broadcasted to the rest of the tile before elementwise operation
- * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
+ * @brief Sets up initialization for elementwise binary broadcast operation where Output = SrcA [+, -, *] SrcB.
+ *
+ * SrcB either has row, col or scalar datums broadcasted to the rest of the tile before elementwise operation.
+ * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register.
  *
  * In a 32 x 32 tile, faces layout would be the following:
  * --------------------
@@ -142,10 +150,15 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  * Result face 1 = face 1 SrcA [+,-,*] datums[0, 16, 32, 48, ...240] of face 0 SrcB register
  * Result face 2 = face 2 SrcA [+,-,*] datums[0, 16, 32, 48, ...240] of face 2 SrcB register
  * Result face 3 = face 3 SrcA [+,-,*] datums[0, 16, 32, 48, ...240] of face 2 SrcB register
- * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = [ELWADD, ELWSUB, ELWMUL]
- * @tparam BROADCAST_TYPE: Sets the broadcast type, values = [NONE, COL, ROW, SCALAR]
- * @tparam MATH_FIDELITY: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication when input is Tf32 format
+ *
+ * @tparam ELTWISE_BINARY_TYPE: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam BROADCAST_TYPE: Sets the broadcast type (must not be NONE for this op), values = <COL/ROW/SCALAR>
+ * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
+ *values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
+ * @note On the unpack thread, pair with @ref _llk_unpack_binary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE; on the pack thread, pair with
+ *       @ref _llk_pack_init_ (T2).
+ * @note @ref _llk_math_eltwise_binary_broadcast_ runs the configured op with matching template args.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape)
@@ -158,12 +171,14 @@ inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_s
 }
 
 /**
- * @brief Perform an elementwise binary broadcast operation where Output = SrcA [+, -, *] SrcB
- * SrcB either has row, col or scalar datums broadcasted to the rest of the tile before elementwise operation
- * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
- * @param tile_idx: Tile index into the destination register.
- * If dest reg in float16 mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in full mode
- * If dest reg in float32 mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @brief Perform an elementwise binary broadcast operation where Output = SrcA [+, -, *] SrcB.
+ *
+ * SrcB either has row, col or scalar datums broadcasted to the rest of the tile before elementwise operation.
+ * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register.
+ *
+ * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
+ * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @note Call @ref _llk_math_eltwise_binary_broadcast_init_ with matching template args before this function.
  */
 inline void _llk_math_eltwise_binary_broadcast_(const std::uint32_t tile_idx)
 {

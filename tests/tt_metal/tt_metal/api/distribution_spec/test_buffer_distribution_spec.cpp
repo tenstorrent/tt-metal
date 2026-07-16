@@ -446,7 +446,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .physical_shard_shape = tt::tt_metal::Shape{1, 64, 96},
                     .page_shape = tt::tt_metal::Shape2D{32, 32},
                     .bytes_per_element = 1.0625,  // Headers for block float amortized over elements
-                    .grid = CoreRangeSet(tt::stl::Span<const CoreRange>(
+                    .grid = CoreRangeSet(ttsl::Span<const CoreRange>(
                         {CoreRange({4, 6}, {6, 6}), CoreRange({1, 1}, {1, 1}), CoreRange({0, 3}, {3, 3})})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
@@ -516,7 +516,7 @@ INSTANTIATE_TEST_SUITE_P(
                     .page_shape = tt::tt_metal::Shape2D{32, 32},
                     .bytes_per_element = 2,
                     .grid = CoreRangeSet(
-                        tt::stl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
+                        ttsl::Span<const CoreRange>({CoreRange({0, 0}, {2, 0}), CoreRange({0, 1}, {1, 1})})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,
                 },
@@ -533,3 +533,42 @@ INSTANTIATE_TEST_SUITE_P(
         )       // Combine
 );
 // clang-format on
+
+// Device-free check of the shard->core placement formula for both 1D strategies.
+// 8 single-page shards over 2 cores (R = 4 shards per core). Round-robin spreads
+// consecutive shards across cores; CONTIGUOUS_1D (shard-contiguous) packs a contiguous run per core.
+TEST(BufferDistributionSpecContiguous, ShardContiguousVsRoundRobinPlacement) {
+    const tt::tt_metal::Shape tensor_in_pages{8, 1};
+    const tt::tt_metal::Shape shard_in_pages{1, 1};
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));  // 2 cores
+
+    BufferDistributionSpec round_robin(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::ROUND_ROBIN_1D);
+    BufferDistributionSpec shard_contiguous(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::CONTIGUOUS_1D);
+
+    ASSERT_EQ(round_robin.num_cores(), 2u);
+    ASSERT_EQ(shard_contiguous.num_cores(), 2u);
+
+    const auto round_robin_map = round_robin.compute_page_mapping().core_host_page_indices;
+    const auto shard_contiguous_map = shard_contiguous.compute_page_mapping().core_host_page_indices;
+
+    // Round-robin: core c holds shards c, c + num_cores, ...
+    EXPECT_EQ(round_robin_map[0], (std::vector<uint32_t>{0, 2, 4, 6}));
+    EXPECT_EQ(round_robin_map[1], (std::vector<uint32_t>{1, 3, 5, 7}));
+
+    // Shard-contiguous: core c holds the contiguous run c*R .. c*R + R - 1.
+    EXPECT_EQ(shard_contiguous_map[0], (std::vector<uint32_t>{0, 1, 2, 3}));
+    EXPECT_EQ(shard_contiguous_map[1], (std::vector<uint32_t>{4, 5, 6, 7}));
+}
+
+// CONTIGUOUS_1D requires a uniform shards-per-core; an indivisible count must fatal.
+TEST(BufferDistributionSpecContiguous, ShardContiguousRequiresUniformShardsPerCore) {
+    const tt::tt_metal::Shape tensor_in_pages{7, 1};  // 7 shards over 2 cores -> not uniform
+    const tt::tt_metal::Shape shard_in_pages{1, 1};
+    const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));  // 2 cores
+
+    BufferDistributionSpec shard_contiguous(
+        tensor_in_pages, shard_in_pages, grid, ShardOrientation::ROW_MAJOR, ShardDistributionStrategy::CONTIGUOUS_1D);
+    EXPECT_ANY_THROW((void)shard_contiguous.compute_page_mapping());
+}

@@ -30,11 +30,10 @@
  * program creation time.
  *
  * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
- * @tparam disable_src_zero_flag When true, disables the source-zero optimisation flag.
  * @param  unpA_operand          Operand index for unpack source A (In0).
  * @param  unpB_operand          Operand index for unpack source B (In1).
  */
-template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     // In0 -> unpA
     // In1 -> unpB
@@ -53,54 +52,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
     const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
-        unpack_src_format[unpA_operand_id],
-        unpack_src_format[unpB_operand_id],
-        unpack_dst_format[unpA_operand_id],
-        unpack_dst_format[unpB_operand_id],
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces,
-        unpA_tile_size,
-        unpB_tile_size);
-}
-
-/**
- * @deprecated Operand A face geometry (face_r_dim, num_faces) is now derived from the CB metadata. Use the
- * llk_unpack_hw_configure(unpA_operand, unpB_operand) overload instead. This explicit-face-geometry overload
- * is retained only for backwards compatibility and will be removed.
- *
- * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
- * @tparam disable_src_zero_flag Disable the source zero flag.
- * @param  unpA_operand          Input operand index for unpack source A.
- * @param  unpB_operand          Input operand index for unpack source B.
- * @param  unpA_face_r_dim       Face row dimension for operand A (overrides operand metadata).
- * @param  unpA_num_faces        Number of faces for operand A (overrides operand metadata).
- */
-template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
-[[deprecated(
-    "Operand A face geometry is now derived from CB metadata; use the "
-    "llk_unpack_hw_configure(unpA_operand, unpB_operand) overload instead.")]] inline void
-llk_unpack_hw_configure(
-    const std::uint32_t unpA_operand,
-    const std::uint32_t unpB_operand,
-    const std::uint32_t unpA_face_r_dim,
-    const std::uint32_t unpA_num_faces) {
-    // In0 -> unpA
-    // In1 -> unpB
-    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
-
-    const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
-    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
-
-    // Currently, there is a constraint that tile size is equal to the fifo page size
-    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
-    const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
-    const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
-
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
@@ -119,12 +71,11 @@ llk_unpack_hw_configure(
  * unpA_operand == unpB_operand.
  *
  * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
- * @tparam disable_src_zero_flag When true, disables the source-zero optimisation flag.
  * @param  unpA_operand          Operand index used for both unpack source A and B.
  */
-template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
-    llk_unpack_hw_configure<is_fp32_dest_acc_en, disable_src_zero_flag>(unpA_operand, unpA_operand);
+    llk_unpack_hw_configure<is_fp32_dest_acc_en>(unpA_operand, unpA_operand);
 }
 
 /**
@@ -263,8 +214,6 @@ inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srcb_new_operand);
-    _llk_unpack_reconfig_zero_src_flag_(
-        unpack_dst_format[get_operand_id(srca_new_operand)], unpack_dst_format[get_operand_id(srcb_new_operand)]);
 }
 
 /**
@@ -290,15 +239,7 @@ inline void llk_unpack_reconfig_data_format(
         srca_old_operand, srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(
         srcb_old_operand, srcb_new_operand);
-    _llk_unpack_reconfig_zero_src_flag_(
-        unpack_dst_format[get_operand_id(srca_new_operand)], unpack_dst_format[get_operand_id(srcb_new_operand)]);
 }
-
-/**
- * Disable unpacker debug features.
- */
-// TODO NC: Remove as a part of tt-metal#36411
-inline void llk_unpack_dbg_feature_disable() { _llk_unpack_dbg_feature_disable_(); }
 
 /**
  * Mark srcB as holding dummy-valid data so the math thread can proceed without a real srcB unpack.

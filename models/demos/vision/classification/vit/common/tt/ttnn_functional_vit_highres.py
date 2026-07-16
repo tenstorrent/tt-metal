@@ -239,7 +239,7 @@ def vit(
         config,
         embeddings_output,
         attention_mask=attention_mask,
-        parameters=parameters.vit.encoder,
+        parameters=parameters.vit.encoder if "encoder" in parameters.vit else parameters.vit.layers,
     )
 
     # Final LayerNorm

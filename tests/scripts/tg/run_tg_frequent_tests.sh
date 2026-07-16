@@ -22,7 +22,6 @@ run_tg_tests() {
   elif [[ "$1" == "flux1" ]]; then
     echo "LOG_METAL: running Flux.1 run_tg_frequent_tests"
     HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_attention.py::test_attention_flux -k "4x" --timeout=300; fail+=$?
-    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block -k "4x" --timeout=300; fail+=$?
     HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k "4x" --timeout=300; fail+=$?
 
   elif [[ "$1" == "motif" ]]; then

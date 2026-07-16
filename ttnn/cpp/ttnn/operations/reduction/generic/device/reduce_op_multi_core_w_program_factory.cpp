@@ -176,6 +176,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     const bool use_post_mul = operation_attributes.post_mul_scaler != 1.0f;
     uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 
+    // Int32 max/min/sum use the SFPU reduce path; fp32 SUM only for the accurate mean opt-in.
+    const bool is_sfpu_reduce =
+        use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
+    const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
+
     std::vector<uint32_t> reader_compile_time_args;
     if (rm_path) {
         reader_compile_time_args = build_rm_reader_ct_args(
@@ -193,7 +198,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
     }
 
-    if (operation_attributes.negate) {
+    if (use_fpu_negate) {
         uint32_t acc_cb_index = tt::CBIndex::c_4;
         uint32_t num_acc_tiles = 1;
         desc.cbs.push_back(CBDescriptor{
@@ -223,6 +228,14 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         reduce_op_utils::get_defines(operation_attributes.math_op, ReduceOpDim::W);
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
+    }
+    // Accurate fp32 mean: route Float32 SUM through the SFPU (needs 32-bit DEST)
+    const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
+
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    // UnpackToDestFp32 unpacks c_0 straight into the fp32 DEST, bypassing the SrcA tf32 truncation.
+    if (fp32_sfpu_reduce) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     KernelDescriptor reader_desc;
@@ -262,13 +275,15 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, ht_per_core_group_1, post_mul_scaler_bits);
     } else {
         compute_kernel_args_group_1 = {
-            ht_per_core_group_1,   // Ht
-            Wt,                    // Wt
-            1,                     // NC
-            post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+            ht_per_core_group_1,         // Ht
+            Wt,                          // Wt
+            1,                           // NC
+            post_mul_scaler_bits,        // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+            fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
         };
     }
 
+    // MIN on Int32 uses -MAX(-x) in reduce_w_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
@@ -283,6 +298,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     compute_desc_g1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
     };
 
     std::optional<KernelDescriptor> compute_desc_g2;
@@ -292,10 +308,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             compute_kernel_args_group_2 = build_rm_compute_ct_args(plan, ht_per_core_group_2, post_mul_scaler_bits);
         } else {
             compute_kernel_args_group_2 = {
-                ht_per_core_group_2,   // Ht
-                Wt,                    // Wt
-                1,                     // NC
-                post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+                ht_per_core_group_2,         // Ht
+                Wt,                          // Wt
+                1,                           // NC
+                post_mul_scaler_bits,        // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+                fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
             };
         }
 
@@ -308,6 +325,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         d.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
         };
         compute_desc_g2 = std::move(d);
     }

@@ -275,11 +275,11 @@ class TestTriage:
         )
         assert len(result.stderr) == 0
 
-    def test_triage_initialize_with_noc1(self):
+    def test_triage_with_noc_0(self):
         global triage_script
 
         result = subprocess.run(
-            [triage_script, "--initialize-with-noc1", "--run=test_output"],
+            [triage_script, "--noc-id=0", "--run=test_output"],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -356,6 +356,9 @@ class TestTriage:
     def test_check_core_magic(self):
         self.run_triage_script("check_core_magic.py")
 
+    def test_check_l1_status(self):
+        self.run_triage_script("check_l1_status.py")
+
     def test_check_eth_status(self):
         self.run_triage_script("check_eth_status.py")
 
@@ -411,16 +414,21 @@ class TestTriage:
             # Verify first callstack entry if specified
             first_entry = callstack[0]
             expected_file = expected.get("first_callstack_file")
-            if expected_file:
-                assert first_entry.file.endswith(
-                    expected_file
-                ), f"{check.risc_name}: Expected file ending with '{expected_file}', got '{first_entry.file}'"
-
             expected_line = expected.get("first_callstack_line")
+            if expected_file or expected_line:
+                assert (
+                    first_entry.file_info is not None
+                ), f"{check.risc_name}: Expected file_info on first callstack entry, got None"
+
+            if expected_file:
+                assert first_entry.file_info.file.endswith(
+                    expected_file
+                ), f"{check.risc_name}: Expected file ending with '{expected_file}', got '{first_entry.file_info.file}'"
+
             if expected_line:
                 assert (
-                    first_entry.line == expected_line
-                ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.line}"
+                    first_entry.file_info.line == expected_line
+                ), f"{check.risc_name}: Expected line {expected_line}, got {first_entry.file_info.line}"
 
     def test_dump_configuration(self):
         result = self.run_triage_script("dump_configuration.py")
@@ -499,10 +507,13 @@ class TestTriage:
                         if expected_file and row.callstack:
                             callstack = row.callstack.callstack
                             assert len(callstack) > 0, "Expected non-empty callstack in aggregated row"
-                            matching_entries = [e for e in callstack if e.file and e.file.endswith(expected_file)]
-                            assert (
-                                len(matching_entries) > 0
-                            ), f"Expected file '{expected_file}' not found in aggregated callstack. Callstack files: {[e.file for e in callstack]}"
+                            matching_entries = [
+                                e for e in callstack if e.file_info and e.file_info.file.endswith(expected_file)
+                            ]
+                            assert len(matching_entries) > 0, (
+                                f"Expected file '{expected_file}' not found in aggregated callstack. "
+                                f"Callstack files: {[e.file_info.file if e.file_info else None for e in callstack]}"
+                            )
 
         finally:
             os.environ.pop("TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS", None)
@@ -558,18 +569,22 @@ class TestTriage:
             expected_line = expected_data.get("line")
             if expected_file:
                 # Search through callstack to find the expected file/line
-                matching_entries = [entry for entry in callstack if entry.file.endswith(expected_file)]
+                matching_entries = [
+                    entry for entry in callstack if entry.file_info and entry.file_info.file.endswith(expected_file)
+                ]
                 assert len(matching_entries) > 0, (
                     f"{risc_name}: Expected file '{expected_file}' not found in callstack. "
-                    f"Callstack files: {[entry.file for entry in callstack]}"
+                    f"Callstack files: {[entry.file_info.file if entry.file_info else None for entry in callstack]}"
                 )
 
                 if expected_line is not None:
                     # Find entry with matching file and line
-                    matching_entry = next((entry for entry in matching_entries if entry.line == expected_line), None)
+                    matching_entry = next(
+                        (entry for entry in matching_entries if entry.file_info.line == expected_line), None
+                    )
                     assert matching_entry is not None, (
                         f"{risc_name}: Expected file '{expected_file}' at line {expected_line} not found. "
-                        f"Found {expected_file} at lines: {[entry.line for entry in matching_entries]}"
+                        f"Found {expected_file} at lines: {[entry.file_info.line for entry in matching_entries]}"
                     )
 
     def run_triage_script(

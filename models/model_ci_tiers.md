@@ -46,6 +46,10 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen3-32B | WH Galaxy |
 | GPT-OSS 120B | WH Galaxy, BH Galaxy, BH QuietBox 2 |
 | Whisper | WH N150, BH P150 |
+| Gemma-4-12B | BH QuietBox 2 |
+| Gemma-4-26B-A4B | BH QuietBox 2 |
+| Gemma-4-31B | BH QuietBox 2 |
+| Qwen3.6-27B | BH QuietBox 2 |
 ## Tier 2 Models
 | Model | Systems |
 |-------|---------|
@@ -57,6 +61,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen2.5-32B | WH LLMBox, BH QuietBox 2 |
 | Qwen2.5-Coder-32B | WH LLMBox |
 | Qwen2.5-72B-VL | WH LLMBox, BH QuietBox 2 |
+| Qwen3-VL-32B | WH LLMBox |
 | Llama90B-VL | WH LLMBox |
 | Shallow-UNet | WH N150, WH LLMBox |
 | Mistral-7B | WH N150 |
@@ -65,8 +70,8 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Gemma-3-27B | WH LLMBox |
 | Gemma-4-E2B | WH N150, BH P150 |
 | Gemma-4-E4B | WH N150, BH P150, BH P300, BH QuietBox 2 |
-| Gemma-4-26B-A4B | WH LLMBox, BH QuietBox 2 |
-| Gemma-4-31B | WH LLMBox, BH QuietBox 2 |
+| Gemma-4-26B-A4B | WH LLMBox |
+| Gemma-4-31B | WH LLMBox |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
@@ -80,6 +85,8 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
+| Panoptic-DeepLab | BH P150 |
+| BEVFormer | BH P150 |
 
 
 # Pipelines
@@ -137,10 +144,8 @@ Captures device timing for a single layer of each target model, used to track pe
 
 | Pipeline | Workflow |
 |----------|----------|
-| Models post-commit | [`[internal] models tests impl`](../.github/workflows/models-post-commit.yaml) |
 | PR Gate | [`PR Gate`](../.github/workflows/pr-gate.yaml) |
 | Merge Gate | [`Merge Gate`](../.github/workflows/merge-gate.yaml) |
 | vLLM nightly tests | [`vLLM nightly tests`](../.github/workflows/vllm-nightly-tests.yaml) |
 | vLLM nightly impl | [`[internal] vLLM nightly tests impl`](../.github/workflows/vllm-nightly-tests-impl.yaml) |
 | Galaxy stress tests | [`(Galaxy) Stress`](../.github/workflows/galaxy-stress-tests.yaml) |
-| TTNN stress tests | [`ttnn stress tests`](../.github/workflows/ttnn-stress-tests.yaml) |

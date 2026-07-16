@@ -66,12 +66,12 @@ std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, ui
     return tt::tt_metal::MetalContext::instance().data_collector()->GetProgramSubDevice(device_id, runtime_id);
 }
 
-std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
+void TieRuntimeIdToProgramId(ProgramImpl& program) {
+    tt::tt_metal::MetalContext::instance().data_collector()->TieRuntimeIdToProgramId(program);
 }
 
-std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id) {
-    return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesVecForRuntimeId(runtime_id);
+std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) {
+    return tt::tt_metal::MetalContext::instance().data_collector()->GetKernelSourcesForRuntimeId(runtime_id);
 }
 
 ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(

@@ -799,6 +799,7 @@ class DecoderStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
+            stage_plan=ctx.stage_plan,
             loopback=LoopbackConfig.host_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
             if self._host_loopback
             else LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
@@ -1195,6 +1196,7 @@ class HostIoDecoderStage(DecoderStage):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
+            stage_plan=ctx.stage_plan,
             loopback=LoopbackConfig.no_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
         )
 

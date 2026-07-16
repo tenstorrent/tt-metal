@@ -39,6 +39,9 @@ TEST_F(DramSubchannelHelperFixture, PicksUnreservedSubchannelPerBank) {
             reserved.emplace(c.x, c.y);
         }
 
+        // Logical/compacted channel — get_dram_core_for_channel indexes the compacted DRAM grid,
+        // so on a harvested board this must match what pick_unused_dram_logical_core uses (passing
+        // the raw physical channel here indexes the wrong core and the harvested grid throws).
         const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank));
         uint32_t expected_free = num_subchannels;
         for (uint32_t sub = 0; sub < num_subchannels; ++sub) {
