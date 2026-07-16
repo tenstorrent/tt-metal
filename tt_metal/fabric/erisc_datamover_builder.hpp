@@ -277,6 +277,12 @@ struct FabricEriscDatamoverConfig {
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
 
+    // [debug] Receiver flow-control trace buffer address, carved from channel-buffer headroom (see ctor).
+    std::size_t receiver_log_buffer_address = 0;
+
+    // [debug] Sender flow-control trace buffer address, carved from channel-buffer headroom (see ctor).
+    std::size_t sender_log_buffer_address = 0;
+
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channels_buffer_index_address = {};
