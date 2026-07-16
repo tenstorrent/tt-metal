@@ -6,6 +6,7 @@
 
 #include <variant>
 #include <optional>
+#include <tuple>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -34,10 +35,47 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
         const std::optional<MemoryConfig> qkv_memory_config;
         bool use_noc1_only;
         bool use_optimal_ccl_for_llama;
+
+        static constexpr auto attribute_names = std::forward_as_tuple(
+            "dim",
+            "cluster_axis",
+            "ring_devices",
+            "num_links",
+            "num_heads",
+            "num_kv_heads",
+            "head_dim",
+            "slice_size",
+            "topology",
+            "use_noc1_only",
+            "use_optimal_ccl_for_llama");
+        auto attribute_values() const {
+            return std::make_tuple(
+                dim,
+                cluster_axis,
+                ring_devices,
+                num_links,
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                slice_size,
+                topology,
+                use_noc1_only,
+                use_optimal_ccl_for_llama);
+        }
     };
     struct tensor_args_t {
-        const Tensor input_tensor;
-        Tensor intermediate_packet_buffer;
+        const Tensor& input_tensor;
+        Tensor& intermediate_packet_buffer;
+
+        tensor_args_t(const Tensor& input, Tensor& intermediate) :
+            input_tensor(input), intermediate_packet_buffer(intermediate) {}
+
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("input_dtype", "input_memory_config", "input_device_id");
+        auto attribute_values() const {
+            return std::make_tuple(
+                input_tensor.dtype(), std::cref(input_tensor.memory_config()), input_tensor.device()->id());
+        }
     };
 
     using spec_return_value_t = std::vector<ttnn::TensorSpec>;
@@ -92,8 +130,6 @@ struct LlamaReduceScatterCreateHeadsDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::experimental::ccl
 
