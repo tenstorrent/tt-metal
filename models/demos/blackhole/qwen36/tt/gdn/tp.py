@@ -346,8 +346,8 @@ class TPGatedDeltaNet:
         # inputs of the previous chunk (left context); zero == None for a from-scratch pass.
         # valid_len makes new_state capture the last K-1 REAL tokens (not padding).
         if valid_len is None and self._conv1d_w is not None:
-            # On-core depthwise conv1d for the full-chunk path. The masked tail (valid_len set) +
-            # decode keep the manual FIR / decode helpers.
+            # Native depthwise conv1d for the full-chunk path.
+            # The masked tail and decode keep the manual FIR.
             conv, conv_new_state = self._conv1d_prefill(qkv, self.conv_carry if carry else None, T)
         else:
             conv, conv_new_state = _causal_conv1d_fir(
