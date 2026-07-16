@@ -731,7 +731,7 @@
     exit $exit_code
   model: sdxl-nightly
   skus:
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -779,7 +779,7 @@
     pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -v -m "not disable_fast_runtime_mode" --timeout=600
   model: sdxl-nightly
   skus:
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -797,7 +797,7 @@
     wh_n150:
       timeout: 40
       tier: 2
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 30
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -812,7 +812,7 @@
     wh_n150:
       timeout: 35
       tier: 2
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -830,7 +830,7 @@
     wh_n150:
       timeout: 30
       tier: 2
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -857,7 +857,7 @@
     pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "unet and not refiner"
   model: sdxl-perf
   skus:
-    wh_n150:
+    wh_n300_perf:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -870,7 +870,7 @@
     pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal -k "refiner"
   model: sdxl-perf
   skus:
-    wh_n150:
+    wh_n300_perf:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -883,7 +883,7 @@
     pytest models/demos/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
   model: sdxl-perf
   skus:
-    bh_p150:
+    bh_p150_perf:
       timeout: 40
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -899,7 +899,7 @@
     exit $exit_code
   model: sdxl-perf
   skus:
-    wh_n150:
+    wh_n300_perf:
       timeout: 35
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic

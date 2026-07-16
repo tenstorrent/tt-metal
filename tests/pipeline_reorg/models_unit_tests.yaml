@@ -800,7 +800,7 @@
     pytest --timeout 900 tests/nightly/single_card/stable_diffusion_xl_base/lora
   model: sdxl
   skus:
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 20
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -812,7 +812,7 @@
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py
   model: sdxl
   skus:
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 15
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -824,7 +824,7 @@
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base/vae
   model: sdxl
   skus:
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 15
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
@@ -836,7 +836,7 @@
     pytest --timeout 600 tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae --ignore=tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py
   model: sdxl
   skus:
-    bh_p150:
+    bh_p150b_civ2:
       timeout: 15
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic

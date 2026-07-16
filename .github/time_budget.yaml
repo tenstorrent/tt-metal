@@ -166,9 +166,11 @@ shield:
   e2e:
     wh_llmbox: 110
   e2e_tier2:
-    wh_n150: 340
+    wh_n150: 225
     wh_n300: 150
-    bh_p150: 230
+    wh_n300_perf: 115
+    bh_p150_perf: 40
+    bh_p150b_civ2: 190
   unit:
     wh_n150: 90
     wh_n300: 115
@@ -176,7 +178,7 @@ shield:
   unit_tier2:
     wh_n150: 94
     wh_n300: 90
-    bh_p150: 65
+    bh_p150b_civ2: 65
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
