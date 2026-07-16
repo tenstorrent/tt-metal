@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/allocation_context.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
@@ -90,8 +91,14 @@ void MeshTrace::populate_mesh_buffer(
         .size = padded_size,
     };
 
-    trace_buffer->mesh_buffer =
-        MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
+    // Give dynamically allocated trace storage a useful diagnostic context. The allocator excludes BufferType::TRACE
+    // storage in the reserved trace region, but intentionally tracks top-down BufferType::DRAM trace storage because
+    // it can be unsafe for older traces.
+    {
+        tt::tt_metal::AllocationContextGuard trace_storage_context("trace_storage");
+        trace_buffer->mesh_buffer =
+            MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
+    }
 
     // In dynamic allocation mode, validate that trace buffer doesn't overlap with allocations during trace
     DeviceAddr dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);

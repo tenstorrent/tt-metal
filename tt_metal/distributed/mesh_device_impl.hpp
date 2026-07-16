@@ -221,15 +221,15 @@ public:
 
     // Exposed for trace allocation safety control from higher-level APIs.
     // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_unsafe();
+    void mark_allocations_unsafe(const MeshTraceId& trace_id);
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_safe();
     bool allocations_unsafe() const;
 
     // Unsafe allocation tracking
-    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids() const;
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    void clear_unsafe_tracked_ids();
+    void clear_unsafe_tracked_ids(const MeshTraceId& trace_id);
     static std::vector<size_t> drain_pending_traceback_ids();
 
     // IDevice interface implementation

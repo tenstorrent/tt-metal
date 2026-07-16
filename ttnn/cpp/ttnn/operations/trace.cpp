@@ -39,9 +39,9 @@ void mark_allocations_safe(MeshDevice* device) {
     device->mark_allocations_safe();
 }
 
-void mark_allocations_unsafe(MeshDevice* device) {
+void mark_allocations_unsafe(MeshDevice* device, MeshTraceId trace_id) {
     ZoneScoped;
-    device->mark_allocations_unsafe();
+    device->mark_allocations_unsafe(trace_id);
 }
 
 bool allocations_unsafe(MeshDevice* device) {
@@ -49,13 +49,13 @@ bool allocations_unsafe(MeshDevice* device) {
     return device->allocations_unsafe();
 }
 
-std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(MeshDevice* device) {
-    return device->get_unsafe_tracked_ids();
+std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(MeshDevice* device, MeshTraceId trace_id) {
+    return device->get_unsafe_tracked_ids(trace_id);
 }
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     device->remove_unsafe_tracked_id(buffer_unique_id);
 }
-void clear_unsafe_tracked_ids(MeshDevice* device) { device->clear_unsafe_tracked_ids(); }
+void clear_unsafe_tracked_ids(MeshDevice* device, MeshTraceId trace_id) { device->clear_unsafe_tracked_ids(trace_id); }
 std::vector<size_t> drain_pending_traceback_ids() { return MeshDevice::drain_pending_traceback_ids(); }
 
 void push_allocation_context(const std::string& ctx) { tt::tt_metal::push_allocation_context(ctx); }

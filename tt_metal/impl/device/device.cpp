@@ -912,7 +912,10 @@ void Device::disable_and_clear_program_cache() {
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
+void Device::mark_allocations_unsafe() {
+    // Legacy single-device tracing has no public trace ID at this layer.
+    this->allocator_impl()->mark_allocations_unsafe(/*trace_id=*/0);
+}
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }

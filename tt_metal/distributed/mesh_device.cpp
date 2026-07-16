@@ -267,21 +267,25 @@ uint32_t MeshDeviceImpl::dram_size_per_channel() const {
 IDevice* MeshDeviceImpl::reference_device() const { return this->get_devices().at(0); }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
+void MeshDeviceImpl::mark_allocations_unsafe(const MeshTraceId& trace_id) {
+    this->allocator_impl()->mark_allocations_unsafe(*trace_id);
+}
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 bool MeshDeviceImpl::allocations_unsafe() const { return this->allocator_impl()->allocations_unsafe(); }
 
-std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids() const {
-    return this->allocator_impl()->get_unsafe_tracked_ids();
+std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
+    return this->allocator_impl()->get_unsafe_tracked_ids(*trace_id);
 }
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
     this->allocator_impl()->remove_unsafe_tracked_id(buffer_unique_id);
 }
 // NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::clear_unsafe_tracked_ids() { this->allocator_impl()->clear_unsafe_tracked_ids(); }
+void MeshDeviceImpl::clear_unsafe_tracked_ids(const MeshTraceId& trace_id) {
+    this->allocator_impl()->clear_unsafe_tracked_ids(*trace_id);
+}
 std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
     return AllocatorImpl::drain_pending_traceback_ids();
 }
@@ -1292,10 +1296,11 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
 
     tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
+    this->clear_unsafe_tracked_ids(trace_id);
+
     // Only enable allocations once all captured traces are released
     if (this->trace_buffers_size_ == 0) {
         this->mark_allocations_safe();
-        this->clear_unsafe_tracked_ids();
     }
 }
 
@@ -1317,8 +1322,6 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
         "CQ {} is already being used for tracing tid {}",
         (uint32_t)cq_id,
         *trace_id);
-    this->mark_allocations_safe();
-
     // Start tracking DRAM high water mark if trace_region_size is 0 (dynamic allocation mode)
     auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
     if (trace_region_size == 0) {
@@ -1366,7 +1369,7 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 
     MeshTrace::populate_mesh_buffer(
         *(mesh_command_queues_[cq_id]), trace_buffer, dram_allocation_high_water_mark, dram_deletion_high_water_mark);
-    this->mark_allocations_unsafe();
+    this->mark_allocations_unsafe(trace_id);
 }
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
@@ -1821,15 +1824,15 @@ void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, b
 }
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { pimpl_->release_mesh_trace(trace_id); }
 void MeshDevice::mark_allocations_safe() { pimpl_->mark_allocations_safe(); }
-void MeshDevice::mark_allocations_unsafe() { pimpl_->mark_allocations_unsafe(); }
+void MeshDevice::mark_allocations_unsafe(const MeshTraceId& trace_id) { pimpl_->mark_allocations_unsafe(trace_id); }
 bool MeshDevice::allocations_unsafe() const { return pimpl_->allocations_unsafe(); }
-std::unordered_map<size_t, std::string> MeshDevice::get_unsafe_tracked_ids() const {
-    return pimpl_->get_unsafe_tracked_ids();
+std::unordered_map<size_t, std::string> MeshDevice::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
+    return pimpl_->get_unsafe_tracked_ids(trace_id);
 }
 void MeshDevice::remove_unsafe_tracked_id(size_t buffer_unique_id) {
     pimpl_->remove_unsafe_tracked_id(buffer_unique_id);
 }
-void MeshDevice::clear_unsafe_tracked_ids() { pimpl_->clear_unsafe_tracked_ids(); }
+void MeshDevice::clear_unsafe_tracked_ids(const MeshTraceId& trace_id) { pimpl_->clear_unsafe_tracked_ids(trace_id); }
 std::vector<size_t> MeshDevice::drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     return pimpl_->get_mesh_trace(trace_id);
