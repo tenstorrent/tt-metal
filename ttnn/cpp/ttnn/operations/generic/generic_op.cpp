@@ -4,13 +4,15 @@
 
 #include "generic_op.hpp"
 #include "device/generic_op_device_operation.hpp"
+#include "device/generic_op_device_operation_types.hpp"
 
 namespace ttnn {
 
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
-    return ttnn::prim::generic_op(io_tensors, mesh_program_descriptor);
+    return ttnn::prim::generic_op(
+        io_tensors, ttnn::operations::generic::operation_attributes_t{mesh_program_descriptor});
 }
 
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {

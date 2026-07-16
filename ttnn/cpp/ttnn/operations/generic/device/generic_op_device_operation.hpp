@@ -5,10 +5,6 @@
 #pragma once
 
 #include <variant>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
-#include <tt_stl/reflection.hpp>  // ttsl::hash::hash_t
-
 #include "ttnn/tensor/tensor.hpp"
 #include "generic_op_program_factory.hpp"
 #include "generic_op_device_operation_types.hpp"
@@ -28,10 +24,6 @@ struct GenericOpDeviceOperation {
     static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-
-    // Note: will either compute a program hash, or simply return user provided custom program hash
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };  // struct GenericOpDeviceOperation
 
 }  // namespace ttnn::operations::generic
