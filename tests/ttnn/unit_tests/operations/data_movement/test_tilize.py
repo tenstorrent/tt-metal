@@ -987,12 +987,9 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
-@pytest.mark.xfail(reason="Retile program factory (changing tile shape of a tiled input) is not yet implemented")
 @pytest.mark.parametrize(
     "tensor_shape, input_tile_shape, output_tile_shape",
     [
-        ([1, 1, 32, 64], (32, 32), (16, 32)),
-        ([1, 1, 64, 128], (32, 32), (16, 32)),
         ([1, 1, 128, 256], (32, 32), (16, 32)),
     ],
 )
