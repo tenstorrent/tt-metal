@@ -415,15 +415,24 @@ if(WITH_PYTHON_BINDINGS)
             BUILD_RPATH
                 "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
             INSTALL_RPATH
-                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+                "$ORIGIN"
     )
+
+    add_custom_command(
+        TARGET layer_completion_ext
+        POST_BUILD
+        COMMAND
+            ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:layer_completion_ext>"
+            "${PROJECT_SOURCE_DIR}/models/demos/common/prefill/runners/pipelined_prefill/$<TARGET_FILE_NAME:layer_completion_ext>"
+    )
+
     install(
         TARGETS
             layer_completion_ext
-            DESTINATION
-            ${PROJECT_SOURCE_DIR}/models/demos/common/prefill/runners/pipelined_prefill
-            COMPONENT
-            tt_pybinds
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT ttnn-runtime
     )
 
     if(TT_INSTALL)
