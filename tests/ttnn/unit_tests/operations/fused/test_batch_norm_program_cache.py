@@ -41,9 +41,9 @@ INIT_RUNNING_MEAN = 10.0
 INIT_RUNNING_VAR = 10.0
 
 
-def _stat_tensor(value, channels, device):
+def _stat_tensor(value, channels, device, torch_dtype=torch.bfloat16):
     return ttnn.from_torch(
-        torch.full((1, channels, 1, 1), value, dtype=torch.bfloat16),
+        torch.full((1, channels, 1, 1), value, dtype=torch_dtype),
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
@@ -89,15 +89,17 @@ def _assert_running_stats_updated(input_torch, channels, momentum, eps, updated_
         )
 
 
-def _run_bn_training(device, input_shape, momentum, *, with_mean=True, with_var=True, seed=0, eps=1e-5):
+def _run_bn_training(
+    device, input_shape, momentum, *, with_mean=True, with_var=True, seed=0, eps=1e-5, torch_dtype=torch.bfloat16
+):
     """Run ttnn.batch_norm(training=True) under the program-cache entry counter, then read back
     and validate the in-place running-stat update for this call."""
     torch.manual_seed(seed)
     channels = input_shape[1]
-    input_torch = torch.rand(input_shape, dtype=torch.bfloat16)
+    input_torch = torch.rand(input_shape, dtype=torch_dtype)
     input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT)
-    mean_tt = _stat_tensor(INIT_RUNNING_MEAN, channels, device) if with_mean else None
-    var_tt = _stat_tensor(INIT_RUNNING_VAR, channels, device) if with_var else None
+    mean_tt = _stat_tensor(INIT_RUNNING_MEAN, channels, device, torch_dtype) if with_mean else None
+    var_tt = _stat_tensor(INIT_RUNNING_VAR, channels, device, torch_dtype) if with_var else None
 
     with device.cache_entries_counter.measure():
         ttnn.batch_norm(
@@ -147,6 +149,20 @@ def test_bn_cache_miss_different_momentum(device, isolate_program_cache):
     assert device.cache_entries_counter.total > n_after_first
 
 
+def test_bn_cache_miss_different_dtype(device, isolate_program_cache):
+    """dtype drives the RunningStatistics compile-time `any_float32` path, which selects a different
+    compute kernel (sfpu vs non-sfpu). A bfloat16 run and a float32 run must therefore key distinct
+    programs, and a repeated dtype must reuse. This pins the dtype keying (input_dtype/dtype) that
+    the default hash must preserve now that the op no longer keys on it explicitly."""
+    _run_bn_training(device, BASE_SHAPE, momentum=0.1, torch_dtype=torch.bfloat16, seed=0)
+    n_bf16 = device.cache_entries_counter.total
+    _run_bn_training(device, BASE_SHAPE, momentum=0.1, torch_dtype=torch.float32, seed=1)
+    n_fp32 = device.cache_entries_counter.total
+    assert n_fp32 > n_bf16  # dtype flip -> distinct program
+    _run_bn_training(device, BASE_SHAPE, momentum=0.1, torch_dtype=torch.float32, seed=2)
+    assert device.cache_entries_counter.total == n_fp32  # same dtype -> reuse
+
+
 def test_bn_cache_optional_stat_presence(device, isolate_program_cache):
     """running_mean/running_var presence is baked into the RunningStatistics program, so each
     present/absent combination must key a distinct program while a repeated combination reuses it.
@@ -167,4 +183,15 @@ def test_bn_cache_optional_stat_presence(device, isolate_program_cache):
 
     # running_mean absent (var present) -> another distinct combination -> new program.
     _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=False, with_var=True, seed=4)
-    assert device.cache_entries_counter.total > n_mean_only
+    n_var_only = device.cache_entries_counter.total
+    assert n_var_only > n_mean_only
+    _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=False, with_var=True, seed=5)
+    assert device.cache_entries_counter.total == n_var_only  # same combo -> reuse
+
+    # Neither stat present -> a fourth distinct combination. In training mode RunningStatistics
+    # still runs (it just has no buffers to update), so this presence combo keys its own program.
+    _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=False, with_var=False, seed=6)
+    n_neither = device.cache_entries_counter.total
+    assert n_neither > n_var_only
+    _run_bn_training(device, BASE_SHAPE, momentum=0.1, with_mean=False, with_var=False, seed=7)
+    assert device.cache_entries_counter.total == n_neither  # same combo -> reuse
