@@ -372,6 +372,13 @@ immediately passed. No profiler/watcher retries were performed on the wrong boar
   gate remains. `$autofix` was not needed because each discovered defect was
   isolated and repaired within this pass.
 
+## Local commits
+
+- Starting point: `f5f421b08c386602772fad6584e961b260a9e588`.
+- Optimized decoder implementation, tests, and evidence:
+  `50aeb2605ce28fd427d9d8584701a201e56e2d42`.
+- A docs-only follow-up records the implementation commit SHA. Nothing was pushed.
+
 ## Artifact hashes
 
 - HF activation tensor: `31fec043b5fc5a822611ac5398f439878640d0f2f5e8a87a3c47b729ea72128d`.
