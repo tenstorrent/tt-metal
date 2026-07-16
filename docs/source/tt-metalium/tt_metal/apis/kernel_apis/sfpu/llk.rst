@@ -258,8 +258,8 @@ available:
   * SM32 - (vSMag), 32-bit sign-magnitude integer
   * SM16 - (vSMag16), 16-bit sign-magnitude integer
   * M32 - (vMag), 32-bit magnitude only integer
-  * LO16 - zero extend low 16 bits
-  * HI16 - high 16 bits (store will transfer 32 bits that are uint16_t-swapped)
+  * LO16 - low 16 bits
+  * HI16 - high 16 bits
 
 On Wormhole, the default mode for ``vInt`` is ``SM32``. In all cases
 when transfering a ``vInt`` to or from ``SM32``, or tranferring
@@ -268,6 +268,13 @@ Wormhole this is part of the load or store, on other architectures it
 is a separate operation. It is unspecified how 2's complement's most
 negative value converts to sign-magnitude.  Not all data
 representations are permitted for all types.
+
+The ``LO16`` layout transfers 16 bits to and from the low part of a
+``vUInt`` or related type. The ``HI16`` layout reads 16 bits into the
+high 16 bits of a ``vUInt`` type, but writes 32 bits, with the two
+16-bit halves swapped. For precise details consult the ISA document
+for how ``SFPLOAD`` and ``SFPSTORE`` handle the appropriate
+``MOD0_FMT_LO16`` and ``MOD0_FMT_HI16`` modifier values.
 
 Quasar's SrcS reg accessors may also use a `done` modifier, to set the
 ''done'' bit in the load or store:
