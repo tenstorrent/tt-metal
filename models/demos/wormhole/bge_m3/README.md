@@ -4,6 +4,70 @@ Tenstorrent implementation of [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3),
 a multilingual embedding model supporting dense, sparse (lexical), and ColBERT
 (multi-vector) retrieval.
 
+> **This branch (`bge_n300_tp_optimizations`) targets the two-chip
+> sequence-parallel (SP) B12/S8192 prefill path.** Its perf and Tracy
+> instructions are the section immediately below. The single-chip section that
+> follows is retained for reference.
+
+## Two-chip sequence-parallel: batch 12, sequence length 8192 (N300, TP2/SP)
+
+This branch provides a **two-chip sequence-parallel (SP)** prefill path for
+B12/S8192. The sequence dimension is split across the two ASICs of one Wormhole
+N300 (a `(2, 1)` mesh); each chip computes its local `S/2 = 4096` query rows and
+the attention K/V are shared across chips with an `all_gather` over the mesh
+axis. The tests are labelled `tp2` for historical reasons but the parallelism is
+sequence-parallel, not classic tensor-parallel.
+
+### Requirements to launch this configuration
+
+- **Hardware:** one Wormhole N300 exposed as **two devices** (local + remote
+  chip). Select a single N300 with `TT_VISIBLE_DEVICES=0`; the `(2, 1)` mesh then
+  maps to that board's two chips. Do **not** enumerate more than one board.
+- **Fabric:** SP requires the 1D fabric for the cross-chip K/V `all_gather`, so
+  the device parameters add `fabric_config = ttnn.FabricConfig.FABRIC_1D` on top
+  of the single-chip parameters (`trace_region_size = 50_000_000`,
+  `num_command_queues = 1`).
+- **Data type / shapes:** same as the single-chip path (`bfloat8_b`,
+  `max_batch_size = 12`, `max_seq_len = 8192`).
+
+### Measure prefill performance (`tp2_perf.py`)
+
+Builds the SP model, warms up, captures the trace, and times trace replays
+(device compute only); reports avg / best ms and tokens/s:
+
+```bash
+TT_VISIBLE_DEVICES=0 pytest \
+  models/demos/wormhole/bge_m3/tests/perf/tp2_perf.py::test_embedding_perf_b12_s8192_tp2 -s
+```
+
+### Kernel-level profiling (`tracy_perf.py`, TP2/SP case)
+
+Profiles a single untraced sequence-parallel forward between Tracy signposts
+(no trace capture — Tracy needs the individual device ops). Requires
+`TT_METAL_DEVICE_PROFILER=1`. **Before profiling, clear any stale profiler logs**
+so the report is not contaminated by a previous run:
+
+```bash
+TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r \
+  --no-runtime-analysis -m pytest \
+  models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py::test_bge_m3_tracy_perf_b12_s8192_tp2 -sq
+```
+
+Summarize the resulting CSV with `tt-perf-report`:
+
+```bash
+tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv \
+  --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_b12_s8192_tp2_tracy_report.log
+```
+
+
+**Reading the SP profile:** unlike the single-chip path, the SP breakdown
+contains `AllGatherDeviceOperation` ops — the cross-chip K/V gather. On device 0
+this is roughly `SDPA` (~784 ms) + `AllGather` (~340 ms, the SP tax) +
+`MinimalMatmul` (~230 ms) + LayerNorm/head ops. SP prefill measures ~1559 ms
+best (~62.9k tokens/s), slower than the single-chip and data-parallel paths
+because of the ~340 ms all-gather tax (one ethernet link per mesh axis).
+
 ## Long-context serving: batch 12, sequence length 8192 (N300)
 
 This is the optimized long-context prefill configuration for a **single
