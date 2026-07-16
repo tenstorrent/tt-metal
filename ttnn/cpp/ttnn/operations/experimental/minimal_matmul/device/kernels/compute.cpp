@@ -289,6 +289,13 @@ void matmul_blocks(
     uint32_t in0_index_offset = 0;
 
     for (uint32_t M_start = 0; M_start < M_block_tiles; M_start += subblock_h) {
+        // The in0 CB slot is padded to a uniform (M_block_tiles / nb) rows, so a ragged band whose
+        // height is not a multiple of subblock_h still has real tiles for a full subblock_h read -- the
+        // trailing rows are slack. Compute the full subblock (a smaller rt_dim would need an
+        // mm_block_init_short re-init that stalls the engine), then pack only the real rows so a ragged
+        // band never writes into the next band's output rows. subblock_h | (M_block_tiles/nb) (host
+        // guard) keeps the deep read inside the slot.
+        const uint32_t real_h = std::min(subblock_h, M_block_tiles - M_start);
         uint32_t in1_index_offset = 0;
         for (uint32_t N_start = 0; N_start < N_block_tiles; N_start += subblock_w) {
             tile_regs_acquire();
@@ -315,14 +322,13 @@ void matmul_blocks(
 
             tile_regs_wait();
             uint32_t write_dst_index = 0;
-            for (uint32_t h = 0; h < subblock_h; h++) {
+            for (uint32_t h = 0; h < real_h; h++) {
                 uint32_t h_tile_id = M_start + h + m_out_tile_offset;
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     uint32_t w_tile_id = N_start + w;
                     uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
                     pack_tile<true>(write_dst_index, out_cb, out_tile_id);
                     write_dst_index++;
-                    dst_index++;
                 }
             }
             tile_regs_release();
@@ -436,9 +442,12 @@ void kernel_main() {
                         if (band_h == 0) {
                             break;
                         }
-                        const uint32_t band_in0_tiles = band_h * K_block_tiles;
+                        // Reserve a uniform slot of M_block_tiles/nb rows for every band (not the ragged
+                        // band_h) so each band tiles the in0 CB exactly and no reservation wraps
+                        // fifo_limit mid-block. matmul reads band_h rows and packs the real ones.
+                        const uint32_t band_slot_tiles = (M_block_tiles / nb) * K_block_tiles;
                         for (uint32_t member = 0; member < 2; member++) {
-                            cb_wait_front(in0_cb, band_in0_tiles);
+                            cb_wait_front(in0_cb, band_slot_tiles);
                             cb_wait_front(in1_cb, in1_block_num_tiles);
                             matmul_blocks(
                                 in0_cb,
@@ -451,7 +460,7 @@ void kernel_main() {
                                 current_subblock_h,
                                 current_subblock_w,
                                 band_lo);
-                            cb_pop_front(in0_cb, band_in0_tiles);
+                            cb_pop_front(in0_cb, band_slot_tiles);
                             cb_pop_front(in1_cb, in1_block_num_tiles);
                         }
                     }
@@ -465,13 +474,13 @@ void kernel_main() {
                     if (band_h == 0) {
                         break;  // only when nb > current_M_block_tiles
                     }
-                    const uint32_t band_in0_tiles = band_h * K_block_tiles;
-                    cb_wait_front(in0_cb, band_in0_tiles);
+                    // Reserve a uniform slot of M_block_tiles/nb rows for every band (not the ragged
+                    // band_h) so each band tiles the in0 CB exactly and no reservation wraps fifo_limit
+                    // mid-block. matmul reads band_h rows and packs the real ones.
+                    const uint32_t band_slot_tiles = (M_block_tiles / nb) * K_block_tiles;
+                    cb_wait_front(in0_cb, band_slot_tiles);
                     cb_wait_front(in1_cb, in1_block_num_tiles);
 
-                    // band_h is a whole multiple of subblock_h (host guards SUB | M_block and
-                    // subblock_h | (M_block / SUB) with full M blocks), so current_subblock_h matches
-                    // the rt_dim mm_block_init_short was configured with.
                     matmul_blocks(
                         in0_cb,
                         in1_cb,
@@ -484,7 +493,7 @@ void kernel_main() {
                         current_subblock_w,
                         band_lo);
 
-                    cb_pop_front(in0_cb, band_in0_tiles);
+                    cb_pop_front(in0_cb, band_slot_tiles);
                     cb_pop_front(in1_cb, in1_block_num_tiles);
                 }
                 if (k_block == 0) {

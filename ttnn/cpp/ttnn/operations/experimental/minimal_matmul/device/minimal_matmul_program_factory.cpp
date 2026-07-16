@@ -470,14 +470,24 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         // IN0_SUB_CHUNKS so the per-band signal counts match.
         defines["IN0_SUB_CHUNKS"] = std::to_string(in0_sub_chunks);
         if (in0_sub_chunks > 1) {
-            // Per-band matmul (matmul_blocks) needs uniform M-row bands with whole subblocks, and full
-            // (non-partial) M blocks so current_subblock_h == subblock_h on every band.
+            // Every band occupies a uniform in0 CB slot of (M_block_tiles / in0_sub_chunks) rows, so a
+            // ragged band (height not a multiple of subblock_h, e.g. a partial final M-block) still
+            // reserves a slot that tiles the CB exactly -- no mid-block fifo wrap. matmul reads the full
+            // subblock_h into the slot's slack rows and packs only the real rows. Two divisibility
+            // invariants make that exact:
+            //   1. in0_sub_chunks | M_block_tiles           -- uniform slot is a whole number of rows
+            //   2. subblock_h | (M_block_tiles/in0_sub_chunks) -- the deep read never runs past the slot
+            // Plus every band must be non-empty: balanced_band yields a zero band only when a block has
+            // fewer rows than in0_sub_chunks, and the in1 sender / signal aggregator fire IN0_SUB_CHUNKS
+            // times unconditionally -- a zero band would desync them against the in0/compute early-exit
+            // and deadlock. The smallest block is the (possibly partial) last one.
+            uint32_t last_m_block_tiles = M_tiles_per_core - (M_blocks_per_core - 1) * M_block_tiles;
             TT_FATAL(
-                (M_tiles_per_core % M_block_tiles) == 0,
-                "M_tiles_per_core ({}) must be a multiple of M_block_tiles ({}) when IN0_SUB_CHUNKS > 1 "
-                "(no partial M blocks)",
-                M_tiles_per_core,
-                M_block_tiles);
+                last_m_block_tiles >= in0_sub_chunks,
+                "smallest M block ({} tiles) must be >= IN0_SUB_CHUNKS ({}) so every M-row band is "
+                "non-empty",
+                last_m_block_tiles,
+                in0_sub_chunks);
             TT_FATAL(
                 (M_block_tiles % in0_sub_chunks) == 0,
                 "IN0_SUB_CHUNKS ({}) must divide M_block_tiles ({})",
@@ -485,8 +495,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
                 M_block_tiles);
             TT_FATAL(
                 ((M_block_tiles / in0_sub_chunks) % subblock_h) == 0,
-                "subblock_h ({}) must divide the M-row band height ({}) when IN0_SUB_CHUNKS > 1",
+                "subblock_h ({}) must divide the per-band slot M_block_tiles/IN0_SUB_CHUNKS ({}/{} = {})",
                 subblock_h,
+                M_block_tiles,
+                in0_sub_chunks,
                 M_block_tiles / in0_sub_chunks);
             // Count this device's local (self) k-blocks = the leading schedule positions the AG delivers
             // whole (never sub-chunked). Mirrors compute_device_chunk_stats for start_ring_index. v1

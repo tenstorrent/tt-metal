@@ -268,12 +268,16 @@ void kernel_main() {
                             if (band_h == 0) {
                                 break;
                             }
-                            const uint32_t band_in0_tiles = band_h * K_block_tiles;
-                            const uint32_t band_bytes = band_in0_tiles * in0_tile_size;
+                            // Reserve a uniform M_block_tiles/IN0_SUB_CHUNKS-tile slot per band so each band
+                            // tiles the in0 CB exactly (no fifo wrap), but forward only the band_h real tiles.
+                            // The receiver mirrors this member-inner order (see the !is_injector_core branch),
+                            // so exact band_bytes forwards stay in lockstep -- no slack tiles on the wire.
+                            const uint32_t band_slot_tiles = (M_block_tiles / (uint32_t)IN0_SUB_CHUNKS) * K_block_tiles;
+                            const uint32_t band_bytes = band_h * K_block_tiles * in0_tile_size;
                             const uint32_t band_start = m_tile + band_lo;
                             const uint32_t band_end = band_start + band_h;
                             for (uint32_t member = 0; member < 2; member++) {
-                                cb_reserve_back(cb_id_in0, band_in0_tiles);
+                                cb_reserve_back(cb_id_in0, band_slot_tiles);
                                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                                 {
                                     DeviceZoneScopedN("DRAM-Latency");
@@ -302,7 +306,100 @@ void kernel_main() {
                                         /*issue_barrier=*/true);
 #endif
                                 }
-                                cb_push_back(cb_id_in0, band_in0_tiles);
+                                cb_push_back(cb_id_in0, band_slot_tiles);
+                                if (!is_sink_core) {
+                                    DeviceZoneScopedN("MCAST-SEND");
+                                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                                    uint64_t in0_unicast_data_addr =
+                                        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                                    noc_async_write(in0_start_address, in0_unicast_data_addr, band_bytes);
+#ifdef ARCH_BLACKHOLE
+                                    noc_async_writes_flushed();
+#endif
+                                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                                }
+                            }
+                        }
+#ifdef SRS_FUSE_OP_SIGNALER
+                        if constexpr (is_output_writer) {
+                            if (not_first_block && k_block_iter == max_defer_write_k_block) {
+                                noc_async_write_barrier();
+                                srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                            }
+                            if (not_first_block && (k_block_iter + 1) == max_defer_write_k_block) {
+                                noc_async_write_barrier();
+                                srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                            }
+                        }
+#endif
+                        k_block_iter++;  // the backward member of the pair is consumed here too
+                        continue;
+                    }
+                }
+#endif
+#if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1) && defined(AG_INTERLEAVE_BANDS)
+                if constexpr (!is_injector_core) {
+                    // Receiver mirror of the injector's paired interleave (the is_injector_core block above).
+                    // The injector mcasts bands member-inner (A.b0, B.b0, A.b1, B.b1, ...); we must recv AND
+                    // forward in that SAME order. The sequential non-interleave loop below walks the two
+                    // k-blocks separately (A.b0,A.b1,... then B.b0,...), so it would forward each uniform slot
+                    // with the wrong (sequential) band_h and drop the last tile of band 0's backward member.
+                    // Same 2*nb recv/forwards, exact band_bytes each -> no extra fabric sends; only the
+                    // per-slot band_h order changes to match the slot content.
+                    if (n_block_iter == 0 && k_block_iter >= num_local_k_blocks && (k_block_iter + 1) < K_num_blocks &&
+                        ((k_block_iter - num_local_k_blocks) & 1u) == 0) {
+                        // Receivers (unlike injectors) can defer_write, and this branch consumes both
+                        // k_block_iter and k_block_iter+1, bypassing the top-of-loop flush below via continue.
+                        // Honor a flush scheduled on either paired position here.
+                        if constexpr (is_output_writer) {
+                            if (defer_write &&
+                                (k_block_iter == defer_write_k_block || (k_block_iter + 1) == defer_write_k_block)) {
+                                DeviceZoneScopedN("DEFER-WRITE");
+                                cb_wait_front(cb_id_out, out_block_num_tiles);
+                                uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                                if constexpr (N_chunks == 1) {
+                                    write_block_sync<M_block_tiles, N_block_tiles>(
+                                        std::get<0>(outputs_tuple),
+                                        out_shape,
+                                        out_read_ptr,
+                                        out_tile_size,
+                                        defer_write_m_tile,
+                                        defer_write_m_tile_end,
+                                        defer_write_n_tile,
+                                        defer_write_n_tile_end);
+                                } else {
+                                    write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                                        outputs_tuple,
+                                        out0_shape,
+                                        out_read_ptr,
+                                        out_tile_size,
+                                        defer_write_m_tile,
+                                        defer_write_m_tile_end,
+                                        defer_write_n_tile,
+                                        defer_write_n_tile_end);
+                                }
+                                cb_pop_front(cb_id_out, out_block_num_tiles);
+                            }
+                        }
+                        for (uint32_t band = 0; band < (uint32_t)IN0_SUB_CHUNKS; band++) {
+                            uint32_t band_lo, band_h;
+                            balanced_band(current_M_block_tiles, (uint32_t)IN0_SUB_CHUNKS, band, band_lo, band_h);
+                            if (band_h == 0) {
+                                break;
+                            }
+                            const uint32_t band_bytes = band_h * K_block_tiles * in0_tile_size;
+                            const uint32_t band_slot_tiles = (M_block_tiles / (uint32_t)IN0_SUB_CHUNKS) * K_block_tiles;
+                            for (uint32_t member = 0; member < 2; member++) {
+                                cb_reserve_back(cb_id_in0, band_slot_tiles);
+                                uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                                {
+                                    DeviceZoneScopedN("RECV-WAIT");
+                                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
+                                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
+                                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+                                }
+                                cb_push_back(cb_id_in0, band_slot_tiles);
                                 if (!is_sink_core) {
                                     DeviceZoneScopedN("MCAST-SEND");
                                     noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
@@ -396,9 +493,18 @@ void kernel_main() {
                     if (band_h == 0) {
                         break;  // only when nb > current_M_block_tiles
                     }
-                    const uint32_t band_in0_tiles = band_h * K_block_tiles;
+                    // Reserve a uniform slot of M_block_tiles/nb tiles for every band (not the ragged
+                    // band_h) so each band tiles the in0 CB exactly and no reservation wraps fifo_limit
+                    // mid-block -- a wrap would straddle a single mcast noc_async_write into the
+                    // mailboxes and wedge the mesh. band_h real tiles are read; the slot's remaining tiles
+                    // are slack that compute reads deep but never packs.
+                    const uint32_t band_slot_tiles = (M_block_tiles / nb) * K_block_tiles;
+                    // Forward exactly band_h tiles. This path serves single-k-block positions (local, or an
+                    // unpaired remote tail) where injector and receiver both walk bands sequentially, so the
+                    // per-slot band_h already matches -- the paired fwd/bwd interleave (member-inner order)
+                    // is handled by the dedicated injector/receiver branches above.
                     const uint32_t band_bytes = band_h * K_block_tiles * in0_tile_size;
-                    cb_reserve_back(cb_id_in0, band_in0_tiles);
+                    cb_reserve_back(cb_id_in0, band_slot_tiles);
                     uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                     if constexpr (is_injector_core) {
                         DeviceZoneScopedN("DRAM-Latency");
@@ -439,7 +545,7 @@ void kernel_main() {
                         noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
                     }
 
-                    cb_push_back(cb_id_in0, band_in0_tiles);
+                    cb_push_back(cb_id_in0, band_slot_tiles);
 
                     if (!is_sink_core) {
                         DeviceZoneScopedN("MCAST-SEND");
