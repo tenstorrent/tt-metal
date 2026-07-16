@@ -32,6 +32,34 @@ struct OutboundSocketServiceSyncParams {
     std::vector<uint32_t> service_core_x;    // LOGICAL service-core x per coord
     std::vector<uint32_t> service_core_y;    // LOGICAL service-core y per coord
     std::vector<uint32_t> metadata_addrs;    // per-coord service-core metadata L1 (metadata mode)
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "page_size",
+        "num_pages",
+        "scratch_cb_index",
+        "metadata_size_bytes",
+        "metadata_only",
+        "worker_cores",
+        "mesh_num_cols",
+        "data_ready_addrs",
+        "service_core_x",
+        "service_core_y",
+        "metadata_addrs");
+
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            page_size,
+            num_pages,
+            scratch_cb_index,
+            metadata_size_bytes,
+            metadata_only,
+            worker_cores,
+            mesh_num_cols,
+            data_ready_addrs,
+            service_core_x,
+            service_core_y,
+            metadata_addrs);
+    }
 };
 
 struct OutboundSocketServiceSyncInputs {
@@ -44,6 +72,13 @@ struct OutboundSocketServiceSyncInputs {
     Tensor input;
     Tensor backing;
     std::optional<Tensor> metadata;
+
+    OutboundSocketServiceSyncInputs(
+        const Tensor& input_in, const Tensor& backing_in, const std::optional<Tensor>& metadata_in) :
+        input(input_in), backing(backing_in), metadata(metadata_in) {}
+
+    static constexpr auto attribute_names = std::forward_as_tuple("input_dtype");
+    auto attribute_values() const { return std::forward_as_tuple(input.dtype()); }
 };
 
 }  // namespace ttnn::experimental::prim
