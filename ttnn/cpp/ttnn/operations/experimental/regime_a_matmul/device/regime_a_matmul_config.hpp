@@ -59,6 +59,14 @@ enum RegimeADiag : uint32_t {
     // sub-block); this bit restores the OLD single full-slice startup barrier before any matmul. Compute-only
     // define; identical config/tensors/transport/reduction, only the CB0 wait placement differs.
     DIAG_FULL_IN0_WAIT = 1u << 10,
+    // Grouped-K compute (Kg = grouping factor in DELIVERED K blocks). Delivery/kb/ring layout are UNCHANGED;
+    // compute holds DST across Kg consecutive delivered blocks and packs the FP32 partial to CB3 ONCE per
+    // group instead of once per block (K_num_blocks/Kg FP32 materializations instead of K_num_blocks). The
+    // math K traversal order is preserved. These map to the compute #define KGROUP=2/4/8 AND enlarge CB1
+    // (max(4, min(2*Kg, K_num_blocks)) blocks) so the in1 reader isn't serialized. Mutually exclusive.
+    DIAG_KGROUP2 = 1u << 11,
+    DIAG_KGROUP4 = 1u << 12,
+    DIAG_KGROUP8 = 1u << 13,
 };
 
 namespace plan = ttnn::operations::experimental::regime_a_matmul::plan;
@@ -73,8 +81,15 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt);
 // assignments off the device, translate RegimeAMatmulConfig -> plan::RegimeAConfig, and run the pure
 // planner. When cfg is nullopt, auto_select_config picks the config. Returns the plan result verbatim;
 // the caller must TT_FATAL on !ok() with plan.error.
+// k_group (Kg): compute-only grouping of delivered K blocks (see RegimeADiag KGROUP bits). Default 1 =
+// current per-block schedule. Only affects CB1 sizing here (compute scheduling is a kernel #define); passed
+// so the planner's L1 feasibility check accounts for the enlarged in1 CB.
 plan::PlanResult make_and_build_plan(
-    tt::tt_metal::IDevice* device, const Tensor& in0, const Tensor& in1, const std::optional<RegimeAMatmulConfig>& cfg);
+    tt::tt_metal::IDevice* device,
+    const Tensor& in0,
+    const Tensor& in1,
+    const std::optional<RegimeAMatmulConfig>& cfg,
+    uint32_t k_group = 1u);
 
 // Build the canonical DRAM width-sharded MemoryConfig for the Regime-A in1 (weight) tensor.
 //

@@ -83,6 +83,10 @@ struct PlanInputs {
     // in0 ring / reduction chain ordering: false = bank order [0..7]; true = nearest-neighbour
     // Hamiltonian over physical coords (matches --chain nn). v1 defaults to bank order.
     bool nn_chain{false};
+
+    // Grouped-K compute factor (delivered blocks per compute group). 1 = current per-block schedule. Only
+    // affects CB1 depth here (compute scheduling itself is a kernel #define). See RegimeADiag KGROUP bits.
+    uint32_t k_group{1};
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -288,7 +292,16 @@ inline PlanResult build_plan(const PlanInputs& in) {
     // --- CB sizing + L1 check (spec §5; cb7 only when Pk>1) ---
     CbSizes cb;
     cb.cb0_tiles = g.M_block_capacity * g.K_slice_capacity;  // == K_num_blocks_eff * M_block * kb
-    cb.cb1_tiles = 4u * kb * g.N_sub;
+    // in1 CB depth in DELIVERED blocks. Grouped-K compute (Kg>1) consumes Kg blocks per group, so CB1 must
+    // hold >= 2 groups (2*Kg) to overlap the in1 reader with compute — otherwise the reader stalls at each
+    // group boundary (a bubble that would masquerade as grouped-compute cost). Cap at the TOTAL in1 blocks
+    // the reader ever streams (N_bpc * K_num_blocks_eff) — more is pointless; note this can exceed a single
+    // k-slice so a Kg==K_num_blocks group can still double-buffer across N-sub-blocks. 4-block floor keeps
+    // Kg==1/2 at the current 4-block allocation.
+    const uint32_t kg = in.k_group ? in.k_group : 1u;
+    const uint32_t total_in1_blocks = g.N_bpc * g.K_num_blocks_eff;
+    const uint32_t cb1_depth_blocks = std::max(4u, std::min(2u * kg, total_in1_blocks));
+    cb.cb1_tiles = cb1_depth_blocks * kb * g.N_sub;
     cb.cb2_tiles = 2u * g.M_block_capacity * g.N_sub;
     cb.cb3_tiles = g.M_block_capacity * g.N_sub;
     cb.cb7_tiles = (Pk > 1u) ? (2u * g.M_block_capacity * g.N_sub) : 0u;
