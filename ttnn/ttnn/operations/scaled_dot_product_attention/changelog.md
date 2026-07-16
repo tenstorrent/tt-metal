@@ -40,3 +40,49 @@
   R5 perf — flagged shape compute-side. R2 is pulled ahead of R4 because the
   perf-flagged loose case requires `fp32_dest_acc_en=False` (added by R2) before
   R3 can run against it.
+
+## Refinement 1 — Non-tile-aligned shapes (w_non_aligned + h_non_aligned)
+- Date: 2026-07-16
+- What was done: Added `"w_non_aligned"` and `"h_non_aligned"` to
+  `SUPPORTED["alignment"]`, handled natively in the kernel (no `ttnn.tilize`
+  wrapper). Three legs, all TILE layout:
+  * **w_non_aligned (D%32≠0)** — rides the `from_torch(TILE)` tile zero-padding:
+    the padded columns of the last D-tile are 0 in Q/K/V, so the Q·Kᵀ contraction
+    over `Dt` and the P·V free dim are exact with zero contribution from padding;
+    output D-pad columns are written as whole tiles and sliced off by the logical
+    shape. **No reader/compute change** (the reader already streams `ceil(D/32)`
+    D-tiles). Confirmed by probe: pure-w cells pass on the SUPPORTED change alone.
+  * **h_non_aligned S_q (S_q%32≠0)** — the last Q-chunk's padding rows produce
+    finite (discarded) output; whole-tile write + logical slice. No change.
+  * **S_kv%32≠0 (the structural piece)** — the last KV tile's padding columns are
+    driven to **−∞** (bf16 `0xFF80`) via an additive mask added to the scores
+    **before** the softmax row-max/exp/row-sum, on the **last KV chunk only**, so
+    they fall out of the denominator (and PV, since `exp(−∞)=0` and V's padding
+    rows are 0). Reuses the existing additive-mask compute path
+    (`add<cb_scores, cb_kv_mask, cb_scores>`). New `cb_kv_mask` CB + a face-aware
+    `fill_vertical_mask_tile` in the reader (mirrors production SDPA
+    `fill_vertical_tile_bf16`), keyed on a `skv_partial = S_kv%32` CT arg. The
+    divisor-trick chunking keeps every chunk whole, so the only partial unit is
+    the last chunk's boundary tile.
+- Accuracy achieved: golden bf16+fp32-DEST tolerance (PCC≥0.995, norm-RMS≤0.05)
+  met on all non-aligned cells. Before the mask, the S_kv-partial cells failed at
+  norm-RMS ≈ 0.14–0.36 (softmax-denominator inflation from unmasked padding);
+  after, they pass. Unit test `test_scaled_dot_product_attention_nonaligned.py`:
+  20/20 (none+custom) on shapes 32x50, 47x64, 50x50, 100x64, 64x47, 33x50,
+  47x64(gqa/mqa), 100x50-cross, plus a Q-aligned/K-non-aligned isolation case.
+- Golden test progress: **252/252 passing** (212 prior + 40 new non-aligned);
+  2017 xfailed; **0 failed, 0 xpass** (no SUPPORTED drift). Prior unit suite
+  (13) green; `test_regression.py` unchanged (same 9 pre-existing precision
+  misses on aligned adversarial shapes — R2's target, not new).
+- Issues encountered: PCC alone (scale-invariant) masked the denominator error;
+  the norm-RMS gate is what exposed it — the debug test asserts both, matching
+  golden tolerances. None outstanding.
+- Tests added: `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/
+  test_scaled_dot_product_attention_nonaligned.py`.
+- Deferred → **Refinement 1b**: the verifier's "while here" ask to replace the
+  `_chunk_size` largest-divisor trick with a coarse chunk (`min(axis_t,4)`) +
+  partial remainder. The divisor trick is correct + DRY + general for every
+  tested/realistic shape; the replacement needs partial-CHUNK kernel machinery
+  (runtime-variable matmul subblock `n` / reader-writer tile counts across the
+  core loop all shapes share), benefits only prime `Skv_t`>4 shapes (none in any
+  test), and risks the no-regression invariant — split out rather than bundled.

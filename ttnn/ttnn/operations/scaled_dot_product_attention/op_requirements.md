@@ -72,7 +72,7 @@
 
 ---
 
-### [ ] Refinement 1 — Non-tile-aligned shapes (w_non_aligned + h_non_aligned)
+### [x] Refinement 1 — Non-tile-aligned shapes (w_non_aligned + h_non_aligned)
 
 **Goal**: add `"w_non_aligned"` and `"h_non_aligned"` to `SUPPORTED["alignment"]`,
 handled **natively in the kernel** (no `ttnn.tilize`/`to_layout` wrapper). Covers
@@ -104,6 +104,48 @@ by R2, not by this refinement.
 **Done when**: the `alignment ∈ {w_non_aligned, h_non_aligned}` golden cells
 (currently `xfail_expected`) pass; the mask-reduction correctly excludes KV
 padding (verify on `test_regression`-style partial-S_kv shapes); prior phases green.
+
+**Landed (R1)**: both alignment values added to `SUPPORTED`; golden **252 passed**
+(212 prior + 40 non-aligned), **0 failed / 0 xpass**; prior unit + regression
+unchanged (the 9 `test_regression` misses are the same pre-existing aligned-
+adversarial precision cells, R2's target). `w_non_aligned` (D%32) rides the
+`from_torch` tile zero-padding through the QKᵀ contraction and PV free dim (no
+reader change); `h_non_aligned` S_q writes only valid rows (whole-tile write +
+logical slice); the structural piece — S_kv%32 — is an additive **−∞** mask
+(bf16 `0xFF80`, face-aware `fill_vertical_mask_tile` in the reader, mirroring
+production `fill_vertical_tile_bf16`) added to the last KV chunk's boundary tile
+before the row-max/exp/row-sum, reusing the existing additive-mask `add` path.
+The `_chunk_size` divisor trick was **kept** (correct + DRY + general for every
+tested/realistic shape) and its generalization deferred to R1b below.
+
+### [ ] Refinement 1b — Coarse-chunk + partial-remainder (replace `_chunk_size` divisor trick)
+
+**Goal** (verifier-noted "while here" from R1, deferred): replace
+`_chunk_size(axis_t, target)`'s largest-divisor rule with a coarse chunk
+`min(axis_t, 4)` plus a **partial last chunk** (fewer whole tiles than
+`Sq_chunk_t`/`Skv_chunk_t`). Today the divisor trick keeps every chunk whole
+(so the *only* partial unit is the last S_kv tile's columns, handled by R1's
+mask), but for a **prime tile-count > 4** (e.g. `S_kv = 32·101 → Skv_t=101`) it
+collapses to a 1-tile chunk — a granularity-floor violation that repays per-chunk
+reconfig/init/fill-drain overhead every tile.
+
+**Exact lever**: thread a per-chunk runtime tile count
+`min(chunk_t, axis_t − j·chunk_t)` into the reader's read counts, the compute
+`MatmulBlockShape`/`ReduceInputBlockShape`/`EltwiseShape` (all take runtime
+extents) with a re-derived matmul subblock decomposition for the partial `n`,
+and the writer's tile counts — for **both** the Sq q-chunk and the Skv loop. This
+is a core-loop restructuring touching all three kernels (regression risk to the
+212 aligned + perf-flagged shape), so it is split out rather than bundled into R1.
+
+**Verifier notes**: **no current test exercises a prime tile-count > 4** (golden
+`S_kv` are all composite or chunk-4-divisible; worst real case `Skv_t=6 → 3`), so
+this is a generality/perf hardening with no golden cell to unlock — add a
+`test_regression`-style shape (e.g. `S_kv=3232`, `Skv_t=101`) alongside it.
+Gate on the full golden suite staying green (no regression) as the acceptance net.
+
+**Done when**: `_chunk_size` uses the coarse-chunk + partial-remainder scheme; a
+prime-`Skv_t`(>4) shape runs at chunk 4 (not 1) and is correct; the full golden
+suite + unit + regression stay green.
 
 ### [ ] Refinement 2 — Numerical configurability (dtype + compute-config + intermediate precision)
 
