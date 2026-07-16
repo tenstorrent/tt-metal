@@ -156,11 +156,7 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
 }
 
 plan::PlanResult make_and_build_plan(
-    IDevice* device,
-    const Tensor& in0,
-    const Tensor& in1,
-    const std::optional<RegimeAMatmulConfig>& cfg_opt,
-    uint32_t k_group) {
+    IDevice* device, const Tensor& in0, const Tensor& in1, const std::optional<RegimeAMatmulConfig>& cfg_opt) {
     // Tile counts from logical shapes (tile = 32).
     const auto& a_shape = in0.logical_shape();
     const auto& w_shape = in1.logical_shape();
@@ -205,7 +201,6 @@ plan::PlanResult make_and_build_plan(
     in.tb = 2048u;  // bf16 tile bytes
     in.tf = 4096u;  // fp32 tile bytes
     in.nn_chain = false;
-    in.k_group = k_group ? k_group : 1u;  // grouped-K compute: enlarges CB1 so the in1 reader isn't serialized
 
     return plan::build_plan(in);
 }
