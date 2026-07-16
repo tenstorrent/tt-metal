@@ -191,6 +191,12 @@ TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     auto output_shape = input_tensor.logical_shape();
     auto output_padded_shape = input_tensor.padded_shape();
 
+    // This runs before validate_on_program_cache_miss (create_output_tensors is called ahead of validation in
+    // device_operation::launch), so guard the dereference here too rather than relying on the check in validate.
+    TT_FATAL(
+        args.output_mem_config.shard_spec().has_value(),
+        "fused_rms_minimal requires a sharded output memory config (width-sharded in L1); an interleaved output "
+        "memory config is not supported.");
     auto output_shard_spec = args.output_mem_config.shard_spec().value();
     auto input_shard_spec = input_tensor.shard_spec().value();
     if (output_shard_spec != input_shard_spec) {
@@ -198,10 +204,6 @@ TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
     }
 
     auto mem_config = args.output_mem_config;
-    if (!mem_config.shard_spec().has_value()) {
-        mem_config =
-            tt::tt_metal::MemoryConfig(mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
-    }
 
     return ttnn::TensorSpec(
         output_shape,
