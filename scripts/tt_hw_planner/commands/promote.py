@@ -98,7 +98,6 @@ def _cmd_promote_impl(args) -> int:
         _quiet_framework_logging,
         _resolve_tiered_model_aliases,
         cmd_bringup,
-        iter_loop_kwargs_from,
     )
 
     _quiet_framework_logging()

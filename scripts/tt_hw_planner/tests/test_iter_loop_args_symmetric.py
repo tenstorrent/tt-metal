@@ -60,6 +60,6 @@ def test_pup_and_pprom_share_iter_loop_args() -> None:
         f"Helper produced inconsistent args between parsers; " f"diff: {pup_dests ^ pprom_dests}"
     )
     # Non-empty sanity check
-    assert "parallel_agents" in pup_dests, "Helper must define parallel_agents"
-    assert "auto_only_component" in pup_dests, "Helper must define auto_only_component"
     assert "pcc_engine" in pup_dests, "Helper must define pcc_engine"
+    assert "strict_pcc" in pup_dests, "Helper must define strict_pcc"
+    assert "escalate_on_pcc_fail" in pup_dests, "Helper must define escalate_on_pcc_fail"

@@ -48,31 +48,6 @@ def add_iter_loop_cli_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
-        "--parallel-agents",
-        type=int,
-        default=2,
-        help=(
-            "Number of LLM agents to run concurrently per iter (default: 2). "
-            "The loop picks N distinct ungraduated components, builds a "
-            "prompt for each, and spawns N concurrent agent calls in the "
-            "same worktree. After all return, the loop continues with the "
-            "normal apply + validation sweep. Pass 1 for legacy serial "
-            "behaviour. Past 6, prompts begin to dilute and concurrent "
-            "Anthropic API calls risk rate-limit throttling."
-        ),
-    )
-    parser.add_argument(
-        "--auto-only-component",
-        default=None,
-        help=(
-            "Sandbox: restrict the auto-iterate loop to a single component "
-            "name (e.g. `vision_neck`). All other failed components are "
-            "ignored for the duration of the run. Useful for cheap A/B "
-            "tests of prompt-enrichment changes on one stuck component "
-            "before committing to a multi-component run."
-        ),
-    )
-    parser.add_argument(
         "--strict-pcc",
         dest="strict_pcc",
         action="store_true",
@@ -145,17 +120,6 @@ def add_iter_loop_cli_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
-        "--strict-pcc-max-iters",
-        type=int,
-        default=4,
-        help=(
-            "Cap on the PCC-repair loop's iteration count (default: "
-            "4). Each iteration costs one LLM agent call PLUS one "
-            "full demo pytest re-run PLUS one HF CPU reference "
-            "generation; budget accordingly."
-        ),
-    )
-    parser.add_argument(
         "--pcc-engine",
         choices=("legacy", "evidence", "agentic"),
         default="agentic",
@@ -176,72 +140,6 @@ def add_iter_loop_cli_args(parser: argparse.ArgumentParser) -> None:
             "gate, preserved for byte-for-byte reproduction of "
             "older runs but NOT RECOMMENDED for new bring-ups."
         ),
-    )
-
-
-def iter_loop_kwargs_from(
-    args: argparse.Namespace,
-    *,
-    MODEL: str,
-    BOX: str,
-    demo_dir: Path,
-    sep: str,
-    target_components: List[str],
-    provider: Optional[str],
-    agent_bin: Optional[str],
-    model: Optional[str],
-    model_light: Optional[str],
-    model_heavy: Optional[str],
-    model_super_heavy: Optional[str],
-) -> Dict[str, Any]:
-    """Single source of truth for the kwarg dict forwarded into
-    `_run_auto_iterate_loop`. Both `cmd_up` (auto-up's iter-loop call
-    site at cli.py:_cmd_up_core) and `cmd_promote` MUST use this so
-    every iter-loop knob the CLI accepts is actually plumbed through.
-
-    The CLI-derived knobs come from `args` via getattr (defaults match
-    the helper's argparse defaults). Per-call-site values that aren't
-    on the command line (MODEL, demo_dir, agent resolution, etc.) are
-    accepted as explicit keyword arguments.
-
-    test_invariants.py asserts the keys returned here match the
-    keyword-only parameters of `_run_auto_iterate_loop`. Adding a new
-    iter-loop param to the function = add it here too, or the test
-    fails loudly.
-    """
-    return dict(
-        MODEL=MODEL,
-        BOX=BOX,
-        demo_dir=demo_dir,
-        sep=sep,
-        target_components=target_components,
-        provider=provider,
-        agent_bin=agent_bin,
-        model=model,
-        model_light=model_light,
-        model_heavy=model_heavy,
-        model_super_heavy=model_super_heavy,
-        mesh=getattr(args, "mesh", None),
-        dtype=getattr(args, "dtype", None),
-        batch=getattr(args, "batch", 1),
-        max_seq_len=getattr(args, "max_seq_len", 1024),
-        max_generated_tokens=getattr(args, "max_generated_tokens", 200),
-        accuracy=getattr(args, "accuracy", False),
-        no_trace=getattr(args, "no_trace", False),
-        no_paged_attention=getattr(args, "no_paged_attention", False),
-        no_instruct=getattr(args, "no_instruct", False),
-        download_first=getattr(args, "download_first", False),
-        strict=getattr(args, "strict", False),
-        strict_native=True,
-        max_iters=getattr(args, "auto_max_iters", 5),
-        max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 5),
-        agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
-        allow_kill_stale=not getattr(args, "no_kill_stale", False),
-        allow_device_reset=not getattr(args, "no_device_reset", False),
-        allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
-        parallel_agents=getattr(args, "parallel_agents", 1),
-        adaptive_agents=getattr(args, "adaptive_agents", False),
-        only_component=getattr(args, "auto_only_component", None),
     )
 
 

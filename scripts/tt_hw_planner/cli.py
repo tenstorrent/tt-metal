@@ -7348,7 +7348,6 @@ def _native_directive(forbidden_excerpt: str = "", *, strict_native: bool = Fals
 
 from ._cli_helpers.auto_iterate import (  # noqa: F401
     add_iter_loop_cli_args,
-    iter_loop_kwargs_from,
 )
 
 _DEVICE_RESET_COUNT: int = 0
@@ -7991,8 +7990,32 @@ def _quiet_framework_logging() -> None:
         pass
 
 
+def _warn_on_registry_drift() -> None:
+    """Non-fatal pre-plan registry drift check (fixes-plan Point 2a).
+
+    Prints a one-line hint when a mapped registry path is missing from the
+    checkout, with full detail only under TT_HW_PLANNER_VERBOSE. Never raises:
+    a failing drift check must not block bring-up.
+    """
+    try:
+        from .discovery import REPO_ROOT
+        from .registry_sync import check_registry_drift, format_drift, has_hard_drift
+
+        issues = check_registry_drift(REPO_ROOT, include_unmapped=False)
+        if has_hard_drift(issues):
+            n = sum(1 for i in issues if i.kind == "missing_path")
+            print(
+                f"[registry] {n} mapped registry path(s) are stale on this checkout — run `tt_hw_planner sync-registry` for detail."
+            )
+            if os.environ.get("TT_HW_PLANNER_VERBOSE"):
+                print(format_drift(issues))
+    except Exception:
+        pass
+
+
 def cmd_up(args) -> int:
     _quiet_framework_logging()
+    _warn_on_registry_drift()
     # Resolve local-weights handling BEFORE any subprocess is spawned.
     # Sets HF_HOME / HF_HUB_OFFLINE in os.environ when the user passed
     # --local-dir or --offline-hf; prints an info line when cached
@@ -8108,21 +8131,12 @@ def cmd_bringup(args) -> int:
         "auto_model_heavy": None,
         "auto_model_super_heavy": None,
         "auto_agent_timeout": 600,
-        # 4 parallel agents so the brain can iterate multiple
-        # ADAPT/NEW components concurrently (LLM-edit + apply happens
-        # in parallel; pytest device runs still serialize). Locked at 1
-        # used to waste time on multi-component models like Qwen2.5-14B.
-        "parallel_agents": 2,
-        "auto_only_component": None,
-        "phase2": False,
-        "phase2_only": False,
         "accept_fallback": False,
         "strict_pcc": True,
         "no_strict_pcc": False,
         "escalate_on_pcc_fail": True,
         "no_escalate_on_pcc_fail": False,
         "strict_pcc_tokens": None,
-        "strict_pcc_max_iters": 4,
         "pcc_engine": "agentic",
         "allow_partial_cpu": False,
         "regen_demo_only": False,
@@ -9512,21 +9526,6 @@ def _cmd_up_core_impl(args) -> int:
                 "  continuing --auto to synthesize NEW components and emit real PCC tests."
             )
 
-    if getattr(args, "phase2_only", False):
-        if not getattr(args, "auto", False):
-            args.auto = True
-        # Phase 2's auto-onboard driver defaults to claude. Force the
-        # provider so phase2-only doesn't fall through to the cursor
-        # readiness check (which fails when CURSOR_API_KEY isn't set).
-        # User can still override by passing --auto-agent explicitly
-        # alongside --phase2-only, but in that case they wouldn't be
-        # relying on this implication anyway.
-        args.auto_agent = "claude"
-        print(
-            "  --phase2-only implies --auto --auto-agent claude "
-            "(needed for the auto-onboard driver path inside Phase 2)."
-        )
-
     if getattr(args, "auto", False):
         provider = (getattr(args, "auto_agent", None) or "cursor").lower()
         if provider not in ("cursor", "claude"):
@@ -9653,6 +9652,7 @@ from .commands.prepare import cmd_prepare  # noqa: F401
 
 
 from .commands.list_meshes import cmd_list_meshes  # noqa: F401  (re-export)
+from .commands.sync_registry import cmd_sync_registry  # noqa: F401
 
 
 def _load_bringup_status(model_id: str) -> Tuple[Path, Dict]:
@@ -9929,31 +9929,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "spends all its iterations on a single hopeless component, and "
             "the demo always converges to an end-to-end-running state "
             "(mix of native TTNN + CPU fallback) within --auto-max-iters."
-        ),
-    )
-    pup.add_argument(
-        "--phase2",
-        action="store_true",
-        help=(
-            "After the standard auto-iterate loop finishes, run the Phase 2 "
-            "stage inside the same worktree: walk the persistent skip-list, "
-            "drop ModuleList components (their files moved to _phase2_dropped/), "
-            "retry capture-inputs for missing-arg/shape-mismatch components "
-            "with TT_PLANNER_AUTO_ONBOARD_DRIVER=1, then re-run PCC on any "
-            "newly-unblocked components. Successful changes persist via the "
-            "existing overlay-capture step. Use this to clean up the skip-list "
-            "AFTER Phase 1 has graduated all currently-testable components."
-        ),
-    )
-    pup.add_argument(
-        "--phase2-only",
-        action="store_true",
-        help=(
-            "Skip the standard auto-iterate loop and run ONLY the Phase 2 "
-            "stage (implies --phase2). Useful for validating skip-list "
-            "handling against an already-graduated model without re-running "
-            "Phase 1. The worktree, scaffold, and overlay-apply steps still "
-            "run -- Phase 2 needs the demo dir to operate on."
         ),
     )
     pup.add_argument(
@@ -10726,6 +10701,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     pl = sub.add_parser("list-meshes", help="print canonical mesh topology")
     pl.set_defaults(func=cmd_list_meshes)
+
+    psr = sub.add_parser(
+        "sync-registry",
+        help="check the deterministic registry (backends / building blocks) against the checkout for path drift",
+    )
+    psr.add_argument(
+        "--check", action="store_true", help="exit non-zero if any mapped registry path is missing from the tree"
+    )
+    psr.add_argument("--no-unmapped", action="store_true", help="skip the reverse 'unmapped reusable module' hints")
+    psr.set_defaults(func=cmd_sync_registry)
 
     pe2e = sub.add_parser(
         "emit-e2e",
