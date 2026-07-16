@@ -153,12 +153,16 @@ void kernel_main() {
         cb_push_back(in0_cb, R * W * in0_blk);  // incremental: compute consumes this round's R shards
     }
     noc_async_write_barrier();
-#elif defined(DIAG_IN0_XCHG)
-    // Eager incremental direct exchange: read own shard into slot 0 and push it (compute starts), then in
-    // ONE round scatter our shard to the G-1 ahead peers' slot d, and push each of OUR slots 1..G-1 the
-    // moment its direct write lands (per-slot semaphore) -> depth-1 delivery that KEEPS the incremental
-    // compute overlap. Ring cb0 layout (slot d = shard rp-d), so in1/compute are unchanged.
-    // Runtime args: 17..17+G-2 = per-slot sem ids; 17+G-1.. = G-1 ahead peers (x,y) in d order.
+#elif defined(DIAG_IN0_XCHG) || defined(DIAG_IN0_XCHGRR)
+    // Direct-exchange all-gather. Read own shard into slot 0 and push it (compute starts). Then send our
+    // shard to the G-1 ahead peers with the SAME write-then-signal ordering the ring uses (payload write
+    // then semaphore-inc to the SAME peer on the SAME NoC -> ordered, NO writes_flushed), so each peer's
+    // slot is exposed as ITS OWN write lands (true per-write producer/consumer overlap). We push our
+    // received slots in compute order (slot d from the core d-behind). Ring cb0 layout (slot d = shard
+    // rp-d), so in1/compute unchanged. Runtime args: 17..17+G-2 = per-slot sem ids; 17+G-1.. = ahead peers.
+    // DIAG_IN0_XCHG    = eager: issue all G-1 (write+signal) up front, then consume -> depth 1, G-1 in flight.
+    // DIAG_IN0_XCHGRR  = round-robin: per round d, (write+signal peer d) then wait+push OUR slot d before
+    //                    advancing -> 1 transfer/core/round (less burst congestion), still incremental.
     {
         uint32_t p = base0;
         for (uint32_t wb = 0; wb < W; ++wb) {
@@ -179,22 +183,31 @@ void kernel_main() {
     }
     cb_push_back(in0_cb, W * in0_blk);          // slot 0 ready -> compute starts
     constexpr uint32_t XPEER = 17u + (G - 1u);  // first peer-coord arg
-    for (uint32_t d = 1; d < G; ++d) {          // scatter own shard to peer d's slot d
+    auto send_d = [&](uint32_t d) {             // write own shard to peer d's slot d, then signal (ring order)
         uint32_t px = get_arg_val<uint32_t>(XPEER + (d - 1) * 2), py = get_arg_val<uint32_t>(XPEER + 1 + (d - 1) * 2);
+        uint32_t sem = get_semaphore(get_arg_val<uint32_t>(17 + (d - 1)));
         noc_async_write(base0, get_noc_addr(px, py, base0 + d * shard_bytes), shard_bytes);
-    }
-    noc_async_writes_flushed();  // payload lands before we signal the per-slot sem
-    for (uint32_t d = 1; d < G; ++d) {
-        uint32_t px = get_arg_val<uint32_t>(XPEER + (d - 1) * 2), py = get_arg_val<uint32_t>(XPEER + 1 + (d - 1) * 2);
-        uint32_t sem = get_semaphore(get_arg_val<uint32_t>(17 + (d - 1)));  // peer's slot-d readiness sem
-        noc_semaphore_inc(get_noc_addr(px, py, sem), 1);
-    }
-    for (uint32_t d = 1; d < G; ++d) {  // push our slots as they land, in order (incremental overlap)
+        noc_semaphore_inc(get_noc_addr(px, py, sem), 1);  // NO flush: payload-then-inc to same peer is ordered
+    };
+    auto recv_d = [&](uint32_t d) {  // wait our slot d (written by the core d-behind) then push it
         volatile tt_l1_ptr uint32_t* sp =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_arg_val<uint32_t>(17 + (d - 1))));
         noc_semaphore_wait_min(sp, 1);
         cb_push_back(in0_cb, W * in0_blk);
+    };
+#ifdef DIAG_IN0_XCHG
+    for (uint32_t d = 1; d < G; ++d) {
+        send_d(d);
     }
+    for (uint32_t d = 1; d < G; ++d) {
+        recv_d(d);
+    }
+#else  // DIAG_IN0_XCHGRR
+    for (uint32_t d = 1; d < G; ++d) {
+        send_d(d);
+        recv_d(d);
+    }
+#endif
     noc_async_write_barrier();
 #else
     for (uint32_t step = 0; step < G; ++step) {
