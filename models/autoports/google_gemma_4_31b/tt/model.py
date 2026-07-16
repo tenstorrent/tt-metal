@@ -956,6 +956,18 @@ class Gemma4FullModel:
                 if identity not in stable_tables:
                     stable_tables[identity] = ttnn.clone(table)
                 self.trace_state.page_tables.append(stable_tables[identity])
+            # A later vLLM new_block_ids boundary refreshes each stable trace
+            # table with ttnn.copy(source, target).  Warm those exact
+            # persistent source/target pairs before any trace is registered;
+            # otherwise the first copy workload can allocate its device
+            # program resources while the model and sampler traces are live.
+            warmed_pairs: set[tuple[int, int]] = set()
+            for source, target in zip(page_tables, self.trace_state.page_tables):
+                copy_key = (id(source), id(target))
+                if source is target or copy_key in warmed_pairs:
+                    continue
+                ttnn.copy(source, target)
+                warmed_pairs.add(copy_key)
             self.trace_state.page_table_identities = [id(table) for table in page_tables]
             self.trace_state.page_table_generations = [int(generation) for generation in page_table_generations]
             self.trace_state.batch_size = batch_size

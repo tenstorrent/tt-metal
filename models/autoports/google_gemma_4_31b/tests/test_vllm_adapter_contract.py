@@ -11,6 +11,7 @@ import torch
 
 from models.autoports.google_gemma_4_31b.tt.generator import Gemma4Generator
 from models.autoports.google_gemma_4_31b.tt.generator_vllm import Gemma4ForCausalLM, _page_table_prefix
+from models.autoports.google_gemma_4_31b.tt.model import Gemma4FullModel
 from models.common.readiness_check import run_vllm_server
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -53,7 +54,7 @@ def _adapter(*, trace_id=7):
     adapter.model = SimpleNamespace(trace_state=SimpleNamespace(trace_id=trace_id))
     adapter._decode_cache_identity = ((11, 12),)
     adapter._decode_sampling_key = ("greedy", 1)
-    adapter._decode_active_batch_size = 0
+    adapter._decode_active_batch_size = 1
     adapter.host_sampling_compat = True
     adapter._page_tables_to_tt = lambda page_tables_per_layer, page_table, rows=None: (["tt-page-table"], [3])
     return adapter
@@ -85,7 +86,7 @@ def test_vllm_protocol_constructor_and_full_context_hybrid_pool_budget():
     assert final_blocks == 5 * (119_552 // 64 + 1) + 119_552 // 128
 
 
-def test_steady_decode_ignores_stale_host_token_and_position():
+def test_proven_steady_async_decode_ignores_all_stale_host_trace_inputs():
     adapter = _adapter()
     kv_cache = [[object(), object()]]
     adapter._decode_cache_identity = tuple(tuple(id(tensor) for tensor in pair) for pair in kv_cache)
@@ -99,10 +100,31 @@ def test_steady_decode_ignores_stale_host_token_and_position():
         reset_batch=False,
         enable_trace=True,
         read_from_device=False,
+        reuse_device_decode_inputs=True,
     )
 
     assert output == ("next-device-token", None)
     assert adapter.generator.prepare_calls == []
+    assert adapter.generator.next_calls == [{}]
+
+
+def test_unproven_steady_decode_still_checks_scheduler_page_tables():
+    adapter = _adapter()
+    kv_cache = [[object(), object()]]
+    adapter._decode_cache_identity = tuple(tuple(id(tensor) for tensor in pair) for pair in kv_cache)
+
+    output = adapter.decode_forward(
+        tokens=torch.tensor([[17], [0]], dtype=torch.int32),
+        start_pos=torch.tensor([102, -1], dtype=torch.int32),
+        page_table=torch.zeros((2, 4), dtype=torch.int32),
+        kv_cache=kv_cache,
+        sampling_params=_SamplingParams(),
+        reset_batch=False,
+        enable_trace=True,
+        read_from_device=False,
+    )
+
+    assert output == ("next-device-token", None)
     assert adapter.generator.next_calls == [
         {
             "page_table": ["tt-page-table"],
@@ -265,7 +287,8 @@ def test_dynamic_prepare_releases_trace_before_batch_shaped_page_table_conversio
 def test_adapter_lifecycle_uses_vllm_configured_logger():
     module_source = inspect.getsource(inspect.getmodule(Gemma4ForCausalLM))
     assert "from vllm.logger import init_logger" in module_source
-    assert "logger = init_logger(__name__)" in module_source
+    assert 'logger = init_logger(f"vllm.{__name__}")' in module_source
+    assert Gemma4ForCausalLM.decode_forward.__globals__["logger"].name.startswith("vllm.")
 
 
 def test_generator_dynamic_batch_is_explicit_and_trace_release_is_synchronized():
@@ -276,6 +299,43 @@ def test_generator_dynamic_batch_is_explicit_and_trace_release_is_synchronized()
     assert "if pad_to_max_batch and tokens.shape[0] < self.max_batch_size" in prepare_source
     assert "int(tokens.shape[0])" in prepare_source
     assert release_source.index("ttnn.synchronize_device") < release_source.index("ttnn.release_trace")
+
+
+def test_split_sampler_is_prepared_and_captured_before_first_nonblocking_replay():
+    prepare_source = inspect.getsource(Gemma4Generator.prepare_token_out_decode)
+    initial_prepare = prepare_source[prepare_source.index("self._prewarm_split_sampling_workloads(") :]
+    assert initial_prepare.index("self._prewarm_split_sampling_workloads(") < initial_prepare.index(
+        "self.model.capture_decode_trace("
+    )
+    assert initial_prepare.index("self.model.capture_decode_trace(") < initial_prepare.index(
+        "self._capture_sampling_trace("
+    )
+    assert initial_prepare.index("self._capture_sampling_trace(") < initial_prepare.index(
+        "self.model.execute_decode_trace()"
+    )
+    assert initial_prepare.index("self.model.execute_decode_trace()") < initial_prepare.index(
+        "self._execute_sampling_trace()"
+    )
+    assert "return output" in initial_prepare
+
+    capture_source = inspect.getsource(Gemma4Generator._capture_sampling_trace)
+    before_capture = capture_source[: capture_source.index("ttnn.begin_trace_capture")]
+    assert "greedy_tp4_sampler.decode_forward" not in before_capture
+    assert "force_argmax_sampler.decode_forward" not in before_capture
+    assert "sampler.decode_forward" not in before_capture
+    assert "ttnn.synchronize_device" in before_capture
+    assert capture_source.count("self.greedy_tp4_sampler.decode_forward") == 1
+    assert capture_source.count("self.force_argmax_sampler.decode_forward") == 1
+    assert capture_source.count("self.sampler.decode_forward") == 1
+
+    initialize_source = inspect.getsource(Gemma4FullModel.initialize_trace_state)
+    assert initialize_source.index("stable_tables[identity] = ttnn.clone(table)") < initialize_source.index(
+        "ttnn.copy(source, target)"
+    )
+    assert initialize_source.index("ttnn.copy(source, target)") < initialize_source.index(
+        "self.trace_state.page_table_identities ="
+    )
+    assert "warmed_pairs" in initialize_source
 
 
 def test_hma_decode_preserves_shared_storage_and_uses_geometry_aware_update():
@@ -292,6 +352,10 @@ def test_plugin_registers_the_autoport_and_honors_greedy_only_policy():
     assert "gemma4_31b_autoport" in platform_source
     assert "models.autoports.google_gemma_4_31b.tt.generator_vllm:Gemma4ForCausalLM" in platform_source
     assert 'sampling_policy == "greedy_only"' in runner_source
+    async_source = (ROOT / "vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/async_decode.py").read_text()
+    assert 'kwargs["reuse_device_decode_inputs"]' in async_source
+    assert "if model_input.page_tables_changed" in async_source
+    assert "scheduler_updates_page_tables(scheduler_output)" in async_source
 
 
 def test_max_context_gate_rejects_http_200_error_payload(monkeypatch, tmp_path, expect_error):

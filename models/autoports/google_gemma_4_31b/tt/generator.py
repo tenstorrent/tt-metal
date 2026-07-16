@@ -561,27 +561,13 @@ class Gemma4Generator(Generator):
         use_greedy_tp4 = not force_argmax and self._is_semantic_greedy(
             top_k=top_k, top_p=top_p, temperature=temperature
         )
-        if force_argmax:
-            output = self.force_argmax_sampler.decode_forward(logits, tt_out_tok=tt_out_tok)
-        elif use_greedy_tp4:
-            output = self.greedy_tp4_sampler.decode_forward(logits, tt_out_tok=tt_out_tok)
-        else:
-            if self._sampling_params is None:
-                # The initial prepare path creates these persistent tensors
-                # before model capture. This fallback is only valid when no
-                # model trace is live (for direct low-level callers).
-                if self.model.trace_state.trace_id is not None:
-                    raise RuntimeError("sampling parameters must be allocated before model trace capture")
-                self._sampling_params = self._make_sampling_params(
-                    batch_size=key[0], top_k=top_k, top_p=top_p, temperature=temperature
-                )
-            output = self.sampler.decode_forward(
-                logits,
-                k=self._sampling_params[0],
-                p=self._sampling_params[1],
-                temp=self._sampling_params[2],
-                tt_out_tok=tt_out_tok,
-            )
+        if not force_argmax and not use_greedy_tp4 and self._sampling_params is None:
+            raise RuntimeError("sampling parameters must be allocated before sampler trace capture")
+        # prepare_token_out_decode prewarms this exact physical sampler
+        # workload before registering the model trace.  Dispatching it eagerly
+        # again here would allocate after that trace is live.  Capture the
+        # sampler directly; begin_trace_capture establishes a trace-safe
+        # allocation region for any address-specific runtime resources.
         ttnn.synchronize_device(self.mesh_device)
         self.model.trace_state.counters["synchronizations"] += 1
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -604,7 +590,7 @@ class Gemma4Generator(Generator):
         self._sampling_trace_key = key
         return self._sampling_trace_output
 
-    def _prewarm_split_sampling_workloads(self, *, kv_cache, use_greedy_tp4: bool) -> None:
+    def _prewarm_split_sampling_workloads(self, *, kv_cache, use_greedy_tp4: bool, force_argmax: bool) -> None:
         """Create batch-specific sampler programs/resources before either trace is live.
 
         The broadcast-backed candidate gathers own workload semaphores that are
@@ -615,7 +601,7 @@ class Gemma4Generator(Generator):
         model and sampler captures.
         """
         state = self.model.trace_state
-        if not use_greedy_tp4 and self._sampling_params is None:
+        if not force_argmax and not use_greedy_tp4 and self._sampling_params is None:
             raise RuntimeError("sampling parameters must exist before split-sampling prewarm")
         if state.initial_positions is None:
             raise RuntimeError("initial trace positions were lost before split-sampling prewarm")
@@ -636,7 +622,9 @@ class Gemma4Generator(Generator):
             advance_position=True,
         )
         warmup_token = self._new_token_buffer(state.batch_size)
-        if use_greedy_tp4:
+        if force_argmax:
+            self.force_argmax_sampler.decode_forward(warmup_logits, tt_out_tok=warmup_token)
+        elif use_greedy_tp4:
             self.greedy_tp4_sampler.decode_forward(warmup_logits, tt_out_tok=warmup_token)
         else:
             self.sampler.decode_forward(
@@ -807,22 +795,26 @@ class Gemma4Generator(Generator):
             self._sampling_params = self._make_sampling_params(
                 batch_size=requested_key[0], top_k=top_k, top_p=top_p, temperature=temperature
             )
-        if not force_argmax:
-            self._prewarm_split_sampling_workloads(
-                kv_cache=resolved_kv_cache,
-                use_greedy_tp4=use_greedy_tp4,
-            )
+        self._prewarm_split_sampling_workloads(
+            kv_cache=resolved_kv_cache,
+            use_greedy_tp4=use_greedy_tp4,
+            force_argmax=force_argmax,
+        )
         self.model.capture_decode_trace(kv_cache=resolved_kv_cache)
-        self._validate_next_trace_position()
-        logits = self.model.execute_decode_trace()
-        return self._capture_sampling_trace(
-            logits,
+        if self.model.trace_state.logits is None:
+            raise RuntimeError("model trace capture did not retain persistent logits")
+        output = self._capture_sampling_trace(
+            self.model.trace_state.logits,
             tt_out_tok=state.token_input,
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
             force_argmax=force_argmax,
         )
+        self._validate_next_trace_position()
+        self.model.execute_decode_trace()
+        self._execute_sampling_trace()
+        return output
 
     def decode_next_token_traced(
         self,

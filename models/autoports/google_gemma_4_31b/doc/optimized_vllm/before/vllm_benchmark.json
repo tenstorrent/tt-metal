@@ -45,40 +45,40 @@
     "dataset_name": "random",
     "ignore_eos": true
   },
-  "elapsed_s": 5.261517272330821,
+  "elapsed_s": 5.825087082572281,
   "completed_requests": 1,
   "total_input_tokens": 127.0,
   "total_output_tokens": 128.0,
   "requested_output_tokens": 128,
   "missing_output_tokens": 0,
   "ttft_ms": {
-    "p50": 494.655585847795,
-    "p99": 494.655585847795,
-    "mean": 494.655585847795
+    "p50": 992.5861526280642,
+    "p99": 992.5861526280642,
+    "mean": 992.5861526280642
   },
   "tpot_ms": {
-    "p50": 37.53099314076459,
-    "p99": 37.53099314076459,
-    "mean": 37.53099314076459
+    "p50": 38.02276616109403,
+    "p99": 38.02276616109403,
+    "mean": 38.02276616109403
   },
   "itl_ms": {
-    "p50": 29.329814016819,
-    "p99": 32.839703988283865,
-    "mean": 37.53099597873181
+    "p50": 29.348406940698624,
+    "p99": 29.739288240671154,
+    "mean": 38.022768295069376
   },
   "e2el_ms": {
-    "p50": 5261.091714724898,
-    "p99": 5261.091714724898,
-    "mean": 5261.091714724898
+    "p50": 5821.477455087006,
+    "p99": 5821.477455087006,
+    "mean": 5821.477455087006
   },
-  "itl_p50_decode_tps": 34.094999696437085,
-  "itl_mean_decode_tps": 26.644643285424223,
-  "vllm_mean_tpot_decode_tps": 26.644645300202352,
-  "mean_per_request_decode_tps": 26.644645300202352,
+  "itl_p50_decode_tps": 34.07339969152668,
+  "itl_mean_decode_tps": 26.30003139802095,
+  "vllm_mean_tpot_decode_tps": 26.30003287407396,
+  "mean_per_request_decode_tps": 26.30003287407396,
   "mean_per_request_decode_tps_basis": "1000 / mean_tpot_ms from vllm bench serve; this is the TPOT-derived decode value. For burst-serving profiles, scheduler admission and chunked prefill can affect TPOT, so use the single-user profile for headline decode t/s/u.",
-  "output_throughput_tok_per_s": 24.327583351882975,
-  "request_throughput_per_s": 0.19005924493658574,
-  "total_token_throughput_tok_per_s": 48.465107458829365,
+  "output_throughput_tok_per_s": 21.97392042137109,
+  "request_throughput_per_s": 0.17167125329196165,
+  "total_token_throughput_tok_per_s": 43.77616958945022,
   "secondary_benchmarks": {
     "ci_serving_burst": {
       "summary_file": "/localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/readiness_vllm/vllm_ci_serving_benchmark.json",
@@ -94,8 +94,8 @@
         "dataset_name": "random",
         "ignore_eos": true
       },
-      "output_throughput_tok_per_s": 210.10204257631455,
-      "vllm_mean_tpot_decode_tps": 13.192666249571738,
+      "output_throughput_tok_per_s": 201.0696480774223,
+      "vllm_mean_tpot_decode_tps": 12.92439333327741,
       "comparison_scope": "vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT."
     }
   }

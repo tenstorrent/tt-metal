@@ -22,7 +22,7 @@ MODEL_DIR_ENV = "GEMMA4_31B_AUTOPORT_DIR"
 HOST_SAMPLING_COMPAT_ENV = "GEMMA4_31B_VLLM_HOST_SAMPLING_COMPAT"
 REDUCED_LAYERS_ENV = "GEMMA4_31B_VLLM_LAYER_INDICES"
 PAGE_BLOCK_SIZE = 64
-logger = init_logger(__name__)
+logger = init_logger(f"vllm.{__name__}")
 
 
 class Gemma4ForCausalLM(GenerativeTestModelBase):
@@ -310,6 +310,7 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=None,
+        reuse_device_decode_inputs: bool = False,
         **_: Any,
     ):
         del prompt_tokens, output_tokens, slot_remap, perform_device_sampling
@@ -336,6 +337,26 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         if not enable_trace:
             raise ValueError("Gemma 4 31B on-device serving sampling requires decode tracing")
         _require_semantic_greedy(sampling_params)
+        cache_identity = _kv_cache_identity(kv_cache)
+        steady_sampling_key = ("greedy", self._decode_active_batch_size)
+        if (
+            bool(reuse_device_decode_inputs)
+            and not bool(reset_batch)
+            and not read_from_device
+            and self.model.trace_state.trace_id is not None
+            and self._decode_active_batch_size >= 1
+            and self._decode_cache_identity == cache_identity
+            and self._decode_sampling_key == steady_sampling_key
+        ):
+            # The TT plugin sets reuse_device_decode_inputs only for its proven
+            # steady async fast path.  The prior sampler replay already wrote
+            # the next token into trace_state.token_input, the model replay
+            # advanced cache/RoPE positions on device, and the scheduler has
+            # guaranteed that the page tables are unchanged.  Do not inspect
+            # the intentionally stale host token, position, or page-table
+            # tensors in this path.
+            return self.generator.decode_next_token_traced()
+
         positions = start_pos.reshape(-1).to(torch.int32)
         active = positions >= 0
         active_batch_size = int(active.sum().item())
@@ -345,7 +366,6 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
             raise ValueError("Gemma 4 31B dynamic decode requires active requests in a contiguous prefix")
         trace_tokens = tokens.reshape(tokens.shape[0], -1)[:active_batch_size, 0].to(torch.int32)
         trace_positions = positions[:active_batch_size]
-        cache_identity = _kv_cache_identity(kv_cache)
         sampling_key = ("greedy", active_batch_size)
         cache_changed = self._decode_cache_identity != cache_identity
         must_prepare = (

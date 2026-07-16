@@ -89,5 +89,5 @@ vllm/plugins/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty:
   <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-============ 72 passed, 1 skipped, 2 warnings in 1779.52s (0:29:39) ============
+============ 72 passed, 1 skipped, 2 warnings in 1761.84s (0:29:21) ============
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

@@ -1,0 +1,56 @@
+{
+  "stage": "optimized_vllm",
+  "model": "google/gemma-4-31B",
+  "hardware": "4x Blackhole P150b",
+  "mesh": "1x4",
+  "tt_config": {
+    "sample_on_device_mode": "all",
+    "trace_region_size": 268435456,
+    "fabric_config": "FABRIC_1D",
+    "trace_mode": "all",
+    "enable_model_warmup": true
+  },
+  "workload": {
+    "requested_input_tokens": 128,
+    "actual_input_tokens": 127,
+    "output_tokens": 128,
+    "requests": 1,
+    "concurrency": 1,
+    "temperature": 0.0,
+    "ignore_eos": true,
+    "max_num_seqs": 32,
+    "max_model_len": 113280
+  },
+  "before": {
+    "ttft_ms_mean": 992.5861526280642,
+    "tpot_ms_mean": 38.02276616109403,
+    "itl_ms_p50": 29.348406940698624,
+    "itl_ms_p99": 29.739288240671154,
+    "aggregate_output_tok_per_s": 21.97392042137109,
+    "tpot_decode_t_per_s_per_user": 26.30003287407396
+  },
+  "after": {
+    "ttft_ms_mean": 494.655585847795,
+    "tpot_ms_mean": 37.53099314076459,
+    "itl_ms_p50": 29.329814016819,
+    "itl_ms_p99": 32.839703988283865,
+    "aggregate_output_tok_per_s": 24.327583351882975,
+    "tpot_decode_t_per_s_per_user": 26.644645300202352
+  },
+  "ttft_ms": {
+    "before": 992.5861526280642,
+    "after": 494.655585847795
+  },
+  "decode_ms_per_token_e2e": {
+    "before": 38.02276616109403,
+    "after": 37.53099314076459
+  },
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "named_limitations": [
+    "Stage 10 intentionally forbids TT device-profiler collection on the live vLLM serving path, so device-only decode latency is unavailable.",
+    "A roofline estimate is not reported because the serving-stage evidence contract forbids profiler collection and no defensible per-token serving operation/byte accounting is available."
+  ],
+  "primary_artifact": "after/vllm_benchmark.json",
+  "secondary_ci_artifact": "after/vllm_ci_serving_benchmark.json"
+}

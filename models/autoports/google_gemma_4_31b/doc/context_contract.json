@@ -38,7 +38,8 @@
   "optimized_full_model_status": "complete_clean_pass",
   "datatype_sweep_status": "complete_clean_pass",
   "decode_status": "datatype_sweep_complete_clean_pass",
-  "stage": "vllm-integration",
+  "stage": "optimized-vllm",
+  "optimized_vllm_status": "complete_clean_pass",
   "limiting_reason": "none",
   "functional_decoder_supported_context": 262144,
   "optimized_decoder_supported_context": 262144,
@@ -279,6 +280,38 @@
       "qualitative_verdict": "datatype_sweep/qualitative/verdict.md"
     },
     "calculation_document": "datatype_sweep/README.md"
+  },
+  "optimized_vllm_plan": {
+    "status": "complete_clean_pass",
+    "target_hardware": "4x Blackhole P150b",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "tensor_parallel_size": 4,
+    "selected_config_id": "lm_head_bfp8_hifi2",
+    "vllm_supported_context": 113280,
+    "max_num_seqs": 32,
+    "block_size": 64,
+    "sample_on_device_mode": "all",
+    "trace_mode": "all",
+    "async_scheduling": true,
+    "primary_workload": "127 actual input tokens (128 requested), 128 output tokens, one request, concurrency 1",
+    "primary_ttft_ms": 494.655585847795,
+    "primary_tpot_ms": 37.53099314076459,
+    "primary_decode_t_per_s_per_user": 26.644645300202352,
+    "ci_burst_output_tok_per_s": 210.10204257631455,
+    "non_aligned_prompt_length_tested": 149,
+    "max_length_request_tested": "113279 input tokens + 1 output token",
+    "context_capability_reduction": null,
+    "evidence": {
+      "summary": "optimized_vllm/README.md",
+      "performance": "optimized_vllm/perf_summary.json",
+      "fallback_audit": "optimized_vllm/runtime_fallback_audit.md",
+      "adapter_contract": "optimized_vllm/evidence/adapter_contract.xml",
+      "plugin_contract": "optimized_vllm/evidence/plugin_lane_contract.xml",
+      "qualitative": "optimized_vllm/qualitative/verdict.md"
+    }
   },
   "capability_reduction": null,
   "page_block_size": 64,
