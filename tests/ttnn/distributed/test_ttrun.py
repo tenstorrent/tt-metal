@@ -107,13 +107,13 @@ class TestCommandLineArguments:
             ],
         )
         assert result.exit_code != 0
-        assert "mutually exclusive" in result.output.lower()
+        assert "do not combine" in result.output.lower()
 
     def test_no_mode_specified(self, runner):
         """Test that at least one mode must be specified."""
         result = runner.invoke(main, ["echo", "test"])
         assert result.exit_code != 0
-        assert "must be specified" in result.output.lower()
+        assert "specify exactly one" in result.output.lower()
 
     def test_new_mode_not_implemented(self, runner, sample_mesh_graph_descriptor):
         """Test that new mode requires --hosts or --mock-cluster-rank-binding."""
