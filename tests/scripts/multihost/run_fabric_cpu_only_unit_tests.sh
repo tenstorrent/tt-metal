@@ -635,7 +635,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 for entry in \
     "SC16_revAB_aisleD:${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC20_revAB_subtorus_aisleC:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
-    "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" \
+    "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC16_revC_subtorus_aisleD:${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC20_revC_subtorus_aisleC:${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 48 64 80" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"

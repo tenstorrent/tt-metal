@@ -79,13 +79,20 @@ enum class MeshScope {
     GLOBAL,
 };
 
+// Gather record for one physical inter-mesh cable channel. The logical routing direction is
+// intentionally NOT stored here: assignment is deferred to rank 0's round-robin allocator
+// (pair_logical_intermesh_ports), which sees both endpoints of every cable and assigns a
+// port_id on each side. Only physical facts are carried: the cable's connection_hash (its
+// symmetric identity, equal on both endpoint meshes), the exit chip on the sending mesh, and
+// the resolved peer FabricNodeId on the destination mesh.
 struct PortDescriptor {
-    port_id_t port_id = {RoutingDirection::NONE, 0};
     std::size_t connection_hash = 0;
+    ChipId src_chip = 0;
+    FabricNodeId dst_node{MeshId{0}, 0};
 };
 
-// Stores the logical ports (routing direction, logical channel id and connection hash) between the src mesh and its
-// neighbor meshes
+// Stores the gathered inter-mesh cable records between the src mesh and its neighbor meshes.
+// Keyed src_mesh -> neighbor_mesh -> one PortDescriptor per physical cable channel.
 using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<PortDescriptor>>>;
 
 class ControlPlane {
@@ -476,13 +483,13 @@ private:
     // and Routing Table Generator.
     void generate_intermesh_connectivity();
 
-    // Propose PortDescriptors per neighbor cable; final maps written after rank-0 pairing.
+    // Gather physical inter-mesh cables toward one neighbor host (no port/direction assignment; that
+    // is deferred to rank-0 pairing which sees both endpoints of every cable).
     std::vector<PortDescriptor> propose_port_descriptors_for_exit_nodes(
         const std::string& my_host,
         const std::string& neighbor_host,
         bool strict_binding,
-        const std::unordered_set<FabricNodeId>& requested_exit_nodes,
-        std::unordered_set<port_id_t>& assigned_port_ids);
+        const std::unordered_set<FabricNodeId>& requested_exit_nodes);
 
     // Multi-Host Intermesh Connectivity Helper Function:
     // Fully annotate local physical exit nodes in logical space (src/dst mesh id, direction, channel id)
