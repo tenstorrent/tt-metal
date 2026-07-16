@@ -14,7 +14,7 @@ Run type is determined by `SWEEP_NAME` (authoritative in CI) or, when absent, by
 | --------------- | ------------------------------- | ----------------- | -------------- |
 | Lead Models     | `ALL SWEEPS (Lead Models)`      | `0 2 * * *`       | `model_traced` |
 | Model Traced    | `ALL SWEEPS (Model Traced)`     | `0 3 * * *`       | `model_traced` |
-| Comprehensive   | `ALL SWEEPS (Comprehensive)`    | `0 4 * * 3,6`     | All suites     |
+| Comprehensive   | `ALL SWEEPS (Comprehensive)`    | *(dispatch only)* | All suites     |
 | Nightly         | `ALL SWEEPS (Nightly)`          | *(default)*       | `nightly`      |
 
 **Batch size**: 10 modules per batch for most run types; 3 for comprehensive or when device perf measurement is enabled.
