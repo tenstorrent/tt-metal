@@ -558,6 +558,17 @@ from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
+# YUV conversion op
+from ttnn._ttnn.operations.experimental import YUVCoefficients
+from ttnn._ttnn.operations.experimental import yuv_conversion
+from ttnn._ttnn.operations.experimental import yuv_bt601_coefficients
+from ttnn._ttnn.operations.experimental import yuv_bt709_coefficients
+
+experimental.YUVCoefficients = YUVCoefficients
+experimental.yuv_conversion = yuv_conversion
+experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
+experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
