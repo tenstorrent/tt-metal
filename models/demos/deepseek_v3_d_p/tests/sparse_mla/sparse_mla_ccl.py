@@ -66,7 +66,6 @@ class CCLTraffic:
 
     critical_path_bytes: float
     total_network_bytes: float
-    theoretical_ns: float
     link_gigabits_per_second_per_direction: float
     num_links: int
 
@@ -77,6 +76,10 @@ class CCLTraffic:
     @property
     def roofline_gigabytes_per_second(self) -> float:
         return self.roofline_gigabits_per_second / 8
+
+    @property
+    def theoretical_ns(self) -> float:
+        return self.critical_path_bytes / self.roofline_gigabytes_per_second  # bytes / (GB/s) = ns
 
 
 @dataclass(frozen=True)
@@ -122,10 +125,20 @@ class CollectivePath:
     layout: object
     logical_shape: Callable
     local_input_shape: Callable
+    output_placements: tuple  # tensor placements after the collective (asserted post-op)
     partition_dim: Optional[int] = None
-    output_placements: Optional[tuple] = None
     expected_output_shape: Optional[Callable] = None
     verify_reshard: bool = False
+
+    def __post_init__(self):
+        # A reshard needs an expected output shape to assert, and its reconstruct/recompose use placement
+        # .dim, so every reshard placement must be a shard (a Replicate has no dim).
+        if self.partition_dim is not None:
+            assert self.expected_output_shape is not None, f"{self.name}: reshard path needs expected_output_shape"
+            assert all(
+                isinstance(placement, ttnn.PlacementShard)
+                for placement in self.input_placements + self.output_placements
+            ), f"{self.name}: reshard placements must all be PlacementShard"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -187,6 +200,7 @@ KVPE_ALL_GATHER = CollectivePath(
     collective_axis=SP_AXIS,
     gather_dim=2,
     input_placements=(ttnn.PlacementShard(2), ttnn.PlacementReplicate()),  # SP shards tokens; TP replicates.
+    output_placements=(ttnn.PlacementReplicate(), ttnn.PlacementReplicate()),  # gathered over SP -> fully replicated.
     layout=ttnn.ROW_MAJOR_LAYOUT,
     logical_shape=_kvpe_logical_shape,
     local_input_shape=_kvpe_local_input_shape,
@@ -262,13 +276,15 @@ def ccl_mesh_param(collective_axis: int):
     )
 
 
+def _is_sp_ring_proxy(mesh_shape, collective_axis) -> bool:
+    """The LoudBox SP proxy (8x1) is the only ring topology; every other mesh/axis is Linear."""
+    return collective_axis == SP_AXIS and math.prod(mesh_shape) == 8
+
+
 def resolve_runtime_system(mesh_device, path: CollectivePath) -> RuntimeSystem:
     """Fabric roofline inputs for the live mesh: topology, link count, per-direction bandwidth."""
     mesh_shape = tuple(mesh_device.shape)
-    # The only ring is the LoudBox SP proxy (8x1); every other mesh/axis is Linear.
-    topology = (
-        ttnn.Topology.Ring if (path.collective_axis == SP_AXIS and math.prod(mesh_shape) == 8) else ttnn.Topology.Linear
-    )
+    topology = ttnn.Topology.Ring if _is_sp_ring_proxy(mesh_shape, path.collective_axis) else ttnn.Topology.Linear
     default_gbps = _GALAXY_LINK_GBPS_PER_DIRECTION if math.prod(mesh_shape) == 32 else _LOUDBOX_LINK_GBPS_PER_DIRECTION
     link_gbps = float(os.environ.get("MLA_CCL_LINK_GBPS_PER_DIRECTION", default_gbps))
     return RuntimeSystem(mesh_shape, topology, NUM_LINKS, link_gbps)
@@ -347,7 +363,7 @@ def _run_all_gather(mesh_device, path, workload, system) -> Measurement:
         ),
     )
     assert list(tt_output.shape) == global_shape
-    assert tt_output.tensor_topology().placements() == [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+    assert tt_output.tensor_topology().placements() == list(path.output_placements)
     measurement = Measurement(
         records, program_durations_ns, _tensor_description(tt_input), _tensor_description(tt_output)
     )
@@ -483,11 +499,9 @@ def all_gather_roofline(path: CollectivePath, workload: Workload, mesh_device, s
     local_input_bytes = math.prod(path.local_input_shape(workload, mesh_shape)) * torch.bfloat16.itemsize
     participants = mesh_shape[path.collective_axis]
     critical_path_bytes = local_input_bytes * (participants - 1)
-    roofline_gigabytes_per_second = system.link_gigabits_per_second_per_direction * system.num_links * 2 / 8
     return CCLTraffic(
         critical_path_bytes=critical_path_bytes,
         total_network_bytes=critical_path_bytes * math.prod(mesh_shape),
-        theoretical_ns=critical_path_bytes / roofline_gigabytes_per_second,
         link_gigabits_per_second_per_direction=system.link_gigabits_per_second_per_direction,
         num_links=system.num_links,
     )
@@ -513,9 +527,9 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
         f"total-mesh={traffic.total_network_bytes / 1e6:.3f} MB, "
         f"theoretical={traffic.theoretical_ns / 1e3:.3f} us"
     )
+    measured_ops = "all_gather + mesh_partition" if path.partition_dim is not None else "all_gather"
     logger.info(
-        f"real-time profiler measured: {measured_ns / 1e3:.3f} us "
-        f"(all_gather + mesh_partition for reshards), "
+        f"real-time profiler measured: {measured_ns / 1e3:.3f} us ({measured_ops}), "
         f"bandwidth={measured_gigabytes_per_second:.3f} GB/s, "
         f"roofline utilization={roofline_utilization:.1%}, "
         f"measured/theoretical={measured_ns / traffic.theoretical_ns:.2f}x"
