@@ -63,13 +63,14 @@ MAX_TILES_32_BIT_DEST = 4
 golden_registry = {}
 
 
-# Hardware flushes subnormals to zero (FTZ): values below a format's smallest
-# normal get snapped to 0. Plain float formats use their smallest-normal, listed
-# below. Other formats (BFP/MX) use 1e-37.
+# Flush-to-zero (FTZ): values below a threshold get snapped to 0, matching what
+# the hardware keeps as nonzero. bf16/fp32 flush subnormals, so they flush below
+# their smallest normal; fp16 keeps subnormals, so it flushes below its smallest
+# subnormal (i.e. effectively nothing). Other formats (BFP/MX) use 1e-37.
 _FTZ_THRESHOLD = {
     DataFormat.Float32: float(torch.finfo(torch.float32).tiny),  # 2^-126 ~ 1.18e-38
     DataFormat.Float16_b: float(torch.finfo(torch.bfloat16).tiny),  # 2^-126 ~ 1.18e-38
-    DataFormat.Float16: float(torch.finfo(torch.float16).tiny),  # 2^-14 ~ 6.10e-5
+    DataFormat.Float16: 2.0**-24,  # smallest fp16 subnormal ~ 5.96e-8
 }
 
 
