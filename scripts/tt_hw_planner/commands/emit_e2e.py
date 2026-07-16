@@ -129,6 +129,57 @@ def _e2e_cell(rel: str, sub: str, f) -> str:
     return f"`{rel}/{sub}/{f.name}`" if f else "(none)"
 
 
+def _repoint_canonical_demo(demo_dir, demo_files) -> Optional[list]:
+    """Make the advertised ``demo/demo.py`` lead to the real emitted pipeline(s)
+    after emit-e2e passes, instead of leaving the CPU scaffold as a dead
+    entrypoint (fixes-plan Point 8).
+
+    Single task -> ``demo.py`` runs the one real ``demo_<task>.py``. Multi-task ->
+    ``demo.py`` becomes a dispatcher that lists the per-task demos and runs one by
+    name. Never raises; returns the demo filenames it pointed at, or None.
+    """
+    try:
+        demo_root = Path(demo_dir) / "demo"
+        names = [f.name for f in (demo_files or []) if f.name != "demo.py"]
+        if not demo_root.is_dir() or not names:
+            return None
+        header = "# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.\n# SPDX-License-Identifier: Apache-2.0\n"
+        if len(names) == 1:
+            body = (
+                header
+                + '"""Canonical entrypoint: runs the real emitted pipeline demo (repointed by emit-e2e)."""\n'
+                + "import os\nimport runpy\nimport sys\n\n"
+                + "_HERE = os.path.dirname(os.path.abspath(__file__))\n"
+                + f"_TARGET = os.path.join(_HERE, {names[0]!r})\n"
+                + "sys.argv[0] = _TARGET\n"
+                + 'runpy.run_path(_TARGET, run_name="__main__")\n'
+            )
+        else:
+            body = (
+                header
+                + '"""Canonical dispatcher over the emitted per-task pipeline demos (repointed by emit-e2e)."""\n'
+                + "import os\nimport runpy\nimport sys\n\n"
+                + "_HERE = os.path.dirname(os.path.abspath(__file__))\n"
+                + f"_DEMOS = {names!r}\n\n\n"
+                + "def main() -> None:\n"
+                + "    if len(sys.argv) > 1:\n"
+                + "        pick = sys.argv[1]\n"
+                + '        target = pick if pick.endswith(".py") else f"demo_{pick}.py"\n'
+                + "        if target in _DEMOS:\n"
+                + "            sys.argv = [os.path.join(_HERE, target)] + sys.argv[2:]\n"
+                + '            runpy.run_path(os.path.join(_HERE, target), run_name="__main__")\n'
+                + "            return\n"
+                + '    print(f"This model has {len(_DEMOS)} task demo(s). Run one of:")\n'
+                + "    for _n in _DEMOS:\n"
+                + '        print(f"  python demo/{_n}")\n\n\n'
+                + 'if __name__ == "__main__":\n    main()\n'
+            )
+        (demo_root / "demo.py").write_text(body)
+        return names
+    except Exception:
+        return None
+
+
 def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
     """Consolidated end-of-emit-e2e report: the on-device vs CPU-fallback split, and
     per task/demo the real-input demo + full-model e2e PCC test + trace+2CQ perf test
@@ -163,6 +214,8 @@ def emit_e2e_report(model_id: str, demo_dir, *, verdict: str = "PASS") -> None:
             fallback = []
 
         demo_files = sorted((demo_dir / "demo").glob("demo_*.py")) if (demo_dir / "demo").is_dir() else []
+        if str(verdict).upper() == "PASS":
+            _repoint_canonical_demo(demo_dir, demo_files)
         e2e_dir = demo_dir / "tests" / "e2e"
         all_e2e = sorted(e2e_dir.glob("test_*.py")) if e2e_dir.is_dir() else []
 
