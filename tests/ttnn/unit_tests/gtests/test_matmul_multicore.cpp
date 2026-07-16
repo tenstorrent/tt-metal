@@ -229,7 +229,12 @@ TEST_P(MatmulMulticoreFixture, MatmulMulticoreAccuracy) {
 INSTANTIATE_TEST_SUITE_P(
     MatmulMulticoreTests,
     MatmulMulticoreFixture,
-    ::testing::Values(MatmulMulticoreParam{2048, 2048, 2048}, MatmulMulticoreParam{2080, 2048, 64}),
+    ::testing::Values(
+        // Minimal single-tile smoke case (M=K=N=32 -> 1 output tile). Fast enough to run on
+        // the Quasar emulator's single worker core; the large shapes below are HW regressions.
+        MatmulMulticoreParam{32, 32, 32},
+        MatmulMulticoreParam{2048, 2048, 2048},
+        MatmulMulticoreParam{2080, 2048, 64}),
     [](const testing::TestParamInfo<MatmulMulticoreParam>& info) {
         return fmt::format("M{}_K{}_N{}", info.param.M, info.param.K, info.param.N);
     });
