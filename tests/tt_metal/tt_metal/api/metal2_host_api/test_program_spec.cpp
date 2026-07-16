@@ -1775,8 +1775,8 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "Kernel 'compute_kernel' consumes FP32 DFB 'dfb_0' with enable_32_bit_dest=true, but has no "
-            "unpack_modes entry for it")));
+            "Compute kernel 'compute_kernel' consumes FP32 DFB 'dfb_0' with enable_32_bit_dest=true, but "
+            "provides no unpack_modes entry for this DFB")));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithoutFp32DestAccEnDoesNotRequireEntry) {
@@ -1850,7 +1850,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
 }
 
 TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
-    // UnpackToDest requires enable_32_bit_dest=true (Dest must be 32-bit-wide to hold FP32).
+    // A 32-bit-format DFB (here Float32) cannot be unpacked into a 16-bit Dest, so UnpackToDest
+    // on a consumed 32-bit DFB with enable_32_bit_dest=false is rejected on every generation.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
@@ -1867,7 +1868,22 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("specifies UnpackToDest, but enable_32_bit_dest is false")));
+            ::testing::HasSubstr("A 32-bit datum cannot be unpacked into a 16-bit Dest register")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ConsumerUnpackToDestBelow32BitWithoutEnableSucceeds) {
+    // Gen2 has no unpack-to-Dest performance penalty, so UnpackToDest on a consumed <=16-bit DFB
+    // is accepted even without enable_32_bit_dest (a 16-bit Dest holds a <=16-bit datum). On Gen1
+    // the same spec is rejected as bad-for-perf — see the ProgramSpecTestGen1 counterpart.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b, consumed by compute_kernel
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            // enable_32_bit_dest stays at its default (false).
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+        }
+    }
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
@@ -3099,6 +3115,23 @@ TEST_F(ProgramSpecTestGen1, ComputeGen1ConfigDefaultsMapToInternalDefaults) {
 TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, ConsumerUnpackToDestBelow32BitWithoutEnableFailsForPerf) {
+    // On Gen1, UnpackToDest on a consumed <=16-bit DFB without enable_32_bit_dest bypasses the
+    // SrcA/B path for no precision benefit — rejected as bad-for-perf. (On Gen2 the identical spec
+    // is accepted — see ProgramSpecTestQuasar.ConsumerUnpackToDestBelow32BitWithoutEnableSucceeds.)
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // dfb_0 is Float16_b, consumed by compute_kernel
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            // enable_32_bit_dest stays at its default (false).
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+        }
+    }
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("leads to worse performance")));
 }
 
 TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {

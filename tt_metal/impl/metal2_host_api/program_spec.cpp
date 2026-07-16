@@ -946,52 +946,78 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Validate compute kernel unpack_modes entries.
+    // Validate compute kernel unpack_modes entries against the per-DFB unpack legality table.
     //
-    // UnpackMode only has a meaningful effect when the kernel CONSUMES the
-    // DFB (endpoint_type == CONSUMER), the DFB data format is Float32, and
-    // enable_32_bit_dest is true. Only in that configuration is there a real choice:
-    //   - UnpackToSrc  → unpack via SrcA/B (~19-bit, full FPU access)
-    //   - UnpackToDest → direct Unpacker0 → Dest (full FP32, no SrcA/B for this DFB)
-    // Anywhere else, the value is dead config (non-consumer / non-FP32) or
-    // incoherent (UnpackToDest with enable_32_bit_dest=false — Dest is 16-bit).
+    // "Unpack to Dest" means the unpacker writes a consumed DFB straight into the Dest register,
+    // bypassing SrcA/B. Its legality depends on the Dest width (enable_32_bit_dest), the DFB's
+    // element width, the binding role, and the generation:
     //
-    // Rules enforced:
-    //   - Every entry references a DFB the kernel binds.
-    //   - No duplicate entries for the same DFB.
-    //   - UnpackToDest is rejected only when it is INCOHERENT (enable_32_bit_dest=false —
-    //     Dest is 16-bit and can't hold full FP32). Setting it where it is merely INERT (a
-    //     non-CONSUMER binding or a non-Float32 DFB) is tolerated: the LLK ignores the mode
-    //     there, and legacy ops commonly set it unconditionally across dtypes. (Failing to set
-    //     it where it IS meaningful is the harmful direction — caught by the require-an-entry
-    //     rule below, not here.)
-    //   - When the triple holds for a DFB, an explicit entry is REQUIRED — the two
-    //     values have very different runtime semantics, so we surface the choice in source.
-    //   - UnpackToSrc is silently assumed everywhere else (no entry required, no busywork).
+    //   UnpackToSrc                          → always accepted (the default path).
+    //   UnpackToDest, producer-only binding  → inert (the DFB is never unpacked): tolerated.
+    //   UnpackToDest, consumer, enable=true  → accepted (Dest is 32-bit; the choice is coherent).
+    //   UnpackToDest, consumer, enable=false, 32-bit format (Float32/Int32/UInt32/RawUInt32)
+    //                                        → REJECTED on every generation: a 32-bit datum cannot
+    //                                          be unpacked into a 16-bit Dest register.
+    //   UnpackToDest, consumer, enable=false, <=16-bit format, Gen1
+    //                                        → REJECTED: bad for perf (bypasses SrcA/B for no gain).
+    //   UnpackToDest, consumer, enable=false, <=16-bit format, Gen2
+    //                                        → accepted: Gen2 has no unpack-to-Dest penalty.
+    //   (A compute self-loop DFB binds both roles; the consumer rules govern it.)
+    //
+    // Separately, where the Src-vs-Dest choice is REAL an explicit entry is REQUIRED rather than
+    // silently defaulting to UnpackToSrc: a consumed Float32 DFB with enable_32_bit_dest=true.
+    //
+    // INTENTIONAL INTERMEDIATE GAP — do not "fix" without the follow-up. The require-an-explicit-
+    // entry rule is Float32-only. The choice is just as real for a consumed Int32/UInt32 DFB with
+    // enable_32_bit_dest=true, and the end goal is to require an entry there too — but that is a
+    // legality tightening that would reject roughly a dozen already-ported ops, so it is deferred to
+    // a follow-up PR (see issue #49936). Until then, an unspecified int32/uint32 consumer silently
+    // defaults to UnpackToSrc (its 32-bit value truncated to ~19 bits): wrong, but it preserves
+    // existing behavior. (Some accepted UnpackToDest cases are also silently mishandled by the LLK
+    // today — a codegen gap being fixed LLK-side, not a host-validation concern.)
+
+    // A DataFormat whose elements are 32 bits wide, and so cannot be held by a 16-bit Dest register.
+    // (Note: datum_size() throws on the block/MX formats.)
+    auto is_32bit_element_format = [](tt::DataFormat fmt) {
+        switch (fmt) {
+            case tt::DataFormat::Float32:
+            case tt::DataFormat::Int32:
+            case tt::DataFormat::UInt32:
+            case tt::DataFormat::RawUInt32: return true;
+            default: return false;
+        }
+    };
+
     for (const auto& kernel : spec.kernels) {
         if (!kernel.is_compute_kernel()) {
             continue;
         }
         const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-
-        const auto& unpack_modes = std::visit([](const auto& config) { return config.unpack_modes; }, compute_config);
-
+        const auto& unpack_modes =
+            std::visit([](const auto& config) -> const auto& { return config.unpack_modes; }, compute_config);
         const bool enable_32_bit_dest =
             std::visit([](const auto& config) { return config.enable_32_bit_dest; }, compute_config);
+        const bool is_gen2 = std::holds_alternative<ComputeGen2Config>(compute_config);
 
-        // Index the kernel's DFB bindings: which DFBs it binds.
+        // Index the kernel's DFB bindings: which it binds at all, and which it CONSUMES. A self-loop
+        // DFB appears as two separate bindings (one PRODUCER, one CONSUMER — there is no BOTH endpoint
+        // type); indexing by name into a set dedups them, and membership in consumed_dfbs makes the
+        // consumer rules govern it.
         std::unordered_set<DFBSpecName> bound_dfbs;
+        std::unordered_set<DFBSpecName> consumed_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
             bound_dfbs.insert(binding.dfb_spec_name);
+            if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
+                consumed_dfbs.insert(binding.dfb_spec_name);
+            }
         }
 
-        // Validate each user-supplied entry, tracking which DFBs got an explicit
-        // entry (used below to require one where the FP32 choice is real).
-        // Duplicate DFB entries are impossible now that unpack_modes is a
-        // Table with unique keys: a repeated DFB overwrites the prior value.
-        std::unordered_set<DFBSpecName> entries_seen;
+        // Validate each explicit entry, tracking which DFBs got one (to require one below where the
+        // choice is real). Duplicate DFB entries are impossible: unpack_modes is a Table with unique
+        // keys, so a repeated DFB overwrites the prior value.
+        std::unordered_set<DFBSpecName> dfbs_with_entry;
         for (const auto& [dfb_name, mode] : unpack_modes) {
-            entries_seen.insert(dfb_name);
+            dfbs_with_entry.insert(dfb_name);
             TT_FATAL(
                 bound_dfbs.contains(dfb_name),
                 "Kernel '{}' unpack_modes entry references DFB '{}', which the kernel does not bind",
@@ -999,46 +1025,79 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dfb_name);
 
             if (mode == UnpackMode::UnpackToSrc) {
-                continue;  // UnpackToSrc is always allowed.
+                continue;  // Always allowed.
             }
-            // mode == UnpackToDest. Inert where the kernel doesn't consume the DFB or the DFB
-            // isn't Float32 — the LLK ignores the mode there, so we don't reject (legacy ops set it
-            // unconditionally). Reject only the incoherent case: full-precision FP32 in Dest is
-            // impossible without enable_32_bit_dest (otherwise Dest is 16-bit).
+            //////////////////////////
+            // mode == UnpackToDest
+            //////////////////////////
+            if (!consumed_dfbs.contains(dfb_name)) {
+                continue;  // Compute kernel is bound as the DFB Producer: inert, tolerated.
+            }
+
+            // Compute kernel is the DFB's consumer.
+
+            if (enable_32_bit_dest) {
+                continue;  // UnpackTo Dest, with 32-bit Dest: always permitted
+            }
+
+            // UnpackToDest into a 16-bit Dest:
+            // Legality checks are gen-specific, and depends on the element width.
+
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
+            if (!dfb_spec->data_format_metadata.has_value()) {
+                continue;  // Format unknown (deferred to the data_format-required check).
+            }
+
+            const tt::DataFormat fmt = dfb_spec->data_format_metadata.value();
             TT_FATAL(
-                enable_32_bit_dest,
-                "Kernel '{}' unpack_modes entry for DFB '{}' specifies UnpackToDest, "
-                "but enable_32_bit_dest is false. Full-precision FP32 in the Dest register requires "
-                "enable_32_bit_dest=true (otherwise Dest is 16-bit and the mode is incoherent).",
+                !is_32bit_element_format(fmt),
+                "Compute kernel '{}' unpack_modes entry for DFB '{}' specifies UnpackToDest, but the DFB entries use a "
+                "32-bit format ({}) and enable_32_bit_dest is false. A 32-bit datum cannot be unpacked into "
+                "a 16-bit Dest register. Set enable_32_bit_dest=true, or use UnpackToSrc.",
+                kernel.unique_id,
+                dfb_name,
+                fmt);
+            TT_FATAL(
+                is_gen2,
+                "Compute kernel '{}' unpack_modes entry for DFB '{}' specifies UnpackToDest, but "
+                "enable_32_bit_dest=false "
+                "and the data type is not a 32-bit type. On Gen1 architectures, bypassing the SrcA/B path (with no "
+                "precision benefit) is not permitted because it leads to worse performance. Use UnpackToSrc instead.",
                 kernel.unique_id,
                 dfb_name);
+            // On Gen2, <=16-bit format + UnpackToDest + enable_32_bit_dest=false
+            // is permitted. Unpacking to dest on Gen2 does not carry the performance penalty it does on Gen1.
         }
 
-        // Require an explicit entry where the choice is real:
-        // CONSUMER binding + FP32 data format + enable_32_bit_dest=true.
-        if (!enable_32_bit_dest) {
-            continue;
-        }
-        for (const auto& binding : kernel.dfb_bindings) {
-            if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
-                continue;
+        // Require an explicit entry (i.e. don't assume a default) if the following conditions are all true:
+        //  - the compute kernel is the DFB consumer
+        //  - the data format is FP32
+        //  - enable_32_bit_dest=true
+        // NOTE: Int32/UInt32 are also 32-bit formats, but they are deliberately NOT required here yet.
+        //       See the INTENTIONAL INTERMEDIATE GAP note above.
+        //       This check should be extended to int32/uint32. (TODO: Issue #49936)
+        if (enable_32_bit_dest) {
+            for (const auto& binding : kernel.dfb_bindings) {
+                if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
+                    continue;
+                }
+                const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
+                if (!dfb_spec->data_format_metadata.has_value()) {
+                    continue;  // Format unknown (deferred to the data_format-required check).
+                }
+
+                // FP32 only for now
+                if (dfb_spec->data_format_metadata.value() != tt::DataFormat::Float32) {
+                    continue;
+                }
+                TT_FATAL(
+                    dfbs_with_entry.contains(binding.dfb_spec_name),
+                    "Compute kernel '{}' consumes FP32 DFB '{}' with enable_32_bit_dest=true, but provides no "
+                    "unpack_modes entry for this DFB. This configuration requires an explicit choice "
+                    "between UnpackMode::UnpackToSrc and UnpackMode::UnpackToDest.",
+                    kernel.unique_id,
+                    binding.dfb_spec_name);
             }
-            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
-            if (!dfb_spec->data_format_metadata.has_value()) {
-                continue;  // Deferred to the data_format-required check.
-            }
-            if (dfb_spec->data_format_metadata.value() != tt::DataFormat::Float32) {
-                continue;
-            }
-            TT_FATAL(
-                entries_seen.contains(binding.dfb_spec_name),
-                "Kernel '{}' consumes FP32 DFB '{}' with enable_32_bit_dest=true, but has no "
-                "unpack_modes entry for it. This configuration requires an explicit choice "
-                "between UnpackMode::UnpackToSrc (unpack via SrcA/B — enables binary FPU ops, "
-                "precision reduced to ~19 bits) and UnpackMode::UnpackToDest (unpack "
-                "direct to Dest — full FP32 precision, SrcA/B access disabled for this DFB).",
-                kernel.unique_id,
-                binding.dfb_spec_name);
         }
     }
 
