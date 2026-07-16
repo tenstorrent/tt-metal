@@ -322,10 +322,10 @@ models:
   unit_tier1:
     wh_llmbox: 61
     wh_n150: 110
-    wh_galaxy: 45
+    wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 250  # GPT-OSS-120B 15->22 (host-variance headroom)
+    bh_quietbox_2: 260
     bh_galaxy: 70
   unit_tier2:
     wh_llmbox: 114
