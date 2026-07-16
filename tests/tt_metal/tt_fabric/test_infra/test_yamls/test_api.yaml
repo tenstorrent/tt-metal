@@ -72,7 +72,7 @@ Tests:
                   E: max
                   N: 0
                   W: 0
-                # (optional) hops: full
+                # (optional) hops: full_mcast
             (optional) atomic_inc_val: 1 # Only used for atomic_inc ntype, how much to increment by.
             (optional) atomic_inc_wrap: 65535 # Only used for atomic_inc ntype, the maximum value of the remote counter after which it will wrap to 0.
             # How many hops to perform before starting the multicast. Used for grid-based multicasting.

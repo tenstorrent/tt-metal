@@ -55,7 +55,7 @@ struct ParsedDestinationConfig {
     std::optional<DeviceIdentifier> device;
     std::optional<CoreConfig> core;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
-    bool full_hops = false;  // hops: full -> resolved to get_full_mcast_hops(src) at build time
+    bool full_hops = false;  // hops: full_mcast -> resolved to get_full_mcast_hops(src) at build time
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
 };

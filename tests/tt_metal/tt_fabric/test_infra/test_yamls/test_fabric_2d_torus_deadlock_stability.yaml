@@ -275,7 +275,7 @@ Tests:
       size: 256
       num_packets: 2000
       destination:
-        hops: full
+        hops: full_mcast
 
     patterns:
       - type: all_devices_uniform_pattern

@@ -89,11 +89,11 @@ ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::N
     if (dest_yaml["hops"]) {
         if (dest_yaml["hops"].IsScalar()) {
             TT_FATAL(
-                parse_scalar<std::string>(dest_yaml["hops"]) == "full",
-                "Scalar 'hops' only supports the value 'full'.");
+                parse_scalar<std::string>(dest_yaml["hops"]) == "full_mcast",
+                "Scalar 'hops' only supports the value 'full_mcast'.");
             config.full_hops = true;
         } else {
-            TT_FATAL(dest_yaml["hops"].IsMap(), "Expected 'hops' to be a map or the scalar 'full'.");
+            TT_FATAL(dest_yaml["hops"].IsMap(), "Expected 'hops' to be a map or the scalar 'full_mcast'.");
             std::unordered_map<RoutingDirection, uint32_t> hops_map;
             for (const auto& it : dest_yaml["hops"]) {
                 std::string dir_str = parse_scalar<std::string>(it.first);
@@ -1390,7 +1390,7 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
             }
         }
 
-        // Resolve destination hop sentinels (max / full) from the global mesh shape now that the
+        // Resolve destination hop sentinels (max / full_mcast) from the global mesh shape now that the
         // cluster is available, before any step that reads concrete hop values.
         resolve_hop_sentinels(iteration_test);
 
