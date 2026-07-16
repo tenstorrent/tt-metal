@@ -106,14 +106,6 @@ SelectTargetLogitDeviceOperation::tensor_return_value_t SelectTargetLogitDeviceO
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.logit.device());
 }
 
-ttsl::hash::hash_t SelectTargetLogitDeviceOperation::compute_program_hash(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    // first_v / local_V / cluster_axis only affect runtime args (they're patched by
-    // override_runtime_arguments per coord); they don't change the compiled kernel binary.
-    return tt::tt_metal::operation::hash_operation<SelectTargetLogitDeviceOperation>(
-        tensor_args.logit.dtype(), tensor_args.logit.logical_shape());
-}
-
 }  // namespace ttml::metal::ops::select_target_logit::device
 
 namespace ttnn::prim {
