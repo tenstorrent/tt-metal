@@ -292,7 +292,8 @@ void RunSemaphoreIncMulticastTest(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device, bool use_barrier) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     if (compute_grid_size.x < 2) {
-        return;  // need at least one column besides the sender's for a sender-excluding multicast rectangle
+        // need at least one column besides the sender's for a sender-excluding multicast rectangle
+        GTEST_SKIP() << "Multicast semaphore-inc test requires a compute grid at least 2 columns wide";
     }
 
     CoreCoord sender_core = {0, 0};
@@ -585,7 +586,7 @@ void RunFullBarrierWritesSingleCore(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
     if (compute_grid_size.x < 2) {
-        return;
+        GTEST_SKIP() << "Single-core full-barrier write test requires a compute grid at least 2 columns wide";
     }
 
     const CoreCoord writer_core = {0, 0};
