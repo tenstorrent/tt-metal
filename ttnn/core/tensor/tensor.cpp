@@ -176,11 +176,8 @@ Tensor Tensor::from_span(
 
 template <typename T>
 Tensor Tensor::from_borrowed_data(
-    ttsl::Span<T> buffer,
-    const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile) {
-    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), tile);
+    ttsl::Span<T> buffer, const tt::tt_metal::Shape& shape, tt::tt_metal::MemoryPin buffer_pin) {
+    auto host_tensor = HostTensor::from_borrowed_data(buffer, shape, std::move(buffer_pin), std::nullopt);
     return Tensor(std::move(host_tensor));
 }
 
@@ -245,35 +242,17 @@ template Tensor Tensor::from_span<uint32_t>(
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint32_t pad_value);
 template Tensor Tensor::from_borrowed_data<float>(
-    ttsl::Span<float> buffer,
-    const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    ttsl::Span<float> buffer, const tt::tt_metal::Shape& shape, tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<bfloat16>(
-    ttsl::Span<bfloat16> buffer,
-    const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    ttsl::Span<bfloat16> buffer, const tt::tt_metal::Shape& shape, tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<int32_t>(
-    ttsl::Span<int32_t> buffer,
-    const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    ttsl::Span<int32_t> buffer, const tt::tt_metal::Shape& shape, tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<uint8_t>(
-    ttsl::Span<uint8_t> buffer,
-    const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    ttsl::Span<uint8_t> buffer, const tt::tt_metal::Shape& shape, tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<uint16_t>(
-    ttsl::Span<uint16_t> buffer,
-    const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    ttsl::Span<uint16_t> buffer, const tt::tt_metal::Shape& shape, tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_borrowed_data<uint32_t>(
-    ttsl::Span<uint32_t> buffer,
-    const tt::tt_metal::Shape& shape,
-    tt::tt_metal::MemoryPin buffer_pin,
-    const std::optional<Tile>& tile);
+    ttsl::Span<uint32_t> buffer, const tt::tt_metal::Shape& shape, tt::tt_metal::MemoryPin buffer_pin);
 template Tensor Tensor::from_vector<bfloat16>(
     std::vector<bfloat16>&& buffer,
     const TensorSpec& spec,

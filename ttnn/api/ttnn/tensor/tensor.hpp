@@ -104,10 +104,7 @@ public:
     //
     template <typename T>
     [[nodiscard]] static Tensor from_borrowed_data(
-        ttsl::Span<T> buffer,
-        const tt::tt_metal::Shape& shape,
-        tt::tt_metal::MemoryPin buffer_pin,
-        const std::optional<Tile>& tile = std::nullopt);
+        ttsl::Span<T> buffer, const tt::tt_metal::Shape& shape, tt::tt_metal::MemoryPin buffer_pin);
 
     // Overload that takes `on_creation_callback` and `on_destruction_callback` as separate arguments.
     template <typename T>
@@ -115,9 +112,8 @@ public:
         ttsl::Span<T> buffer,
         const tt::tt_metal::Shape& shape,
         const std::function<void()>& on_creation_callback,
-        const std::function<void()>& on_destruction_callback,
-        const std::optional<Tile>& tile = std::nullopt) {
-        return from_borrowed_data(buffer, shape, MemoryPin(on_creation_callback, on_destruction_callback), tile);
+        const std::function<void()>& on_destruction_callback) {
+        return from_borrowed_data(buffer, shape, MemoryPin(on_creation_callback, on_destruction_callback));
     }
 
     // Same as `from_span`, but operates on a vector instead.
