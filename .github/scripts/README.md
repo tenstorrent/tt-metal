@@ -51,7 +51,7 @@ Scripts that collect CI/CD metrics and benchmark data for upload to the analytic
 | `utils/find-changed-files.sh` | Detects which files changed between `origin/main` and `HEAD`, then sets boolean flags for affected areas (CMake, tt-metalium, ttnn, models, docs, LLK, etc.). Used to conditionally gate CI jobs. |
 | `utils/prepare_test_matrix.py` | Builds a filtered GitHub Actions test matrix from a YAML test definition file and a list of enabled SKUs. Outputs JSON. Usage: `prepare_test_matrix.py <tests_yaml> <enabled_skus> <sku_config_yaml>` |
 | `utils/count_pytests.py` | Counts total pytest cases in a directory, including `@pytest.mark.parametrize` expansions, by parsing Python ASTs. |
-| `utils/verify_time_budget.py` | Validates that the sum of test timeouts per (team, SKU) pair stays within the time budget defined in the budget YAML. |
+| `utils/verify_time_budget.py` | Validates that the sum of test timeouts per (team, SKU) pair stays within the time budget defined in the budget YAML. Optionally enforces `--max-per-test-timeout` (minutes) against each individual SKU timeout. |
 | `utils/validate_perf_targets.py` | Validates model performance benchmark results against targets defined in `models/model_targets.yaml`. Exits non-zero if any metric regresses beyond tolerance. |
 | `utils/validate_golden_csv_columns.sh` | Validates that golden bandwidth CSV files in the perf microbenchmark directory have the expected column headers. |
 | `utils/hang_report.py` | Generates a JUnit XML test report for a hung test (dispatch timeout). Ensures the hung test appears in CI artifacts even if the process is killed before pytest finalizes. Supports a two-phase flow: initial report, then update with triage summary. |

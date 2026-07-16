@@ -265,7 +265,7 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n300_civ2,wh_llmbox_civ2_prio,bh_p150b_civ2_viommu_prio' || 'wh_n300_civ2,wh_llmbox_civ2_viommu,bh_p150b_civ2_viommu' }}
-      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
+      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       product: tt-metalium
       enable-kernel-ccache: true
 
@@ -282,13 +282,12 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
-      per-test-timeout: 11
+      per-test-timeout: 15 # max minutes for any SKU timeout in the basic tests yaml
       product: tt-metalium
 
   # ===========================================================================
   # Team: triage
   # test list: triage_merge_gate_tests.yaml
-  # (kept next to runtime in case the teams are combined later)
   # ===========================================================================
 
   triage-tests:
@@ -322,7 +321,7 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n300_civ2,wh_llmbox_civ2_prio,bh_p150b_civ2_viommu_prio' || 'wh_n300_civ2,wh_llmbox_civ2_viommu,bh_p150b_civ2_viommu' }}
-      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
+      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       product: tt-nn
       enable-kernel-ccache: true
 
@@ -339,7 +338,7 @@ jobs:
       docker-image: ${{ needs.resolve-docker-pull-refs-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
       enabled-skus: ${{ github.event_name == 'merge_group' && 'wh_n150_civ2,bh_p150b_civ2_viommu_prio' || 'wh_n150_civ2,bh_p150b_civ2_viommu' }}
-      per-test-timeout: 11
+      per-test-timeout: 15 # max minutes for any SKU timeout in the basic tests yaml
       product: tt-nn
 
   ttnn-merge-gate-tests:

@@ -197,6 +197,7 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       test-category: pr_gate
+      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
   ttnn-smoke-tests:
@@ -215,6 +216,7 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-nn
       test-category: pr_gate
+      per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
 

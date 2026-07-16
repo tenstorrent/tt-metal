@@ -7,10 +7,10 @@
   cmd: /usr/bin/tt-metalium-validation-basic
   skus:
     wh_n150_civ2:
-      timeout: 30
+      timeout: 15
     bh_p150b_civ2_viommu:
-      timeout: 30
+      timeout: 15
     bh_p150b_civ2_viommu_prio:
-      timeout: 30
+      timeout: 15
   team: runtime
   owner_id: U099A7FMKL2 # Manish Sudumbrekar

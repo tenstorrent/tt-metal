@@ -7,10 +7,10 @@
   cmd: /usr/bin/tt-nn-validation-basic
   skus:
     wh_n150_civ2:
-      timeout: 30
+      timeout: 15
     bh_p150b_civ2_viommu:
-      timeout: 30
+      timeout: 15
     bh_p150b_civ2_viommu_prio:
-      timeout: 30
+      timeout: 15
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
