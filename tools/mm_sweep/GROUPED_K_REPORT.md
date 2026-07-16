@@ -1,5 +1,19 @@
 # Grouped-K compute for Regime-A matmul — report
 
+> **STATUS: REJECTED and REMOVED from the code (2026-07-16).** Grouped-K produced no stable win over `Kg=1`
+> in any form (whole-group prewait OR streamed) at fixed configuration, so its implementation was deleted to
+> keep the production-adjacent kernels simple. This report (the causal explanation) and the raw benchmark
+> JSON (`regime_a_kgroup_bench.json.gz`) are retained as the experimental record; `Kg=1` — the per-block
+> progressive schedule — is and remains the production path. **Recover the removed implementation from:**
+> `56b37f5d5e6` + `7b3f93ddaa5` (kernels/plan/factory/config) and `a5b7986b18f` + `3593ecd4083`
+> (diagnostic tests + `kgroup` benchmark mode + data). Progressive in0 waiting and `DIAG_FULL_IN0_WAIT` were
+> kept. **Root cause (why it can't win):** the FP32 pack/L1-accumulation is not on the critical path — the
+> packer runs concurrently with the math (TRISC) and data-movement RISCs — so reducing the pack count per
+> output tile cannot lower wall time; on narrow-N the compute RISC is the limiter and on wide-N the shape is
+> DRAM-read-bound on in1. Prewait additionally reintroduced startup latency; streamed removed that but only
+> reached parity with `Kg=1`. Full evidence below (§6 per-RISC, §9 streamed vs prewait).
+
+
 Change (diagnostic-only): a compute grouping factor `Kg` (in delivered K blocks) that holds DST across `Kg`
 consecutive delivered blocks and packs the FP32 output partial to CB3 **once per group** instead of once per
 block. Delivery, `kb`, and the ring layout are unchanged; `Kg` is a compute-only grouping. Implemented as
