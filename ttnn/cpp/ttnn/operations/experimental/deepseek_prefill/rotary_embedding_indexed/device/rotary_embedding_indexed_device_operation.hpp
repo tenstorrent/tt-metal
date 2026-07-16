@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <variant>
 
 #include <tt-metalium/program.hpp>
@@ -29,6 +30,9 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         uint32_t kv_actual_global;  // TODO: move to metadata
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
+
+        static constexpr auto attribute_names = std::forward_as_tuple("cluster_axis", "compute_kernel_config");
+        auto attribute_values() const { return std::forward_as_tuple(cluster_axis, compute_kernel_config); }
     };
 
     struct tensor_args_t {
@@ -85,7 +89,6 @@ struct RotaryEmbeddingIndexedDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed
