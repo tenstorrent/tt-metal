@@ -204,7 +204,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32) {
                 return {
                     "relu_max_tile_init();",
-                    fmt::format("relu_max_tile_int32({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                    fmt::format(
+                        "relu_max_tile_int32({}, {}u);", idst, static_cast<uint32_t>(static_cast<int32_t>(params[0])))};
             }
             return {
                 "relu_max_tile_init();",
@@ -893,9 +894,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint32({}, 6u);", idst)};
             }
             if (input_dtype == DataType::INT32) {
-                // 0x40c00000u == bit_cast<float>(6.0f); the _relu_max_ int32 path reinterprets the
-                // threshold via Converter::as_float, so this decodes back to the integer limit 6.
-                return {"relu_max_tile_init();", fmt::format("relu_max_tile_int32({}, 0x40c00000u);", idst)};
+                return {"relu_max_tile_init();", fmt::format("relu_max_tile_int32({}, 6u);", idst)};
             }
             return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
         case UnaryOpType::NEG:
