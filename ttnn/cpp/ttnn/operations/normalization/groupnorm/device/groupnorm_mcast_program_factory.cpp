@@ -325,13 +325,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         xmm_CB_size_group_1 = single_tile_size * 3;
     }
 
-    // c_30 (untilize output) and c_20 (row-major reread) scratch for the ROW_MAJOR-output path; each is one out-block.
+    // c_30 (untilize output) and c_20 (row-major reread) scratch for the ROW_MAJOR-output path.
     uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
 
-    // Legacy ROW_MAJOR input: cb_in_resident (c_17) holds the whole per-core group tilized once so the
-    // mean/variance/normalize passes reuse it (no re-read / re-tilize). The host op (group_norm) guarantees this
-    // group fits L1 before dispatching a ROW_MAJOR input here; when it would not fit, the host converts the input
-    // with ttnn::tilize_with_zero_padding and takes the TILE path instead.
+    // Legacy ROW_MAJOR input: cb_in_resident (c_17) holds the whole per-core group tilized once, reused across
+    // the mean/variance/normalize passes. The host op only dispatches a ROW_MAJOR input here when it fits L1.
     uint32_t in_tilized_CB_size_group_1 = 0;
     if (!use_welford && tilize_in) {
         in_tilized_CB_size_group_1 =
@@ -818,8 +816,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         }}},
     });
 
-    // Legacy ROW_MAJOR input: tilized-group CB (c_17), holds the whole per-core group so the
-    // three passes reuse it without re-reading DRAM / re-tilizing.
+    // Resident tilized per-core group (c_17); see in_tilized_CB_size_group_1 above.
     if (in_tilized_CB_size_group_1 > 0) {
         constexpr uint32_t in_tilized_cb_index = tt::CBIndex::c_17;
         desc.cbs.push_back(CBDescriptor{

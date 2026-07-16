@@ -107,9 +107,8 @@ OPTIONAL_WEIGHT_BIAS_AFFINE_PARAMS = [
 OPTIONAL_WEIGHT_BIAS_AFFINE_IDS = ["no_affine", "weight_only", "bias_only"]
 
 NEGATIVE_TESTS_PARAMS = [
-    # ttnn.empty produces a ROW_MAJOR interleaved input. ROW_MAJOR interleaved is now supported,
-    # so this shape is accepted as a layout and instead rejected by the device op because its
-    # per-batch H*W (16) is not a multiple of the tile height (32).
+    # Shape is rejected by the device op because its per-batch H*W (16) is not a
+    # multiple of the tile height (32).
     ((2, 1, 16, 32), 8, "must be a multiple of the tile height"),
 ]
 
