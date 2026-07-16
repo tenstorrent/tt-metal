@@ -391,7 +391,11 @@ int main(uint64_t hartid) {
         uint32_t single_prod = 0;
         uint32_t pending = 0;          /* 0 or 1 WorkerZoneWire already written to the in-progress page */
         uint64_t moved = 0, loops = 0; /* moved = WorkerZoneWire records emitted (zone start/end only) */
-        uint64_t cyc_copy = 0;         /* time in the reshape+pack path */
+        uint64_t cyc_copy = 0;         /* time in the reshape+pack path (INCLUDES cyc_swait) */
+        /* collect breakdown: cyc_swait/swait_spins = blocked on a FULL single-SPSC (relay back-pressure;
+         * expect ~0 since relay is idle -> confirms collect is limited by its OWN work, not downstream).
+         * scanned/productive = round-robin volume: how much of the ~550-mirror sweep is empty vs found data. */
+        uint64_t cyc_swait = 0, swait_spins = 0, scanned = 0, productive = 0;
         uint64_t t_start = rdcycle_();
         for (;;) {
             uint64_t progressed = 0;
@@ -399,9 +403,11 @@ int main(uint64_t hartid) {
             for (uint64_t i = 0; i < nmirror; i++) {
                 uint32_t mtail = r32(MTAIL(i));
                 uint32_t mh = chead[i];
+                scanned++; /* round-robin visit (most are empty during idle) */
                 if (mh == mtail) {
                     continue;
                 }
+                productive++; /* this mirror had data */
                 /* STRUCTURAL identity: mirror i IS (core_idx, risc). No STICKY_META / forward-fill. */
                 uint32_t core_idx = (uint32_t)(i / NRISC);
                 uint32_t risc = (uint32_t)(i % NRISC);
@@ -427,12 +433,16 @@ int main(uint64_t hartid) {
                         uint32_t w1 = mk[k + 1];
                         if (pending == 0) {
                             /* start a new single-SPSC page (2 records/page): reserve 1 page (block on relay) */
+                            uint64_t tsw = rdcycle_();
                             while ((uint32_t)(single_prod + 1u - r32(S_CONS)) > SINGLE_NREC) {
+                                swait_spins++; /* blocked on FULL single-SPSC => relay is the wall */
                                 if (r64(P_STOP)) {
+                                    cyc_swait += rdcycle_() - tsw;
                                     cyc_copy += rdcycle_() - tcp;
                                     goto collect_done;
                                 }
                             }
+                            cyc_swait += rdcycle_() - tsw;
                             w_wzw(
                                 single_store + (uint64_t)(single_prod % SINGLE_NREC) * PAGE,
                                 cx,
@@ -503,8 +513,12 @@ int main(uint64_t hartid) {
         w64(COLLECT_STATS + 8, loops);
         w64(COLLECT_STATS + 16, cwall);            /* collect wall */
         w64(COLLECT_STATS + 24, cwall - cyc_copy); /* empty-spin (round-robin over idle mirrors) */
-        w64(COLLECT_STATS + 32, cyc_copy);         /* copy time */
-        fence_();                                  /* stats visible to the relay before the done flag */
+        w64(COLLECT_STATS + 32, cyc_copy);         /* copy time (reshape + swait) */
+        w64(COLLECT_STATS + 40, cyc_swait);        /* subset of copy: blocked on relay (single-SPSC full) */
+        w64(COLLECT_STATS + 48, swait_spins);
+        w64(COLLECT_STATS + 56, scanned);    /* total mirror-visits (round-robin volume) */
+        w64(COLLECT_STATS + 64, productive); /* mirror-visits that found data */
+        fence_();                            /* stats visible to the relay before the done flag */
         w64(COLLECT_DONE, 1);
         helper_to_idle_fw(); /* collect done -- return to the resident idle FW */
     }
@@ -621,6 +635,12 @@ relay_done:
     w64(RES(0xD8), r64(COLLECT_STATS + 16));  /* collect wall */
     w64(RES(0xE0), r64(COLLECT_STATS + 24));  /* collect empty-spin */
     w64(RES(0xE8), r64(COLLECT_STATS + 32));  /* collect copy */
+    /* collect breakdown (relay-copied so it's host-visible): swait/swait_spins/scanned/productive
+     * -> RES 0x28/0x48/0xF0/0xF8 (host reads at params+0x68/0x88/0x130/0x138). */
+    w64(RES(0x28), r64(COLLECT_STATS + 40));  /* collect swait (blocked on relay) */
+    w64(RES(0x48), r64(COLLECT_STATS + 48));  /* collect swait_spins */
+    w64(RES(0xF0), r64(COLLECT_STATS + 56));  /* collect scanned (mirror-visits) */
+    w64(RES(0xF8), r64(COLLECT_STATS + 64));  /* collect productive (visits with data) */
     w64(RES(0x18), DONE_MAGIC);               /* written LAST: host waits on it before reading results */
     helper_to_idle_fw();                      /* relay done -- return to the resident idle FW */
     return 0;                                 /* unreachable (helper_to_idle_fw is noreturn) */

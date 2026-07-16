@@ -1911,6 +1911,33 @@ void RealtimeProfilerManager::shutdown() {
                         cempty / 1000000,
                         cmoved,
                         cloops);
+                    // Collect detail (relay-copied to RES 0x28/0x48/0xF0/0xF8 == params+0x68/0x88/0x130/
+                    // 0x138): split the reshape rate from the round-robin scan and the downstream wait.
+                    //  reshape = copy - swait (pure per-marker reshape) => ns/marker is the hard ceiling.
+                    //  swait/swait_spins = blocked on a FULL single-SPSC (relay) -- expect ~0 (relay idle),
+                    //    confirming collect is limited by its OWN work, not downstream.
+                    //  scan = empty-spin over `scanned` mirror-visits (~550/loop) => ns/visit; %empty shows
+                    //    how much of the sweep is wasted on idle mirrors.
+                    uint64_t cswait = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x68);
+                    uint64_t cswait_spins = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x88);
+                    uint64_t cscanned = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x130);
+                    uint64_t cproductive = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x138);
+                    uint64_t reshape_pure = ccopy > cswait ? ccopy - cswait : 0;
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: collect detail: reshape={} ms ({} ns/marker), "
+                        "swait={} ms (swait_spins={}, blocked on relay), scan={} ms over {} mirror-visits "
+                        "({} ns/visit, {} productive, {}% empty)",
+                        dev_state.chip_id,
+                        reshape_pure / 1000000,
+                        cmoved ? reshape_pure / cmoved : 0,
+                        cswait / 1000000,
+                        cswait_spins,
+                        cempty / 1000000,
+                        cscanned,
+                        cscanned ? cempty / cscanned : 0,
+                        cproductive,
+                        cscanned ? (100 * (cscanned - cproductive) / cscanned) : 0);
                     // PROBE-a: disambiguate the collect-telemetry-0 puzzle.
                     //  collect_direct_loops (RES 0x130): collect wrote `loops` DIRECTLY to a fresh RES line.
                     //  relay_read_sentinel (RES 0x138): relay copied COLLECT_STATS entry sentinel (0xC0FFEE01).
