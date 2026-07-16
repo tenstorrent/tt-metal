@@ -8,6 +8,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/detailed_fabric_log.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -47,6 +48,29 @@ class Program;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
+
+// [debug] DRAM log-buffer geometry for the detailed fabric flow-control tracing. The kernel bulk-writes each
+// full L1 log buffer to a per-router DRAM buffer of DETAILED_FABRIC_LOG_DRAM_BUFFER_SIZE bytes via a NOC write
+// to a single DRAM bank. The two buffer base addresses are fixed *per-bank byte offsets* shared by every eth
+// core (emitted as compile-time args): the sender log at DETAILED_FABRIC_SENDER_LOG_DRAM_BASE and the receiver
+// log at DETAILED_FABRIC_RECEIVER_LOG_DRAM_BASE (one 4 MiB buffer higher). What varies per core is the DRAM BANK
+// the two buffers live in (LOG_DRAM_BANK_ID, emitted per core) -- cores are spread across banks (ordinal among
+// the device's active fabric eth channels, modulo the DRAM bank count) to distribute the debug NOC writes and
+// reduce bank/NOC congestion at runtime.
+//
+// Because each write targets one explicit bank, both 4 MiB buffers sit fully inside that bank: a Blackhole
+// DRAM view is 0xFF000000 (~4080 MiB), and 3 GiB + 8 MiB (0xC0800000) is far below it, so no buffer can
+// straddle a bank boundary. The region is placed high (3 GiB) so it stays clear of interleaved buffer
+// allocations (which grow up from the small unreserved base; per-bank high-water is ~total/num_banks) and
+// the trace region (top-down). Deciphered from the DRAM usage of
+// models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py (BH ring-8 2link), whose
+// interleaved footprint is a tiny fraction of one 4 GB bank. Offsets stay < 4 GiB so they fit uint32_t.
+//
+// The geometry constants live in detailed_fabric_log.hpp so the host reader (dump_detailed_fabric_logs) drains
+// the exact same DRAM locations these compile-time args point the kernel at.
+using tt::tt_fabric::DETAILED_FABRIC_LOG_DRAM_BUFFER_SIZE;
+using tt::tt_fabric::DETAILED_FABRIC_RECEIVER_LOG_DRAM_BASE;
+using tt::tt_fabric::DETAILED_FABRIC_SENDER_LOG_DRAM_BASE;
 
 size_t FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(tt::ARCH arch) {
     switch (arch) {
@@ -367,6 +391,24 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->notify_worker_of_read_counter_update_src_address = buffer_address;
         buffer_address += field_size;
     }
+
+    // [debug] Carve an L1 scratch region for the receiver flow-control trace (ReceiverLog in the kernel):
+    // a ring-buffer-free append log of delta-encoded {ts, iter, ready, ack, wr_sent, wr_flush, completion}
+    // records, one appended per change of the receiver channel's flow-control state during a logging window.
+    // Sized for a 64 B header + 252 * 16 B records = 4096 B (kept in sync with RECEIVER_LOG_CAPACITY in the
+    // kernel). This advances buffer_address, shrinking available_channel_buffering_space below by the same
+    // amount; safe as long as the total debug carve stays well under the unused channel-buffer headroom in
+    // the target config (the allocator's TT_FATAL catches overflow at build time otherwise).
+    this->receiver_log_buffer_address = buffer_address;
+    buffer_address += RECEIVER_LOG_BUFFER_SIZE;
+
+    // [debug] Carve a second L1 scratch region for the sender flow-control trace (SenderLog in the kernel):
+    // one combined delta-encoded record per main-loop pass capturing both VC0 sender channels' state during a
+    // logging window. Distinct from the receiver region so the two traces never alias. Sized for a 112 B header
+    // + 128 * 20 B records = 2672 B (kept in sync with SENDER_LOG_CAPACITY in the kernel); like the receiver
+    // carve it must stay well under the unused channel-buffer headroom (the allocator's TT_FATAL catches it).
+    this->sender_log_buffer_address = buffer_address;
+    buffer_address += SENDER_LOG_BUFFER_SIZE;
 
     // Channel Allocations
     this->max_l1_loading_size =
@@ -849,6 +891,40 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 
     // Add telemetry buffer address (16B aligned)
     named_args["PERF_TELEMETRY_BUFFER_ADDR"] = static_cast<uint32_t>(config.perf_telemetry_buffer_address);
+
+    // [debug] Receiver/sender flow-control trace buffer addresses (carved from channel-buffer headroom).
+    named_args["RECEIVER_LOG_BUFFER_ADDR"] = static_cast<uint32_t>(config.receiver_log_buffer_address);
+    named_args["SENDER_LOG_BUFFER_ADDR"] = static_cast<uint32_t>(config.sender_log_buffer_address);
+
+    // [debug] Per-router DRAM log-buffer geometry. Base addresses are fixed per-bank byte offsets shared by
+    // every eth core; the per-core DRAM bank (LOG_DRAM_BANK_ID) is what distributes the writes across banks.
+    // See the DETAILED_FABRIC_*_LOG_DRAM_BASE comment near the top of this file. Sizes bound the DRAM ring per
+    // buffer.
+    named_args["SENDER_LOG_DRAM_BUFFER_BASE"] = static_cast<uint32_t>(DETAILED_FABRIC_SENDER_LOG_DRAM_BASE);
+    named_args["RECEIVER_LOG_DRAM_BUFFER_BASE"] = static_cast<uint32_t>(DETAILED_FABRIC_RECEIVER_LOG_DRAM_BASE);
+    named_args["SENDER_LOG_DRAM_BUFFER_SIZE"] = static_cast<uint32_t>(DETAILED_FABRIC_LOG_DRAM_BUFFER_SIZE);
+    named_args["RECEIVER_LOG_DRAM_BUFFER_SIZE"] = static_cast<uint32_t>(DETAILED_FABRIC_LOG_DRAM_BUFFER_SIZE);
+
+    // Per-core DRAM bank assignment: spread routers across banks by this eth channel's ordinal among the
+    // device's active fabric eth channels, modulo the DRAM bank count. Same bank for both eRiscs of a core
+    // (independent of risc_id). Distributes the debug NOC writes so they don't all land on one bank.
+    {
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto active_channels = control_plane.get_active_fabric_eth_channels(this->local_fabric_node_id);
+        uint32_t ordinal = 0;
+        for (const auto& [chan, _direction] : active_channels) {
+            if (chan == this->my_eth_channel) {
+                break;
+            }
+            ++ordinal;
+        }
+        auto local_physical_chip_id =
+            control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
+        const auto& soc_desc =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
+        const uint32_t num_dram_banks = static_cast<uint32_t>(soc_desc.get_num_dram_channels());
+        named_args["LOG_DRAM_BANK_ID"] = num_dram_banks > 0 ? (ordinal % num_dram_banks) : 0;
+    }
 
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {

@@ -12,8 +12,10 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/detailed_fabric_log.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
 namespace ttnn::fabric {
@@ -249,6 +251,20 @@ void bind_fabric_api(nb::module_& mod) {
             Returns a {mesh_id: (rows, cols)} map scoped to get_user_physical_mesh_ids() -- i.e. only
             this rank's local mesh(es). This is exactly the shape to pass to open_mesh_device, so it is
             safe to call before the device is opened (the control plane lazily inits from the MGD).
+        )");
+
+    mod.def(
+        "dump_detailed_fabric_logs",
+        [](tt::tt_metal::distributed::MeshDevice* mesh_device, const std::string& out_dir) {
+            tt::tt_fabric::dump_detailed_fabric_logs(*mesh_device, out_dir);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("out_dir") = std::string(""),
+        R"(
+            Drain the detailed fabric flow-control traces ([rxlog]/[txlog]) that fabric routers flushed to DRAM
+            during the last logging window and write one text file per (device, eth core) into out_dir, each
+            tagged with its device id and ethernet core -- mirroring the DPRINT files. Call AFTER the op that ran
+            the logging window has finished. out_dir defaults to "generated/fabric_detailed_logs".
         )");
 }
 

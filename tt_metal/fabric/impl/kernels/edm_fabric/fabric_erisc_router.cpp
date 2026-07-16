@@ -9,6 +9,10 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+// [debug] The detailed flow-control tracing producer machinery is pulled in further down (see
+// detailed_fabric_log_producer.hpp), at the point where this TU's CT args + channel tables are in scope.
+// get_timestamp_32b (for the record timestamps) comes from risc_common.h, already pulled in transitively
+// (same header as get_timestamp used by the bandwidth-telemetry path).
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_eth_handshake.hpp"
@@ -514,6 +518,14 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
+// [debug] Windowed flow-control tracing ([rxlog]/[txlog]) -- PRODUCER machinery. The worker sets the router's
+// telemetry marker (FabricTelemetry::scratch[0]) nonzero at data-send start and 0 at end (handled in the main
+// loop). Between those markers the receiver/sender traces record every flow-control state change into a carved
+// L1 log region, occasionally flushing to DRAM, and at STOP flush the header+tail so the host reader
+// (dump_detailed_fabric_logs) can drain them. All the struct layouts + reset/record/flush/finalize functions
+// (and the detailed_log_window_active gate) live in the producer header below; the main loop just calls them.
+// Included here (not at file top) because it relies on this TU's CT args + channel-serviced tables being in scope.
+#include "tt_metal/fabric/hw/inc/edm_fabric/detailed_fabric_log_producer.hpp"
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
@@ -1683,6 +1695,12 @@ FORCE_INLINE
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        // [debug] Sender trace: one packet transmitted this pass (see record_sender_flow_state).
+        if constexpr (sender_log_channel_enabled(sender_channel_index)) {
+            if (detailed_log_window_active) {
+                sender_log()->sent[sender_channel_index]++;
+            }
+        }
     }
 
     // Process COMPLETIONs from receiver
@@ -1691,6 +1709,12 @@ FORCE_INLINE
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
+        // [debug] Sender trace: completions returned from the remote receiver (batched, can be > 1).
+        if constexpr (sender_log_channel_enabled(sender_channel_index)) {
+            if (detailed_log_window_active) {
+                sender_log()->cmpl[sender_channel_index] += completions_since_last_check;
+            }
+        }
 
         // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
         // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
@@ -1710,6 +1734,12 @@ FORCE_INLINE
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
+            // [debug] Sender trace: first-level acks returned from the remote receiver (batched, can be > 1).
+            if constexpr (sender_log_channel_enabled(sender_channel_index)) {
+                if (detailed_log_window_active) {
+                    sender_log()->acked[sender_channel_index] += acks_since_last_check;
+                }
+            }
         }
     }
 
@@ -1721,6 +1751,26 @@ FORCE_INLINE
                 local_sender_channel_worker_interface,
                 channel_connection_established,
                 sender_channel_free_slots_stream_id);
+        }
+    }
+
+    // [debug] Sender trace: stash this pass's end-of-pass levels + block-reason annotation for the combined
+    // per-pass record emitted after both channels are serviced. free_slots is re-read (send may have bumped
+    // it); num_free_slots reflects any completions processed above. reason is the send-decision this pass.
+    if constexpr (sender_log_channel_enabled(sender_channel_index)) {
+        if (detailed_log_window_active) {
+            uint32_t free_slots_now = get_ptr_val(sender_channel_free_slots_stream_id);
+            uint32_t local_occ = WorkerInterfaceT::num_buffers - free_slots_now;
+            uint8_t reason = can_send ? SENDER_REASON_SENT
+                                      : (!has_unsent_packet ? SENDER_REASON_STARVED
+                                                            : (!receiver_has_space_for_packet ? SENDER_REASON_RXFULL
+                                                                                              : SENDER_REASON_TXQBUSY));
+            stash_sender_flow_state(
+                sender_channel_index,
+                local_occ,
+                outbound_to_receiver_channel_pointers.num_free_slots,
+                reason,
+                channel_connection_established);
         }
     }
     return progress;
@@ -2172,6 +2222,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
+    // [debug] last-seen value of the detailed-logging marker (FabricTelemetry::scratch[0], written by a worker
+    // over NOC via start/stop_detailed_logging). A change opens/closes the flow-control trace window.
+    uint32_t last_detailed_log_marker = 0;
 
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
@@ -2243,6 +2296,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif
 
     uint16_t fabric_heartbeat_counter = 0;
+    // [debug] Monotonic main-loop pass index, shared by the receiver ([rxlog]) and sender ([txlog]) traces.
+    uint32_t detailed_log_loop_iter = 0;
 #if defined(ARCH_BLACKHOLE)
     constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
 #else
@@ -2571,6 +2626,38 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         "VC2 receiver channel not serviced");
 #endif  // FABRIC_2D_VC2_SERVICED
                 }
+
+                // [debug] Receiver flow-control trace: sample VC0 receiver channel state once per loop pass.
+                // record_receiver_flow_state appends only when the state differs from the last recorded row,
+                // so identical polling passes collapse. Gated on the logging window so it costs nothing (and
+                // captures nothing) outside the monitored region. `ready` is the doorbell stream register.
+                // The `if constexpr` restricts all log activity to the RISC that actually services the VC0
+                // receiver channel (the receiver eRisc). The log buffer address is shared across both eRiscs
+                // on the core, so without this gate the sender eRisc would interleave its own (idle) records
+                // and race on the shared append index -- see the reset/dump gates below for the same reason.
+                if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
+                    if (detailed_log_window_active) {
+                        record_receiver_flow_state(
+                            detailed_log_loop_iter,
+                            static_cast<uint32_t>(
+                                get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
+                            receiver_channel_pointers_ch0.ack_counter.counter,
+                            receiver_channel_pointers_ch0.wr_sent_counter.counter,
+                            receiver_channel_pointers_ch0.wr_flush_counter.counter,
+                            receiver_channel_pointers_ch0.completion_counter.counter);
+                    }
+                }
+                // [debug] Sender flow-control trace: one combined record per pass covering both VC0 sender
+                // channels (compiled in only on the sender eRisc). Placed after the sender steps ran this pass,
+                // so the per-channel stash/accumulators are fresh.
+                if constexpr (sender_log_enabled()) {
+                    if (detailed_log_window_active) {
+                        record_sender_flow_state(detailed_log_loop_iter);
+                    }
+                }
+                // Advance unconditionally (cheap, and keeps the counter referenced on the sender eRisc where
+                // the recording above is compiled out) so iter still tracks the true main-loop pass index.
+                detailed_log_loop_iter++;
             }
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -2590,6 +2677,46 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
             if ((++fabric_heartbeat_counter & 0x3F) == 0) {
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
+            }
+
+            // [debug] Detect the detailed-logging marker (a worker writes scratch[0] non-zero at data-send
+            // start, then 0 at end, via start/stop_detailed_logging) and open/close the trace window on change.
+            // The read is a local L1 load (no NOC). detailed_log_window_active and the per-eRisc [rxlog]/[txlog]
+            // resets/dumps stay per-eRisc so both eRiscs open/close their own trace windows; the reset/dump
+            // calls are role-gated (is_receiver/sender_channel_serviced) so they land on the correct eRisc.
+            {
+                uint32_t detailed_log_marker = fabric_telemetry->scratch[0];
+                if (detailed_log_marker != last_detailed_log_marker) {
+                    last_detailed_log_marker = detailed_log_marker;
+                    if (detailed_log_marker != 0) {
+                        // START event: reset the per-eRisc flow-control traces, stamping the marker value as
+                        // the window's correlation id (window_id). Each trace uses its OWN wall clock
+                        // (get_timestamp_32b) as the ts baseline, decoupled from the other eRisc.
+                        if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
+                            reset_receiver_log(
+                                detailed_log_marker,
+                                get_timestamp_32b(),
+                                detailed_log_loop_iter,
+                                static_cast<uint32_t>(
+                                    get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>()),
+                                receiver_channel_pointers_ch0.ack_counter.counter,
+                                receiver_channel_pointers_ch0.wr_sent_counter.counter,
+                                receiver_channel_pointers_ch0.wr_flush_counter.counter,
+                                receiver_channel_pointers_ch0.completion_counter.counter);
+                        }
+                        if constexpr (sender_log_enabled()) {
+                            reset_sender_log(detailed_log_marker, get_timestamp_32b(), detailed_log_loop_iter);
+                        }
+                        detailed_log_window_active = true;
+                    } else {
+                        // END event: close the window and finalize the per-eRisc traces -- flush each L1 tail to
+                        // DRAM so the host reader sees the complete array (each a no-op on the eRisc that does
+                        // not service that role).
+                        detailed_log_window_active = false;
+                        finalize_receiver_log();
+                        finalize_sender_log();
+                    }
+                }
             }
 
             if constexpr (enable_context_switch) {

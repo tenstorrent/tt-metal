@@ -23,6 +23,7 @@ set(FABRIC_SOURCES
     routing_table_generator.cpp
     mesh_graph.cpp
     erisc_datamover_builder.cpp
+    debug/detailed_fabric_log_reader.cpp
     fabric_router_channel_mapping.cpp
     fabric_router_builder.cpp
     compute_mesh_router_builder.cpp
