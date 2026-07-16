@@ -85,7 +85,6 @@ See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the da
 | Task | Command |
 |------|---------|
 | **Trace a model** | `python model_tracer/generic_ops_tracer.py <test_path>` |
-| **Validate a trace** | `python model_tracer/validate_trace.py --manifest model_tracer/traced_operations/ttnn_operations_master.json` |
 | **Load into DB** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py load` |
 | **Reconstruct from manifest** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest` |
 | **List traces in DB** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py list-traces` |
@@ -100,33 +99,6 @@ See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the da
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
-- **Validator**: `model_tracer/validate_trace.py` - Fail-fast validation of a master JSON (and optionally the registry) before long test runs
-
----
-
-## Validating a Trace (Fail-Fast)
-
-Trace problems (missing files, malformed manifests, inconsistent shapes) otherwise surface late during pytest or CI replay. Run the standalone validator locally to catch them up-front. It runs independently of pytest and the database.
-
-```bash
-# Validate a master JSON (--manifest is required)
-python model_tracer/validate_trace.py --manifest model_tracer/traced_operations/ttnn_operations_master.json
-
-# Print resolved artifact info (op, config_hash, hardware, source) for the first N records
-python model_tracer/validate_trace.py --manifest <master.json> --print-resolved 5
-
-# Also validate the trace-selection registry (status enum + targets -> registry cross references)
-python model_tracer/validate_trace.py --manifest <master.json> --registry model_tracer/trace_selection_registry.yaml
-```
-
-What it checks:
-
-- **Required fields**: `config_hash` per configuration; `source`, provenance (`trace_uid` or `trace_run_ids`), and `machine_info.{board_type, device_series, card_count, mesh_device_shape, device_count}` per execution.
-- **Artifact existence**: the `--manifest` master JSON must exist and parse as JSON — no silent degraded mode.
-- **Enum values**: `layout`/`storage_type`/`original_dtype` and `memory_config.{buffer_type, memory_layout}` carry their expected prefixes; registry `status` is one of `draft`/`active`/`deprecated`.
-- **Tensor shapes**: `original_shape`/`logical_shape` are well-formed; when inline tensor `values` are present their element count matches `original_shape`.
-
-**Exit codes**: `0` = valid (no errors); `1` = validation failed, or the manifest could not be found / parsed.
 
 ---
 
