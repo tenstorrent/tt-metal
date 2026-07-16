@@ -160,7 +160,8 @@ template <
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
     tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
-ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
+ALWI void tilize(
+    uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt, bool self_drain_output = false);
 
 }  // namespace compute_kernel_lib
 

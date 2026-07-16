@@ -74,7 +74,7 @@ template <
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
     tilize_config::RemapMode remap_mode>
-ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
+ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages, bool self_drain_output) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
     static_assert(input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
@@ -202,6 +202,15 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
 
         out_dfb.push_back(block_width_tiles);
+        // OPTION B / Program A drain (self_drain_output): the tilized-activation OUTPUT has NO real consumer
+        // within this program (Program B / matmul runs as a SEPARATE later program), so OUT's credits never
+        // free and reserve_back deadlocks once the ring fills. Pop OUT in lockstep to free the credits. Safe
+        // because OUT is sized to the EXACT total (num_entries == produced): the write pointer never wraps, so
+        // no earlier tile is overwritten — pop only advances the read pointer; the data persists in the L1
+        // output tensor, which Program B reads by address afterwards.
+        if (self_drain_output) {
+            out_dfb.pop_front(block_width_tiles);
+        }
         in_dfb.pop_front(input_pages);
 
         if (asymmetric_dfb_pages) {
