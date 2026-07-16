@@ -1062,7 +1062,8 @@ public:
         log_info(tt::LogTest, "Random seed set to {}", pgcfg.seed);
         this->dispatch_buffer_page_size_ = this->cfg_.dispatch_buffer_page_size;
         this->send_to_all_ = this->cfg_.send_to_all;
-        this->max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+        this->max_fetch_bytes_ =
+            tt_metal::MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         this->init_params(this->GetParam());
     }
 
@@ -1120,7 +1121,7 @@ public:
             append_dispatch_payload(raw, term_cmd);
         }
 
-        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER, std::nullopt);
         const uint32_t l1_buf_base = memmap.dispatch_buffer_base();
         const uint32_t dispatch_buffer_pages = memmap.dispatch_buffer_pages();
         const uint32_t dispatch_buffer_size = dispatch_buffer_pages * page_size;

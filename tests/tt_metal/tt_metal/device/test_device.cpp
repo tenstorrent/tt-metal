@@ -303,9 +303,10 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     uint32_t base_l1_src_address = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1) +
                                    MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // This is a slow dispatch test dispatch core type is needed to query DispatchMemMap
-    uint32_t base_pcie_dst_address =
-        MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
-        MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t base_pcie_dst_address = MetalContext::instance()
+                                         .dispatch_mem_map(std::nullopt)
+                                         .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
+                                     MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;
     std::vector<uint32_t> src = generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));

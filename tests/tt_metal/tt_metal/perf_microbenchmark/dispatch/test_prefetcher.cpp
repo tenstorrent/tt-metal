@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
+#include <optional>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -176,7 +177,7 @@ HostMemDeviceCommand build_dispatch_terminate(bool include_dispatch_s = true) {
     }
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
     HostMemDeviceCommand cmd(total_cmd_bytes);
-    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
     cmd.add_dispatch_terminate();
     if (dispatch_sub_enabled) {
         cmd.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
@@ -203,7 +204,7 @@ HostMemDeviceCommand build_dispatch_prefetch_stall() {
     HostMemDeviceCommand cmd(command_size_bytes);
 
     cmd.add_dispatch_wait_with_prefetch_stall(
-        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0);
+        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0, 0);
 
     return cmd;
 }
@@ -680,7 +681,7 @@ public:
         DeviceCommandCalculator wait_calc;
         wait_calc.add_dispatch_wait();
         HostMemDeviceCommand wait_cmd(wait_calc.write_offset_bytes());
-        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
         const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
         exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
 
@@ -2635,7 +2636,7 @@ public:
         this->host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
         // Cap inline command size to avoid cmddat_q L1 overflow on the prefetch-d core.
         this->max_fetch_bytes_ =
-            tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER).scratch_db_size();
+            tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER, std::nullopt).scratch_db_size();
 
         this->dram_base_ = this->device_->allocator_impl()->get_base_allocator_addr(HalMemType::DRAM);
         this->num_banks_ = this->device_->allocator_impl()->get_num_banks(BufferType::DRAM);
@@ -2676,7 +2677,7 @@ public:
         uint32_t num_iterations,
         bool /*wait_for_completion*/ = true,
         bool /*wait_for_host_writes*/ = false) override {
-        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER, std::nullopt);
         const uint32_t entry_size = memmap.prefetch_q_entry_size_bytes();
         TT_FATAL(entry_size == 4, "Entry size must be 32 bits for worker cores used to launch prefetcher in this test");
         const uint32_t dispatch_cb_base = memmap.dispatch_buffer_base();
@@ -2696,6 +2697,8 @@ public:
         const uint32_t cmddat_q_pages = memmap.cmddat_q_size() / page_size;
         const uint32_t scratch_db_base = memmap.scratch_db_base();
         const uint32_t scratch_db_size = memmap.scratch_db_size();
+        const uint32_t dispatch_telemetry_addr =
+            memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
 
         // Hugepage addressing
         // WH/BH stage commands in the PCIe hugepage (same region the FD runtime uses for the issue
@@ -2880,6 +2883,7 @@ public:
             di_dispatch_cb_sem,
             pf_sync_sem,
             entry_size,
+            dispatch_telemetry_addr,
             phys_prefetch,
             phys_disp);
         // On Quasar the experimental API auto-assigns DM cores in creation order, so prefetch must be
@@ -3001,7 +3005,7 @@ public:
             quasar_completion_buf_.resize(Common::QUASAR_SIMULATION_COMPLETION_QUEUE_SIZE);
             return quasar_completion_buf_.data();
         }
-        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+        const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER, std::nullopt);
         const uint32_t dev_hugepage_base = memmap.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         const ChipId mmio_id =
             tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
@@ -3016,9 +3020,9 @@ public:
 
     void refresh_completion_data() override {
         if (Common::is_quasar_sim()) {
-            // Read the dispatch kernel's DRAM completion writes into the host staging buffer so
-            // device_data.validate() sees the correct data.
-            const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER);
+            // Read the dispatch kernel's DRAM completion writes into the host staging buffer so device_data.validate()
+            // sees the correct data.
+            const auto& memmap = tt_metal::MetalContext::instance().dispatch_mem_map(CoreType::WORKER, std::nullopt);
             const CoreCoord phys_disp =
                 this->device_->worker_core_from_logical_core(Common::dispatch_core(this->device_));
             const tt_cxy_pair dispatch_cxy(this->device_->id(), phys_disp);
@@ -3427,7 +3431,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     }
 
     HostMemDeviceCommand barrier_cmd(barrier_calc.write_offset_bytes());
-    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U);
+    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U, 0);
     dc.add_data(barrier_cmd.data(), barrier_cmd.size_bytes(), barrier_cmd.size_bytes());
     entry_sizes.push_back(barrier_cmd.size_bytes());
 

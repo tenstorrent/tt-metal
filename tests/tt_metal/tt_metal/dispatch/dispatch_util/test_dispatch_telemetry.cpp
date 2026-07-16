@@ -126,8 +126,11 @@ protected:
 
     template <typename TelemetryType>
     void write_telemetry(CoreType core_type, const CoreCoord& core, const TelemetryType& telemetry) {
-        auto telemetry_addr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-            CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+        // write to cq_id 0's slot to match the cq_id=0 default that read_dispatch_core_telemetry() uses at every call
+        // site in this file.
+        auto telemetry_addr = MetalContext::instance()
+                                  .dispatch_mem_map(/*cq_id=*/0)
+                                  .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
         auto bytes = std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&telemetry), sizeof(TelemetryType));
         ASSERT_TRUE(detail::WriteToDeviceL1(device(), core, telemetry_addr, bytes, core_type));
     }

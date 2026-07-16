@@ -257,8 +257,9 @@ int main(int argc, char** argv) {
             tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel);
         uint32_t host_write_ptr = 0;
 
-        uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-            CommandQueueDeviceAddrType::UNRESERVED);
+        uint32_t prefetch_q_base = MetalContext::instance()
+                                       .dispatch_mem_map(std::nullopt)
+                                       .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
 
         uint32_t reg_addr = prefetch_q_base;
         uint32_t num_reg_entries = 128;

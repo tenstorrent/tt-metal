@@ -298,8 +298,9 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
-    uint32_t cq_start =
-        MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+    uint32_t cq_start = MetalContext::instance()
+                            .dispatch_mem_map(std::nullopt)
+                            .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     auto device_coord = distributed::MeshCoordinate(0, 0);
     std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
     if (device->sysmem_manager().is_dram_backed()) {
@@ -769,7 +770,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestPageLargerThanAndUnalignedTo
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSinglePageLargerThanMaxPrefetchCommandSize) {
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
@@ -780,7 +781,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSinglePageLargerThanMaxPrefe
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSize) {
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1024, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
@@ -789,7 +790,8 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
 }
 
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSinglePageLargerThanMaxPrefetchCommandSizeShardedBuffer) {
-    const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 2048;
+    const uint32_t page_size =
+        MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() + 2048;
     for (const auto& mesh_device : devices_) {
         log_info(tt::LogTest, "Running On Device {}", mesh_device->id());
         CoreCoord start(0, 0);
@@ -812,7 +814,8 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSinglePageLargerThanMaxPrefe
 }
 
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeShardedBuffer) {
-    const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 2048;
+    const uint32_t page_size =
+        MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() + 2048;
     for (const auto& mesh_device : devices_) {
         log_info(tt::LogTest, "Running On Device {}", mesh_device->get_devices()[0]->id());
         CoreCoord start(0, 0);
@@ -836,7 +839,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
 
 TEST_F(
     UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeShardedBuffer) {
-    const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 4;
+    const uint32_t page_size = MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() + 4;
     for (const auto& mesh_device : devices_) {
         log_info(tt::LogTest, "Running On Device {}", mesh_device->id());
         CoreCoord start(0, 0);
@@ -864,7 +867,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         const uint32_t page_size = max_prefetch_command_size + 2048;
         const uint32_t buffer_size = 40 * page_size;
         const uint32_t region_size = 5 * page_size;
@@ -887,7 +890,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSingleUnalignedPageLargerThanMaxPrefetchCommandSize) {
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         uint32_t unaligned_page_size = max_prefetch_command_size + 4;
         TestBufferConfig config = {.num_pages = 1, .page_size = unaligned_page_size, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
@@ -898,7 +901,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSingleUnalignedPageLargerTha
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1024, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
@@ -912,7 +915,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLarger
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         const uint32_t page_size = max_prefetch_command_size + 4;
         const uint32_t buffer_size = 40 * page_size;
         const uint32_t region_size = 5 * page_size;
@@ -933,7 +936,8 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLarger
 }
 
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeShardedSubBuffer) {
-    const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 2048;
+    const uint32_t page_size =
+        MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() + 2048;
     const uint32_t buffer_size = 20 * page_size;
     const uint32_t region_size = 5 * page_size;
     const uint32_t region_offset = 9 * page_size;
@@ -978,7 +982,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
 TEST_F(
     UnitMeshCQSingleCardSharedBufferFixture,
     TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeShardedSubBuffer) {
-    const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 4;
+    const uint32_t page_size = MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() + 4;
     const uint32_t buffer_size = 20 * page_size;
     const uint32_t region_size = 5 * page_size;
     const uint32_t region_offset = 9 * page_size;
@@ -1044,8 +1048,9 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapHostHugepageOnEnqueueRea
         log_info(tt::LogTest, "Running On Device {}", device->id());
         uint32_t page_size = 2048;
         uint32_t command_issue_region_size = device->sysmem_manager().get_issue_queue_size(0);
-        uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-            CommandQueueHostAddrType::UNRESERVED);
+        uint32_t cq_start = MetalContext::instance()
+                                .dispatch_mem_map(std::nullopt)
+                                .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
 
         uint32_t max_command_size = command_issue_region_size - cq_start;
         uint32_t buffer = 14240;
@@ -1484,7 +1489,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestIssueMultipleReadWriteComman
 
 TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDramWrapsAcrossBanksAndTransactions) {
     constexpr uint32_t page_size = 200;
-    const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    const uint32_t max_prefetch_command_size =
+        MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
@@ -1637,7 +1643,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDra
     auto mesh_device = this->device_;
     auto* device = mesh_device->get_devices()[0];
     constexpr uint32_t page_size = 200;
-    const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    const uint32_t max_prefetch_command_size =
+        MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
     const uint32_t num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     const uint32_t num_pages = std::max(4 * num_banks, (max_prefetch_command_size / page_size) + num_banks);
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
@@ -1685,7 +1692,7 @@ TEST_F(UnitMeshCQMultiDeviceBufferFixture, TestMultipleUnalignedPagesLargerThanM
         auto* device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 50, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::DRAM};
 
@@ -1817,7 +1824,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleNonOverlappingWrites
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeForL1) {
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 30, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::L1};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
@@ -1826,7 +1833,8 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
 }
 
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPrefetchCommandSizeForL1ShardedBuffer) {
-    const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 2048;
+    const uint32_t page_size =
+        MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() + 2048;
     for (const auto& mesh_device : devices_) {
         log_info(tt::LogTest, "Running On Device {}", mesh_device->id());
         CoreCoord start(0, 0);
@@ -1851,7 +1859,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultiplePagesLargerThanMaxPr
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSingleUnalignedPageLargerThanMaxPrefetchCommandSizeForL1) {
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 1, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::L1};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
@@ -1862,7 +1870,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestSingleUnalignedPageLargerTha
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeForL1) {
     for (const auto& mesh_device : devices_) {
         const uint32_t max_prefetch_command_size =
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+            MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 30, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::L1};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
@@ -1873,7 +1881,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleUnalignedPagesLarger
 TEST_F(
     UnitMeshCQSingleCardSharedBufferFixture,
     TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeForL1ShardedBuffer) {
-    const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 4;
+    const uint32_t page_size = MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() + 4;
     for (const auto& mesh_device : devices_) {
         log_info(tt::LogTest, "Running On Device {}", mesh_device->id());
         CoreCoord start(0, 0);
@@ -1898,7 +1906,7 @@ TEST_F(
 TEST_F(
     UnitMeshCQSingleCardSharedBufferFixture,
     TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSizeForL1ShardedSubBuffer) {
-    const uint32_t page_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() + 4;
+    const uint32_t page_size = MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() + 4;
     const uint32_t buffer_size = 32 * page_size;
     const uint32_t region_offset = 16 * page_size;
     const uint32_t region_size = 16 * page_size;
