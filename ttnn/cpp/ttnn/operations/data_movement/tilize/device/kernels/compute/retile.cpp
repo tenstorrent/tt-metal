@@ -33,9 +33,34 @@
 //   GROW (out_tile_height > in_tile_height), ratio = out_tile_height / in_tile_height:
 //     `ratio` untilized input tile-rows land contiguously and form exactly one output tile-row of
 //     RM. A single tilize reads the whole block (one output tile-row).
+//
+// Height padding (grow): the padded output can be taller than the real (padded) input — the tail
+// input tile-rows do not exist in DRAM. `num_real_input_rows` (runtime) marks how many of this
+// core's input tile-rows are real; the rest are filled with zeros directly into the intermediate
+// CB (no read of invalid input), so the padded output region is zero.
+
+namespace {
+
+// Producer-side zero fill: reserve `num_pages` on the intermediate CB, zero the L1 bytes (PACK
+// owns the valid write pointer), and push. Used for padding input tile-rows in the grow case.
+ALWI void fill_zeros_pages(DataflowBuffer& dfb, uint32_t num_pages, uint32_t page_size) {
+    dfb.reserve_back(num_pages);
+    PACK({
+        const uint32_t dst_addr = dfb.get_write_ptr() << cb_addr_shift;
+        volatile tt_l1_ptr uint32_t* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+        const uint32_t num_words = (num_pages * page_size) / sizeof(uint32_t);
+        for (uint32_t i = 0; i < num_words; ++i) {
+            dst_ptr[i] = 0;
+        }
+    })
+    dfb.push_back(num_pages);
+}
+
+}  // namespace
 
 void kernel_main() {
     const uint32_t num_input_blocks = get_arg_val<uint32_t>(0);
+    const uint32_t num_real_input_rows = get_arg_val<uint32_t>(1);
     if (num_input_blocks == 0) {
         return;
     }
@@ -48,6 +73,7 @@ void kernel_main() {
     constexpr uint32_t in_tile_height = get_compile_time_arg_val(5);
     constexpr uint32_t out_tile_height = get_compile_time_arg_val(6);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
+    constexpr uint32_t mid_page_size = get_compile_time_arg_val(8);
 
     static_assert(in_tile_height > 0 && out_tile_height > 0, "retile kernel requires positive tile heights");
     static_assert(
@@ -72,14 +98,30 @@ void kernel_main() {
     DataflowBuffer out_dfb(out_cb);
 
     for (uint32_t b = 0; b < num_iters; ++b) {
-        // Untilize the input tile-row(s) for this output block into the producer view.
-        compute_kernel_lib::untilize<
-            tiles_per_block,
-            src_cb,
-            mid_cb,
-            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in_rows_per_iter);
+        // Split this iteration's input tile-rows into real rows (untilized from the input) and
+        // padding rows (beyond the real input) that are zero-filled directly into the intermediate.
+        const uint32_t block_in_row_start = b * in_rows_per_iter;
+        uint32_t real_rows = 0;
+        if (block_in_row_start < num_real_input_rows) {
+            const uint32_t rem = num_real_input_rows - block_in_row_start;
+            real_rows = rem < in_rows_per_iter ? rem : in_rows_per_iter;
+        }
+        const uint32_t pad_rows = in_rows_per_iter - real_rows;
+
+        // Untilize the real input tile-row(s) for this output block into the producer view.
+        if (real_rows > 0) {
+            compute_kernel_lib::untilize<
+                tiles_per_block,
+                src_cb,
+                mid_cb,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(real_rows);
+        }
+        // Zero the padding tile-row(s) so the padded output region is zero instead of invalid data.
+        for (uint32_t k = 0; k < pad_rows; ++k) {
+            fill_zeros_pages(mid, tiles_per_block, mid_page_size);
+        }
 
         mid.wait_front(block_pages);
         uint32_t block_rd_ptr = 0;

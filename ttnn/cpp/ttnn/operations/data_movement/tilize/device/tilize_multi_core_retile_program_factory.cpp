@@ -6,6 +6,8 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -78,6 +80,11 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     const uint32_t tiles_per_block = tensor_width / in_tile_width;  // == width / out_tile_width
     const uint32_t num_input_tile_rows = tensor_height / in_tile_height;
     const uint32_t num_output_tile_rows = tensor_height / out_tile_height;
+
+    // In the grow case the padded output can be taller than the real (padded) input, so some of the
+    // trailing input tile-rows do not exist in DRAM. Only the real rows are read; the compute kernel
+    // zero-fills the rest into the intermediate CB (instead of reading invalid input as padding).
+    const uint32_t num_real_input_tile_rows = a.physical_volume() / tensor_width / in_tile_height;
 
     // SHRINK: 1 input tile-row -> `ratio` output tile-rows. GROW: `ratio` input tile-rows -> 1 output tile-row.
     const uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
@@ -215,6 +222,7 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
             in_tile_height,
             out_tile_height,
             out_tile_size_input_fmt,
+            mid_page_size,
         };
         cd.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,
@@ -252,16 +260,21 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         const uint32_t input_rows = shrink ? nblocks_per_core : nblocks_per_core * ratio;
         const uint32_t output_rows = shrink ? nblocks_per_core * ratio : nblocks_per_core;
         const uint32_t num_input_blocks = input_rows;  // compute kernel derives its outer loop from this
-        const uint32_t num_input_tiles = input_rows * tiles_per_block;
+        // Padding is always at the tail (highest rows), so this core's real rows are a prefix.
+        const uint32_t core_row_start = input_tile_start_id / tiles_per_block;
+        const uint32_t real_rows = core_row_start >= num_real_input_tile_rows
+                                       ? 0u
+                                       : std::min(num_real_input_tile_rows - core_row_start, input_rows);
+        const uint32_t num_input_tiles = real_rows * tiles_per_block;  // only real tiles are read
         const uint32_t num_output_tiles = output_rows * tiles_per_block;
 
         reader_ref.emplace_runtime_args(core, {src0_buffer, num_input_tiles, input_tile_start_id});
         writer_ref.emplace_runtime_args(core, {dst_buffer, num_output_tiles, output_tile_start_id});
         if (full_compute_idx >= 0) {
-            desc.kernels[full_compute_idx].emplace_runtime_args(core, {num_input_blocks});
+            desc.kernels[full_compute_idx].emplace_runtime_args(core, {num_input_blocks, real_rows});
         }
 
-        input_tile_start_id += num_input_tiles;
+        input_tile_start_id += input_rows * tiles_per_block;
         output_tile_start_id += num_output_tiles;
     }
 
@@ -270,13 +283,17 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
         const uint32_t input_rows = shrink ? nblocks_per_core_cliff : nblocks_per_core_cliff * ratio;
         const uint32_t output_rows = shrink ? nblocks_per_core_cliff * ratio : nblocks_per_core_cliff;
         const uint32_t num_input_blocks = input_rows;
-        const uint32_t num_input_tiles = input_rows * tiles_per_block;
+        const uint32_t core_row_start = input_tile_start_id / tiles_per_block;
+        const uint32_t real_rows = core_row_start >= num_real_input_tile_rows
+                                       ? 0u
+                                       : std::min(num_real_input_tile_rows - core_row_start, input_rows);
+        const uint32_t num_input_tiles = real_rows * tiles_per_block;  // only real tiles are read
         const uint32_t num_output_tiles = output_rows * tiles_per_block;
 
         reader_ref.emplace_runtime_args(core, {src0_buffer, num_input_tiles, input_tile_start_id});
         writer_ref.emplace_runtime_args(core, {dst_buffer, num_output_tiles, output_tile_start_id});
         if (cliff_compute_idx >= 0) {
-            desc.kernels[cliff_compute_idx].emplace_runtime_args(core, {num_input_blocks});
+            desc.kernels[cliff_compute_idx].emplace_runtime_args(core, {num_input_blocks, real_rows});
         }
     }
 
