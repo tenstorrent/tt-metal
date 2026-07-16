@@ -71,7 +71,11 @@ TT_METAL_TRACE_ALLOC_TRACKING=1 python your_program.py
 
 The environment variables are read once while TT-NN starts up, so they must be set before `import ttnn`. Changing them from Python after importing TT-NN has no effect.
 
-Once a trace has been captured, the checker accounts for subsequent device-buffer allocations. Immediately before every `ttnn.execute_trace`, it runs Python garbage collection and checks whether any of those buffers are still alive. If so, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting the buffers. Buffers that have already been released are removed from the accounting automatically.
+Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it runs Python garbage collection and checks whether any buffers unsafe for the requested trace are still alive. If so, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting the buffers. Buffers that have already been released are removed from the accounting automatically.
+
+Accounting is kept separately for each trace. For example, given `capture(trace_a)`, `allocate(x)`, then `capture(trace_b)`, `x` is unsafe when executing `trace_a` but safe when executing `trace_b`, because it was already present in the allocator when `trace_b` was captured. An allocation made after both captures is unsafe for both traces.
+
+Trace buffers in the reserved `BufferType::TRACE` region are excluded because that region cannot overlap ordinary buffers. With `trace_region_size=0`, trace storage is instead a top-down DRAM allocation and is tracked as unsafe for older traces. Until https://github.com/tenstorrent/tt-metal/issues/48869 is fixed, this is another reason to avoid dynamic trace storage with multiple traces.
 
 For more information about where unsafe buffers were allocated and which Python objects still hold them, enable diagnostics as well:
 

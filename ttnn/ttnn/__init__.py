@@ -187,7 +187,7 @@ if TRACE_ALLOC_TRACKING:
         """Execute a captured trace, with automatic allocation-safety verification."""
         from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
 
-        UnsafeAllocationTracker(device).verify_before_replay()
+        UnsafeAllocationTracker(device).verify_before_replay(trace_id)
         return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
 
 else:

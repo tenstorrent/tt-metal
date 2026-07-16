@@ -25,13 +25,13 @@ void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, std::optional<Q
 void execute_trace(MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking);
 void release_trace(MeshDevice* device, MeshTraceId trace_id);
 void mark_allocations_safe(MeshDevice* device);
-void mark_allocations_unsafe(MeshDevice* device);
+void mark_allocations_unsafe(MeshDevice* device, MeshTraceId trace_id);
 bool allocations_unsafe(MeshDevice* device);
 
 // Unsafe allocation tracking
-std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(MeshDevice* device);
+std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(MeshDevice* device, MeshTraceId trace_id);
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id);
-void clear_unsafe_tracked_ids(MeshDevice* device);
+void clear_unsafe_tracked_ids(MeshDevice* device, MeshTraceId trace_id);
 std::vector<size_t> drain_pending_traceback_ids();
 
 // Thread-local allocation context stack (delegates to tt::tt_metal:: free functions)

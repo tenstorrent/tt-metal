@@ -154,3 +154,49 @@ def test_single_device_multi_trace(device, shape, blocking):
     # Release trace buffer once workload is complete
     ttnn.release_trace(device, tid)
     ttnn.release_trace(device, tid_1)
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.skipif(not ttnn.TRACE_ALLOC_TRACKING, reason="requires TT_METAL_TRACE_ALLOC_TRACKING=1 at startup")
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}], indirect=True)
+def test_trace_allocation_tracking_is_per_trace(device):
+    shape = (1, 1, 32, 32)
+    trace_input = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
+
+    # Compile before either capture so this test isolates ordinary buffer accounting.
+    warmup_output = ttnn.neg(trace_input)
+    del warmup_output
+
+    trace_a = ttnn.begin_trace_capture(device, cq_id=0)
+    trace_a_output = ttnn.neg(trace_input)
+    ttnn.end_trace_capture(device, trace_a, cq_id=0)
+
+    allocation_between_captures = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
+    )
+    allocation_between_captures_id = allocation_between_captures.buffer_unique_id()
+
+    trace_b = ttnn.begin_trace_capture(device, cq_id=0)
+    trace_b_output = ttnn.neg(trace_input)
+    ttnn.end_trace_capture(device, trace_b, cq_id=0)
+
+    try:
+        unsafe_for_trace_a = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_a)
+        unsafe_for_trace_b = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_b)
+        assert allocation_between_captures_id in unsafe_for_trace_a
+        assert "trace_storage" not in unsafe_for_trace_a.values()
+        assert not unsafe_for_trace_b
+
+        # The allocation happened before trace_b was captured, so trace_b cannot corrupt it through allocator reuse.
+        ttnn.execute_trace(device, trace_b, cq_id=0, blocking=True)
+
+        # The same allocation happened after trace_a was captured and must still be rejected for trace_a.
+        with pytest.raises(RuntimeError, match=rf"Buffer {allocation_between_captures_id}\b"):
+            ttnn.execute_trace(device, trace_a, cq_id=0, blocking=True)
+    finally:
+        ttnn.release_trace(device, trace_a)
+        ttnn.release_trace(device, trace_b)
+
+    # Keep captured tensors alive through both checks.
+    assert trace_a_output.is_allocated()
+    assert trace_b_output.is_allocated()
