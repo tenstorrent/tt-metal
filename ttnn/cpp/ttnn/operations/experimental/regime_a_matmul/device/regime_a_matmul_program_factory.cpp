@@ -72,8 +72,17 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     const uint32_t Nt_r = (static_cast<uint32_t>(in1.logical_shape()[-1]) + 31u) / 32u;
     const RegimeAMatmulConfig cfg = operation_attributes.config.value_or(auto_select_config(Mt_r, Kt_r, Nt_r));
 
+    // Grouped-K compute factor (delivered blocks per compute group). Derived from the diagnostic mask;
+    // mutually exclusive bits, default 1 (current per-block schedule). Affects the compute schedule (KGROUP
+    // define below) AND CB1 sizing (passed to the planner so its L1 check sees the enlarged in1 CB).
+    const uint32_t diag_mask_val = operation_attributes.diag_mask;
+    const uint32_t Kg = (diag_mask_val & RegimeADiag::DIAG_KGROUP8)   ? 8u
+                        : (diag_mask_val & RegimeADiag::DIAG_KGROUP4) ? 4u
+                        : (diag_mask_val & RegimeADiag::DIAG_KGROUP2) ? 2u
+                                                                      : 1u;
+
     // ---- Run the pure host planner ----
-    auto planres = make_and_build_plan(device, in0, in1, cfg);
+    auto planres = make_and_build_plan(device, in0, in1, cfg, Kg);
     TT_FATAL(planres.ok(), "regime_a_matmul planner rejected config: {}", planres.error);
     const plan::ExecutionPlan& P = *planres.plan;
     const plan::Geometry& geo = P.geo;
@@ -108,9 +117,24 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
         wdefs["DIAG_LOCAL_FEED"] = "1";
         ddefs["DIAG_LOCAL_FEED"] = "1";
     }
+    if (diag & RegimeADiag::DIAG_FULL_IN0_WAIT) {
+        ddefs["DIAG_FULL_IN0_WAIT"] = "1";  // A/B baseline: old full-slice startup barrier (compute-only)
+    }
+    if (Kg > 1u) {
+        ddefs["KGROUP"] = std::to_string(Kg);  // grouped-K compute: hold DST across Kg blocks, pack once/group
+    }
     const bool scatter = (diag & RegimeADiag::DIAG_IN0_SCATTER) != 0u;
     if (scatter) {
         wdefs["DIAG_IN0_SCATTER"] = "1";  // writer phase-1 uses direct scatter; needs the G-1 ahead peers (below)
+    }
+    // Replicated shorter ring: IN0_REPL (2 or 4) goes to BOTH the writer (seed reads + R-bundle rotation) and
+    // the in1 reader (matching shard order). No runtime-arg change (nearest-neighbor forward reuses fwd_next).
+    if (diag & RegimeADiag::DIAG_IN0_REPL2) {
+        wdefs["IN0_REPL"] = "2";
+        rdefs["IN0_REPL"] = "2";
+    } else if (diag & RegimeADiag::DIAG_IN0_REPL4) {
+        wdefs["IN0_REPL"] = "4";
+        rdefs["IN0_REPL"] = "4";
     }
 
     // ---- Core range sets: all cores + split-NoC groups (g0 = noc 0, g1 = noc 1) ----
