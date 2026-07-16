@@ -362,6 +362,14 @@ def main(argv: list[str] | None = None) -> int:
             result.video[0].save(image_path)
             size_kb = image_path.stat().st_size / 1024
             print(f"[generate] wrote {image_path} ({size_kb:.1f} KB)")
+        elif os.environ.get("TT_COSMOS3_FRAMES_DIR"):
+            # export_to_video forks ffmpeg; on a swapless box the decoded-video RSS
+            # makes that fork hit ENOMEM. Dump frames here and mux in a fresh process.
+            frames_dir = os.environ["TT_COSMOS3_FRAMES_DIR"]
+            os.makedirs(frames_dir, exist_ok=True)
+            for i, frame in enumerate(result.video):
+                frame.save(os.path.join(frames_dir, f"{i:05d}.png"))
+            print(f"[generate] wrote {len(result.video)} frames to {frames_dir}")
         else:
             export_to_video(result.video, str(args.out), fps=args.fps)
             size_kb = args.out.stat().st_size / 1024
