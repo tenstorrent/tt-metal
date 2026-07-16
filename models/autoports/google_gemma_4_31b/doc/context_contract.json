@@ -1,7 +1,19 @@
 {
   "hf_model_id": "google/gemma-4-31B",
   "hf_advertised_context": 262144,
-  "current_supported_context": 262144,
+  "current_supported_context": 113280,
+  "current_supported_context_scope": "optimized-vllm serving on 4x Blackhole P150b",
+  "supported_context_by_surface": {
+    "functional_decoder": 262144,
+    "optimized_decoder": 262144,
+    "multichip_decoder": 262144,
+    "optimized_multichip_decoder": 262144,
+    "full_model": 262144,
+    "optimized_full_model": 262144,
+    "datatype_selected_full_model": 262144,
+    "vllm_serving": 113280,
+    "optimized_vllm_serving": 113280
+  },
   "vllm_supported_context": 113280,
   "vllm_context_status": "verified_hardware_max_length_request",
   "vllm_capability_reduction": {
@@ -40,7 +52,8 @@
   "decode_status": "datatype_sweep_complete_clean_pass",
   "stage": "optimized-vllm",
   "optimized_vllm_status": "complete_clean_pass",
-  "limiting_reason": "none",
+  "limiting_reason": "device_dram_capacity",
+  "capacity_evidence": "vllm_integration/evidence/full_262144_capacity_failed_server.log",
   "functional_decoder_supported_context": 262144,
   "optimized_decoder_supported_context": 262144,
   "largest_prefill_context_tested": 262144,
@@ -303,7 +316,14 @@
     "ci_burst_output_tok_per_s": 210.10204257631455,
     "non_aligned_prompt_length_tested": 149,
     "max_length_request_tested": "113279 input tokens + 1 output token",
-    "context_capability_reduction": null,
+    "context_capability_reduction": {
+      "from_context": 262144,
+      "to_context": 113280,
+      "reason": "device_dram_capacity",
+      "capacity_evidence": "vllm_integration/evidence/full_262144_capacity_failed_server.log",
+      "calculation_document": "vllm_integration/context_capacity_audit.md",
+      "details": "vllm_capability_reduction"
+    },
     "evidence": {
       "summary": "optimized_vllm/README.md",
       "performance": "optimized_vllm/perf_summary.json",
@@ -313,7 +333,16 @@
       "qualitative": "optimized_vllm/qualitative/verdict.md"
     }
   },
-  "capability_reduction": null,
+  "capability_reduction": {
+    "scope": "optimized-vllm serving on 4x Blackhole P150b",
+    "from_context": 262144,
+    "to_context": 113280,
+    "reason": "device_dram_capacity",
+    "capacity_evidence": "vllm_integration/evidence/full_262144_capacity_failed_server.log",
+    "largest_verified_context_evidence": "vllm_integration/evidence/full_113280_source_ceiling_max_context_passing_server.log",
+    "next_candidate_shortfall_bytes_per_bank": 148800,
+    "calculation_document": "vllm_integration/context_capacity_audit.md"
+  },
   "page_block_size": 64,
   "optimized_decoder_kv_cache_dtype": "bfloat8_b",
   "layer_kinds": {

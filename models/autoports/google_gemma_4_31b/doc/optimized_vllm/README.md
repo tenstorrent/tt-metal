@@ -117,9 +117,12 @@ batch 1, 99 steady replays, one sampled-token read, no full-logits readback).
 - Qualitative: six greedy and six sampled raw continuations reviewed; zero
   mechanical degeneracy findings, exit 0; see `qualitative/verdict.md`.
 
-The context contract is unchanged. vLLM remains at the proven physical ceiling
+The served capability is unchanged. vLLM remains at the proven physical ceiling
 of 113280 tokens on four P150b devices; the standalone/full-model contract
-remains 262144. No benchmark, evaluation, or qualitative context was lowered.
+remains 262144. The runner-facing current-stage field now correctly scopes
+113280 to optimized-vLLM serving and records the existing DRAM-capacity
+reduction evidence, while surface-specific full-model fields remain 262144. No
+benchmark, evaluation, or qualitative context was lowered.
 
 ## Reproduction command
 
@@ -177,3 +180,11 @@ See `work_log.md`, `runtime_fallback_audit.md`, and `perf_summary.json` for the
 full decision and artifact record.
 
 Independent Stage 10 review: `clean-pass`; see `stage_review.md`.
+
+The post-completion independent runner check was also reproduced and repaired:
+its initial exit 2 came from stale top-level context metadata, not serving
+degeneracy or a reduced runtime setting. The exact
+`.agents/prompts/model_bringup_multigoal/10-optimized-vllm.check.sh` command now
+exits 0. A fresh independent review returned `clean-pass`; see
+`stage_review_runner_recheck.md`. See `work_log.md` for the finding, contract
+repair, and verification.

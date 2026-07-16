@@ -1,5 +1,79 @@
 # Gemma 4 31B optimized vLLM work log
 
+## Runner-side verification repair (2026-07-16)
+
+The independent Stage 10 runner check initially exited 2 after the stage was
+reported complete:
+
+```bash
+MODEL_DIR=models/autoports/google_gemma_4_31b \
+HF_MODEL= TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+bash .agents/prompts/model_bringup_multigoal/10-optimized-vllm.check.sh
+```
+
+The degeneracy half passed (`No degenerate output detected`). The critical
+finding was:
+
+```text
+CONTEXT CAP: doc/optimized_vllm/perf_summary.json:workload.max_model_len sets max_model_len=113280 below 262144
+```
+
+This reproduced the saved bug report in
+`.exp_run/multigoal_logs/07-10-optimized-vllm.check-1.log`. The serving
+implementation and evidence consistently use the hardware-verified
+`vllm_supported_context=113280`, but `doc/context_contract.json` still exposed
+the earlier full-model value through the runner-facing
+`current_supported_context=262144`. It also had top-level
+`limiting_reason="none"`, `capability_reduction=null`, and an optimized-vLLM
+`context_capability_reduction=null`, contradicting the detailed existing DRAM
+proof in `vllm_capability_reduction`.
+
+The repair changes no model, adapter, plugin, benchmark, or serving parameter.
+The contract now scopes `current_supported_context=113280` to optimized-vLLM
+serving, preserves every full-model surface at 262144 in
+`supported_context_by_surface` and the existing surface-specific fields, sets
+`limiting_reason=device_dram_capacity`, and points the top-level and Stage 10
+reduction records at the existing capacity failure, byte calculation, and
+largest-passing-context evidence. `perf_summary.json` now carries the same
+explicit context provenance.
+
+Focused verification:
+
+```bash
+TRANSFORMERS_OFFLINE=1 HF_HUB_OFFLINE=1 \
+python .agents/scripts/check_context_contract.py \
+  --model-dir models/autoports/google_gemma_4_31b \
+  --stage optimized-vllm --require-contract
+```
+
+Result: exit 0, `target=262144, supported=113280 (DRAM-limited)`. The remaining
+messages are advisory references to historical failed capacity probes and the
+underscore-formatted `262_144` decoder default; there are no critical caps.
+
+The exact runner check command above was then rerun unchanged. Result: exit 0;
+degeneracy pass plus context-contract pass. No TT hardware or live server was
+used for this metadata-only repair, and no Tracy, profiler, or device readback
+was attempted.
+
+The focused non-hardware contracts were also rerun after the repair:
+
+- adapter plus full-model contracts: 49 passed;
+- nested vLLM plugin lane/model-runner plus scheduler contracts: 22 passed.
+
+Fresh JUnit artifacts are
+`evidence/runner_recheck_adapter_contract.xml` and
+`evidence/runner_recheck_plugin_lane_contract.xml`.
+
+These cover the serving/trace contracts adjacent to the repaired metadata and
+confirm the change did not disturb async reuse, stale inputs, page tables,
+external cache ownership, non-aligned lengths, or plugin overlap decisions.
+
+A fresh independent `$stage-review` re-derived the capacity boundary, inspected
+the original and repaired gate behavior, sampled the serving/qualitative
+artifacts, and returned `clean-pass` with no required work. Its report is
+`stage_review_runner_recheck.md`. The reviewer independently ran the exact
+Stage 10 check and observed exit 0.
+
 ## Scope and baseline
 
 Started from main Stage 09 commit `e07e401794d` and nested vLLM plugin commit

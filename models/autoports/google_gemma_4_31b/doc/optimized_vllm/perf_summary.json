@@ -3,6 +3,13 @@
   "model": "google/gemma-4-31B",
   "hardware": "4x Blackhole P150b",
   "mesh": "1x4",
+  "context_contract": {
+    "hf_advertised_context": 262144,
+    "served_context": 113280,
+    "reduction_reason": "device_dram_capacity",
+    "capacity_evidence": "../vllm_integration/evidence/full_262144_capacity_failed_server.log",
+    "largest_verified_context_evidence": "../vllm_integration/evidence/full_113280_source_ceiling_max_context_passing_server.log"
+  },
   "tt_config": {
     "sample_on_device_mode": "all",
     "trace_region_size": 268435456,
