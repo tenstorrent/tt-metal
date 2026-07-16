@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from typing import TYPE_CHECKING, Sequence
 
 import torch
@@ -829,6 +830,23 @@ class LTXVideoDecoder(Module):
             host dispatch. A single decode does not amortize the capture, so this pays off only when the
             decoder is reused across generations; the mesh must be opened with a trace_region_size.
         """
+        # Optional stage-wall split (LTX_TIME_STAGES=1): host prep + H2D vs device decode vs the
+        # D2H gather, to size what a second command queue could hide behind the audio decode.
+        _time_stages = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
+        _marks: list[tuple[str, float]] = []
+
+        def _mark(label: str, *, sync: bool = True) -> None:
+            # decode_device and the unpatch only enqueue; the gather is the one call that blocks, so
+            # without these syncs every zone's device time would bill to the gather. Aggregate wall is
+            # unchanged -- the gather waits on the same work either way.
+            if not _time_stages:
+                return
+            if sync:
+                ttnn.synchronize_device(self.mesh_device)
+            _marks.append((label, time.perf_counter()))
+
+        _mark("t0")
+
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
@@ -844,6 +862,7 @@ class LTXVideoDecoder(Module):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
         )
+        _mark("host_prep+h2d")
 
         if traced:
             if self._decode_tracer is None:
@@ -853,6 +872,7 @@ class LTXVideoDecoder(Module):
             sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
         else:
             sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
+        _mark("device_decode")
         # decode_device threads logical_h/logical_w through the upsamples; read back the final dims.
         logical_h, logical_w = self._decode_logical_hw
 
@@ -863,6 +883,7 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.reshape(sample_tt, (B_, T_, H4, W4, 3, p, r, q))
         sample_tt = ttnn.permute(sample_tt, (0, 4, 1, 5, 2, 7, 3, 6))
         sample_tt = ttnn.reshape(sample_tt, (B_, 3, T_ * p, H4 * q, W4 * r))  # (B, 3, T, H, W)
+        _mark("device_unpatch")
 
         concat_dims = [None, None]
         concat_dims[self.parallel_config.height_parallel.mesh_axis] = 3
@@ -876,7 +897,22 @@ class LTXVideoDecoder(Module):
             ccl_manager=self.ccl_manager,
             pre_transfer_fn=pre_fn,
         )
-        return result[:, :, :, : logical_h * q, : logical_w * r]  # crop mesh padding
+        _mark("d2h+host_convert", sync=False)  # fast_device_to_host already synced
+
+        out = result[:, :, :, : logical_h * q, : logical_w * r]  # crop mesh padding
+        _mark("host_crop", sync=False)
+
+        if _time_stages:
+            _spans = " ".join(
+                f"{_marks[i][0]}={(_marks[i][1] - _marks[i - 1][1]) * 1000:.1f}ms" for i in range(1, len(_marks))
+            )
+            _nbytes = result.numel() * result.element_size()
+            _d2h = next(t - _marks[i][1] for i, (lbl, t) in enumerate(_marks[1:]) if lbl == "d2h+host_convert")
+            logger.info(
+                f"VAE_DECODE_SPLIT {_spans} total={(_marks[-1][1] - _marks[0][1]) * 1000:.1f}ms "
+                f"| gather {_nbytes / 1e9:.2f}GB @ {_nbytes / 1e9 / _d2h:.2f} GB/s"
+            )
+        return out
 
 
 # =============================================================================
