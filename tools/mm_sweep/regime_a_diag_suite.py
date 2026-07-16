@@ -752,6 +752,77 @@ def placement(relaunches=3):
     print("PLACEMENT DONE", flush=True)
 
 
+# Part-5 picker re-sweep: with in1_near making M-split cheaper, re-check whether any Mt>=4 production
+# shape's best Sm changed. Keyed (M,K,N); cfg tuple order = (Ns,Pk,Sm,kb,nsb). All run at mask=0 (in1_near
+# default). For each shape we test the picker's current cfg plus core-budget-matched Sm variants (Pk*Sm
+# held ~constant, same Ns/kb/nsb) that are feasible for the shape's Mt.
+PICKER_RESWEEP_SHAPES = [
+    (128, 2304, 6144),  # Mt=4 picker Sm=1 (Ns2,Pk3)
+    (128, 6144, 768),  # Mt=4 picker Sm=1 (Pk12)
+    (128, 6144, 2304),  # Mt=4 picker Sm=1 (Pk12)
+    (128, 6144, 4608),  # Mt=4 picker Sm=1 (Pk12) -- placement test shape, in1_near -3.5% at Sm=2
+    (128, 15360, 768),  # Mt=4 picker Sm=1 (Pk6)
+    (256, 2048, 1024),  # Mt=8 picker Sm=2 (production primary) -- confirm Sm=2 still beats Sm1/Sm4
+    (512, 6144, 1536),  # Mt=16 picker Sm=1 (Pk12)
+]
+
+
+def _sm_candidates(M, K, N):
+    """Picker cfg + core-budget-matched Sm variants (Pk*Sm ~ const, same Ns/kb/nsb), feasible for Mt."""
+    Ns, Pk, Sm, kb, nsb = rb.auto_config(M, K, N)
+    Mt = cdiv(M, 32)
+    budget = Pk * Sm
+    cands = [(f"picker_sm{Sm}", (Ns, Pk, Sm, kb, nsb))]
+    for sm_c in (1, 2, 4):
+        if sm_c == Sm or Mt % sm_c != 0:
+            continue
+        pk_c = max(1, budget // sm_c)
+        cands.append((f"sm{sm_c}", (Ns, pk_c, sm_c, kb, nsb)))
+    return cands
+
+
+def pickerresweep(relaunches=3):
+    # For each Mt>=4 production shape, INTERLEAVED relaunches of the picker cfg vs core-budget-matched Sm
+    # variants under the in1_near default. Report median kernel us + %vs picker; flag any Sm-flip candidate
+    # that clears a stable ~2% gain. Raw: regime_a_picker_resweep.json.
+    out = []
+    for M, K, N in PICKER_RESWEEP_SHAPES:
+        cands = _sm_candidates(M, K, N)
+        ideal = ideal_us(M, K, N)
+        runs = {name: [] for name, _ in cands}
+        for _r in range(relaunches):
+            for name, cfg in cands:
+                runs[name].append(run_one(M, K, N, cfg, 0))
+        per = {}
+        for name, cfg in cands:
+            oks = [x for x in runs[name] if x.get("ok") and x["wall_us"]]
+            walls = sorted(x["wall_us"] for x in oks)
+            med = statistics.median(walls) if walls else None
+            per[name] = {
+                "cfg": list(cfg),
+                "walls": walls,
+                "med_us": med,
+                "n_ok": len(oks),
+                "util512_pct": (ideal / med * 100 if med else None),
+                "max_rel_err": [x.get("max_rel_err") for x in runs[name]],
+            }
+        pick_name = cands[0][0]
+        pm = per[pick_name]["med_us"]
+        for name, _ in cands:
+            m = per[name]["med_us"]
+            per[name]["vs_picker_pct"] = ((m / pm - 1) * 100) if (pm and m) else None
+        rec = {"M": M, "K": K, "N": N, "ideal_us": ideal, "picker": pick_name, "cands": per}
+        out.append(rec)
+        summ = " ".join(
+            f"{name}={per[name]['med_us'] and round(per[name]['med_us'],1)}"
+            f"({per[name]['vs_picker_pct'] and round(per[name]['vs_picker_pct'],1)}%)"
+            for name, _ in cands
+        )
+        print(f"[resweep] {M}x{K}x{N:5} ideal={ideal:.1f}  {summ}", flush=True)
+        json.dump(out, open(f"{HERE}/regime_a_picker_resweep.json", "w"), indent=2)
+    print("PICKER RESWEEP DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
     {
@@ -764,4 +835,5 @@ if __name__ == "__main__":
         "pipelined": pipelined,
         "ringorder": ringorder,
         "placement": placement,
+        "pickerresweep": pickerresweep,
     }[mode]()
