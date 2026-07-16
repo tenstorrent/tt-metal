@@ -25,10 +25,6 @@ struct IndexerScoreDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // Custom hash: runtime values (cache_batch_idx / kv_len / chunk_start_idx) are excluded so they reuse
-    // one program; the seq_shard_axes (SP/TP) ARE hashed.
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     // Re-checks the runtime values that can change on a hit (slot < B, kv_len bounds, chunk_start window).
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

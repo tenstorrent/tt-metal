@@ -186,36 +186,6 @@ IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::sele
     return program::IndexerScoreProgramFactory{};
 }
 
-ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Hash what shapes the binary, NOT the runtime values: chunk_start_idx is EXCLUDED, cache_batch_idx /
-    // kv_len contribute only has_value() (so distinct slot / kv_len / chunk_start reuse one program).
-    // The seq-shard axes ARE hashed (they shape the causal geometry); tensor_args cover dtype + shape.
-    // apply_relu / num_groups / block_size pick the compile-time kernel path, so they MUST be hashed (else
-    // DSA vs MSA, or pooled vs unpooled, would collide). Hash via the SP/TP accessors so the key is identical
-    // to the pre-consolidation (cluster_axis, seq_subshard_axis) form.
-    return tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
-        attrs.apply_relu,
-        attrs.num_groups,
-        attrs.block_size,
-        attrs.synthesize_gate,  // gate read from DRAM vs filled in-kernel -> different reader binary
-        attrs.gate_scale,       // the in-kernel fill value; distinct scales get distinct programs
-        attrs.program_config,
-        attrs.compute_kernel_config,
-        attrs.sp_axis().has_value(),
-        attrs.sp_axis().value_or(0u),
-        attrs.tp_axis().has_value(),
-        attrs.tp_axis().value_or(0u),
-        attrs.has_indexed_kv_cache(),
-        attrs.has_runtime_kv_len(),
-        // The block-cyclic layout bakes invP divisors into the reader as compile-time arguments, so sp/chunk_local
-        // must be hashed (a contiguous vs block-cyclic read, or a different layout shape, is a different binary).
-        attrs.has_block_cyclic(),
-        attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
-        attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
-        tensor_args);
-}
-
 void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // chunk_start, cache slot, kv_len are hash-excluded runtime values -> re-checked on hits.
