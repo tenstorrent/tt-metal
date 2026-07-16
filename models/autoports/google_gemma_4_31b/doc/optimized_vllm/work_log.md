@@ -269,3 +269,6 @@ are recorded below; no push was performed.
 - Main tt-metal repository, branch
   `odjuricic/agentic-research/graph-rewrite-skill`:
   `1db88f6af66105647814fc4bf3bd9bd95432a4ac`
+- Runner-side context-contract repair and fresh review/test evidence, same main
+  repository branch:
+  `5a03a3127b4937a245c429e5ef278875223271f0`
