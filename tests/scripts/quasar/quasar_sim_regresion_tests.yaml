@@ -43,3 +43,7 @@ unit_tests_api:
     config: 1x3
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # TEMP(revert): forced failure to validate the RTL Sim CI check-output feature
+  - filter: "RtlSimCheckOutput.DoesNotExist_ForcedFailure"
+    config: 1x3
