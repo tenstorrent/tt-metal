@@ -285,3 +285,71 @@
 - Tests added: none (used existing suites). Verification: full golden suite
   1181/1088; core unit (acceptance + nonaligned + coarse-chunk + debug) 58 passed;
   precision baseline + matrix + perf/guard 285 passed / 112 skipped.
+
+## Refinement 3a — Close the perf win on the compute-bound flagged shape (re-measure DM after compute-side) (partial)
+- Date: 2026-07-16
+- What was done: Applied the compute-side coarsen lever (folding R5's block/subblock
+  levers into R3a) and re-measured the R3 DM batching on top of it.
+  * **Coarsen (the win).** Lifted the `_fit_l1` block-factor target 4→8 via new
+    single-source module constants `SQ_CHUNK_TARGET`/`SKV_CHUNK_TARGET` (the shrink
+    loop still L1-caps; `_chunk_size` still per-axis-caps — "coarsest that fits" per
+    the design). On the flagged `1×10×9472×128` shape (Sq_t=Skv_t=296=8·37, Dt=4)
+    this halves `n_kv_chunks` 74→37 (amortizing the ~10 sequential per-chunk softmax
+    helper phases) and grows the QKᵀ matmul `out_subblock_w` 4→8 (the full
+    `fp32_dest_acc_en=False` DEST budget). No partial chunk (296%8=0).
+  * **DM batching re-measured → complete/parked.** Re-enabled the R3 divisor
+    predicates (`batch_q/batch_kv`) and re-measured: 9.05 ms batched vs 9.01 ms
+    per-tile — **flat**. The reads are STILL hidden behind `KV_DEPTH=2` (the shape
+    stays compute-bound even after the coarsen), so per the refinement's "reads stay
+    hidden → leave parked" branch the reader/writer knob is **parked at its per-tile
+    default** (runtime byte-identical to the gate-passing R2/R3b kernels; the
+    `read_tiles`/`write_tiles` scaffolding stays a live tunable for R3c). "DM batching
+    confirmed still hidden → complete" — that half of the Done-when is fully met.
+  * **Regression found + fixed in the same pass.** The coarser target made `_fit_l1`
+    shrink some previously-clean shapes onto a **partial** KV chunk: `Q1x8x4096x128`
+    GQA (Skv_t=128, which 4 divides cleanly) had its fp32-intermediate configs
+    L1-shrink from target 8 to target 7, and the old `_chunk_size(128,7)` returned 6
+    (128%6=2 ≠ 0 → partial). A partial last chunk pushes `sq_valid·rem` tiles — a
+    *fraction* of the `Sq_chunk_t·Skv_chunk_t`-page `cb_scores`/`cb_exp` ring — so on
+    shapes with **>1 work unit per core** (`total_work = 1·8·16 = 128 > 110 cores`)
+    the ring read+write pointers started the next work unit mid-ring and the reduce's
+    linear read window straddled the wrap → catastrophic garbage (6 golden cells,
+    pcc≈0 / rms=inf / max_abs≈1e20). This is a **latent R1b bug** (its `rem|chunk`
+    guard only covers the *within*-work-unit straddle; the cross-work-unit ring carry
+    was never exercised because R1b's prime tests ran ≤1 wu/core), *exposed* — not
+    introduced — by the coarsen. Isolated by ablation: the discriminator is
+    `partial_kv=True` (all 3 failing configs) vs `partial_kv=False` (all 9 passing) —
+    NOT L1 (max-pass WS 1.282 MB > min-fail WS 1.202 MB) and NOT batching (reproduced
+    with batching parked). Fixed by making `_chunk_size` **prefer the largest exact
+    divisor ≤ target** (whole chunks → the ring realigns to slot 0 after every work
+    unit), keeping R1b's coarse+partial only as the prime-tile-count>target fallback
+    (reachable only by shapes with a single wu/core — verified: prime101 has
+    total_work=21 ≤ 110). Flagged shape unchanged (296→8 either way).
+- Perf measured (Blackhole p150b, 110 cores, 1.35 GHz; device FW ns, warm median of
+  5, fresh kernel cache): baseline (chunk 4) **9.666 ms** → coarsen chunk 8 (batch
+  parked) **9.006 ms** = **1.073×** (FPU util 0.078 → 0.084). Batched re-measure
+  **9.05 ms** (flat → reads hidden). The knob-turn levers are now **exhausted**
+  (`Sq_chunk_t` L1-capped at 8 — Sq=16 overflows the ~1.4 MB budget; `Skv_chunk_t`
+  DEST/divisor-capped at 8 — 296's next divisor is 37).
+- Accuracy achieved: flagged-shape soft PCC≥0.997 held; golden `TOLERANCES` met across
+  the suite (no numeric change beyond the regression fix).
+- Golden test progress: **1181 passed / 1088 xfailed / 0 failed** (restored to the
+  R2/R3b baseline; no SUPPORTED change — perf refinement). Unit **343 passed / 112
+  skipped** (acceptance + debug + nonaligned + coarse-chunk + precision-baseline +
+  precision-matrix + perf flagged-shape + R3 guard set).
+- Issues encountered: the coarsen exposed the latent partial-chunk × multi-work-unit
+  cb_scores/cb_exp ring-straddle (root-caused + fixed by prefer-divisor chunking, see
+  above). No outstanding issues; op green.
+- Why **[~] partial**: the compute-side lever is correct, kept, and won (+7%), and the
+  DM-batching half is complete (confirmed hidden → parked) — but the heading's
+  aspiration ("close the perf win" → `expected_math_util=0.35`) is NOT reached (0.084
+  measured). The knob-turns are exhausted; the ~11× residual gap is **structural** —
+  the ~10 per-chunk online-softmax vector phases (exp/reduce/sub/mul over S² tiles)
+  run *sequentially* with the QKᵀ/PV matmul (each helper owns all 3 TRISCs), so the
+  FPU idles during the softmax. Closing it needs a **scheme-change** (overlap the
+  softmax vector work with the matmul), filed as **Refinement 3c** (the exact next
+  lever). R5's remaining reconfig-ablation knob is judged low-value (coarsening halved
+  the phase count for only +7%, so per-phase fixed overhead is small).
+- Tests added: none (the flagged-shape perf harness + R3 guard set from R3, and the
+  coarse-chunk suite from R1b, cover the coarsen + the regression fix; the fix is
+  validated by the previously-failing `Q1x8x4096x128` golden cells now passing).

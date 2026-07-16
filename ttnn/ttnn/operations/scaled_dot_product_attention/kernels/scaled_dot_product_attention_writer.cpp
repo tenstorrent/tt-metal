@@ -50,11 +50,13 @@ void kernel_main() {
 
     constexpr auto dst_args = TensorAccessorArgs<6>();
 
-    // R3 DM-batching knob (writer twin) — PARKED at the per-tile default in R3b to
-    // match the reader (see the reader kernel for the full rationale: correct but
-    // zero-win/compute-bound, and disabled to guarantee no golden-suite regression;
-    // runtime byte-identical to the gate-passing R2 per-tile writer). R3a re-enables
-    // with: batch_q = (Sq_t % Sq_chunk_t) == 0;
+    // R3 DM-batching knob (writer twin) — RE-MEASURED in R3a, kept PARKED at the
+    // per-tile default to match the reader (see the reader kernel for the full
+    // rationale: re-measured flat, reads hidden / compute-bound, parked to stay
+    // byte-identical to the gate-passing R2/R3b writer and to avoid widening the
+    // dormant zero-win batching under R3a's prefer-divisor chunking). The write_tiles
+    // scaffolding stays a live tunable; re-enable with the divisor predicate
+    // batch_q = (Sq_t % Sq_chunk_t) == 0 when the writes reach the critical path.
     constexpr bool batch_q = false;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);

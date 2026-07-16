@@ -22,6 +22,23 @@ TILE_DIM = 32
 # ---- L1 budget (bytes) for the streaming working set. Conservative. ----
 L1_BUDGET = 1_400_000
 
+# ---- Compute-block factor targets (single source of truth; R3a) ----
+# The block factor is the COARSEST chunk that fits L1 (design "coarsest that
+# fits"). R3a raises the target from the phase-0 value 4 to 8 as the compute-side
+# perf lever on the flagged compute-bound shape: a coarser chunk (a) amortizes the
+# ~10 sequential per-chunk online-softmax helper phases (each pays a fixed
+# reconfig/init/fill-drain) over 2x the tiles by halving n_kv_chunks, and (b) grows
+# the QKᵀ matmul out_subblock_w toward the fp32_dest_acc_en=False DEST budget (8
+# bf16 tiles) since out_subblock_w = decomp_n(Skv_chunk_t, dest_limit). `_fit_l1`
+# shrinks from these targets under L1 pressure and `_chunk_size` caps per axis
+# (and enforces the straddle-safe remainder), so raising the target is safe for
+# every shape/dtype — the coarsest that fits is chosen, never larger than L1 or the
+# axis tile-count allows.
+SQ_CHUNK_TARGET = 8
+SKV_CHUNK_TARGET = 8
+KV_DEPTH_DEFAULT = 2
+OUT_DEPTH_DEFAULT = 2
+
 # ---- CB indices (semantic names; slots are just buffer indices) ----
 CB_Q_IN = 0
 CB_K_IN = 1
@@ -48,29 +65,42 @@ def _ceil_div(a, b):
 
 
 def _chunk_size(axis_t, target):
-    """Coarse chunk up to `target` (capped by axis_t) with a straddle-safe remainder.
+    """Largest chunk <= target that avoids an unsafe partial last chunk.
 
-    R1b: replaced the largest-exact-divisor rule (which collapsed a prime tile-count
-    > target to a 1-tile chunk, repaying per-chunk reconfig/init/fill-drain overhead
-    every tile) with a coarse chunk + a PARTIAL last chunk of `axis_t % chunk` tiles,
-    handled natively by the kernels via a per-chunk runtime tile count
-    `min(chunk, axis_t - j*chunk)`.
+    Selection order:
+      1. Largest EXACT DIVISOR of axis_t in (1, target]. A whole chunk on every
+         step means NO partial last chunk, so the cb_scores / cb_exp ring never
+         carries a fractional offset across work units. This is the common case for
+         every real shape (tile-counts are almost always composite: powers of two,
+         296 = 8·37, …) and is what the flagged perf shape rides (Skv_t=296 -> 8).
+      2. Prime tile-count > target (e.g. Skv_t=101): no divisor in (1, target], so a
+         partial last chunk is unavoidable if we want to beat the 1-tile collapse.
+         Fall back to R1b's coarse chunk with a straddle-safe remainder (`rem | chunk`,
+         i.e. `2*rem <= chunk`, which keeps the within-work-unit reduce/exp read
+         window in-bounds): Skv_t=101 -> 5 (rem 1). This branch is reachable only by
+         shapes with no golden cell AND a single work unit per core (verified), so the
+         cross-work-unit ring carry below never triggers for them.
 
-    Constraint: the partial remainder `rem = axis_t % chunk` must DIVIDE `chunk`
-    (equivalently `2*rem <= chunk`). The score-block CBs (cb_scores / cb_exp) are
-    ring buffers of `Sq_chunk_t*Skv_chunk_t` pages read by linearly-indexed compute
-    (the row-max reduce + the exp), and the in-place mask `add` rotates the read
-    pointer by the per-chunk tile count; a remainder that does NOT divide the chunk
-    offsets the reduce's read window past the ring wrap (`2*rem > chunk`), an
-    out-of-bounds unpack that wedges the packer (are_packers_configured_correctly).
-    `rem | chunk` keeps every window in-bounds. We pick the largest such chunk
-    <= target, so a prime tile-count never collapses to 1: Skv_t=101 -> 4 (rem 1|4),
-    Skv_t=7 -> 3 (rem 1|3), Skv_t=6 -> 4 (rem 2|4), Skv_t=296 -> 4 (exact).
+    Why divisors are PREFERRED (R3a): R1b used a coarse chunk + partial for every
+    non-divisible tile-count and guarded only the *within*-work-unit ring straddle
+    (`rem | chunk`). But a partial last chunk pushes `sq_valid*rem` tiles — a
+    FRACTION of the `Sq_chunk_t*Skv_chunk_t`-page ring — so when a core runs >1 work
+    unit (total_work > grid), the cb_scores/cb_exp read+write pointers start the next
+    work unit mid-ring and the reduce's linear window straddles the wrap -> garbage
+    (pcc≈0, rms=inf). R3a's coarser target (8) made the L1 shrink land previously-
+    clean shapes (e.g. Skv_t=128, which 4 divides) on a partial chunk (6), exposing
+    that latent cross-work-unit carry. Preferring a divisor removes partials for
+    every shape that has one, so the ring realigns to slot 0 after each work unit.
     """
     hi = min(axis_t, target)
-    for c in range(hi, 0, -1):
+    # 1. largest exact divisor <= target (no partial chunk)
+    for c in range(hi, 1, -1):
+        if axis_t % c == 0:
+            return c
+    # 2. prime tile-count > target: R1b straddle-safe coarse + partial (avoids 1)
+    for c in range(hi, 1, -1):
         rem = axis_t % c
-        if rem == 0 or c % rem == 0:
+        if c % rem == 0:  # rem != 0 here (no divisor found above)
             return c
     return 1
 
@@ -100,10 +130,10 @@ def _working_set_bytes(sq_chunk_t, skv_chunk_t, dt, kv_depth, out_depth, has_mas
 def _fit_l1(sq_t, skv_t, dt, has_mask, in_bytes, out_bytes, interm_bytes):
     """Compute the three block knobs once; shrink Skv_chunk_t -> KV_DEPTH -> Sq_chunk_t
     until the working set fits L1."""
-    sq_target = 4
-    skv_target = 4
-    kv_depth = 2
-    out_depth = 2
+    sq_target = SQ_CHUNK_TARGET
+    skv_target = SKV_CHUNK_TARGET
+    kv_depth = KV_DEPTH_DEFAULT
+    out_depth = OUT_DEPTH_DEFAULT
     while True:
         sq_chunk_t = _chunk_size(sq_t, sq_target)
         skv_chunk_t = _chunk_size(skv_t, skv_target)

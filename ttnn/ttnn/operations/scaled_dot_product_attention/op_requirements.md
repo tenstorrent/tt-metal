@@ -328,7 +328,7 @@ exposes the reads on the critical path.
 No SUPPORTED change (perf refinement).
 
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression. ✔
-### [ ] Refinement 3a — Close the perf win on the compute-bound flagged shape (re-measure DM after compute-side)
+### [~] Refinement 3a — Close the perf win on the compute-bound flagged shape (re-measure DM after compute-side)
 
 **Type**: perf
 
@@ -357,6 +357,74 @@ the soft `pcc_threshold=0.997` holding and the golden suite green.
 **Done when**: measured device-ns improves on the flagged shape via the compute-side
 lever, and the R3 DM batching is confirmed (still hidden → complete; or exposed →
 `KV_DEPTH`/read-block tuned); prior phases green.
+
+**Landed (R3a, partial)**: the compute-side coarsen lever landed and **won** — the
+`_fit_l1` block-factor target is raised 4→8 (single-source module constants
+`SQ_CHUNK_TARGET`/`SKV_CHUNK_TARGET`; the shrink loop still L1-caps and `_chunk_size`
+still per-axis-caps, so it stays "coarsest that fits"). On the flagged shape this
+halves `n_kv_chunks` (74→37) and grows the QKᵀ matmul `out_subblock_w` 4→8 (full
+`fp32_dest_acc_en=False` DEST budget). **Measured (Blackhole p150b, 110 cores; device
+FW ns, warm median of 5, fresh cache): 9.666 ms → 9.006 ms = 1.073×** (FPU util
+0.078→0.084). The **DM batching half is complete**: re-enabled the divisor predicates,
+re-measured the flagged shape at 9.05 ms — **flat vs 9.01 ms** → the reads are STILL
+hidden behind `KV_DEPTH=2` (the shape stays compute-bound even after the coarsen), so
+per the refinement's "reads stay hidden → leave parked" branch the reader/writer knob
+is **parked at its per-tile default** (byte-identical to gate-passing R2/R3b; the
+`read_tiles`/`write_tiles` scaffolding stays a live tunable). **Regression found + fixed
+in the same pass**: the coarser target made `_fit_l1` shrink some previously-clean
+shapes (e.g. `Q1x8x4096x128` GQA, 128%4==0) onto a **partial** KV chunk (`_chunk_size`
+returned 6), and a partial chunk pushes a *fraction* of the `cb_scores`/`cb_exp` ring —
+so on shapes with **>1 work unit per core** (`total_work=128 > 110`) the ring pointer
+carried across work units and the reduce's linear read window straddled the wrap →
+catastrophic garbage (6 golden cells, pcc≈0/rms=inf). Root-caused by isolation
+(discriminator = `partial_kv`, not batching, not L1 — batching-parked reproduced it) —
+a **latent R1b bug** (its `rem|chunk` guard only covers the *within*-work-unit straddle;
+the cross-work-unit carry was never exercised because R1b's prime tests ran ≤1 wu/core).
+Fixed by making `_chunk_size` **prefer the largest exact divisor ≤ target** (no partial
+→ ring realigns to slot 0 per work unit), keeping R1b's coarse+partial only as the
+prime-tile-count>target fallback (reachable only at 1 wu/core). Golden **1181 passed /
+1088 xfailed / 0 failed** (restored, no SUPPORTED change); unit **343 passed / 112
+skipped**. **Why partial**: the flagged shape is nowhere near the aspirational
+`expected_math_util=0.35` (0.084 measured) — the knob-turn levers are now **exhausted**
+(`Sq_chunk_t` L1-capped at 8; `Skv_chunk_t` DEST/divisor-capped at 8), and the ~11×
+residual gap is **structural**: the ~10 sequential per-chunk online-softmax vector
+phases (exp/reduce/sub/mul over S² tiles) run serially with the QKᵀ/PV matmul (each
+helper owns all 3 TRISCs), so the FPU idles during the softmax — a **scheme-change** to
+overlap them, not a knob-turn. Filed as **R3c**.
+
+### [ ] Refinement 3c — Overlap the softmax vector phases with the matmul (lift FPU util past ~0.08)
+
+**Type**: perf
+
+**Goal** (sharper follow-up from R3a — the exact next lever): R3a exhausted the
+compute-side **knob-turns** on the flagged `1×10×9472×128` shape (block factor coarsened
+to the L1 ceiling `Sq_chunk_t=8` and the DEST/divisor ceiling `Skv_chunk_t=8`, QKᵀ
+subblock at the full 8-tile budget) and banked +7% (9.67→9.01 ms), but FPU util is still
+only ≈0.084 vs the 0.35 goal. Ablation (R3 + R3a) proves the shape is **compute-bound**
+with the FPU **idle during the softmax**: per KV chunk the kernel runs ~10 phases
+*sequentially* (QKᵀ matmul → mask → row-max reduce → running-max/α → exp → row-sum
+reduce → O-rescale → PV matmul → O-accumulate), each a kernel_lib helper that owns all 3
+TRISCs, so the two matmuls (the only FPU work) never overlap the vector-engine softmax
+(exp/reduce/sub/mul over the S² score tiles — the dominant wall-time). The lever is a
+**scheme-change**: pipeline the matmul of KV chunk *j+1* against the softmax of chunk *j*
+(e.g. split the KV loop across compute passes / deepen `cb_scores`/`cb_exp` so the FPU
+and SFPU run concurrently), so the FPU stops idling. This is distinct from R5's remaining
+knob-turn (reconfig-ablation), which R3a judged low-value (coarsening halved the phase
+count for only +7%, so per-phase fixed overhead is small — the cost is the vector math
+itself, not reconfig).
+
+**Verifier notes**: no SUPPORTED change (perf). This is the structural step R3a's
+heading ("close the perf win") could not reach with knob-turns. Gate on `/perf-measure`
+ablation (confirm the softmax phases are the idle-FPU cost) and the soft
+`pcc_threshold=0.997`. Reference `tech_reports/FlashAttention/FlashAttention.md` (§3.2.2
+overlap) and `ttnn/ttnn/operations/examples/master.md` `compute_fusion` /
+`double_buffer` (compute-side depth). If the overlap exposes the reads on the critical
+path, **re-enable the R3 DM batching** (the parked `read_tiles`/`write_tiles` knob) and
+re-measure — it may finally win.
+
+**Done when**: measured device-ns improves further on the flagged shape beyond R3a
+(toward the 0.35 util goal), soft `pcc_threshold=0.997` holds, golden green, no
+regression across the config-spanning guard set.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode = causal)
 
