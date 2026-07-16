@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -230,7 +231,11 @@ def test_explicit_event_overrides_env(tests_yaml: Path):
 
 
 def test_backcompat_no_flags_with_dual_sku_list(tmp_path: Path):
-    """Non-migrated lists that still list prio twins keep expanding both without --event."""
+    """Synthetic: listing prio twins still expands both if someone misconfigures a YAML.
+
+    Production pipeline_reorg lists must not contain *_prio keys (see
+    test_pipeline_reorg_yamls_have_no_prio_sku_keys).
+    """
     path = tmp_path / "legacy.yaml"
     path.write_text(
         textwrap.dedent(
@@ -252,7 +257,11 @@ def test_backcompat_no_flags_with_dual_sku_list(tmp_path: Path):
 
 
 def test_dual_sku_list_plus_merge_group_duplicates_prio(tmp_path: Path):
-    """Calling --event merge_group while YAML still has prio twins duplicates prio rows."""
+    """Hazard if a test list still has prio twins AND --event merge_group is set.
+
+    Gate/non-gate pipeline_reorg YAMLs must not list *_prio; this guards the script
+    contract so a regression is obvious.
+    """
     path = tmp_path / "legacy.yaml"
     path.write_text(
         textwrap.dedent(
@@ -438,27 +447,15 @@ def test_llk_pr_gate_uses_viommu_not_bh_p150b_civ2():
     assert concrete_skus(mq) == {"wh_n150_civ2", "bh_p150b_civ2_viommu_prio"}
 
 
-def test_gate_yamls_have_no_prio_twin_keys():
-    gate_globs = [
-        "*merge_gate*.yaml",
-        "*pr_gate*.yaml",
-        "*validation_basic*.yaml",
-        "runtime_examples_pr_gate_tests.yaml",
-        "ttnn_examples_pr_gate_tests.yaml",
-        "triage_merge_gate_tests.yaml",
-        "train_merge_gate_tests.yaml",
-        "fabric_merge_gate_tests.yaml",
-        "fabric_cpu_only_smoke_merge_gate_tests.yaml",
-    ]
+def test_pipeline_reorg_yamls_have_no_prio_sku_keys():
+    """Prio SKUs belong only in sku_config (merge_queue_sku targets), never in test lists."""
     leftovers = []
-    for pattern in gate_globs:
-        for path in PIPELINE.glob(pattern):
-            text = path.read_text()
-            # Ignore commented examples mentioning prio.
-            for i, line in enumerate(text.splitlines(), 1):
-                stripped = line.lstrip()
-                if stripped.startswith("#"):
-                    continue
-                if "_prio" in line:
-                    leftovers.append(f"{path.name}:{i}:{line.strip()}")
+    sku_prio = re.compile(r"^(\s*)([A-Za-z0-9_]*_prio)\s*:")
+    for path in sorted(PIPELINE.rglob("*.yaml")):
+        for i, line in enumerate(path.read_text().splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            m = sku_prio.match(line)
+            if m:
+                leftovers.append(f"{path.name}:{i}:{m.group(2)}")
     assert leftovers == []

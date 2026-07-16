@@ -248,7 +248,6 @@ triage:
     bh_p150b_civ2_viommu: 11
   unit:
     wh_n150_civ2: 16
-    bh_p150b_civ2_viommu_prio: 16
     bh_p150b_civ2_viommu: 16
 
 llk:
@@ -260,7 +259,6 @@ llk:
     wh_n300_civ2: 40
     bh_p150: 40
     bh_p150b_civ2_viommu: 110
-    bh_p150b_civ2_viommu_prio: 70
     bh_p100: 40
   e2e:
     wh_n150_civ2: 1800

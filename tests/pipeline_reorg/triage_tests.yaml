@@ -5,13 +5,12 @@
 #
 # Each entry: name, cmd, skus, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml
+# Logical SKUs only; do not list merge-queue *_prio SKUs here.
 
 - name: triage_hang_report
   cmd: pytest -v -s ./tools/tests/triage/test_hang_report.py
   skus:
     wh_n150_civ2:
-      timeout: 5
-    bh_p150b_civ2_viommu_prio:
       timeout: 5
     bh_p150b_civ2_viommu:
       timeout: 5
