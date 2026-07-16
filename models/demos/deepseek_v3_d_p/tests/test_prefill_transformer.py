@@ -458,6 +458,22 @@ def run_model(
         layout=kvpe_layout,
     )
 
+    # Sparse single-shot is folded onto the block-cyclic path, so (like chunked) it needs the caller-owned,
+    # user-major layer-stacked indexer key cache [num_users*num_layers, 1, T, D_idx], allocated with the
+    # SAME num_kvpe_cache_layers=num_layers as the KVPE cache. Dense variants use no index cache.
+    tt_index_kv_cache = None
+    if has_indexer:
+        tt_index_kv_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=isl_total,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_layers,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
+
     # --- Shard token_ids to device ---
     # Reshape [1, isl_total] -> [sp_factor, 1, isl_per_chip] for SP sharding
     if is_balanced == True:
@@ -502,6 +518,7 @@ def run_model(
                 return_intermediates=True,
                 read_profiler=False,
                 temperature=temperature,
+                index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
             if i == 0:
@@ -560,6 +577,7 @@ def run_model(
             return_intermediates=pcc_validation,
             read_profiler=False,
             temperature=temperature,
+            index_kv_cache=tt_index_kv_cache,
         )
         logger.info(f"Starting completion sync on iteration: {i}")
         ttnn.synchronize_device(mesh_device)
@@ -826,7 +844,10 @@ def run_model(
             "threshold": threshold,
         }
         write_pcc_summary(summary_result, threshold=threshold)
-        if not os.getenv("GITHUB_ACTIONS") and trace_dir is not None:
+        # PCC plots are opt-in (TT_PREFILL_PCC_PLOTS=1). generate_pcc_plots renders a PNG into trace_dir,
+        # which for a pinned golden is a read-only shared mount (/mnt/models/...) -> PermissionError. Off by
+        # default so trace-backed runs don't crash on artifact write; still skipped under GitHub Actions.
+        if os.getenv("TT_PREFILL_PCC_PLOTS") == "1" and not os.getenv("GITHUB_ACTIONS") and trace_dir is not None:
             generate_pcc_plots(summary_result, output_dir=str(trace_dir))
 
     # Deferred PCC failure check (after timing report)

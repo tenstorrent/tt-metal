@@ -478,7 +478,8 @@ def run_chunked_transformer(
     # Sparse (DSA) requires an UNCOMPRESSED bf16/fp8_e4m3 ROW_MAJOR KVPE cache (sparse_sdpa reads it
     # natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE default that dense
     # ring_mla wants. Match the cache format to the path.
-    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if resolve_has_indexer(config) else {}
+    has_indexer = resolve_has_indexer(config)
+    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if has_indexer else {}
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
@@ -496,7 +497,7 @@ def run_chunked_transformer(
     # allocate it with the SAME num_kvpe_cache_layers=num_layers as the KVPE cache. bf8 (half the memory,
     # top-k within bf16 noise). Dense (non-sparse) variants get None (natural-path / dense MLA use no cache).
     tt_index_kv_cache = None
-    if resolve_has_indexer(config):
+    if has_indexer:
         # A sparse config must carry index_head_dim; assert rather than silently defaulting so a
         # misconfigured (missing-field) sparse setup fails loudly with a clear message.
         assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"

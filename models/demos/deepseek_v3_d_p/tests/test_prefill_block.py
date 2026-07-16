@@ -1003,7 +1003,23 @@ def test_glm_prefill_block(
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors(seq_len)
+    # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
+    # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
+    # GLM attention is always sparse, so this is unconditional here; the 1-layer/1-user index cache matches
+    # the layer_num=1 above (update_padded_kv_cache's num_slots = cache_batch / layer_num must be >= 1).
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len, chunk_size_global=seq_len
+    )
+    index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=1,
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
 
     # --- input (full, host) + sharded device copy ---
     torch.manual_seed(7)
@@ -1021,7 +1037,9 @@ def test_glm_prefill_block(
     )
 
     logger.info(f"[glm block {layer_type}] running device block")
-    out = block.forward(tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len)
+    out = block.forward(
+        tt_x, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, actual_isl=seq_len, index_kv_cache=index_kv_cache
+    )
     if isinstance(out, tuple):
         out = out[0]
     tt_out = ttnn.to_torch(
