@@ -199,6 +199,9 @@ public:
     const Impl& impl() const { return *impl_; }
 
 protected:
+    /* Take over an existing Impl object. */
+    explicit PimplBase(Impl impl) : PimplBase(std::in_place, std::move(impl)) {}
+
     /* Forwarding constructor: build the Impl in place (forwards to indirect's in_place ctor). */
     template <typename... Args>
     explicit PimplBase(std::in_place_t, Args&&... args) :  // NOLINT(readability-named-parameter)
