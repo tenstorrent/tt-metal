@@ -200,6 +200,12 @@ class FusedKernelGenerator:
             else '#include "operand.h"\n'
         )
 
+        dvalid_include = ""
+        if self.config.global_config.architecture == ChipArchitecture.QUASAR:
+            dvalid_include = (
+                '#include "dvalid_helper.h"\n' "using namespace test_utils::dvalid;\n"
+            )
+
         combined = (
             f"#define FUSED_TEST\n"
             f'#include "ckernel.h"\n'
@@ -208,6 +214,7 @@ class FusedKernelGenerator:
             f'#include "ckernel_sfpu.h"\n'
             f'#include "tensix_types.h"\n'
             f"{operand_include}"
+            f"{dvalid_include}"
             f"{profiler_include}"
             f"\n"
             f"std::uint32_t unp_cfg_context          = 0;\n"

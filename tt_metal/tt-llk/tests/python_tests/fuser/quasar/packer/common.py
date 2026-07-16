@@ -43,8 +43,13 @@ def l1_accumulation_config(pack_l1_accumulation: L1Accumulation) -> str:
     return f"_llk_pack_set_l1_acc_<p_pacr::PACK0>({l1_acc});\n"
 
 
-def pack_dest_init(dest_sync: str, dest_acc: str) -> str:
-    return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+def pack_dest_init(
+    dest_sync: str,
+    dest_acc: str,
+    sfpu_on_dest: bool = False,
+) -> str:
+    chain = "DestChain::FPU_SFPU_PACK" if sfpu_on_dest else "DestChain::FPU_PACK"
+    return f"setup_dest_dvalid<{chain}>();\n"
 
 
 def packer_wait_for_math() -> str:
@@ -52,10 +57,20 @@ def packer_wait_for_math() -> str:
 
 
 def packer_dest_section_done(dest_sync: str, dest_acc: str) -> str:
-    return f"_llk_pack_dest_dvalid_section_done_<{dest_sync}, {dest_acc}>();\n"
+    return f"pack_section_done<{dest_sync}, {dest_acc}>();\n"
 
 
 def packer_sync_with_unpacker(has_pack_consumer: bool) -> str:
     if has_pack_consumer:
         return "t6_semaphore_post<>(semaphore::PACK_DONE);\n"
     return ""
+
+
+def pack_reduce_mask_config(operation: "FusedOperation") -> str:
+    reduce_dim = operation.reduce_dim.cpp_enum_value
+    tensor_shape = operation.tile_shape.cpp_value
+    return f"_llk_pack_reduce_mask_config_<{reduce_dim}>({tensor_shape});\n"
+
+
+def pack_reduce_mask_clear() -> str:
+    return "_llk_pack_reduce_mask_clear_();\n"

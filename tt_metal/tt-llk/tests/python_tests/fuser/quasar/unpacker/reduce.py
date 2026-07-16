@@ -46,9 +46,10 @@ class ReduceUnpacker(Unpacker):
         buf_desc_id_a = compute_unit.src_a.buf_desc_id
         buf_desc_id_b = compute_unit.src_b.buf_desc_id
         reduce_dim = self.reduce_dim.cpp_enum_value
+        reduce_pool = self.reduce_pool.cpp_enum_value
 
         return (
-            f"_llk_unpack_reduce_init_<{reduce_dim}>"
+            f"_llk_unpack_reduce_init_<{reduce_pool}, {reduce_dim}>"
             f"({buf_desc_id_a}, {buf_desc_id_b}, "
             f"{compute_unit.src_a.tile_shape.cpp_value}, "
             f"1);\n"
@@ -61,7 +62,10 @@ class ReduceUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return f"_llk_unpack_reduce_({block.tile_id_global}, {block.tile_id_global});\n"
+        return (
+            f"_llk_unpack_reduce_({block.tile_id_global}, {block.tile_id_global}, "
+            f"{compute_unit.src_a.tile_shape.cpp_value});\n"
+        )
 
     def uninit(
         self,

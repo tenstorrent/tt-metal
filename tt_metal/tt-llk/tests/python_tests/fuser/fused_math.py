@@ -38,6 +38,16 @@ class ComputePipeline:
     def _get_pack_nodes(self) -> List[PackNode]:
         return [pn for pn in self.pack_nodes if isinstance(pn, PackNode)]
 
+    @property
+    def sfpu_in_math(self) -> bool:
+        return bool(self.math_nodes) and isinstance(self.math_nodes[-1], SfpuNode)
+
+    @property
+    def sfpu_on_dest(self) -> bool:
+        return self.sfpu_in_math or any(
+            isinstance(n, SfpuNode) for n in self.pack_nodes
+        )
+
     def get_unpackers(self) -> List["Unpacker"]:
         unpackers: List["Unpacker"] = []
 
@@ -204,7 +214,7 @@ class ComputePipeline:
         hoist_reconfig = hoist or self._all_same_operand_formats(unpack_ops)
 
         init_code = ""
-        init_code += unpack_common.dvalid_init()
+        init_code += unpack_common.dvalid_init(sfpu_on_dest=self.sfpu_on_dest)
         init_code += config.sentinel.hw_configure_unpack(config, operation)
         if hoist_reconfig and unpack_ops:
             init_code += unpack_ops[0].unpack_reconfig(operation, config)
@@ -272,6 +282,7 @@ class ComputePipeline:
         return fpu_common.math_pack_sync_init(
             operation.dest_sync.cpp_enum_value,
             config.dest_acc.cpp_enum_value,
+            sfpu_on_dest=self.sfpu_on_dest,
         )
 
     def _math_constants(
@@ -301,6 +312,13 @@ class ComputePipeline:
 
         def batch_body(block: BlockData):
             body = self._math_wait_for_dest(operation, config)
+            sfpu_in_math_quasar = (
+                self.sfpu_in_math and get_chip_architecture() == ChipArchitecture.QUASAR
+            )
+            sfpu_on_dest_quasar = (
+                self.sfpu_on_dest and get_chip_architecture() == ChipArchitecture.QUASAR
+            )
+            fpu_dvalid_signaled = False
             for cu in self.math_nodes:
                 if isinstance(cu, FpuNode):
                     if not hoist_reconfig:
@@ -311,10 +329,22 @@ class ComputePipeline:
                     if not hoist:
                         body += cu.fpu_uninit(operation, config, block)
                 elif isinstance(cu, SfpuNode):
+                    if sfpu_in_math_quasar and not fpu_dvalid_signaled:
+                        body += f"signal_fpu_done<{operation.dest_sync.cpp_enum_value}>();\n"
+                        fpu_dvalid_signaled = True
                     body += cu.sfpu_init(operation, config, block)
                     body += cu.sfpu_run(operation, config, block)
                     body += cu.sfpu_uninit(operation, config, block)
-            body += self._math_dest_section_done(operation, config)
+            sfpu_first_in_pack = bool(self.pack_nodes) and isinstance(
+                self.pack_nodes[0], SfpuNode
+            )
+            if sfpu_in_math_quasar:
+                body += f"signal_sfpu_done<{operation.dest_sync.cpp_enum_value}>();\n"
+            elif sfpu_on_dest_quasar and not sfpu_first_in_pack:
+                body += self._math_dest_section_done(operation, config)
+                body += f"signal_sfpu_done<{operation.dest_sync.cpp_enum_value}>();\n"
+            else:
+                body += self._math_dest_section_done(operation, config)
             return body
 
         code += self._zone_loop(
@@ -351,6 +381,7 @@ class ComputePipeline:
         return pack_common.pack_dest_init(
             operation.dest_sync.cpp_enum_value,
             config.dest_acc.cpp_enum_value,
+            sfpu_on_dest=self.sfpu_on_dest,
         )
 
     def _pack_constants(
@@ -361,13 +392,12 @@ class ComputePipeline:
 
     def _pack_reduce_mask_config(self, operation: "FusedOperation") -> str:
         if operation.reduce_dim is not None:
-            reduce_dim = operation.reduce_dim.cpp_enum_value
-            return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
+            return pack_common.pack_reduce_mask_config(operation)
         return ""
 
     def _pack_reduce_mask_clear(self, operation: "FusedOperation") -> str:
         if operation.reduce_dim is not None:
-            return "_llk_pack_reduce_mask_clear_();\n"
+            return pack_common.pack_reduce_mask_clear()
         return ""
 
     def packer_sync_with_unpacker(
@@ -404,6 +434,8 @@ class ComputePipeline:
             if not hoist_reconfig:
                 config.sentinel.reset_pack_formats()
             prev_was_pack = False
+            seen_pack = False
+            need_sfpu_dvalid = False
             for pack_node in self.pack_nodes:
                 if isinstance(pack_node, SfpuNode):
                     if prev_was_pack:
@@ -417,7 +449,15 @@ class ComputePipeline:
                     body += pack_node.sfpu_run(operation, config, block)
                     body += pack_node.sfpu_uninit(operation, config, block)
                     prev_was_pack = False
+                    if (
+                        not seen_pack
+                        and get_chip_architecture() == ChipArchitecture.QUASAR
+                    ):
+                        need_sfpu_dvalid = True
                 elif isinstance(pack_node, PackNode):
+                    if need_sfpu_dvalid:
+                        body += f"signal_sfpu_done<{operation.dest_sync.cpp_enum_value}>();\n"
+                        need_sfpu_dvalid = False
                     if not hoist_reconfig:
                         body += pack_node.reconfig(operation, config)
                     if not hoist:
@@ -426,6 +466,7 @@ class ComputePipeline:
                     if not hoist:
                         body += pack_node.uninit(operation, config)
                     prev_was_pack = True
+                    seen_pack = True
             body += self._packer_dest_section_done(operation, config)
             return body
 
