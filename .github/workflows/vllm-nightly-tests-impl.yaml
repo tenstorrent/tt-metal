@@ -576,6 +576,9 @@ jobs:
           # Structured-output logit-dump harness: server process writes JSONL
           # of grammar-masked closer-token ranks to an uploaded output file.
           export TT_LOGIT_DUMP_PATH=./output/vllm_logit_dump.jsonl
+          # Real JSON closers only (drop bare newline 198, which is legal
+          # trailing whitespace and would trivially rank 0 post-completion).
+          export TT_LOGIT_DUMP_TERMINATORS=92,1,9207,532,497,16707,335,151645
 
           if [ -n "${{ matrix.test-group.tt_mm_throttle_perf }}" ]; then
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
@@ -797,7 +800,7 @@ jobs:
             python3 vllm-source/benchmarks/benchmark_serving_structured_output.py \
               --backend vllm \
               --model ${{ matrix.test-group.model }} \
-              --num-prompts 32 \
+              --num-prompts 128 \
               --percentile-metrics ttft,tpot,itl,e2el \
               --dataset json-unique \
               --output-len 256 \
