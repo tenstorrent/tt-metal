@@ -23,6 +23,7 @@ from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
 from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
+from ..parallel_utils import decode_mm_program_config
 
 
 class HunyuanTtTopKGate(LightweightModule):
@@ -96,13 +97,16 @@ class HunyuanTtTopKGate(LightweightModule):
         if self.weight_dtype == ttnn.float32 and x.get_dtype() != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
 
-        # Router projection (small M, K=4096, N=num_experts=64). l1_sharded_linear's
-        # small-M width-sharded (split-N) path is the measured-optimal schedule for
-        # this shape (~6.8x vs auto; a gather-K split does not help — see gate sweep).
+        # Router projection (M-tiny decode, K=4096, N=num_experts=64). ttnn.linear
+        # auto mis-schedules this skinny matmul to ~90us / 0.4 TFLOPs; the 1D split-N
+        # mcast config recovers ~13us (~6.8x, program-cache ON — see gate sweep). It
+        # returns None (=> auto/wide_mm) for wide-M prefill, so only decode is affected.
+        gate_pc = decode_mm_program_config(self.device, x.shape[-2], x.shape[-1], self.wg.shape[-1])
         logits = l1_sharded_linear(
             x,
             self.wg,
             compute_kernel_config=self.compute_kernel_config,
+            program_config=gate_pc,
         )  # [B, S, num_experts]
         logits = to_interleaved_if_sharded(logits)
 
