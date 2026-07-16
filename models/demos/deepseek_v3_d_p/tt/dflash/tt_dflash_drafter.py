@@ -51,7 +51,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
 
-class TtDFlashDrafterKV:
+class TtDFlashDrafter:
     # safetensors key templates for the 20-tensor prefill subset.
     _K_PROJ = "layers.{i}.self_attn.k_proj.weight"
     _V_PROJ = "layers.{i}.self_attn.v_proj.weight"
@@ -69,6 +69,7 @@ class TtDFlashDrafterKV:
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         weight_cache_path: Optional[Path] = None,
+        fc_mode: str = "sliced",
     ):
         self.mesh_device = mesh_device
         self.config = config
@@ -78,6 +79,14 @@ class TtDFlashDrafterKV:
         self.sp_factor = mesh_device.shape[sp_axis]
         self.num_links = num_links
         self.topology = topology
+        # FC context projection mode:
+        #   "sliced" — stream fc_slice_i @ h_i and accumulate at tap time (smallest memory; the
+        #              hardware-validated path used by test_dflash.py). Nothing raw is stored.
+        #   "concat" — store the raw tapped hiddens, then at write time concat them and do ONE fc matmul
+        #              (fc(concat) == Σ fc_slice_i @ h_i). Needs the full fc pre-permuted so a contiguous
+        #              TP shard aligns with the on-device grouped concat (see _load_weights).
+        assert fc_mode in ("sliced", "concat"), f"fc_mode must be 'sliced' or 'concat', got {fc_mode!r}"
+        self.fc_mode = fc_mode
         # Prefill builds drafter KV for the FULL chunk the verifier hands it (e.g. 5120 tokens), so the
         # cache is sized to max_seq_len — NOT capped at 4k. The 4k (config.context_len) is the drafter's
         # DECODE context window, applied at MIGRATION (send only the last 4k to decode), per #49586's
@@ -111,7 +120,8 @@ class TtDFlashDrafterKV:
         self._rope_cos = self._rope_sin = None
         self._rope_end = 0
         self._alloc_caches()
-        self._reduced_accum: Optional[ttnn.Tensor] = None
+        self._reduced_accum: Optional[ttnn.Tensor] = None  # "sliced": running TP-partial FC sum
+        self._taps: list = [None] * len(config.target_layer_ids)  # "concat": stored raw taps
 
     # ------------------------------------------------------------------ setup
     def _mesh_mappers(self):
@@ -162,13 +172,39 @@ class TtDFlashDrafterKV:
                 cache_file_name=_cache(name),
             )
 
-        # FC context projection, sliced per target layer into [H, H] blocks (concat -> sum decomposition).
-        # Row-parallel: contraction (input H) sharded on TP so each device consumes its hidden shard.
-        self.fc_slices = []
-        fc_full = state_dict["fc.weight"] if have else None  # [H, 6*H]
-        for idx in range(len(cfg.target_layer_ids)):
-            sl = fc_full[:, idx * H : (idx + 1) * H] if have else None  # [H(out), H(in)]
-            self.fc_slices.append(_linear_w(sl, mapper_row, f"fc_slice_{idx}"))
+        # FC context projection. Two layouts (see fc_mode):
+        #   "sliced": n [H(out), H(in)] blocks, each row-parallel (input H sharded on TP), accumulated at
+        #             tap time. fc(concat) == Σ_i fc_slice_i @ h_i.
+        #   "concat": the FULL fc [H, n*H], pre-PERMUTED on the input (n*H) axis so a contiguous
+        #             row-parallel TP shard lines up with the on-device grouped concat of the taps. On
+        #             device tap i is [.., H/tp] (its hidden TP-shard); concatenating the n taps on the
+        #             feature dim yields, per device, [h_0[shard_d]|...|h_{n-1}[shard_d]] — a GROUPED (not
+        #             contiguous) slice of the n*H input. Permuting fc's columns into shard-major-then-layer
+        #             order makes the standard contiguous row-parallel shard match.
+        n = len(cfg.target_layer_ids)
+        self.fc_slices = None
+        self.fc_perm = None
+        if self.fc_mode == "sliced":
+            self.fc_slices = []
+            fc_full = state_dict["fc.weight"] if have else None  # [H, n*H]
+            for idx in range(n):
+                sl = fc_full[:, idx * H : (idx + 1) * H] if have else None  # [H(out), H(in)]
+                self.fc_slices.append(_linear_w(sl, mapper_row, f"fc_slice_{idx}"))
+        else:  # "concat"
+            assert H % self.tp_factor == 0, f"hidden {H} must be divisible by tp {self.tp_factor} for concat fc"
+            fc_perm_w = None
+            if have:
+                W = state_dict["fc.weight"]  # [H(out), n*H(in)]; in = concat over target layers of H
+                hs = H // self.tp_factor
+                # Column order so a contiguous TP block d == {layer*H + [d*hs:(d+1)*hs] for all layers}.
+                perm = [
+                    layer * H + col
+                    for d in range(self.tp_factor)
+                    for layer in range(n)
+                    for col in range(d * hs, (d + 1) * hs)
+                ]
+                fc_perm_w = W[:, perm].contiguous()  # [H(out), n*H(in)] permuted
+            self.fc_perm = _linear_w(fc_perm_w, mapper_row, "fc_perm")
 
         # hidden_norm spans the full H=7168 → it MUST be the DISTRIBUTED (TP-sharded) norm, exactly
         # like the model's attn_norm/ffn_norm. A plain ttnn.rms_norm over the replicated 7168 forces
@@ -251,21 +287,39 @@ class TtDFlashDrafterKV:
 
     # ----------------------------------------------------------------- runtime
     def reset(self):
-        """Clear the FC accumulator (call at the start of each prefill sequence/chunk)."""
+        """Clear the FC accumulator (sliced) / stored taps (concat) — call at the start of each prefill
+        sequence/chunk."""
         if self._reduced_accum is not None:
             ttnn.deallocate(self._reduced_accum)
         self._reduced_accum = None
+        for i, t in enumerate(self._taps):
+            if t is not None:
+                ttnn.deallocate(t)
+                self._taps[i] = None
 
     def is_target_layer(self, global_layer_idx: int) -> bool:
         return global_layer_idx in self.config.target_layer_ids
 
     def tap(self, hidden_states: ttnn.Tensor, global_layer_idx: int) -> None:
         """FC context tap at a verifier target layer. ``hidden_states`` is the residual-stream output
-        [1, 1, seq, hidden/tp] (TP-sharded on hidden). Accumulates the (still TP-partial) FC contribution;
-        the TP all-reduce is deferred to ``write_kv_cache`` (sum-then-reduce == reduce-then-sum)."""
+        [1, 1, seq, hidden/tp] (TP-sharded on hidden, seq contiguous/replicated — SP-gather before tapping
+        if the caller's seq is SP-sharded).
+
+        fc_mode="sliced": stream the FC-slice matmul and accumulate the (still TP-partial) sum; the TP
+            all-reduce is deferred to write_kv_cache (sum-then-reduce == reduce-then-sum).
+        fc_mode="concat": store the raw tap for a single fc(concat) at write time."""
         if not self.is_target_layer(global_layer_idx):
             return
         idx = self.config.target_layer_ids.index(global_layer_idx)
+        if self.fc_mode == "concat":
+            # The drafter TAKES OWNERSHIP of the tensor (deallocated in write_kv_cache()/reset()); the
+            # caller must not free it. The integration hook hands over a fresh (SP-gathered) tensor, so no
+            # clone is needed. TODO(bring-up): if a caller passes a tensor it will mutate/reuse (e.g. the
+            # raw loop `h`), clone before storing.
+            if self._taps[idx] is not None:
+                ttnn.deallocate(self._taps[idx])
+            self._taps[idx] = hidden_states
+            return
         partial = ttnn.linear(
             hidden_states,
             self.fc_slices[idx],
@@ -304,13 +358,34 @@ class TtDFlashDrafterKV:
         return ttnn.permute(x, (0, 2, 1, 3))
 
     def write_kv_cache(self, positions_start: int = 0) -> None:
-        """Finalize: TP-reduce the FC accumulator, hidden_norm, then per draft layer project/norm/rope K
-        and project V, writing each into its cache slot. ``positions_start`` offsets rope for the
-        last-4k window (Phase 3); Phase 1 uses 0. Caller must have supplied seq-contiguous taps."""
-        assert self._reduced_accum is not None, "write_kv_cache called before any tap()"
+        """Finalize: build the TP-partial FC output (mode-dependent), TP-reduce it, hidden_norm, then per
+        draft layer project/norm/rope K and project V, writing each into its cache slot. ``positions_start``
+        offsets rope for the last-4k window (Phase 3); Phase 1 uses 0. Caller must have supplied
+        seq-contiguous taps."""
         cfg = self.config
-        reduced = self._tp_all_reduce(self._reduced_accum)  # [1,1,seq,H] replicated on TP
-        self._reduced_accum = None
+        if self.fc_mode == "concat":
+            missing = [cfg.target_layer_ids[i] for i, t in enumerate(self._taps) if t is None]
+            assert not missing, f"write_kv_cache: missing taps for target layers {missing}"
+            # ONE fc over the concatenated taps. Per device each tap is [1,1,seq,H/tp] (its hidden
+            # TP-shard); concat on the feature dim gives [1,1,seq,n*H/tp] laid out [h_0[shard_d]|...] per
+            # device. fc_perm was pre-permuted so a contiguous row-parallel shard matches → [1,1,seq,H]
+            # TP-partial (== Σ fc_slice_i @ h_i).
+            cat = ttnn.concat(list(self._taps), dim=3)
+            for i, t in enumerate(self._taps):
+                ttnn.deallocate(t)
+                self._taps[i] = None
+            reduced_partial = ttnn.linear(
+                cat,
+                self.fc_perm,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(cat)
+        else:  # "sliced"
+            assert self._reduced_accum is not None, "write_kv_cache called before any tap()"
+            reduced_partial = self._reduced_accum
+            self._reduced_accum = None
+        reduced = self._tp_all_reduce(reduced_partial)  # [1,1,seq,H] replicated on TP
         seq = reduced.shape[2]
         assert positions_start + seq <= self.cache_seq, (
             f"positions_start+seq ({positions_start + seq}) exceeds cache_seq ({self.cache_seq}); "
