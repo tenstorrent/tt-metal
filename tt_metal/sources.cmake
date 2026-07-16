@@ -1,5 +1,6 @@
 set(TT_METAL_PUBLIC_API
     api/internal/service/inter_process_counter_channel.hpp
+    api/tt-metalium/allocation_context.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
