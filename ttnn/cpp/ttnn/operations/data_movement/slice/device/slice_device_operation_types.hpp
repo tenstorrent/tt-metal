@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -19,6 +20,27 @@ struct SliceParams {
     std::optional<uint32_t> slice_dim = std::nullopt;
     std::optional<uint32_t> num_devices = std::nullopt;
     std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "slice_start",
+        "slice_end",
+        "step",
+        "use_tensor_args",
+        "slice_dim",
+        "num_devices",
+        "output_mem_config",
+        "sub_core_grids");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(slice_start),
+            std::cref(slice_end),
+            std::cref(step),
+            use_tensor_args,
+            slice_dim,
+            num_devices,
+            std::cref(output_mem_config),
+            std::cref(sub_core_grids));
+    }
 };
 
 struct SliceInputs {
