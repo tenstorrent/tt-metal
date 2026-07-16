@@ -1784,12 +1784,9 @@ class LTXPipeline:
             torch.save(audio_latent.cpu(), _dump)
             logger.info(f"dumped audio latent {tuple(audio_latent.shape)} -> {_dump}")
 
-        # VAE and audio modules can't be L1-coresident on BH-LB. With
-        # dynamic_load the audio (re)load below evicts the VAE via the
-        # coresident exclusions registered in `_register_coresident_exclusions`;
-        # without dynamic_load nothing evicts, so free the VAE explicitly.
-        if not self.dynamic_load and self.vae_decoder is not None and self.vae_decoder.is_loaded():
-            self.vae_decoder.deallocate_weights()
+        # No explicit VAE free: dynamic_load evicts it via coresident exclusions; static load keeps
+        # it resident (the _prepare_vae is_loaded guard then skips the reload). The VAE and the
+        # audio modules are DRAM-resident and measured coresident with no OOM.
 
         assert self.tt_mel_decoder is not None and self.tt_vocoder_with_bwe is not None, (
             "audio decoder shells not built — _new_audio_decoder() must run first "

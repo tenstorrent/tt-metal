@@ -53,13 +53,15 @@ def _resolve_gemma_dir(gemma: str) -> str:
 
 
 # --- source state dicts (lazy: only read on a cache miss) -------------------
+def _gemma_shards(gemma_path: str) -> list[str]:
+    """The safetensors shards the Gemma encoder is built from, in load order."""
+    return sorted(glob.glob(f"{gemma_path}/model-*.safetensors")) or sorted(glob.glob(f"{gemma_path}/*.safetensors"))
+
+
 def _gemma_state_dict(gemma_path: str) -> dict[str, torch.Tensor]:
     """All Gemma encoder weights, from the HF safetensors shards."""
-    weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors")) or sorted(
-        glob.glob(f"{gemma_path}/*.safetensors")
-    )
     sd: dict[str, torch.Tensor] = {}
-    for f in weight_files:
+    for f in _gemma_shards(gemma_path):
         sd.update(load_file(f))
     return sd
 
@@ -222,6 +224,7 @@ class GemmaTokenizerEncoderPair:
             subfolder="text_encoder",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            sources=_gemma_shards(gemma_path),
             get_torch_state_dict=lambda: _gemma_state_dict(gemma_path),
         )
         logger.info(f"Loaded TTNN Gemma encoder ({self._num_layers}L) in {time.time()-t0:.0f}s")
@@ -249,6 +252,9 @@ class GemmaTokenizerEncoderPair:
             if self.checkpoint_name
             else "ltx-connectors"
         )
+        # Without a checkpoint the weights come from whatever the caller handed in, so there is
+        # nothing to bind the cache to and it must not be shared with the pipeline's.
+        sources = [self.checkpoint_name] if self.checkpoint_name else []
 
         if self.feature_extractor is None:
             self.feature_extractor = GemmaFeatureExtractor(
@@ -267,21 +273,22 @@ class GemmaTokenizerEncoderPair:
             subfolder="feature_extractor",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            sources=sources,
             get_torch_state_dict=lambda: _feature_extractor_state_dict(
                 ckpt(), mode=self.mode, gemma_hidden_size=gemma_hidden_size, gemma_num_layers=gemma_num_layers
             ),
         )
 
         self.video_connector = self._load_connector(
-            "video", self._video_dim, video_num_blocks, num_heads, ckpt_name, ckpt
+            "video", self._video_dim, video_num_blocks, num_heads, ckpt_name, ckpt, sources
         )
         self.audio_connector = (
-            self._load_connector("audio", self._audio_dim, audio_num_blocks, num_heads, ckpt_name, ckpt)
+            self._load_connector("audio", self._audio_dim, audio_num_blocks, num_heads, ckpt_name, ckpt, sources)
             if self.mode == "av"
             else None
         )
 
-    def _load_connector(self, axis, output_dim, num_blocks, num_heads, ckpt_name, ckpt) -> EmbeddingsConnector:
+    def _load_connector(self, axis, output_dim, num_blocks, num_heads, ckpt_name, ckpt, sources) -> EmbeddingsConnector:
         connector = getattr(self, f"{axis}_connector")
         if connector is None:
             connector = EmbeddingsConnector(
@@ -300,6 +307,7 @@ class GemmaTokenizerEncoderPair:
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             dtype="float32",
+            sources=sources,
             get_torch_state_dict=lambda: _connector_state_dict(ckpt(), axis, num_blocks),
         )
         logger.info(f"Loaded {axis} embeddings connector ({num_blocks} blocks, dim={output_dim})")

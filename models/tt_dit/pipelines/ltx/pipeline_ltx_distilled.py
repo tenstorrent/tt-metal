@@ -35,6 +35,9 @@ from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline
 _DEFAULT_S1_SIGMAS = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 _DEFAULT_S2_SIGMAS = [0.909375, 0.725, 0.421875, 0.0]
 
+# Serial number for LTX_DUMP_LATENTS files; see the dump site in generate().
+_LATENT_DUMP_N = 0
+
 
 def _sigma_override(env_name: str, default: list[float]) -> list[float]:
     raw = os.environ.get(env_name, "").strip()
@@ -291,9 +294,13 @@ class LTXDistilledPipeline(LTXPipeline):
         # and keep only the prealloc trace-io + stage statics that gen#0 reuses. When prep_run is off
         # (CI / quality runs), keep the mini-denoise so the prep_run=False capture finds warm kernels.
         iter_fast = (not capture_all) and os.environ.get("LTX_ITER_FAST", "0") in ("1", "true", "True")
-        # generate() drops the audio decode entirely under LTX_VIDEO_ONLY, so warming and
-        # trace-capturing the audio decoder here compiles kernels that are never replayed.
+        # generate() drops the audio decode entirely under LTX_VIDEO_ONLY, so warming the audio
+        # decoder here compiles kernels that are never replayed.
         video_only = os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True")
+        # Profiling-only: the denoise is the measurement target, and the VAE/audio decode warmups cost
+        # ~200s of eager compile that blows the device reservation before the traced denoise is ever
+        # reached. Skipping them leaves encode → S1 → upsample → S2 untouched.
+        denoise_only = os.environ.get("LTX_PROFILE_DENOISE_ONLY", "0") in ("1", "true", "True")
         warmup_steps = 1 if iter_fast else num_inference_steps
         skip_dit_warmup = LTX_DIT_PREP_RUN and not capture_all
 
@@ -398,19 +405,21 @@ class LTXDistilledPipeline(LTXPipeline):
                     )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
-            if not iter_fast:
+            if not iter_fast and not denoise_only:
                 self._warmup_decode(num_frames, height, width)
 
-            # Warm the on-device audio decode eagerly at the exact latent shape generate()
-            # produces: compiles kernels, initializes lazy device state, and frees back to a
-            # deterministic allocator free-list so the first real (traced) decode captures cleanly
-            # on warm state. The adopted ltx-perf vocoder/mel decoder are
-            # @traced_function(prep_run=False), so they do NOT self-warm — this eager warm (via
-            # _warmup_audio_decode, trace flags forced off) is what inits them; the first real
-            # generate then captures+executes correctly and every later decode replays.
-            # in_capture_pass / iter_fast are ltx-rt serving gates preserved from HEAD.
+            # Warm the on-device audio decode eagerly at the exact latent shape generate() produces:
+            # it compiles kernels (cold ~64s otherwise), inits the lazy device state, and frees back
+            # to a deterministic allocator free-list. The vocoder/mel decoder are
+            # @traced_function(prep_run=False) and so never self-warm — this eager pass (trace flags
+            # forced off) is what inits them. The first real decode then captures, with the video
+            # trace's own buffers already allocated, so the free-list it bakes is the one every later
+            # replay sees; capturing here instead would bake a free-list that gen#0's denoise-trace
+            # buffers then shift out from under the replay (flat, clipped, zero-voiceband audio).
             if video_only:
                 logger.info("LTX_VIDEO_ONLY=1: skipping warmup audio decode (generate() decodes no audio)")
+            elif denoise_only:
+                logger.info("LTX_PROFILE_DENOISE_ONLY=1: skipping VAE + audio decode warmup")
             elif in_capture_pass:
                 logger.info("capture pass: skipping audio decode (vocoder prep_run=False; real warmup inits it)")
             elif iter_fast:
@@ -418,13 +427,6 @@ class LTXDistilledPipeline(LTXPipeline):
             else:
                 logger.info("warmup audio decode (on-device, eager)")
                 self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
-                if self._traced:
-                    # Capture the audio trace HERE, while the video traces' held inputs are still the
-                    # only thing pinned below the activation regions. Deferring the capture to the
-                    # first real generate lays its activations over those baked video inputs and
-                    # clobbers them — every video replay then decodes to blank frames.
-                    logger.info("warmup audio decode (capture pass)")
-                    self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
 
         # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
         # DiT), so they never disturb the denoise/decode kernels compiled above.
@@ -452,6 +454,14 @@ class LTXDistilledPipeline(LTXPipeline):
                 self.encode_prompts(["warmup"], use_cache=False)
         else:
             logger.info("LTX_WARMUP_ENCODERS=0: skipping image + gemma encoder warmup")
+
+        # The video replay decodes through the VAE, so its weights must already be resident when the
+        # denoise traces are captured: weights loaded after capture land in a trace's activation
+        # region and the next replay overwrites them (flat colour bands). _warmup_decode loads them
+        # and nothing frees them now, so this only pins that invariant for the video-only path — the
+        # one path with no audio decode to reload them — and short-circuits on the is_loaded guard.
+        if self._traced and not self.dynamic_load and os.environ.get("LTX_VIDEO_ONLY", "0") in ("1", "true", "True"):
+            self._prepare_vae()
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
@@ -673,6 +683,10 @@ class LTXDistilledPipeline(LTXPipeline):
         image_conds: list | None = None,
         traced: bool = False,
         trace_key: str | None = None,
+        # Draining the device profiler is only legal BETWEEN trace replays: a read issued while the
+        # trace is still capturing trips !trace_id_.has_value(). Warmup captures, so only the replay
+        # path (generate) may set this.
+        profile_drain: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
@@ -840,7 +854,20 @@ class LTXDistilledPipeline(LTXPipeline):
                 )
                 video_ts_pair_tt = state.tt_video_ts_pair
                 video_pin_mask_tt = state.tt_video_pin_mask
+            # Drain BEFORE the step: the profiler's DRAM buffer holds a fixed number of programs and the
+            # eager warmup already filled it, so a post-step drain would find the traced programs
+            # already dropped. Draining first resets the buffer, so this step's trace fills it clean and
+            # the NEXT drain reads it back. The drain issues an event-sync, illegal while the command
+            # queue is in kernel capture (prewarm's capture stage) — there is no live replay to sync
+            # against — so it is confined to the real run.
+            if (
+                profile_drain
+                and os.environ.get("LTX_PROFILE_FLUSH")
+                and not os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY")
+            ):
+                ttnn.ReadDeviceProfiler(self.mesh_device)
             # video_N_real is the logical (unpadded) count so ring SDPA masks padded K positions.
+            _t_step = time.perf_counter()
             v_out, a_out = self.transformer.inner_step(
                 video_1BNI=state.tt_video_lat,
                 timestep=state.tt_timestep,
@@ -1095,6 +1122,7 @@ class LTXDistilledPipeline(LTXPipeline):
             image_conds=s1_image_conds,
             traced=self._traced and "s1" not in eager_stages,
             trace_key="s1",
+            profile_drain=True,
         )
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
@@ -1129,10 +1157,44 @@ class LTXDistilledPipeline(LTXPipeline):
             image_conds=full_image_conds,
             traced=self._traced and "s2" not in eager_stages,
             trace_key="s2",
+            profile_drain=True,
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
+
+        dump_prefix = os.environ.get("LTX_DUMP_LATENTS", "")
+        if dump_prefix:
+            # The denoised S2 latents are the last point where a transformer-only change is still
+            # isolated — VAE/vocoder decode below would fold their own error in on top. One file per
+            # generate() call (traced runs generate twice: capture, then steady-state replay), so an
+            # A/B compares like with like instead of racing on one path.
+            global _LATENT_DUMP_N  # noqa: PLW0603
+            path = f"{dump_prefix}.gen{_LATENT_DUMP_N}.pt"
+            _LATENT_DUMP_N += 1
+            # Provenance travels inside the artifact: the flags are read back off the module that
+            # actually ran, not off the environment. An A/B is only worth its weakest claim about
+            # which code produced each side, and an env echo in a log does not survive the tree
+            # being rebuilt underneath it.
+            from ...models.transformers.ltx import transformer_ltx as _tx
+
+            flags = {
+                "LTX_FOLD_GATED_RESIDUAL": _tx.LTX_FOLD_GATED_RESIDUAL,
+                "LTX_PROBE_ADDCMUL_SPLIT": _tx.LTX_PROBE_ADDCMUL_SPLIT,
+                "seed": seed,
+            }
+            torch.save(
+                {
+                    "video": s2_video.detach().cpu().float(),
+                    "audio": s2_audio.detach().cpu().float(),
+                    "flags": flags,
+                },
+                path,
+            )
+            logger.info(
+                f"LTX_DUMP_LATENTS: wrote video {tuple(s2_video.shape)} + audio "
+                f"{tuple(s2_audio.shape)} to {path} with {flags}"
+            )
 
         if os.environ.get("LTX_PROFILE_DENOISE_ONLY", "0") in ("1", "true", "True"):
             # Profiling-only: stop before VAE/audio so the device reservation is spent on the traced
@@ -1161,6 +1223,17 @@ class LTXDistilledPipeline(LTXPipeline):
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
+
+        # LTX_DUMP_FRAMES writes the exact (F,H,W,C) uint8 tensor the H.264 export would quantize.
+        # A pixel-level A/B read back from the mp4 measures the codec as much as the model; this
+        # lands the frames losslessly so the comparison sees only the model. Out-of-place: float()
+        # is a no-op view when video_pixels is already float32, so an in-place rescale here would
+        # corrupt the tensor the export below still needs.
+        dump_path = os.environ.get("LTX_DUMP_FRAMES", "").strip()
+        if dump_path:
+            frames_u8 = ((video_pixels[0].float() + 1.0) * 127.5).clamp(0.0, 255.0)
+            torch.save(frames_u8.to(torch.uint8).permute(1, 2, 3, 0).contiguous().cpu(), dump_path)
+            logger.info(f"LTX_DUMP_FRAMES: wrote raw frames to {dump_path}")
 
         # The vocoder decodes s2_audio, a latent distinct from the s2_video that produced video_pixels
         # above, so LTX_VIDEO_ONLY cannot perturb a single pixel — it only drops the eager vocoder

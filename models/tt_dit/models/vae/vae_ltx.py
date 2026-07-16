@@ -37,6 +37,7 @@ from ...utils.conv3d import (
 )
 from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
+from ...utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -658,6 +659,10 @@ class LTXVideoDecoder(Module):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # Lazily-built trace of the device-only decode (decode_device), plus the post-upsample logical
+        # dims it stashes for forward's crop. Only used when forward(traced=True).
+        self._decode_tracer = None
+        self._decode_logical_hw = (0, 0)
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
         feature_channels = base_channels * 8  # 1024
@@ -789,27 +794,15 @@ class LTXVideoDecoder(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
-        """Decode latent (B, 128, F', H', W') → video.
+    def decode_device(self, sample_tt: ttnn.Tensor, logical_h: int, logical_w: int) -> ttnn.Tensor:
+        """Device-only decode (denorm → conv_in → up_blocks → norm_out → conv_out) of an already-sharded
+        input, returning the device tensor before the depth-to-space unpatch and host gather.
 
-        output_type: "float" → (B, 3, F, H, W) float32 [-1, 1]; "rgb" → (B, 3, F, H, W) uint8 RGB planar.
+        Split out from forward so the whole device region can be captured as ONE ttnn trace: the host
+        upload (typed_tensor_2dshard) and the host gather (fast_device_to_host) must stay outside the
+        trace. Stashes the post-upsample logical dims because the returned tensor still carries mesh
+        padding, so forward needs them to crop.
         """
-        # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
-        sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
-        sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
-        sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
-
-        sample_tt = typed_tensor_2dshard(
-            sample,
-            self.mesh_device,
-            shard_mapping={
-                self.parallel_config.height_parallel.mesh_axis: 2,
-                self.parallel_config.width_parallel.mesh_axis: 3,
-            },
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
-
         # Denormalize: x = x * std + mean (per-channel stats replicated on the mesh).
         mean = self.per_channel_mean.data
         std = self.per_channel_std.data
@@ -829,6 +822,43 @@ class LTXVideoDecoder(Module):
         sample_tt = self.norm_out(sample_tt, compute_kernel_config=self.norm_out_compute_kernel_config)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
         sample_tt = self.conv_out(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
+        self._decode_logical_hw = (logical_h, logical_w)
+        return sample_tt
+
+    def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", traced: bool = False) -> torch.Tensor:
+        """Decode latent (B, 128, F', H', W') → video.
+
+        output_type: "float" → (B, 3, F, H, W) float32 [-1, 1]; "rgb" → (B, 3, F, H, W) uint8 RGB planar.
+        traced: capture the device decode once and replay it from a resident ttnn trace, dropping per-op
+            host dispatch. A single decode does not amortize the capture, so this pays off only when the
+            decoder is reused across generations; the mesh must be opened with a trace_region_size.
+        """
+        # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
+        sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
+        sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
+        sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
+
+        sample_tt = typed_tensor_2dshard(
+            sample,
+            self.mesh_device,
+            shard_mapping={
+                self.parallel_config.height_parallel.mesh_axis: 2,
+                self.parallel_config.width_parallel.mesh_axis: 3,
+            },
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
+
+        if traced:
+            if self._decode_tracer is None:
+                self._decode_tracer = Tracer(
+                    self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
+                )
+            sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
+        else:
+            sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
+        # decode_device threads logical_h/logical_w through the upsamples; read back the final dims.
+        logical_h, logical_w = self._decode_logical_hw
 
         # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large
         # (channels-last would gather a length-3 innermost). conv_out channels are ordered (c, p, r, q).

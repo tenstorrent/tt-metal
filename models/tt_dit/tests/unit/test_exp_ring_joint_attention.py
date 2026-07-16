@@ -363,9 +363,10 @@ def run_test_exp_ring_joint_sdpa(
     [
         ((4, 32), 2, 40, 75600, 1, 32, 0, 4),
         ((4, 8), 2, 40, 18944, 1, 8, 0, 4),
+        ((4, 8), 2, 32, 38760, 1, 8, 0, 4),  # ltx_s2 stage-2 self-attn (empty joint)
         ((1, 4), 2, 10, 8960, 1, 4, 0, 1),
     ],
-    ids=["4x32", "4x8", "1x4"],
+    ids=["4x32", "4x8", "ltx_s2", "1x4"],
     indirect=["mesh_device"],
 )
 @pytest.mark.skipif(
@@ -386,7 +387,8 @@ def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
 ):
     dtype = ttnn.bfloat16
     b, joint_seq_len, d = 1, 0, 128
-    q_chunk_size = 224
+    # ltx_s2 mirrors the shipped stage-2 chunk (192, 512); other shapes keep their tuned 224
+    q_chunk_size = 192 if base_seq_len == 38760 else 224
     k_chunk_size = 512
     n_iters = 5
     trace_enabled = False

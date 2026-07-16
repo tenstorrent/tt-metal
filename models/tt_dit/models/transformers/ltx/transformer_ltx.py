@@ -32,6 +32,23 @@ from .attention_ltx import LTXAttention
 # does not, so enabling it skips warmup with no self-warm and compiles the DiT cold in the reserved window.
 LTX_DIT_PREP_RUN = os.environ.get("LTX_DIT_PREP_RUN", "0") in ("1", "true", "True")
 
+# Fold the three still-unfused gated residuals (audio cross-attn, A->V, V->A) into their to_out matmul
+# epilogue, via the primitive the self-attentions already use. Math-identical, and it removes three
+# programs per block. The traced step carries a large work-independent floor, so a program removed is
+# worth more than the FLOPs it carried. Set to 0 to restore the standalone addcmul for an A/B.
+LTX_FOLD_GATED_RESIDUAL = os.environ.get("LTX_FOLD_GATED_RESIDUAL", "1") in ("1", "true", "True")
+
+# PROBE ONLY (not a shipping path): replace the three gated-residual addcmul(t,t1,t2) calls with the
+# algebraically identical add(t, multiply(t1,t2)). Same math, different bf16 rounding — a control that
+# measures how far the sampler amplifies a rounding-scale perturbation, independent of the fold.
+LTX_PROBE_ADDCMUL_SPLIT = os.environ.get("LTX_PROBE_ADDCMUL_SPLIT", "0") in ("1", "true", "True")
+
+
+def _gated_residual(t: ttnn.Tensor, t1: ttnn.Tensor, t2: ttnn.Tensor) -> ttnn.Tensor:
+    if LTX_PROBE_ADDCMUL_SPLIT:
+        return ttnn.add(t, ttnn.multiply(t1, t2))
+    return ttnn.addcmul(t, t1, t2)
+
 
 def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
     """Split ``x`` into ``n`` size-1 slices along dim 0 WITHOUT leaving TILE layout.
@@ -444,10 +461,20 @@ class LTXTransformerBlock(Module):
                 audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
             else:
                 audio_prompt_mod = audio_prompt
-            audio_ca_out = self.audio_attn2(
-                spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod, kv_replicated=True
-            )
-            audio_1BND = ttnn.addcmul(audio_1BND, audio_ca_out, a_gate_ca)
+            if LTX_FOLD_GATED_RESIDUAL:
+                audio_1BND = self.audio_attn2(
+                    spatial_1BND=audio_ca_input,
+                    N=audio_N,
+                    prompt_1BLP=audio_prompt_mod,
+                    kv_replicated=True,
+                    addcmul_residual=audio_1BND,
+                    addcmul_gate=a_gate_ca,
+                )
+            else:
+                audio_ca_out = self.audio_attn2(
+                    spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod, kv_replicated=True
+                )
+                audio_1BND = _gated_residual(audio_1BND, audio_ca_out, a_gate_ca)
         else:
             audio_ca_input = self.audio_norm2(audio_1BND)
             audio_ca_out = self.audio_attn2(
@@ -487,8 +514,10 @@ class LTXTransformerBlock(Module):
                 k_rope_cos=audio_cross_pe_cos_full,
                 k_rope_sin=audio_cross_pe_sin_full,
                 trans_mat=trans_mat,
+                addcmul_residual=video_1BND if LTX_FOLD_GATED_RESIDUAL else None,
+                addcmul_gate=v_ca_gate if LTX_FOLD_GATED_RESIDUAL else None,
             )
-            video_1BND = ttnn.addcmul(video_1BND, a2v_output, v_ca_gate)
+            video_1BND = a2v_output if LTX_FOLD_GATED_RESIDUAL else _gated_residual(video_1BND, a2v_output, v_ca_gate)
 
             # V→A: video provides context for audio
             audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
@@ -510,8 +539,10 @@ class LTXTransformerBlock(Module):
                 # from the video context it attends to. Defaults to video_N when unset.
                 kv_logical_n=video_kv_logical_n if video_kv_logical_n is not None else video_N,
                 trans_mat=trans_mat,
+                addcmul_residual=audio_1BND if LTX_FOLD_GATED_RESIDUAL else None,
+                addcmul_gate=a_ca_gate if LTX_FOLD_GATED_RESIDUAL else None,
             )
-            audio_1BND = ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
+            audio_1BND = v2a_output if LTX_FOLD_GATED_RESIDUAL else _gated_residual(audio_1BND, v2a_output, a_ca_gate)
 
         # Video feed forward
         video_1BND = self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
@@ -965,8 +996,14 @@ class LTXTransformerModel(Module):
 
         skip_self_attn_set = frozenset(skip_self_attn_blocks) if skip_self_attn_blocks else frozenset()
 
+        # LTX_SKIP_BLOCKS="a,b,..": identity-skip whole blocks (layer-prune experiment; residual passes
+        # through unchanged). Baked into the trace, so it must be constant across capture+replay.
+        _prune = {int(x) for x in os.environ.get("LTX_SKIP_BLOCKS", "").split(",") if x.strip().isdigit()}
+
         # Transformer blocks
         for block_idx, block in enumerate(self.transformer_blocks):
+            if block_idx in _prune:
+                continue
             result = block(
                 video_1BND=video_1BND,
                 video_prompt=video_prompt_1BLP,
@@ -1003,6 +1040,13 @@ class LTXTransformerModel(Module):
                 video_1BND, audio_1BND = result
             else:
                 video_1BND = result
+            # Profiler drain every 16 blocks (LTX_PROFILE_FLUSH): 16 blocks × ~35 ops stays under the
+            # 12k-marker DRAM buffer, so markers are never dropped, while a per-BLOCK drain (a host
+            # readback of all 32 devices each block) is far too slow. Profiling only; no effect traced.
+            if os.environ.get("LTX_PROFILE_FLUSH") and (
+                block_idx % 16 == 15 or block_idx == len(self.transformer_blocks) - 1
+            ):
+                ttnn.ReadDeviceProfiler(self.mesh_device)
 
         v_inner_local = video_emb_ts.shape[-1]
         if self.image_conditioning:
