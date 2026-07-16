@@ -47,6 +47,11 @@ struct operation_attributes_t {
     // host-side and passed to compute as a RUNTIME arg (hash-excluded), so distinct values reuse one program.
     uint32_t chunk_start_idx{0};             // elements, tile-aligned
     std::optional<uint32_t> cluster_axis{};  // mesh axis that is the SP ring; unset = linear device order
+    // Second mesh axis (TP) that the query sequence is ALSO block-cyclically sub-sharded over, on top of the
+    // SP block-cyclic layout. When set (alongside a named cluster_axis + block_cyclic), each device owns a
+    // Sq-row sub-range [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local-wide slab; the causal geometry
+    // adds that TP sub-offset to the exact block-cyclic position. unset = query sharded on the SP axis only.
+    std::optional<uint32_t> seq_subshard_axis{};
     // ReLU on each per-head q.kT before the gate-mul. true = DSA/GLM (relu(q.k)*w); false = raw dot (M3 MSA).
     // Compile-time, so the true path is byte-identical to before.
     bool apply_relu{true};
@@ -79,7 +84,7 @@ struct operation_attributes_t {
     bool has_runtime_kv_len() const { return kv_len.has_value(); }
     // Resolved block-cyclic (per-SP-shard) K layout. When set, the reader remaps each logical k-tile to its
     // physical (permuted) tile, presenting K in natural token order. HASHED (sp/chunk_local shape the reader
-    // binary via compile-time defines, so the contiguous path stays byte-identical). nullopt == contiguous K
+    // binary via compile-time arguments). nullopt == contiguous K
     // (which is also what sp == 1 resolves to, since that is the identity permutation).
     std::optional<BlockCyclicLayout> block_cyclic{std::nullopt};
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
