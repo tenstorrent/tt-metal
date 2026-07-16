@@ -239,19 +239,13 @@ jobs:
               --num-iterations 5
           }
 
-          echo "--- Checking cluster health before reset ---"
-          if run_cluster_validation; then
-            echo "SUCCESS: Cluster validation passed without reset"
-            exit 0
-          fi
-
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
             reset_success=false
             validation_success=false
 
             echo "--- Resetting cards with tt-smi ---"
-            if mpirun --pernode tt-smi -glx_reset; then
+            if mpirun --map-by ppr:1:node --bind-to none --mca btl self,vader,tcp tt-smi -glx_reset; then
               reset_success=true
             else
               echo "WARNING: Reset failed on attempt $attempt"
