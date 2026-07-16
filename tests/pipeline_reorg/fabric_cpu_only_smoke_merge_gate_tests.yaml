@@ -9,8 +9,8 @@
 
 []
 
-# - id: fabric-cpu-unit-smoke
-#   name: fabric cpu unit tests (unit)
+# - id: scaleout-cpu-unit-smoke
+#   name: scaleout cpu unit tests (unit)
 #   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group unit
 #   skus:
 #     cpu_medium:
