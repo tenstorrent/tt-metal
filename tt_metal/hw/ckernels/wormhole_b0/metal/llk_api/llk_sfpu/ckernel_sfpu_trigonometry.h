@@ -541,16 +541,12 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     coefficient = 0x1.5556dcp-3f;
     polynomial =
         __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    sfpi::vFloat neg_two = -2.0f;
     polynomial *= square;
+    sfpi::vFloat pio2 = 1.57079637050628662109f;
     result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
-    v_if(tmp >= 0.0f) {
-        sfpi::vFloat pio2_fac1 = 0.93318945f;
-        sfpi::vFloat pio2_fac2 = 1.68325555f;
-        sfpi::vFloat negative_twice_result = -2.0f * result;
-        result = __builtin_rvtt_sfpmad(
-            pio2_fac1.get(), pio2_fac2.get(), negative_twice_result.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    }
+    v_if(tmp >= 0.0f) { result = pio2 + neg_two * result; }
     v_endif;
 
     result = sfpi::copysgn(result, x);
@@ -604,11 +600,7 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // Map asin(reduced) back to acos(x).
-    v_if(x_lt_switchover < 0.0f) {
-        sfpi::vFloat pio2_fac1 = 0.93318945f;
-        sfpi::vFloat pio2_fac2 = 1.68325555f;
-        result = __builtin_rvtt_sfpmad(pio2_fac1.get(), pio2_fac2.get(), result.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-    }
+    v_if(x_lt_switchover < 0.0f) { result += 1.57079637050628662109f; }
     v_endif;
 
     v_if(tmp >= 0.0f) { result += result; }
