@@ -1,0 +1,56 @@
+{
+  "hf_model": "meta-llama/Llama-3.1-70B-Instruct",
+  "hf_advertised_context": 131072,
+  "current_supported_context": 18,
+  "limiting_reason": "device_dram",
+  "capacity_evidence": {
+    "captured_batch": 32,
+    "captured_cache_length": 128,
+    "device_allocator_dram_bytes": 34178731008,
+    "device_allocator_probe": "TT_VISIBLE_DEVICES=2,3; ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM): 8 banks * 4272341376 bytes per bank",
+    "advertised_context_bf16_kv_cache_bytes": 17179869184,
+    "advertised_context_bf16_input_bytes": 68719476736,
+    "minimum_combined_bytes": 85899345920,
+    "formula": "KV: 32 batch * 8 KV heads * 131072 positions * 128 head_dim * 2 (K,V) * 2 bf16 bytes. Input: 1 * 32 batch * 131072 positions * 8192 hidden * 2 bf16 bytes.",
+    "stage_scope": "The 80 GiB minimum for only the BF16 input and KV cache exceeds the allocator-reported 34178731008 DRAM bytes before full layer weights, RoPE tables, output/residual tensors, and operation temporaries. This stage validates the compiler-captured functional starting point, not advertised-context prefill."
+  },
+  "notes": "The current context is the largest prefill sequence validated by this functional stage. The source capture uses prefill sequence 18 and decode cache length 128 at batch 32. Downstream stages must establish a feasible long-context policy; none is begun here.",
+  "paths": {
+    "prefill": {
+      "status": "translated",
+      "compiler_graph": "ttnn_llama_3_1_70b_tp_qb2_bs32_isl128_runbb45_g0_1784014705663.mlir",
+      "classification": {
+        "fill_cache": 5120,
+        "paged_update_cache": 0,
+        "decode_sdpa": 0,
+        "emitted_batch": 32,
+        "emitted_sequence": 18
+      }
+    },
+    "decode": {
+      "status": "translated",
+      "compiler_graph": "ttnn_llama_3_1_70b_tp_qb2_bs32_isl128_runbb45_g1_1784015812679.mlir",
+      "classification": {
+        "fill_cache": 0,
+        "paged_update_cache": 160,
+        "decode_sdpa": 80,
+        "emitted_batch": 32,
+        "emitted_sequence": 1,
+        "cache_length": 128
+      }
+    }
+  },
+  "ir_provenance": {
+    "source_root": "/home/mvasiljevic/qb2-irs/ttnn-mlir-ttnn_llama_3_1_70b_tp_qb2_bs32_isl128_1784014705663",
+    "representative_layer": 39,
+    "captured_mesh": "2x2",
+    "tensor_parallel_degree": 4,
+    "translation_mesh": "1x1",
+    "collective_collapse": "The emitted two-dimensional TP projection shards and all-reduces are replaced by dense matmuls over canonical full Hugging Face weights."
+  },
+  "dtype_policy": {
+    "functional_baseline": "bf16 weights and activations; TILE layout; DRAM memory by default",
+    "emitted_weights": "BF8 for most projection weights and BF4 for gate/up projection weights",
+    "deferred": "Restoring the compiler precision policy belongs to later datatype selection after correctness."
+  }
+}
