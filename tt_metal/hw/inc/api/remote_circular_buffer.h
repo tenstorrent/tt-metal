@@ -613,7 +613,7 @@ public:
      * @return A scoped lock on the RemoteCircularBuffer
      */
     [[nodiscard]] auto scoped_lock() {
-#if defined(DEVICE_DEBUG_DUMP)
+#if defined(DEVICE_DEBUG_DUMP) && defined(KERNEL_BUILD) && !defined(COMPILE_FOR_TRISC)
         const RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_index_);
         uint32_t addr = remote_cb.fifo_start_addr;
         uint32_t num_bytes = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.config_ptr)[3];
