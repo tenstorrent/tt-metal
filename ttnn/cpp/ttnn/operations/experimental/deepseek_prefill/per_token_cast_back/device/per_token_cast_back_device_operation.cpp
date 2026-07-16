@@ -143,23 +143,6 @@ PerTokenCastBackDeviceOperation::tensor_return_value_t PerTokenCastBackDeviceOpe
     return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input_e4m3.device());
 }
 
-ttsl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    const auto tile_shape = tensor_args.input_e4m3.tensor_spec().tile().get_tile_shape();
-    const auto face_shape = tensor_args.input_e4m3.tensor_spec().tile().get_face_shape();
-    return tt::tt_metal::operation::hash_operation<PerTokenCastBackDeviceOperation>(
-        attrs,
-        tensor_args.input_e4m3.dtype(),
-        tensor_args.input_e4m3.memory_config(),
-        tensor_args.input_scale.memory_config(),
-        tensor_args.input_e4m3.logical_shape(),
-        tensor_args.input_scale.logical_shape(),
-        tile_shape[0],
-        tile_shape[1],
-        face_shape[0],
-        face_shape[1]);
-}
-
 }  // namespace ttnn::experimental::prim::per_token_cast_back
 
 namespace ttnn::prim {
