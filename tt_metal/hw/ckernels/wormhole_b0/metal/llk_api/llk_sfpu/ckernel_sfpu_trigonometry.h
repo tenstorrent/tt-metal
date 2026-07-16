@@ -21,6 +21,43 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
+// Magic seed locally tuned for this sequence, targeting 0 < x < 2^24.
+// fp32 path: exhaustively validated maxulperr < 0.94 for normal fp32 2^-126 <= x <= 2^103.
+template <bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
+    constexpr std::uint32_t MAGIC_SEED = 0xfef392e0;
+
+    // initial estimate y = -reciprocal(x)
+    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(MAGIC_SEED - sfpi::as<sfpi::vInt>(x));
+    sfpi::vFloat e = x * y + 1.0f;
+
+    if constexpr (is_fp32_dest_acc_en) {
+        y = y * e + y;
+        e = x * y + 1.0f;
+    }
+    sfpi::vFloat p = e * e + e;
+    y = -y;
+    y = y * p + y;
+
+    return y;
+}
+
+sfpi_inline sfpi::vFloat _sfpu_sqrt_endpoint_(sfpi::vFloat half_d) {
+    // SQRT_23-bits from ckernel_sfpu_sqrt.h, specialized for the known
+    // non-negative input half_d.  The generic negative and infinity handling
+    // is unnecessary here, and the zero path naturally evaluates to zero.
+    sfpi::vInt i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(half_d) >> 1);
+    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(0x5f1110a0 - i);
+
+    sfpi::vFloat half_d_y = half_d * y;
+    sfpi::vFloat c = (-y) * half_d_y;
+    y = y * (2.2825186f + c * (2.2533049f + c));
+
+    half_d_y = half_d * y;
+    sfpi::vFloat one_minus_half_d_yy = 1.0f + (-y) * half_d_y;
+    return one_minus_half_d_yy * (0.5f * half_d_y) + half_d_y;
+}
+
 static const float PI = 3.14159274101257324f;
 static const float PI_2 = 1.5707963705062866f;
 static const float PI_4 = 0.7853981852531433f;
@@ -319,8 +356,8 @@ inline void calculate_cosine() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
     sfpi::vFloat t0 = sfpi::abs(val);
     sfpi::vFloat result = 0.0f;
 
@@ -336,30 +373,14 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
 
         sfpi::vFloat t1 = t0 * t0;
 
-        if constexpr (!is_fp32_dest_acc_en) {
-            // Low-degree minimax polynomial (Sollya) for reduced-precision destination path.
-            // > fpminimax(atan(x), [|1,3,5,7|], [|single...|], [2^(-40); 1], relative);
-            t1 = PolynomialEvaluator::eval(
-                t1,
-                0.999787867069244384765625f,
-                -0.325808584690093994140625f,
-                0.1555790007114410400390625f,
-                -4.4326744973659515380859375e-2f);
-        } else {
-            // Higher-degree minimax polynomial (Sollya) for fp32 destination path.
-            // > fpminimax(atan(x), [|1,3,5,7,9,11,13,15,17|], [|single...|], [2^(-40); 1], relative);
-            t1 = PolynomialEvaluator::eval(
-                t1,
-                1.0f,
-                -0.3333314359188079833984375f,
-                0.19993579387664794921875f,
-                -0.14209578931331634521484375f,
-                0.1066047251224517822265625f,
-                -7.5408883392810821533203125e-2f,
-                4.3082617223262786865234375e-2f,
-                -1.62907354533672332763671875e-2f,
-                2.90188402868807315826416015625e-3f);
-        }
+        // Low-degree minimax polynomial (Sollya) for reduced-precision destination path.
+        // > fpminimax(atan(x), [|1,3,5,7|], [|single...|], [2^(-40); 1], relative);
+        t1 = PolynomialEvaluator::eval(
+            t1,
+            0.999787867069244384765625f,
+            -0.325808584690093994140625f,
+            0.1555790007114410400390625f,
+            -4.4326744973659515380859375e-2f);
 
         t1 = t1 * t0;
 
@@ -373,68 +394,99 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     return result;
 }
 
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
+    sfpi::vFloat r;
+    sfpi::vFloat q;
+    sfpi::vFloat s;
+    sfpi::vFloat a;
+    sfpi::vFloat x_abs;
+
+    x_abs = sfpi::setsgn(x, 0);
+    a = x_abs;
+
+    v_if(x_abs >= 1.0f) { a = _sfpu_reciprocal_gt0_<true>(a); }
+    v_endif;
+
+    // Next we compute the minimax approximation for atan(a).
+    {
+        q = 0x1.01cp-8f;
+        s = a * a;
+        sfpi::vFloat c6 = -0x1.4bcp-6f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c6.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c5 = 0x1.93p-5f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c5.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c4 = -0x1.48cp-4f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c4.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c3 = 0x1.bd4p-4f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c3.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c2 = -0x1.24p-3f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c2.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c1 = 0x1.99938ap-3f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c1.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat c0 = -0x1.555558p-2f;
+        q = __builtin_rvtt_sfpmad(q.get(), s.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    }
+    sfpi::vFloat half_pi = 0x1.921fb6p+0f;
+    sfpi::vFloat t = q * s;
+    r = t * a + a;
+
+    // Special cases:
+    v_if(x_abs >= 1.0f) { r = half_pi - r; }
+    v_endif;
+
+    r = sfpi::copysgn(r, x);
+
+    return r;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_atan() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpu_atan<APPROXIMATION_MODE, is_fp32_dest_acc_en>(in);
+        sfpi::vFloat result;
 
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
+            result = sfpu_atan_fp32<APPROXIMATION_MODE>(in);
+        } else {
+            result = sfpu_atan_bf16<APPROXIMATION_MODE>(in);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
         sfpi::dst_reg[0] = result;
-
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat sfpu_asin_ratio_poly_direct(sfpi::vFloat val) {
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_asin_ratio_poly_direct_bf16(sfpi::vFloat val) {
     // Polynomial in Horner form for asin(z)/z in u=z^2, evaluated over reduced intervals.
     // asin(z) = z * P(u).
     sfpi::vFloat z2 = val * val;
-    sfpi::vFloat ratio;
-    if constexpr (!is_fp32_dest_acc_en) {
-        // Low-degree polynomial for reduced-precision destination path; |z| <= 5/8 => u=z^2 <= (5/8)^2.
-        // Single-precision fit to asin(sqrt(u))/sqrt(u) (same Horner depth as atan low path). Regenerate with:
-        // > fpminimax(asin(sqrt(x))/sqrt(x), [|0,1,2,3|], [|single...|], [2^(-40); (5/8)^2], relative);
-        ratio = PolynomialEvaluator::eval(
-            z2,
-            0.999978601932525634765625f,
-            0.16771225631237030029296875f,
-            0.06381262838840484619140625f,
-            0.083148844540119171142578125f);
-    } else {
-        // Higher-degree series coefficients for fp32 destination path.
-        ratio = PolynomialEvaluator::eval(
-            z2,
-            1.0f,
-            0.16666666666666666f,
-            0.075f,
-            0.044642857142857144f,
-            0.030381944444444444f,
-            0.022372159090909091f,
-            0.017352764423076923f,
-            0.01396484375f,
-            0.011551800896139705f,
-            0.009761609529194078f);
-    }
+    // Low-degree polynomial for reduced-precision destination path; |z| <= 5/8 => u=z^2 <= (5/8)^2.
+    // Single-precision fit to asin(sqrt(u))/sqrt(u) (same Horner depth as atan low path). Regenerate with:
+    // > fpminimax(asin(sqrt(x))/sqrt(x), [|0,1,2,3|], [|single...|], [2^(-40); (5/8)^2], relative);
+    sfpi::vFloat ratio = PolynomialEvaluator::eval(
+        z2,
+        0.999978601932525634765625f,
+        0.16771225631237030029296875f,
+        0.06381262838840484619140625f,
+        0.083148844540119171142578125f);
     return val * ratio;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_asin_range_reduced_bf16(sfpi::vFloat val) {
     // Use symmetry + range transform for better accuracy near |x| ~= 1:
     // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
     sfpi::vFloat abs_v = sfpi::abs(val);
     sfpi::vFloat asin_abs = PI_2;
 
-    v_if(abs_v <= 0.625f) { asin_abs = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE, is_fp32_dest_acc_en>(abs_v); }
+    v_if(abs_v <= 0.625f) { asin_abs = sfpu_asin_ratio_poly_direct_bf16<APPROXIMATION_MODE>(abs_v); }
     v_else {
         sfpi::vFloat t = (1.0f - abs_v) * 0.5f;
         sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>(t);
-        sfpi::vFloat asin_root = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE, is_fp32_dest_acc_en>(root);
+        sfpi::vFloat asin_root = sfpu_asin_ratio_poly_direct_bf16<APPROXIMATION_MODE>(root);
         asin_abs -= 2.0f * asin_root;
     }
     v_endif;
@@ -442,23 +494,140 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
     return sfpi::copysgn(asin_abs, val);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool IS_ACOS, int ITERATIONS = 8>
-inline void calculate_asin_acos_impl() {
-    // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
-        v_if(sfpi::abs(v) <= 1.0f) {
-            sfpi::vFloat a = sfpu_asin_range_reduced<APPROXIMATION_MODE, is_fp32_dest_acc_en>(v);
-            if constexpr (IS_ACOS) {
-                result = PI_2 - a;
-            } else {
-                result = a;
-            }
-        }
-        v_endif;
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_asin_bf16(sfpi::vFloat val) {
+    sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
+    v_if(sfpi::abs(val) <= 1.0f) { result = sfpu_asin_range_reduced_bf16<APPROXIMATION_MODE>(val); }
+    v_endif;
+    return result;
+}
 
-        if constexpr (!is_fp32_dest_acc_en) {
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_acos_bf16(sfpi::vFloat val) {
+    sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
+    v_if(sfpi::abs(val) <= 1.0f) { result = PI_2 - sfpu_asin_range_reduced_bf16<APPROXIMATION_MODE>(val); }
+    v_endif;
+    return result;
+}
+
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
+    sfpi::vFloat result;
+    sfpi::vFloat x_abs = sfpi::abs(x);
+    sfpi::vFloat d = 1.0f - x_abs;
+    sfpi::vFloat switchover = 0.5625f;
+    sfpi::vFloat half_d = d * 0.5f;
+
+    // asin(x) = pi/2 - 2 * asin(sqrt((1 - |x|) / 2)).
+    sfpi::vFloat reduced = _sfpu_sqrt_endpoint_(half_d);
+
+    v_if(x_abs < switchover) { reduced = x_abs; }
+    v_endif;
+
+    // Minimax approximation for asin(reduced) on [0, SWITCHOVER].
+    sfpi::vFloat square = reduced * reduced;
+    sfpi::vFloat polynomial = 0x1.9e0000p-5f;
+    sfpi::vFloat coefficient = 0x1.365f44p-6f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    coefficient = 0x1.7dbc50p-5f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    coefficient = 0x1.329f7cp-4f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    coefficient = 0x1.5556dcp-3f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    polynomial *= square;
+    result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+    v_if(x_abs >= switchover) {
+        sfpi::vFloat pio2_fac1 = 0.93318945f;
+        sfpi::vFloat pio2_fac2 = 1.68325555f;
+        sfpi::vFloat negative_twice_result = -2.0f * result;
+        result = __builtin_rvtt_sfpmad(
+            pio2_fac1.get(), pio2_fac2.get(), negative_twice_result.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    }
+    v_endif;
+
+    result = sfpi::copysgn(result, x);
+
+    v_if(half_d < 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
+    v_endif;
+
+    return result;
+}
+
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
+    constexpr float SWITCHOVER = 0.5625f;
+
+    sfpi::vFloat result;
+    sfpi::vFloat x_abs = sfpi::abs(x);
+    sfpi::vFloat d = 1.0f - x_abs;
+    sfpi::vFloat half_d = d * 0.5f;
+
+    // acos(x) = 2 * asin(sqrt((1 - x) / 2)).  Reduce to an asin
+    // approximation on [-SWITCHOVER, SWITCHOVER].
+    sfpi::vFloat reduced = _sfpu_sqrt_endpoint_(half_d);
+
+    sfpi::vFloat tmp = x_abs - SWITCHOVER;
+    v_if(tmp < 0.0f) { reduced = x_abs; }
+    v_endif;
+
+    reduced = sfpi::copysgn(reduced, x);
+    sfpi::vUInt flip = sfpi::as<sfpi::vUInt>(sfpi::copysgn(sfpi::vFloat(0.0f), tmp));
+
+    // Minimax approximation for asin(reduced).
+    sfpi::vFloat square = reduced * reduced;
+    sfpi::vFloat polynomial = 0x1.834000p-5f;
+    sfpi::vFloat coefficient = 0x1.ca0000p-8f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    coefficient = 0x1.15a984p-5f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    coefficient = 0x1.6a9354p-5f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    coefficient = 0x1.3345f4p-4f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    coefficient = 0x1.555536p-3f;
+    polynomial =
+        __builtin_rvtt_sfpmad(polynomial.get(), square.get(), coefficient.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    polynomial *= square;
+    reduced = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(reduced) ^ flip);
+    result = __builtin_rvtt_sfpmad(polynomial.get(), reduced.get(), reduced.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+    // Map asin(reduced) back to acos(x).
+    v_if(x < SWITCHOVER) {
+        sfpi::vFloat pio2_fac1 = 0.93318945f;
+        sfpi::vFloat pio2_fac2 = 1.68325555f;
+        result = __builtin_rvtt_sfpmad(pio2_fac1.get(), pio2_fac2.get(), result.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    }
+    v_endif;
+
+    v_if(x_abs >= SWITCHOVER) { result += result; }
+    v_endif;
+
+    v_if(half_d < 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
+    v_endif;
+
+    return result;
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_asin() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result;
+
+        if constexpr (is_fp32_dest_acc_en) {
+            result = sfpu_asin_fp32<APPROXIMATION_MODE>(in);
+        } else {
+            result = sfpu_asin_bf16<APPROXIMATION_MODE>(in);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
@@ -468,34 +637,21 @@ inline void calculate_asin_acos_impl() {
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_asin() {
-    calculate_asin_acos_impl<APPROXIMATION_MODE, is_fp32_dest_acc_en, false, ITERATIONS>();
-}
-
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
-    calculate_asin_acos_impl<APPROXIMATION_MODE, is_fp32_dest_acc_en, true, ITERATIONS>();
-}
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat result;
 
-// Magic seed locally tuned for this sequence, targeting 0 < x < 2^24.
-// fp32 path: exhaustively validated maxulperr < 0.94 for normal fp32 2^-126 <= x <= 2^103.
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
-    constexpr std::uint32_t MAGIC_SEED = 0xfef392e0;
+        if constexpr (is_fp32_dest_acc_en) {
+            result = sfpu_acos_fp32<APPROXIMATION_MODE>(in);
+        } else {
+            result = sfpu_acos_bf16<APPROXIMATION_MODE>(in);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        }
 
-    // initial estimate y = -reciprocal(x)
-    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(MAGIC_SEED - sfpi::as<sfpi::vInt>(x));
-    sfpi::vFloat e = x * y + 1.0f;
-
-    if constexpr (is_fp32_dest_acc_en) {
-        y = y * e + y;
-        e = x * y + 1.0f;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
-    sfpi::vFloat p = e * e + e;
-    y = -y;
-    y = y * p + y;
-
-    return y;
 }
 
 // computes exp(abs(x))/4 without overflow
