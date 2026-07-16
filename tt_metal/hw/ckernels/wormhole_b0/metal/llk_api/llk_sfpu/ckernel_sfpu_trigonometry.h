@@ -404,8 +404,9 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
 
     x_abs = sfpi::setsgn(x, 0);
     a = x_abs;
+    sfpi::vFloat x_abs_m1 = x_abs - 1.0f;
 
-    v_if(x_abs >= 1.0f) { a = _sfpu_reciprocal_gt0_<true>(a); }
+    v_if(x_abs_m1 >= 0.0f) { a = _sfpu_reciprocal_gt0_<true>(a); }
     v_endif;
 
     // Next we compute the minimax approximation for atan(a).
@@ -432,7 +433,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     r = t * a + a;
 
     // Special cases:
-    v_if(x_abs >= 1.0f) { r = half_pi - r; }
+    v_if(x_abs_m1 >= 0.0f) { r = half_pi - r; }
     v_endif;
 
     r = sfpi::copysgn(r, x);
