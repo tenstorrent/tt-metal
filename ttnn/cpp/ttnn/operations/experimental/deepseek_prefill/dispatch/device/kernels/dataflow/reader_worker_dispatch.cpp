@@ -27,7 +27,7 @@
 //   1. Stage the payload: TILE signals compute (cb_signal_id) and streams the
 //      tiled input stripe from DRAM → cb_input_id, block_ct_dim tiles at a time;
 //      ROW_MAJOR reads input rows straight into the payload CB instead.
-//   2. Read this batch's indices and weights pages from DRAM.
+//   2. Read this batch's indices pages from DRAM.
 //   3. Take the baton, then build the route plan into cb_plan_id: for each
 //      (token, top-k) routed to this dispatch core, allocate a DRAM page from
 //      offsets[expert] (drop if the dispatch buffer is full), classify it local
@@ -269,10 +269,9 @@ void kernel_main() {
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(batch_start + t, input_addr_gen, payload_base + t * aligned_input_page_size);
             }
-            // Read this batch's indices and weights pages alongside the payload (single barrier covers all).
+            // Read this batch's indices pages alongside the payload (single barrier covers all).
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
-                noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
             }
 #ifdef FP8_SCALED
             // Read this batch's per-token fp8 scale rows into the scales CB, indexed by token_t parallel
@@ -314,13 +313,13 @@ void kernel_main() {
 
         // 3. Read this batch's indices pages
         {
-            // DeviceZoneScopedN("batch-DRAM-read-indices-weights");
+            // DeviceZoneScopedN("batch-DRAM-read-indices");
             for (uint32_t t = 0; t < batch_count; t++) {
                 noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
             }
             noc_async_read_barrier();
         }
-        
+
 #endif
 
         // 4. Build per-batch route plan into c_14.
@@ -360,8 +359,6 @@ void kernel_main() {
             for (uint32_t t = 0; t < batch_count; t++) {
                 tt_l1_ptr uint16_t* indices_t =
                     reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
-                tt_l1_ptr uint16_t* weights_t =
-                    reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
                 uint32_t token_idx = batch_start + t;
 
                 // Walk this token's top-k experts; emit a plan entry for each one routed to this
