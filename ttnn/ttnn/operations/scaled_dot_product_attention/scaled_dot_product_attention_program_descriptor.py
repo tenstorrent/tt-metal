@@ -31,6 +31,7 @@ CB_SCALER = 4
 CB_SCALE = 5
 CB_M_NEW = 6  # scratch: new running-max before overwriting cb_row_max
 CB_SUM_CHUNK = 7  # scratch: per-chunk row-sum before folding into l
+CB_KV_MASK = 8  # last-KV-tile softmax padding mask (0 valid cols, -inf pad cols)
 CB_OUT = 16
 CB_Q_SCALED = 24
 CB_SCORES = 25
@@ -146,6 +147,12 @@ def create_program_descriptor(
     has_mask = attn_mask is not None
     mask_H = attn_mask.shape[1] if has_mask else 0
 
+    # R1 (h_non_aligned): valid columns in the last S_kv tile (0 => aligned).
+    # When non-zero, the last KV chunk's boundary tile carries an additive -inf
+    # mask on its padding columns so they fall out of the softmax reduce.
+    skv_partial = S_kv % TILE_DIM
+    has_kv_pad = skv_partial != 0
+
     Sq_chunk_t, Skv_chunk_t, KV_DEPTH, OUT_DEPTH = _fit_l1(Sq_t, Skv_t, Dt, has_mask)
 
     n_q_chunks = _ceil_div(Sq_t, Sq_chunk_t)
@@ -194,6 +201,10 @@ def create_program_descriptor(
     ]
     if has_mask:
         cbs.append(_cb(CB_MASK_IN, in_page, Sq_chunk_t * Skv_chunk_t * KV_DEPTH, query.dtype, all_cores))
+    if has_kv_pad:
+        # One score-block worth of mask tiles (0 everywhere except the last S_kv
+        # column tiles). Streamed once per work unit on the last KV chunk.
+        cbs.append(_cb(CB_KV_MASK, bf16, Sq_chunk_t * Skv_chunk_t, ttnn.bfloat16, all_cores))
 
     # ---- Reader kernel ----
     reader_ct = [
@@ -210,6 +221,7 @@ def create_program_descriptor(
         mask_H,
         1 if has_mask else 0,
         _f32_bits(scale),
+        skv_partial,
     ]
     reader_ct += ttnn.TensorAccessorArgs(query).get_compile_time_args()
     reader_ct += ttnn.TensorAccessorArgs(key).get_compile_time_args()
@@ -271,6 +283,7 @@ def create_program_descriptor(
         pv_in1_sb,
         pv_out_sb_h,
         pv_out_sb_w,
+        skv_partial,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),

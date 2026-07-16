@@ -37,6 +37,7 @@ constexpr uint32_t cb_scaler = 4;
 constexpr uint32_t cb_scale = 5;
 constexpr uint32_t cb_m_new = 6;
 constexpr uint32_t cb_sum_chunk = 7;
+constexpr uint32_t cb_kv_mask = 8;
 constexpr uint32_t cb_out = 16;
 constexpr uint32_t cb_q_scaled = 24;
 constexpr uint32_t cb_scores = 25;
@@ -63,6 +64,8 @@ void kernel_main() {
     constexpr uint32_t pv_in1_sb = get_compile_time_arg_val(10);
     constexpr uint32_t pv_out_sb_h = get_compile_time_arg_val(11);
     constexpr uint32_t pv_out_sb_w = get_compile_time_arg_val(12);
+    constexpr uint32_t skv_partial = get_compile_time_arg_val(13);  // valid cols in last S_kv tile (0 => aligned)
+    constexpr bool has_kv_pad = skv_partial != 0;
 
     const uint32_t num_wu = get_arg_val<uint32_t>(0);
 
@@ -126,6 +129,15 @@ void kernel_main() {
             // Phase 3: additive mask (custom mode), in place, before the row-max.
             if constexpr (has_mask) {
                 ckl::add<cb_scores, cb_mask_in, cb_scores>(EltwiseShape::tiles(sq_skv));
+            }
+
+            // Phase 3b: KV-padding mask (h_non_aligned), last chunk only. Additive
+            // -inf on the last KV tile's padding columns so they drop out of the
+            // softmax (max/exp/sum) — same additive path as the custom mask.
+            if constexpr (has_kv_pad) {
+                if (j == n_kv_chunks - 1) {
+                    ckl::add<cb_scores, cb_kv_mask, cb_scores>(EltwiseShape::tiles(sq_skv));
+                }
             }
 
             // Phase 4: chunk row-max -> cb_corr (cb_scores held for the exp below).

@@ -23,6 +23,62 @@ constexpr uint32_t cb_v_in = 2;
 constexpr uint32_t cb_mask_in = 3;
 constexpr uint32_t cb_scaler = 4;
 constexpr uint32_t cb_scale = 5;
+constexpr uint32_t cb_kv_mask = 8;
+
+// bf16 tile: 4 faces of 16x16, each face row-major, 2 bf16 packed per uint32
+// (low16 = even col, high16 = odd col), 8 uint32 words per face-row, 128 words
+// per face, 512 words per tile. -inf(bf16) = 0xFF80, packed pair = 0xFF80FF80.
+constexpr uint32_t NEGINF_PAIR = 0xFF80FF80u;
+
+FORCE_INLINE void fill_zeros_tile(uint32_t wptr, uint32_t words) {
+    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
+    for (uint32_t i = 0; i < words; ++i) {
+        p[i] = 0u;
+    }
+}
+
+// Vertical column mask: columns [0, unpad_col) = 0, columns [unpad_col, 32) = -inf.
+// (Face-aware; mirrors the production SDPA fill_vertical_tile_bf16.)
+FORCE_INLINE void fill_vertical_mask_tile(uint32_t wptr, uint32_t unpad_col) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
+    constexpr uint32_t FACE_W = 16;
+    constexpr uint32_t FACE_H = 16;
+    constexpr uint32_t words_per_face_row = FACE_W / 2;               // 8
+    constexpr uint32_t words_per_face = FACE_H * words_per_face_row;  // 128
+    const uint32_t face_col_start[4] = {0, 16, 0, 16};
+    for (uint32_t f = 0; f < 4; ++f) {
+        const uint32_t base = f * words_per_face;
+        const uint32_t col_start = face_col_start[f];
+        if (unpad_col <= col_start) {
+            for (uint32_t i = 0; i < words_per_face; ++i) {
+                ptr[base + i] = NEGINF_PAIR;  // whole face padded
+            }
+        } else if (unpad_col >= col_start + FACE_W) {
+            for (uint32_t i = 0; i < words_per_face; ++i) {
+                ptr[base + i] = 0u;  // whole face valid
+            }
+        } else {
+            const uint32_t local_col = unpad_col - col_start;  // 1..15 (first padded col)
+            const uint32_t boundary_word = local_col / 2;
+            const uint32_t boundary_pos = local_col % 2;
+            for (uint32_t row = 0; row < FACE_H; ++row) {
+                const uint32_t row_base = base + row * words_per_face_row;
+                for (uint32_t w = 0; w < boundary_word; ++w) {
+                    ptr[row_base + w] = 0u;  // valid columns
+                }
+                uint32_t start_word = boundary_word;
+                if (boundary_pos != 0) {
+                    // low16 = even col (valid, 0), high16 = odd col (-inf)
+                    ptr[row_base + boundary_word] = 0xFF800000u;
+                    start_word = boundary_word + 1;
+                }
+                for (uint32_t w = start_word; w < words_per_face_row; ++w) {
+                    ptr[row_base + w] = NEGINF_PAIR;  // padded columns
+                }
+            }
+        }
+    }
+}
 }  // namespace
 
 void kernel_main() {
@@ -40,8 +96,10 @@ void kernel_main() {
     constexpr uint32_t has_mask_v = get_compile_time_arg_val(11);
     constexpr bool has_mask = has_mask_v != 0;
     constexpr uint32_t scale_bits = get_compile_time_arg_val(12);
+    constexpr uint32_t skv_partial = get_compile_time_arg_val(13);  // valid cols in last S_kv tile (0 => aligned)
+    constexpr bool has_kv_pad = skv_partial != 0;
 
-    constexpr auto q_args = TensorAccessorArgs<13>();
+    constexpr auto q_args = TensorAccessorArgs<14>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -143,6 +201,30 @@ void kernel_main() {
                         noc_async_read_tile((mask_base + sq_g) * Skv_t + skv_g, mask_acc, get_write_ptr(cb_mask_in));
                         noc_async_read_barrier();
                         cb_push_back(cb_mask_in, 1);
+                    }
+                }
+            }
+
+            // KV-padding softmax mask (h_non_aligned): last KV chunk only. Build a
+            // score-block-shaped additive mask — the last S_kv-column tile of each
+            // Q row carries the vertical -inf mask, all other tiles are zero — so
+            // compute drives the last KV tile's padding columns to -inf before the
+            // row-max/exp/row-sum. Divisor-trick chunking keeps every chunk whole,
+            // so the ONLY partial tile is the last chunk's last S_kv column.
+            if constexpr (has_kv_pad) {
+                if (j == n_kv_chunks - 1) {
+                    const uint32_t mask_words = tile_bytes / 4;
+                    for (uint32_t sq = 0; sq < Sq_chunk_t; ++sq) {
+                        for (uint32_t skv = 0; skv < Skv_chunk_t; ++skv) {
+                            cb_reserve_back(cb_kv_mask, 1);
+                            const uint32_t wptr = get_write_ptr(cb_kv_mask);
+                            if (skv == Skv_chunk_t - 1) {
+                                fill_vertical_mask_tile(wptr, skv_partial);
+                            } else {
+                                fill_zeros_tile(wptr, mask_words);
+                            }
+                            cb_push_back(cb_kv_mask, 1);
+                        }
                     }
                 }
             }

@@ -1,0 +1,2 @@
+{"event":"start","details":"Researching production SDPA masking of non-tile-aligned S_kv","ts":"2026-07-16T18:01:32+00:00"}
+{"event":"findings","details":"Production SDPA nuked from tree, found in git a0c5eed609. Mask=-inf (bf16 0xFF80), additive add_block_inplace to QK before reduce, applied only to last kv chunk. from_torch tile pad defaults to 0.0f (py_to_tt_tensor.cpp:439)","ts":"2026-07-16T18:06:42+00:00"}

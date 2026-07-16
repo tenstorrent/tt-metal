@@ -87,7 +87,11 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "fp32_dest_acc_en": [True],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    # R1: non-tile-aligned shapes handled natively in the kernel. w_non_aligned
+    # (D%32≠0) rides the input tile zero-padding through the QKᵀ contraction and
+    # PV free dim; h_non_aligned (S_q or S_kv %32≠0) writes only valid Q rows and
+    # masks the last KV tile's padding columns to −∞ before the softmax reduce.
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "custom"],
