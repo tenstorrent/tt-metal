@@ -301,7 +301,7 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
 
 
 def _bmm_progcfg(device, mt, nt, kt):
-    """Batched-matmul program config for the per-chunk [C,C]@[C,C] bmms (kk, qk).
+    """Batched-matmul program config for the per-chunk [C, K] @ [K, C] products (kk and qk).
     The per_core_M/N is the full [mt,nt] output block, while num_output_blocks is the batch size.
     This allows the chunk-batch elements to efficiently fan out across the device grid.
     """
