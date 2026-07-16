@@ -112,3 +112,7 @@ Fresh independent review `/root/stage_review_qwen25_coder32` returned `Verdict: 
 The reviewer noted that the three evidence logs match the repository-wide `*.log` ignore rule; they are intentionally force-added to the checkpoint. It also classified the paired-p300 selector failure, nanobind teardown warnings, fixed decode head-padding issue, corrected context-padding assumption, and measured 4,000-token OOM as controlled or fixed rather than stage blockers.
 
 Reviewed stage checkpoint: `72f6e948c5e9e0d9794a98c9e9ac4088a67bd800` (`Add Qwen2.5 Coder 32B IR functional decoder`). The three `.log` artifacts were force-added as required. No push was performed.
+
+## Multichip provenance
+
+`multichip_provenance.json` retro-records the complete layer-32 sharding prior from the selected compiler prefill and decode IR. The source mesh is 1x4 with TP degree 4 on mesh/cluster axis 1; the segmented layer's collective set is ring-sum `ttnn.all_reduce` after the attention O projection and MLP down projection in both paths. This provenance pass was pure IR analysis and did not open a TT device.

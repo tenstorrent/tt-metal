@@ -1,0 +1,712 @@
+{
+  "hf_model": "Qwen/Qwen2.5-Coder-32B-Instruct",
+  "source_ir": {
+    "prefill": "ttnn_qwen_2_5_coder_32b_instruct_tp_qb2_bs32_isl128_runc0ba_g0_1784014672995.mlir",
+    "decode": "ttnn_qwen_2_5_coder_32b_instruct_tp_qb2_bs32_isl128_runc0ba_g1_1784015214915.mlir"
+  },
+  "source_classification": {
+    "prefill": {
+      "runtime": false,
+      "returns_logits": false,
+      "fill_cache_ops": 4096,
+      "paged_update_cache_ops": 0,
+      "decode_sdpa_ops": 0,
+      "batch": 32,
+      "sequence_length": 17
+    },
+    "decode": {
+      "runtime": false,
+      "returns_logits": false,
+      "fill_cache_ops": 0,
+      "paged_update_cache_ops": 128,
+      "decode_sdpa_ops": 64,
+      "batch": 32,
+      "sequence_length": 1,
+      "cache_length": 128
+    }
+  },
+  "mesh": {
+    "ir_name": "mesh",
+    "shape": [
+      1,
+      4
+    ],
+    "axes": [
+      {
+        "index": 0,
+        "name": "mesh_axis_0",
+        "size": 1,
+        "role": "singleton"
+      },
+      {
+        "index": 1,
+        "name": "tensor_parallel",
+        "size": 4,
+        "role": "tensor_parallel"
+      }
+    ],
+    "tp_degree": 4,
+    "axis_name_note": "The TTNN IR preserves numeric mesh axes rather than upstream Shardy axis names; tensor_parallel is the semantic name inferred for cluster_axis 1 from the 1x4 TP capture and its projection/cache shardings."
+  },
+  "layer_index": 32,
+  "tensors": [
+    {
+      "name": "model.layers.32.input_layernorm.weight",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        5120
+      ],
+      "per_device_shape": [
+        5120
+      ]
+    },
+    {
+      "name": "model.layers.32.self_attn.q_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "output_features_q_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        5120,
+        5120
+      ],
+      "per_device_shape": [
+        1280,
+        5120
+      ],
+      "shard_materialization": "presharded_parameter"
+    },
+    {
+      "name": "model.layers.32.self_attn.q_proj.bias",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "output_features_q_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        5120
+      ],
+      "per_device_shape": [
+        1280
+      ],
+      "shard_materialization": "const_eval_partition"
+    },
+    {
+      "name": "model.layers.32.self_attn.k_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "output_features_kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        1024,
+        5120
+      ],
+      "per_device_shape": [
+        256,
+        5120
+      ],
+      "shard_materialization": "presharded_parameter"
+    },
+    {
+      "name": "model.layers.32.self_attn.k_proj.bias",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "output_features_kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        1024
+      ],
+      "per_device_shape": [
+        256
+      ],
+      "shard_materialization": "const_eval_partition"
+    },
+    {
+      "name": "model.layers.32.self_attn.v_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "output_features_kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        1024,
+        5120
+      ],
+      "per_device_shape": [
+        256,
+        5120
+      ],
+      "shard_materialization": "presharded_parameter"
+    },
+    {
+      "name": "model.layers.32.self_attn.v_proj.bias",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "output_features_kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        1024
+      ],
+      "per_device_shape": [
+        256
+      ],
+      "shard_materialization": "const_eval_partition"
+    },
+    {
+      "name": "model.layers.32.self_attn.o_proj.weight",
+      "kind": "tensor_row",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "input_features_q_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        5120,
+        5120
+      ],
+      "per_device_shape": [
+        5120,
+        1280
+      ],
+      "shard_materialization": "presharded_parameter"
+    },
+    {
+      "name": "model.layers.32.post_attention_layernorm.weight",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        5120
+      ],
+      "per_device_shape": [
+        5120
+      ]
+    },
+    {
+      "name": "model.layers.32.mlp.gate_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "intermediate_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        27648,
+        5120
+      ],
+      "per_device_shape": [
+        6912,
+        5120
+      ],
+      "shard_materialization": "presharded_parameter"
+    },
+    {
+      "name": "model.layers.32.mlp.up_proj.weight",
+      "kind": "tensor_column",
+      "shard_axes": [
+        0
+      ],
+      "shard_axis_names": [
+        "intermediate_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        27648,
+        5120
+      ],
+      "per_device_shape": [
+        6912,
+        5120
+      ],
+      "shard_materialization": "presharded_parameter"
+    },
+    {
+      "name": "model.layers.32.mlp.down_proj.weight",
+      "kind": "tensor_row",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "intermediate_features"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        5120,
+        27648
+      ],
+      "per_device_shape": [
+        5120,
+        6912
+      ],
+      "shard_materialization": "presharded_parameter"
+    },
+    {
+      "name": "prefill.rotary_cos",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        1,
+        1,
+        17,
+        128
+      ],
+      "per_device_shape": [
+        1,
+        1,
+        17,
+        128
+      ]
+    },
+    {
+      "name": "prefill.rotary_sin",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        1,
+        1,
+        17,
+        128
+      ],
+      "per_device_shape": [
+        1,
+        1,
+        17,
+        128
+      ]
+    },
+    {
+      "name": "prefill.attention_mask",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        1,
+        1,
+        17,
+        128
+      ],
+      "per_device_shape": [
+        1,
+        1,
+        17,
+        128
+      ]
+    },
+    {
+      "name": "prefill.position_ids",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        17
+      ],
+      "per_device_shape": [
+        17
+      ]
+    },
+    {
+      "name": "decode.rotary_cos",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "per_device_shape": [
+        1,
+        1,
+        1,
+        128
+      ]
+    },
+    {
+      "name": "decode.rotary_sin",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        1,
+        1,
+        1,
+        128
+      ],
+      "per_device_shape": [
+        1,
+        1,
+        1,
+        128
+      ]
+    },
+    {
+      "name": "decode.attention_mask",
+      "kind": "tensor_column",
+      "shard_axes": [
+        2
+      ],
+      "shard_axis_names": [
+        "q_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        1,
+        1,
+        40,
+        128
+      ],
+      "per_device_shape": [
+        1,
+        1,
+        10,
+        128
+      ],
+      "shard_materialization": "rank_local_repeat"
+    },
+    {
+      "name": "decode.current_position",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        1
+      ],
+      "per_device_shape": [
+        1
+      ]
+    },
+    {
+      "name": "decode.cache_update_indices",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "full_shape": [
+        32
+      ],
+      "per_device_shape": [
+        32
+      ]
+    },
+    {
+      "name": "model.layers.32.self_attn.key_cache",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        32,
+        8,
+        128,
+        128
+      ],
+      "per_device_shape": [
+        32,
+        2,
+        128,
+        128
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    },
+    {
+      "name": "model.layers.32.self_attn.value_cache",
+      "kind": "tensor_column",
+      "shard_axes": [
+        1
+      ],
+      "shard_axis_names": [
+        "kv_heads"
+      ],
+      "mesh_dims": [
+        1
+      ],
+      "mesh_dim_names": [
+        "tensor_parallel"
+      ],
+      "full_shape": [
+        32,
+        8,
+        128,
+        128
+      ],
+      "per_device_shape": [
+        32,
+        2,
+        128,
+        128
+      ],
+      "paths": [
+        "prefill",
+        "decode"
+      ]
+    }
+  ],
+  "activations": [
+    {
+      "name": "prefill.layer_input_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        17,
+        5120
+      ],
+      "ir_shape": [
+        1,
+        1,
+        544,
+        5120
+      ]
+    },
+    {
+      "name": "prefill.post_attention_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        17,
+        5120
+      ],
+      "ir_shape": [
+        1,
+        1,
+        544,
+        5120
+      ]
+    },
+    {
+      "name": "prefill.layer_output_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        17,
+        5120
+      ],
+      "ir_shape": [
+        1,
+        1,
+        544,
+        5120
+      ]
+    },
+    {
+      "name": "decode.layer_input_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        1,
+        5120
+      ],
+      "ir_shape": [
+        1,
+        1,
+        32,
+        5120
+      ]
+    },
+    {
+      "name": "decode.post_attention_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        1,
+        5120
+      ],
+      "ir_shape": [
+        1,
+        1,
+        32,
+        5120
+      ]
+    },
+    {
+      "name": "decode.layer_output_residual",
+      "kind": "replicated",
+      "shard_axes": [],
+      "mesh_dims": [],
+      "logical_shape": [
+        1,
+        32,
+        1,
+        5120
+      ],
+      "ir_shape": [
+        1,
+        1,
+        32,
+        5120
+      ]
+    }
+  ],
+  "collectives": [
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_dim": "tensor_parallel",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "prefill layer 32 after self_attn.o_proj and before the attention residual add"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_dim": "tensor_parallel",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "prefill layer 32 after mlp.down_proj and before the layer-output residual add"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_dim": "tensor_parallel",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "decode layer 32 after self_attn.o_proj and before the attention residual add"
+    },
+    {
+      "op": "ttnn.all_reduce",
+      "cluster_axis": 1,
+      "mesh_dim": "tensor_parallel",
+      "reduce_type": "sum",
+      "topology": "ring",
+      "where": "decode layer 32 after mlp.down_proj and before the layer-output residual add"
+    }
+  ],
+  "tp_collapse_cross_check": {
+    "source_per_device": {
+      "q_heads": 10,
+      "kv_heads": 2,
+      "qkv_width": 1792,
+      "intermediate_size": 6912
+    },
+    "dense_functional_decoder": {
+      "mesh_shape": [
+        1,
+        1
+      ],
+      "q_heads": 40,
+      "kv_heads": 8,
+      "qkv_width": 7168,
+      "intermediate_size": 27648
+    },
+    "kv_head_ownership": "Each TP rank owns 10 Q heads and 2 KV heads, preserving the 5:1 GQA ratio; the dense functional decoder restores 40 Q heads and 8 KV heads.",
+    "projection_check": "Q/K/V/gate/up shard output features on mesh axis 1; O/down shard input features on mesh axis 1 and sum their partial full-width outputs with all_reduce.",
+    "runtime_collapse": "The functional decoder loads canonical full HF weights, removes all collectives, and retains replicated full-width residual boundaries on a 1x1 mesh."
+  },
+  "architecture_exclusions": {
+    "qk_norm_weights": "absent from the Qwen2 layer and both segmented IR graphs",
+    "other_projection_biases": "absent; only q_proj, k_proj, and v_proj have biases",
+    "moe_router_or_expert_tensors": "absent; this layer uses dense SwiGLU",
+    "other_layer_collectives": "none; no all_gather, reduce_scatter, all_to_all, mesh_shard, or collective_permute occurs inside layer 32"
+  }
+}
