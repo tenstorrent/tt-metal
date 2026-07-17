@@ -1747,10 +1747,11 @@ std::vector<Tensor> prod_bw(
         // Only need to convert if tensor_1 is ROW_MAJOR
         tensor_2 = tensor_2.to_device(tensor_1.device());
         if (tensor_1.layout() == Layout::ROW_MAJOR) {
-            // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
-            bool pad_needed = tensor_2.padded_shape() != padded_shape;
+            // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout.
+            // untilize may drop tile padding (returning padded_shape == logical_shape), so decide whether
+            // padding is required from the tensor *after* untilize rather than before.
             tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
-            if (pad_needed) {
+            if (tensor_2.padded_shape() != padded_shape) {
                 tensor_2 = ttnn::pad(
                     tensor_2,
                     padded_shape.to_array_4D(),
@@ -1796,10 +1797,11 @@ std::vector<Tensor> prod_bw(
     // Only need to convert if tensor_1 is ROW_MAJOR
     tensor_2 = tensor_2.to_device(tensor_1.device());
     if (tensor_1.layout() == Layout::ROW_MAJOR) {
-        // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout
-        bool pad_needed = tensor_2.padded_shape() != padded_shape;
+        // Need to untilize tensor_2 to match tensor_1's ROW_MAJOR layout.
+        // untilize may drop tile padding (returning padded_shape == logical_shape), so decide whether
+        // padding is required from the tensor *after* untilize rather than before.
         tensor_2 = ttnn::untilize(tensor_2, tensor_1.memory_config());
-        if (pad_needed) {
+        if (tensor_2.padded_shape() != padded_shape) {
             tensor_2 = ttnn::pad(
                 tensor_2,
                 padded_shape.to_array_4D(),

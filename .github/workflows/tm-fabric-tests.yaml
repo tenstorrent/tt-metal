@@ -9,7 +9,7 @@ on:
       run-fabric-cpu-only-unit-tests:
         description: "Run fabric CPU-only unit tests (no hardware needed)"
         required: false
-        default: false
+        default: true
         type: boolean
       run-wh-n300-fabric-tests:
         description: "Run Wormhole N300 fabric tests"
@@ -96,6 +96,10 @@ permissions:
 
 run-name: >-
   (TM-Fabric) Fabric Tests${{ github.event_name == 'schedule' && ' [CPU-only scheduled]' || '' }}
+
+concurrency:
+  group: tm-fabric-tests-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   check-harbor:

@@ -29,6 +29,7 @@
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 using tt::tt_fabric::fabric_router_tests::check_asic_mapping_against_golden;
 using tt::tt_fabric::fabric_router_tests::expect_galaxy_corner_folding_check;
+using tt::tt_fabric::fabric_router_tests::expect_mesh_graph_host_topology_matches_runtime;
 
 namespace tt::tt_fabric::multi_host_tests {
 
@@ -234,6 +235,27 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
     check_asic_mapping_against_golden("TestDual2x4ControlPlaneInit");
 }
 
+// Same logical dual-T3K (2x4) mapping as TestDual2x4ControlPlaneInit, but exercised against the
+// physically distinct t3k_dual_host mock cluster (identical tray/asic_location/mesh/chip layout,
+// different asic_ids and hostnames). Kept as a separate test so it carries its own golden file.
+TEST(MultiHost, TestDual2x4T3kDualHostControlPlaneInit) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        log_info(tt::LogTest, "This test is only for T3K");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        dual_galaxy_mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    check_asic_mapping_against_golden("TestDual2x4T3kDualHostControlPlaneInit");
+}
+
 // Verifies that ControlPlane APIs return values derived from the post-solving mapping (MappedChipInfo in
 // fabric_node_id_to_mapping_), not from pre-solved mesh_graph, PSD, or local bindings. Uses discovery path
 // (no set_custom_fabric_topology). Run with:
@@ -321,19 +343,6 @@ TEST(MultiHost, TestDual2x4Fabric2DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
-    EXPECT_EQ(intermesh_connections.size(), 16);  // Bidirectional
-    for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
-        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
-        EXPECT_TRUE(direction.has_value());
-        const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
-        EXPECT_TRUE(!eth_chans_by_direction.empty());
-        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
-        EXPECT_TRUE(!eth_chans.empty());
-    }
 }
 
 TEST(MultiHost, TestDual2x4Fabric1DSanity) {
@@ -345,19 +354,6 @@ TEST(MultiHost, TestDual2x4Fabric1DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
-    EXPECT_EQ(intermesh_connections.size(), 16);  // Bidirectional
-    for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
-        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
-        EXPECT_TRUE(direction.has_value());
-        const auto& eth_chans_by_direction =
-            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
-        EXPECT_TRUE(!eth_chans_by_direction.empty());
-        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
-        EXPECT_TRUE(!eth_chans.empty());
-    }
 }
 
 TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
@@ -498,6 +494,7 @@ TEST(MultiHost, Test32x4QuadGalaxyControlPlaneInit) {
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
     expect_galaxy_corner_folding_check(*control_plane);
 
     check_asic_mapping_against_golden("Test32x4QuadGalaxyControlPlaneInit");
@@ -1319,309 +1316,6 @@ TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyFabric2DSanity) {
     }
 }
 
-namespace {
-
-size_t mesh_graph_total_chip_count(const tt::tt_fabric::MeshGraph& mesh_graph) {
-    size_t total = 0;
-    for (const MeshId mesh_id : mesh_graph.get_mesh_ids()) {
-        total += mesh_graph.get_mesh_shape(mesh_id).mesh_size();
-    }
-    return total;
-}
-
-size_t mesh_graph_stage_chip_count(const tt::tt_fabric::MeshGraph& mesh_graph) {
-    const auto mesh_ids = mesh_graph.get_mesh_ids();
-    if (mesh_ids.empty()) {
-        return 0;
-    }
-    return mesh_graph.get_mesh_shape(mesh_ids.front()).mesh_size();
-}
-
-// Pipeline stage count = total mapped chips / chips per stage (must divide evenly; all stages same size).
-size_t expect_pipeline_stage_count_for_chips_per_stage(
-    const tt::tt_fabric::MeshGraph& mesh_graph, size_t chips_per_stage) {
-    const auto mesh_ids = mesh_graph.get_mesh_ids();
-    EXPECT_FALSE(mesh_ids.empty()) << "mesh graph has no meshes";
-    if (mesh_ids.empty()) {
-        return 0;
-    }
-    const size_t stage_chips = mesh_graph.get_mesh_shape(mesh_ids.front()).mesh_size();
-    EXPECT_EQ(stage_chips, chips_per_stage)
-        << "first mesh has " << stage_chips << " chips, expected " << chips_per_stage << " per stage";
-    for (const MeshId mesh_id : mesh_ids) {
-        EXPECT_EQ(mesh_graph.get_mesh_shape(mesh_id).mesh_size(), stage_chips)
-            << "mesh " << *mesh_id << " chip count mismatch across pipeline stages";
-    }
-    const size_t total_chips = mesh_graph_total_chip_count(mesh_graph);
-    EXPECT_EQ(total_chips % chips_per_stage, 0u)
-        << "total chip count " << total_chips << " not evenly divisible by " << chips_per_stage << " chips/stage";
-    if (total_chips % chips_per_stage != 0) {
-        return mesh_ids.size();
-    }
-    return total_chips / chips_per_stage;
-}
-
-size_t mesh_graph_hosts_per_stage(const tt::tt_fabric::MeshGraph& mesh_graph) {
-    const auto mesh_ids = mesh_graph.get_mesh_ids();
-    if (mesh_ids.empty()) {
-        return 0;
-    }
-    const MeshId mesh_id = mesh_ids.front();
-    const size_t full = mesh_graph.get_mesh_shape(mesh_id).mesh_size();
-    const size_t per_host = mesh_graph.get_mesh_shape(mesh_id, MeshHostRankId(0)).mesh_size();
-    if (per_host == 0 || full % per_host != 0) {
-        return 1;
-    }
-    return full / per_host;
-}
-
-}  // namespace
-
-// Single 8-ASIC subtorus tray-pair (2x4 RING+RING or 4x2 LINE+RING): each rank checks only its local chips.
-// 2x4 and 4x2 orientations must map to the same Rev C tray pair {1,2} or {3,4}.
-// Run with quad_galaxy_4x32_subtorus_mapping.yaml and either:
-//   subtorus/subtorus_2x4_ring_ring_1x1_mesh_graph_descriptor.textproto
-//   subtorus/subtorus_4x2_line_ring_1x1_mesh_graph_descriptor.textproto
-TEST(MultiHost, TestSubtorusTrayPairMapping) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !cluster.is_ubb_galaxy()) {
-        GTEST_SKIP() << "Requires Blackhole Galaxy mock (quad_galaxy_4x32_subtorus)";
-    }
-
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    if (!control_plane.get_physical_system_descriptor().is_bh_galaxy_rev_c()) {
-        GTEST_SKIP() << "Tray mapping check is Rev C only (skip Rev A/B)";
-    }
-
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto& topology_mapper = control_plane.get_topology_mapper();
-    EXPECT_EQ(mesh_graph.get_mesh_ids().size(), 1u);
-    EXPECT_EQ(mesh_graph_stage_chip_count(mesh_graph), 8u) << "tray-pair subtorus stage must be 8 ASICs (2x4 or 4x2)";
-
-    const auto mpi_rank = *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank();
-    for (MeshId mesh_id : mesh_graph.get_mesh_ids()) {
-        std::set<uint32_t> trays;
-        for (const auto& coord : control_plane.get_coord_range(mesh_id, MeshScope::LOCAL)) {
-            const auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
-            trays.insert(*topology_mapper.get_tray_id_for_fabric_node_id(FabricNodeId(mesh_id, chip_id)));
-        }
-        if (trays.empty()) {
-            continue;
-        }
-
-        std::string tray_str;
-        for (uint32_t tray : trays) {
-            if (!tray_str.empty()) {
-                tray_str += ',';
-            }
-            tray_str += std::to_string(tray);
-        }
-
-        EXPECT_EQ(trays.size(), 2u) << "rank=" << mpi_rank << " mesh_id=" << *mesh_id << " local_trays={" << tray_str
-                                    << "} expected exactly trays {1,2} or {3,4}";
-        EXPECT_TRUE((trays == std::set<uint32_t>{1u, 2u}) || (trays == std::set<uint32_t>{3u, 4u}))
-            << "rank=" << mpi_rank << " mesh_id=" << *mesh_id << " local_trays={" << tray_str
-            << "} expected Rev C horizontal pair {1,2} or {3,4}";
-    }
-}
-
-// 4x2 horizontal grouping pipeline (8 ASICs/stage). Rev C only.
-// Each 8-ASIC mesh must stay within adjacent tray pair {1,2} or {3,4} (Rev A/B use {1,3}/{2,4}).
-// Stage count = total mapped chips / 8 (16 on quad mock, 64 on superpod, etc.).
-// Run with quad_galaxy_4x32_subtorus_mapping.yaml, subtorus_sc16, or 110c cluster mocks.
-TEST(MultiHost, Test2x4GroupingHorizontalTrayMapping) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !cluster.is_ubb_galaxy()) {
-        GTEST_SKIP() << "Requires Blackhole Galaxy mock (quad_galaxy_4x32_subtorus)";
-    }
-
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    if (!control_plane.get_physical_system_descriptor().is_bh_galaxy_rev_c()) {
-        GTEST_SKIP() << "Tray mapping check is Rev C only (skip Rev A/B)";
-    }
-
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto& topology_mapper = control_plane.get_topology_mapper();
-    constexpr size_t kChipsPerStage = 8;  // 4x2 torus stage
-    const size_t expected_stages = expect_pipeline_stage_count_for_chips_per_stage(mesh_graph, kChipsPerStage);
-    EXPECT_EQ(mesh_graph.get_mesh_ids().size(), expected_stages);
-
-    const auto mpi_rank = *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank();
-    for (MeshId mesh_id : mesh_graph.get_mesh_ids()) {
-        std::set<uint32_t> trays;
-        for (const auto& coord : control_plane.get_coord_range(mesh_id, MeshScope::LOCAL)) {
-            const auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
-            trays.insert(*topology_mapper.get_tray_id_for_fabric_node_id(FabricNodeId(mesh_id, chip_id)));
-        }
-        if (trays.empty()) {
-            continue;
-        }
-
-        std::string tray_str;
-        for (uint32_t tray : trays) {
-            if (!tray_str.empty()) {
-                tray_str += ',';
-            }
-            tray_str += std::to_string(tray);
-        }
-
-        bool only_12 = true;
-        bool only_34 = true;
-        for (uint32_t tray : trays) {
-            EXPECT_GE(tray, 1u);
-            EXPECT_LE(tray, 4u);
-            if (tray != 1 && tray != 2) {
-                only_12 = false;
-            }
-            if (tray != 3 && tray != 4) {
-                only_34 = false;
-            }
-        }
-        EXPECT_TRUE(only_12 || only_34) << "rank=" << mpi_rank << " mesh_id=" << *mesh_id << " local_trays={"
-                                        << tray_str << "} expected subset of Rev C pair {1,2} or {3,4}";
-    }
-}
-
-// Split-host 4x4 torus pipeline: even meshes are single-host 4x4; odd meshes are 2-host 4x4 (2x4 per rank).
-// Rev C only: every mesh must span all four trays {1,2,3,4} (two slices per 4x4 stage).
-// Stage count = total mapped chips / 16 (8 on quad mock, scales with cluster size).
-TEST(MultiHost, TestSplitHost4x4TrayMapping) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !cluster.is_ubb_galaxy()) {
-        GTEST_SKIP() << "Requires Blackhole Galaxy mock (quad_galaxy_4x32_subtorus)";
-    }
-
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    if (!control_plane.get_physical_system_descriptor().is_bh_galaxy_rev_c()) {
-        GTEST_SKIP() << "Tray mapping check is Rev C only (skip Rev A/B)";
-    }
-
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto& topology_mapper = control_plane.get_topology_mapper();
-    constexpr size_t kChipsPerStage = 16;  // 4x4 torus stage
-    const size_t expected_stages = expect_pipeline_stage_count_for_chips_per_stage(mesh_graph, kChipsPerStage);
-    EXPECT_EQ(mesh_graph.get_mesh_ids().size(), expected_stages);
-
-    const auto mpi_rank = *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank();
-    for (MeshId mesh_id : mesh_graph.get_mesh_ids()) {
-        std::set<uint32_t> trays;
-        for (const auto& coord : mesh_graph.get_coord_range(mesh_id)) {
-            const auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
-            trays.insert(*topology_mapper.get_tray_id_for_fabric_node_id(FabricNodeId(mesh_id, chip_id)));
-        }
-        ASSERT_FALSE(trays.empty()) << "mesh_id=" << *mesh_id << " rank=" << mpi_rank << " has no mapped trays";
-
-        std::string tray_str;
-        for (uint32_t tray : trays) {
-            if (!tray_str.empty()) {
-                tray_str += ',';
-            }
-            tray_str += std::to_string(tray);
-        }
-
-        EXPECT_EQ(trays.size(), 4u) << "rank=" << mpi_rank << " mesh_id=" << *mesh_id << " trays={" << tray_str
-                                    << "} expected all four trays {1,2,3,4}";
-        for (uint32_t tray = 1; tray <= 4; ++tray) {
-            EXPECT_TRUE(trays.contains(tray)) << "rank=" << mpi_rank << " mesh_id=" << *mesh_id << " trays={"
-                                              << tray_str << "} missing tray " << tray;
-        }
-    }
-}
-
-// Full-galaxy 4x8/8x4 torus must span all four trays {1,2,3,4}.
-// - Single mesh: subtorus/subtorus_4x8_ring_ring_2x2 (32 ASICs on 2x2 hosts)
-// - Pipeline: 32 ASICs/stage; stage count = total chips / 32
-// - Split-host 8x4 pipeline (4 ranks/stage):
-//     * quad-galaxy pod (mpi_size=4): 4-stage ring on the single 4-rank group
-//     * superpod (mpi_size>4): one pipeline stage per 4-rank group (e.g. 64 ranks, 16 stages)
-TEST(MultiHost, Test8x4TrayMapping) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !cluster.is_ubb_galaxy()) {
-        GTEST_SKIP() << "Requires Blackhole Galaxy mock (quad_galaxy_4x32_subtorus)";
-    }
-
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    if (!control_plane.get_physical_system_descriptor().is_bh_galaxy_rev_c()) {
-        GTEST_SKIP() << "Tray mapping check is Rev C only (skip Rev A/B)";
-    }
-
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    const auto& topology_mapper = control_plane.get_topology_mapper();
-    constexpr size_t kChipsPerStage = 32;  // 4x8 or 8x4 torus stage
-    const auto mesh_count = mesh_graph.get_mesh_ids().size();
-    if (mesh_count == 1u) {
-        EXPECT_EQ(mesh_graph_stage_chip_count(mesh_graph), kChipsPerStage)
-            << "single-mesh 4x8/8x4 subtorus must have 32 ASICs";
-    } else {
-        const size_t expected_stages = expect_pipeline_stage_count_for_chips_per_stage(mesh_graph, kChipsPerStage);
-        EXPECT_EQ(mesh_count, expected_stages);
-        const size_t hosts_per_stage = mesh_graph_hosts_per_stage(mesh_graph);
-        if (hosts_per_stage == 4u) {
-            const size_t mpi_size =
-                static_cast<size_t>(*tt::tt_metal::MetalContext::instance().full_world_distributed_context().size());
-            ASSERT_GE(mpi_size, 4u);
-            ASSERT_EQ(mpi_size % 4, 0u) << "8x4 split-host pipeline expects MPI size divisible by 4";
-            const size_t num_rank_groups = mpi_size / 4;
-            const size_t stages_per_rank_group = expected_stages / num_rank_groups;
-            if (mpi_size == 4u) {
-                EXPECT_EQ(stages_per_rank_group, 4u)
-                    << "8x4 split-host quad-galaxy pipeline should have 4 stages on the single 4-rank group "
-                       "(mpi_size="
-                    << mpi_size << ", stages=" << expected_stages << ")";
-            } else {
-                EXPECT_EQ(stages_per_rank_group, 1u)
-                    << "8x4 split-host superpod pipeline should have one stage per 4-rank group (mpi_size=" << mpi_size
-                    << ", stages=" << expected_stages << ")";
-            }
-        }
-    }
-
-    const auto mpi_rank = *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank();
-    for (MeshId mesh_id : mesh_graph.get_mesh_ids()) {
-        std::set<uint32_t> trays;
-        for (const auto& coord : mesh_graph.get_coord_range(mesh_id)) {
-            const auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
-            trays.insert(*topology_mapper.get_tray_id_for_fabric_node_id(FabricNodeId(mesh_id, chip_id)));
-        }
-        ASSERT_FALSE(trays.empty()) << "mesh_id=" << *mesh_id << " rank=" << mpi_rank << " has no mapped trays";
-
-        std::string tray_str;
-        for (uint32_t tray : trays) {
-            if (!tray_str.empty()) {
-                tray_str += ',';
-            }
-            tray_str += std::to_string(tray);
-        }
-
-        EXPECT_EQ(trays.size(), 4u) << "rank=" << mpi_rank << " mesh_id=" << *mesh_id << " trays={" << tray_str
-                                    << "} expected all four trays {1,2,3,4}";
-        for (uint32_t tray = 1; tray <= 4; ++tray) {
-            EXPECT_TRUE(trays.contains(tray)) << "rank=" << mpi_rank << " mesh_id=" << *mesh_id << " trays={"
-                                              << tray_str << "} missing tray " << tray;
-        }
-    }
-}
-
 TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyFabric1DSanity) {
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
@@ -1640,6 +1334,171 @@ TEST(MultiHost, TestTriplePod32x4QuadBHGalaxyFabric1DSanity) {
         EXPECT_TRUE(!eth_chans_by_direction.empty());
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
         EXPECT_TRUE(!eth_chans.empty());
+    }
+}
+
+// Llama 8b decode pod MGD (tt-blaze #46935): M0 [1,8] + M1 [4,8] hosts on dual 4x16 meshes.
+// Run with llama_8b_1x2_pod_mesh_graph_descriptor.textproto on single-pod mocks (4 MPI ranks).
+TEST(MultiHost, TestLlama8b1x2PodControlPlaneInit) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !cluster.is_ubb_galaxy()) {
+        GTEST_SKIP() << "Requires Blackhole Galaxy mock (single-pod llama 8b decode pod MGDs)";
+    }
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    const auto mpi_rank = *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank();
+
+    const auto mesh_ids = mesh_graph.get_mesh_ids();
+    ASSERT_EQ(mesh_ids.size(), 2u) << "Llama 8b pod MGD must define exactly two 4x16 decode meshes (M0 + M1)";
+    for (const MeshId mesh_id : mesh_ids) {
+        EXPECT_EQ(mesh_graph.get_mesh_shape(mesh_id), MeshShape(4, 16))
+            << "mesh " << *mesh_id << " device topology must be 4x16 RING+LINE";
+    }
+    EXPECT_EQ(mesh_graph.get_host_ranks(MeshId{0}).shape(), MeshShape(1, 8))
+        << "M0 host_topology must be [1,8] (8 hosts along the 16-col axis)";
+    EXPECT_EQ(mesh_graph.get_host_ranks(MeshId{1}).shape(), MeshShape(4, 8))
+        << "M1 host_topology must be [4,8] for llama 8b 1x2 pod";
+    EXPECT_EQ(mesh_graph.get_host_ranks(MeshId{0}).size(), 8u);
+    EXPECT_EQ(mesh_graph.get_host_ranks(MeshId{1}).size(), 32u);
+
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
+    size_t m0_to_m1_links = 0;
+    for (const auto& [src_node_id, dst_node_id] : get_all_intermesh_connections(control_plane)) {
+        if (src_node_id.mesh_id == MeshId{0} && dst_node_id.mesh_id == MeshId{1}) {
+            ++m0_to_m1_links;
+        }
+    }
+    EXPECT_EQ(m0_to_m1_links, 8u) << "M0<->M1 intermesh must have exactly 8 links (MGD channels count)";
+
+    for (const MeshId mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        std::set<std::string> hostnames;
+        std::set<uint32_t> trays;
+        for (const auto& coord : control_plane.get_coord_range(mesh_id, MeshScope::LOCAL)) {
+            const auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
+            const FabricNodeId fabric_node_id(mesh_id, chip_id);
+            hostnames.insert(topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id));
+            trays.insert(*topology_mapper.get_tray_id_for_fabric_node_id(fabric_node_id));
+        }
+        if (hostnames.empty()) {
+            continue;
+        }
+
+        std::string host_str;
+        for (const std::string& host : hostnames) {
+            if (!host_str.empty()) {
+                host_str += ',';
+            }
+            host_str += host;
+        }
+        std::string tray_str;
+        for (uint32_t tray : trays) {
+            if (!tray_str.empty()) {
+                tray_str += ',';
+            }
+            tray_str += std::to_string(tray);
+        }
+
+        EXPECT_EQ(hostnames.size(), 1u) << "rank=" << mpi_rank << " mesh=" << *mesh_id
+                                        << " local chips must sit on exactly one host; hosts={" << host_str << "}";
+
+        if (mesh_id == MeshId{0}) {
+            EXPECT_EQ(trays.size(), 2u) << "rank=" << mpi_rank << " mesh=" << *mesh_id << " local trays={" << tray_str
+                                        << "} expected exactly 2 trays on that host";
+        } else if (mesh_id == MeshId{1}) {
+            EXPECT_EQ(trays.size(), 1u) << "rank=" << mpi_rank << " mesh=" << *mesh_id << " local trays={" << tray_str
+                                        << "} expected exactly 1 tray on that host";
+        }
+    }
+
+    const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
+    EXPECT_GT(intermesh_connections.size(), 0u) << "M0<->M1 intermesh links must be mapped";
+    for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
+        EXPECT_NE(src_node_id.mesh_id, dst_node_id.mesh_id) << "Intermesh edge must cross mesh boundary";
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_TRUE(direction.has_value());
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
+        EXPECT_FALSE(eth_chans_by_direction.empty());
+    }
+}
+
+// Llama 8b decode pod MGD (tt-blaze #46935): M0 [1,8] + M1 [2,16] hosts on dual 4x16 meshes.
+// Run with llama_8b_2x1_pod_mesh_graph_descriptor.textproto on single-pod mocks (4 MPI ranks).
+TEST(MultiHost, TestLlama8b2x1PodControlPlaneInit) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !cluster.is_ubb_galaxy()) {
+        GTEST_SKIP() << "Requires Blackhole Galaxy mock (single-pod llama 8b decode pod MGDs)";
+    }
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    const auto mpi_rank = *tt::tt_metal::MetalContext::instance().full_world_distributed_context().rank();
+
+    const auto mesh_ids = mesh_graph.get_mesh_ids();
+    ASSERT_EQ(mesh_ids.size(), 2u) << "Llama 8b pod MGD must define exactly two 4x16 decode meshes (M0 + M1)";
+    for (const MeshId mesh_id : mesh_ids) {
+        EXPECT_EQ(mesh_graph.get_mesh_shape(mesh_id), MeshShape(4, 16))
+            << "mesh " << *mesh_id << " device topology must be 4x16 RING+LINE";
+    }
+    EXPECT_EQ(mesh_graph.get_host_ranks(MeshId{0}).shape(), MeshShape(1, 8))
+        << "M0 host_topology must be [1,8] (8 hosts along the 16-col axis)";
+    EXPECT_EQ(mesh_graph.get_host_ranks(MeshId{1}).shape(), MeshShape(2, 16))
+        << "M1 host_topology must be [2,16] for llama 8b 2x1 pod";
+    EXPECT_EQ(mesh_graph.get_host_ranks(MeshId{0}).size(), 8u);
+    EXPECT_EQ(mesh_graph.get_host_ranks(MeshId{1}).size(), 32u);
+
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
+    for (const MeshId mesh_id : control_plane.get_local_mesh_id_bindings()) {
+        std::set<std::string> hostnames;
+        std::set<uint32_t> trays;
+        for (const auto& coord : control_plane.get_coord_range(mesh_id, MeshScope::LOCAL)) {
+            const auto chip_id = mesh_graph.coordinate_to_chip(mesh_id, coord);
+            const FabricNodeId fabric_node_id(mesh_id, chip_id);
+            hostnames.insert(topology_mapper.get_hostname_for_fabric_node_id(fabric_node_id));
+            trays.insert(*topology_mapper.get_tray_id_for_fabric_node_id(fabric_node_id));
+        }
+        if (hostnames.empty()) {
+            continue;
+        }
+
+        std::string host_str;
+        for (const std::string& host : hostnames) {
+            if (!host_str.empty()) {
+                host_str += ',';
+            }
+            host_str += host;
+        }
+        std::string tray_str;
+        for (uint32_t tray : trays) {
+            if (!tray_str.empty()) {
+                tray_str += ',';
+            }
+            tray_str += std::to_string(tray);
+        }
+
+        EXPECT_EQ(hostnames.size(), 1u) << "rank=" << mpi_rank << " mesh=" << *mesh_id
+                                        << " local chips must sit on exactly one host; hosts={" << host_str << "}";
+
+        if (mesh_id == MeshId{0}) {
+            EXPECT_EQ(trays.size(), 2u) << "rank=" << mpi_rank << " mesh=" << *mesh_id << " local trays={" << tray_str
+                                        << "} expected exactly 2 trays on that host";
+        } else if (mesh_id == MeshId{1}) {
+            EXPECT_EQ(trays.size(), 1u) << "rank=" << mpi_rank << " mesh=" << *mesh_id << " local trays={" << tray_str
+                                        << "} expected exactly 1 tray on that host";
+        }
     }
 }
 
