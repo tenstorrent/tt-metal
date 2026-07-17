@@ -536,8 +536,17 @@ class TTVibeVoiceLM:
         # hoisted out of the layer loop to avoid 2 redundant slices/layer.
         if cos_sin_tt is not None:
             c, s = cos_sin_tt
-            q = _apply_rope_ttnn(q, c, s)
-            k = _apply_rope_ttnn(k, c, s)
+            if S > 1:
+                # Prefill: fused single-op HF (rotate-half) RoPE — matches the manual
+                # fp32 path at PCC 0.999999 (validated) but collapses ~9 ops/call
+                # (typecast+slice+slice+neg+concat+2·mul+add+typecast) to one.  fp32
+                # cos/sin + HiFi4 keep the numerics; output is bf16 like the manual path.
+                q = ttnn.experimental.rotary_embedding_hf(q, c, s, is_decode_mode=False, compute_kernel_config=_HIFI4)
+                k = ttnn.experimental.rotary_embedding_hf(k, c, s, is_decode_mode=False, compute_kernel_config=_HIFI4)
+            else:
+                # Decode: keep the validated manual fp32 rope.
+                q = _apply_rope_ttnn(q, c, s)
+                k = _apply_rope_ttnn(k, c, s)
 
         if S > 1:
             # ── Prefill: fp32 manual attention reading the fixed-cache prefix ──

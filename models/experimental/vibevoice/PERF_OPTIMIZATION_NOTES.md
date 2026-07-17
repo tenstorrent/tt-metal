@@ -139,12 +139,18 @@ it untilizes→concats→tilizes internally and was *slower* than the in-TILE sl
 4. **Skip lm_head on non-final prefill chunks** (`forward(compute_logits=...)`, set by `prefill_embeds`) —
    only the last chunk's logits are consumed by the sampler; saves one vocab-151936 matmul (~1.7 ms) per
    intermediate chunk (≈ 51 chunks × 1.7 ms ≈ 87 ms on the 13k climate prefill).
+5. **Fused HF RoPE** (`ttnn.experimental.rotary_embedding_hf`, prefill only, S>1) — replaces the manual
+   per-call rope (typecast + slice+slice+neg+concat + 2·mul + add + typecast ≈ 9 ops) with ONE op for
+   each of Q,K. Reuses the existing fp32 cos/sin cache (already HF/rotate-half format) + HiFi4; probed
+   **PCC 0.999999 vs the manual path** (bf16 in/out, fp32 accumulate). Removed ~448 dispatch-bound ops
+   across the forward (BinaryNg 336→168, Typecast 225→113, Slice 282→170, Concat 112→56, Unary 84→28).
+   Decode (S==1) and the traced decode keep the validated manual rope.
 
-**Result:** warm 256-tok forward **112.4 → 82.6 ms (−26.5 %)**; 1024-tok **145.7 → 125.3 ms (−14 %)**;
-tracy device 39.6 → ~37 ms. Validated: `test_lm_pcc` prefill **0.996597** (identical to baseline) / decode
-**0.999889** (≥ old 0.9997); ISL sweep 32–1024 all PASS; `demo_ttnn.py` (1p_CH2EN) runs clean, valid audio.
-The warm per-chunk win is what matters for the long (13k/64k) prefills; the 478-tok demo prefill is
-compile-dominated so shows little.
+**Result:** warm 256-tok forward **112.4 → 52.0 ms (−54 %)** (−26.5 % from items 1–4, then −37 % more from
+RoPE fusion); tracy device ~39.6 → ~31 ms. Validated: `test_lm_pcc` prefill **0.996577** (vs 0.996597
+baseline = −2e-5, noise; the rope op is 0.999999 vs manual) / decode **0.999898** (≥ old 0.9997); ISL sweep
+32–1024 all PASS; `demo_ttnn.py` (1p_CH2EN) clean, valid audio (prefill 584 tok/s, TTFT 0.82 s).
+The warm per-chunk win is what matters for the long (13k/64k) prefills.
 
 **Investigated, no safe win (don't re-explore):**
 - **Best matmul program configs (M=256):** swept auto vs tuned 2D-mcast (grid/in0_block_w/subblock)
@@ -159,13 +165,17 @@ compile-dominated so shows little.
 - **RoPE q-typecast dedup** (keep prefill Q fp32 out of RoPE, skip the re-cast): tiny PCC *regression*
   (0.996597→0.996358) not an improvement, for only ~2 ops/layer — reverted.
 
-**Next prefill lever (not done — risk):** RoPE is the biggest remaining op-count sink (~18 ops/layer:
-typecast + rotate_half slice/neg/concat + muls, ×q,k). `ttnn.experimental.rotary_embedding_llama` fuses it
-to ~1 op but uses the **interleaved (GPT-J) trans_mat convention**, while Qwen2 uses **NeoX rotate-half** —
-needs the cos/sin cache rebuilt to match + full-depth PCC re-validation (thin margin). Deferred to protect
-the 0.99 gate. (e2e_generate_pcc is currently broken by a pre-existing transformers-version TypeError in the
-CPU reference `_prepare_generation_config` — unrelated to these changes; confirmed identical failure on the
-clean tree. Gate on `test_lm_pcc` + demo instead until that's fixed.)
+**RoPE fusion — DONE** (item 5 above). Used `ttnn.experimental.rotary_embedding_hf` (the HF/rotate-half
+op, no trans_mat, matches Qwen2's convention directly — NOT `rotary_embedding_llama`, which uses the
+interleaved GPT-J trans_mat and would need a weight/cache permute). Reused the existing fp32 cos/sin cache.
+
+**Remaining prefill glue (next levers):** after RoPE fusion the top op-count sinks are the GQA
+slice+concat materialize (6 ops/layer: 4 slice + 2 concat, ~226 ops) and the 3 fp32 typecasts (q/k/v).
+The GQA could go to a grouped/broadcast matmul (no materialize) but has rank/broadcast caveats; the
+typecasts are inherent to the fp32 attention. Both are lower-value than RoPE was and touch the
+numerically-delicate fp32 path — evaluate carefully. (e2e_generate_pcc is currently broken by a
+pre-existing transformers-version TypeError in the CPU reference `_prepare_generation_config` — unrelated
+to these changes; confirmed identical on the clean tree. Gate on `test_lm_pcc` + demo instead.)
 
 ## TRACE INVESTIGATION (done — findings, so it isn't repeated)
 - **Diffusion-loop trace: investigated and rejected.** Captured the 10-step CFG diffusion loop as a device trace (had to remove host-writes from the captured region first: `ttnn.full` in the scheduler's scalar mul/add → scalar-operand `ttnn.mul/add`; `ttnn.ones_like` in the diffusion head → `+1.0`; precompute the per-step timestep tensors outside capture — all numerically identical, validated by a scalar probe). Result: **diffusion is COMPUTE-bound** (batch-2 matmuls over hidden 1536 / ffn 4608 × 10 steps), so trace gave only **~9%** (26.5 ms traced vs 29 ms eager) — not worth the complexity (and the first replay impl had an output-buffer-reuse bug → corrupted audio). Reverted to the committed state. **Lesson: trace only helps the dispatch-bound regions** (tiny tensors, many ops).
