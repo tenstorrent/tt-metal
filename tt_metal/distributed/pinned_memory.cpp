@@ -27,11 +27,24 @@
 
 namespace tt::tt_metal::experimental {
 
+namespace {
+
+tt::umd::DeviceBufferAccess to_umd_access(PinnedMemoryDeviceAccess access) {
+    return access == PinnedMemoryDeviceAccess::ReadOnly ? tt::umd::DeviceBufferAccess::ReadOnly
+                                                        : tt::umd::DeviceBufferAccess::ReadWrite;
+}
+
+}  // namespace
+
 // PinnedMemoryImpl implementation
 PinnedMemoryImpl::PinnedMemoryImpl(
-    const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) :
-    buffer_size_(buffer_size), map_to_noc_(map_to_noc) {
-    initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc);
+    const std::vector<IDevice*>& devices,
+    void* host_buffer,
+    size_t buffer_size,
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) :
+    buffer_size_(buffer_size), map_to_noc_(map_to_noc), device_access_(access) {
+    initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc, access);
 }
 
 PinnedMemoryImpl::~PinnedMemoryImpl() {
@@ -42,6 +55,7 @@ PinnedMemoryImpl::~PinnedMemoryImpl() {
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
     buffer_size_(std::exchange(other.buffer_size_, 0)),
     map_to_noc_(std::exchange(other.map_to_noc_, false)),
+    device_access_(std::exchange(other.device_access_, PinnedMemoryDeviceAccess::ReadWrite)),
     use_64bit_address_space_(std::exchange(other.use_64bit_address_space_, false)),
     host_offset_(std::exchange(other.host_offset_, 0)),
     is_mock_(std::exchange(other.is_mock_, false)),
@@ -57,6 +71,7 @@ PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept
 
         buffer_size_ = std::exchange(other.buffer_size_, 0);
         map_to_noc_ = std::exchange(other.map_to_noc_, false);
+        device_access_ = std::exchange(other.device_access_, PinnedMemoryDeviceAccess::ReadWrite);
         use_64bit_address_space_ = std::exchange(other.use_64bit_address_space_, false);
         host_offset_ = std::exchange(other.host_offset_, 0);
         is_mock_ = std::exchange(other.is_mock_, false);
@@ -69,7 +84,11 @@ PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept
 }
 
 void PinnedMemoryImpl::initialize_from_devices(
-    const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) {
+    const std::vector<IDevice*>& devices,
+    void* host_buffer,
+    size_t buffer_size,
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) {
     if (devices.empty()) {
         throw std::invalid_argument("Cannot create PinnedMemory with empty device list");
     }
@@ -129,7 +148,8 @@ void PinnedMemoryImpl::initialize_from_devices(
     }
 
     for (ChipId mmio_device_id : unique_mmio_devices) {
-        auto buffer = cluster.map_sysmem_buffer(mmio_device_id, aligned_host_ptr, mapped_size, map_to_noc);
+        auto buffer =
+            cluster.map_sysmem_buffer(mmio_device_id, aligned_host_ptr, mapped_size, map_to_noc, to_umd_access(access));
 
         if (!buffer) {
             throw std::runtime_error("Failed to create SysmemBuffer for MMIO device " + std::to_string(mmio_device_id));
@@ -314,8 +334,12 @@ void PinnedMemoryImpl::unlock() {}
 
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(
-    const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) :
-    pImpl(std::make_unique<PinnedMemoryImpl>(devices, host_buffer, buffer_size, map_to_noc)) {}
+    const std::vector<IDevice*>& devices,
+    void* host_buffer,
+    size_t buffer_size,
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) :
+    pImpl(std::make_unique<PinnedMemoryImpl>(devices, host_buffer, buffer_size, map_to_noc, access)) {}
 
 PinnedMemory::~PinnedMemory() = default;
 
@@ -338,6 +362,8 @@ std::optional<PinnedMemory::NocAddr> PinnedMemory::get_noc_addr(ChipId device_id
 
 size_t PinnedMemory::get_buffer_size() const { return pImpl->get_buffer_size(); }
 
+PinnedMemoryDeviceAccess PinnedMemory::get_device_access() const { return pImpl->get_device_access(); }
+
 std::vector<ChipId> PinnedMemory::get_device_ids() const { return pImpl->get_device_ids(); }
 
 bool PinnedMemory::has_device(ChipId device_id) const { return pImpl->has_device(device_id); }
@@ -356,7 +382,8 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
-    bool map_to_noc) {
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) {
     // Extract all coordinates from the range set
     std::vector<distributed::MeshCoordinate> coordinates = coordinate_range_set.coords();
 
@@ -380,7 +407,8 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     void* host_ptr = static_cast<void*>(bytes.data());
     size_t buffer_size = bytes.size();
 
-    auto pinned_memory = std::shared_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+    auto pinned_memory =
+        std::shared_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc, access));
     HostBufferSetPinnedMemory(host_buffer, pinned_memory);
     return pinned_memory;
 }
@@ -389,7 +417,7 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
     bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
     if (!iommu_enabled) {
-        return experimental::MemoryPinningParameters{0u, 0u, false};
+        return experimental::MemoryPinningParameters{0u, 0u, false, false};
     }
 
     const auto& hal = MetalContext::instance().hal();
@@ -400,6 +428,7 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     // bit addresses.
     params.can_map_to_noc = MetalContext::instance().hal().get_supports_64_bit_pcie_addressing() ||
                             MetalContext::instance().get_cluster().is_noc_mapping_enabled();
+    params.supports_read_only = MetalContext::instance().get_cluster().is_read_only_page_pinning_supported();
     return params;
 }
 

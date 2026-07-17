@@ -185,13 +185,16 @@
 # --- IOMMU PinnedMemory Tests (SD + FD) ---
 - name: runtime_iommu_pinned_memory
   cmd: |
+    python3 -c "import pathlib,re; text=pathlib.Path('/sys/module/tenstorrent/version').read_text().strip(); match=re.match(r'(\d+)\.(\d+)\.(\d+)', text); assert match and tuple(map(int, match.groups())) >= (2, 9, 0), f'KMD 2.9.0+ required, found {text}'"
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter='*PinnedMemory*'
     ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*PinnedMemory*'
+    ./build/test/tt_metal/unit_tests_tensor --gtest_filter='*ReadOnly*:*UniformCopyToDevice_ReusesPinnedMemoryCacheEntries:*UniformCopyToHost_ReusesPinnedMemoryCacheEntries'
+    scripts/run_safe_pytest.sh tests/ttnn/unit_tests/tensor/test_tensor_serialization.py::test_large_read_only_file_backed_tensor_upload
   skus:
     wh_n150_civ2:
-      timeout: 5
+      timeout: 10
     bh_p150b_civ2_viommu:
-      timeout: 5
+      timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 

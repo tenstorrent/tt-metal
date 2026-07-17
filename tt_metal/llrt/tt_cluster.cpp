@@ -34,6 +34,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
+#include "umd/device/utils/kmd_versions.hpp"
 #include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -222,6 +223,10 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
 
 bool Cluster::is_noc_mapping_enabled() const { return this->noc_mapping_enabled_; }
+
+bool Cluster::is_read_only_page_pinning_supported() const {
+    return this->iommu_enabled_ && tt::umd::PCIDevice::read_kmd_version() >= tt::umd::KMD_READ_ONLY_PAGE_PINNING;
+}
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     ZoneScoped;
@@ -1025,12 +1030,16 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
 }
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
-    ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc) const {
+    ChipId device_id,
+    void* buffer,
+    size_t sysmem_buffer_size,
+    bool map_to_noc,
+    tt::umd::DeviceBufferAccess access) const {
     tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
     if (!sysmem_manager) {
         TT_THROW("Failed to get SysmemManager for device {}", device_id);
     }
-    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc);
+    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc, access);
 }
 
 void Cluster::verify_sw_fw_versions(

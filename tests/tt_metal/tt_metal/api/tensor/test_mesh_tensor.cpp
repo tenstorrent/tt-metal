@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <fcntl.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -578,8 +579,17 @@ TEST_F(MeshTensorDeviceTest, UniformCopyToDevice_ReusesPinnedMemoryCacheEntries)
     ASSERT_TRUE(first_shard.has_value());
     auto first_coord_range =
         distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(first_coord, first_coord));
-    auto first_pin = cache.try_pin(*mesh_device_, first_coord_range, *first_shard, /*map_to_noc=*/true);
+    auto first_pin = cache.try_pin(
+        *mesh_device_,
+        first_coord_range,
+        *first_shard,
+        /*map_to_noc=*/true,
+        tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
     ASSERT_TRUE(first_pin);
+    const auto expected_access = pinning_params.supports_read_only
+                                     ? tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly
+                                     : tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadWrite;
+    EXPECT_EQ(first_pin->get_device_access(), expected_access);
     std::weak_ptr<tt::tt_metal::experimental::PinnedMemory> first_weak = first_pin;
     first_pin.reset();
 
@@ -678,6 +688,7 @@ TEST_F(MeshTensorDeviceTest, UniformCopyToHost_ReusesPinnedMemoryCacheEntries) {
         distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(first_coord, first_coord));
     auto first_pin = cache.try_pin(*mesh_device_, first_coord_range, *first_shard, /*map_to_noc=*/true);
     ASSERT_TRUE(first_pin);
+    EXPECT_EQ(first_pin->get_device_access(), tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadWrite);
     std::weak_ptr<tt::tt_metal::experimental::PinnedMemory> first_weak = first_pin;
     first_pin.reset();
 
@@ -911,6 +922,61 @@ TEST_F(MeshTensorDeviceTest, LargeWriteRoundtrip_PinnedMemoryPath) {
     MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
     HostTensor result = enqueue_read_tensor(cq, device_tensor);
 
+    expect_host_tensors_eq(host_tensor, result);
+}
+
+TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeReadOnlyFileBackedWriteUsesReadOnlyPinnedMemory) {
+    const auto pinning_params = tt::tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (!pinning_params.can_map_to_noc || !pinning_params.supports_read_only ||
+        tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0) {
+        GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
+    }
+
+    const Shape shape{1, 1, 1024, 9216};
+    const size_t buffer_size = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
+    ASSERT_GT(buffer_size, kPinnedWriteThresholdBytesForTest);
+
+    char file_name[] = "./tt_metal_read_only_tensor_XXXXXX";
+    int writable_fd = mkstemp(file_name);
+    ASSERT_NE(writable_fd, -1);
+    ASSERT_EQ(ftruncate(writable_fd, buffer_size), 0);
+    void* writable_mapping = mmap(nullptr, buffer_size, PROT_READ | PROT_WRITE, MAP_SHARED, writable_fd, 0);
+    ASSERT_NE(writable_mapping, MAP_FAILED);
+    std::fill_n(static_cast<uint32_t*>(writable_mapping), shape.volume(), 0x12345678u);
+    ASSERT_EQ(munmap(writable_mapping, buffer_size), 0);
+    ASSERT_EQ(close(writable_fd), 0);
+
+    int read_only_fd = open(file_name, O_RDONLY | O_CLOEXEC);
+    ASSERT_NE(read_only_fd, -1);
+    ASSERT_EQ(unlink(file_name), 0);
+    void* read_only_mapping = mmap(nullptr, buffer_size, PROT_READ, MAP_SHARED, read_only_fd, 0);
+    ASSERT_NE(read_only_mapping, MAP_FAILED);
+    ASSERT_EQ(close(read_only_fd), 0);
+
+    auto mapping_owner = std::shared_ptr<void>(
+        read_only_mapping, [buffer_size](void* mapping) { EXPECT_EQ(munmap(mapping, buffer_size), 0); });
+    HostBuffer file_buffer(
+        ttsl::Span<uint32_t>(static_cast<uint32_t*>(read_only_mapping), shape.volume()), MemoryPin(mapping_owner));
+    auto distributed_buffer = DistributedHostBuffer::create(mesh_device_->shape());
+    const auto coord = *distributed::MeshCoordinateRange(mesh_device_->shape()).begin();
+    distributed_buffer.emplace_shard(coord, [&file_buffer]() { return file_buffer; });
+    auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto host_tensor = HostTensor::from_buffer(
+        std::move(distributed_buffer), spec, TensorTopology::create_sharded_tensor_topology(mesh_device_->shape()));
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    MeshTensor device_tensor = enqueue_write_tensor(cq, host_tensor, *mesh_device_);
+    cq.finish();
+
+    auto shard = host_tensor.buffer().get_shard(coord);
+    ASSERT_TRUE(shard.has_value());
+    const auto range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
+    auto pinned = tt::tt_metal::experimental::PinnedMemoryCache::instance().try_pin(
+        *mesh_device_, range, *shard, true, tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    ASSERT_TRUE(pinned);
+    EXPECT_EQ(pinned->get_device_access(), tt::tt_metal::experimental::PinnedMemoryDeviceAccess::ReadOnly);
+
+    HostTensor result = enqueue_read_tensor(cq, device_tensor);
     expect_host_tensors_eq(host_tensor, result);
 }
 

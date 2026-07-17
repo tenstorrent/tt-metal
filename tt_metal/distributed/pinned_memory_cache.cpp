@@ -163,7 +163,8 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
-    bool map_to_noc) {
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) {
     // Check whether this hardware/IOMMU configuration supports pinning at all.
     const auto params = GetMemoryPinningParameters(mesh_device);
     if (params.max_pins == 0) {
@@ -200,6 +201,9 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
         if (map_to_noc && !list_it->map_to_noc) {
             continue;
         }
+        if (access == PinnedMemoryDeviceAccess::ReadWrite && list_it->access == PinnedMemoryDeviceAccess::ReadOnly) {
+            continue;
+        }
         bool covers_all_devices = true;
         for (ChipId device_id : target_device_ids) {
             if (!list_it->device_ids.contains(device_id)) {
@@ -212,6 +216,12 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
             return list_it->pinned_memory;
         }
     }
+
+    // Older KMDs cannot create a device-read-only mapping. Widen cache-created mappings to read/write so callers keep
+    // using the pinned fast path; the cache records the mapping's actual permissions.
+    const PinnedMemoryDeviceAccess actual_access =
+        access == PinnedMemoryDeviceAccess::ReadOnly && !params.supports_read_only ? PinnedMemoryDeviceAccess::ReadWrite
+                                                                                   : access;
 
     // No usable entry. Before creating a new pin, check whether any existing
     // entry for this address is still referenced externally on an MMIO device
@@ -257,10 +267,11 @@ std::shared_ptr<PinnedMemory> PinnedMemoryCache::try_pin(
             // PinnedMemory::Create also calls HostBufferSetPinnedMemory internally
             // as part of its public API. We immediately clear it since the cache is
             // the long-term owner; callers set it transiently when needed.
-            auto pinned = PinnedMemory::Create(mesh_device, coordinate_range_set, host_buffer, map_to_noc);
+            auto pinned =
+                PinnedMemory::Create(mesh_device, coordinate_range_set, host_buffer, map_to_noc, actual_access);
             HostBufferSetPinnedMemory(host_buffer, nullptr);
 
-            CacheEntry entry{pinned, host_addr, target_device_ids, target_mmio_ids, map_to_noc};
+            CacheEntry entry{pinned, host_addr, target_device_ids, target_mmio_ids, map_to_noc, actual_access};
             lru_entries_.push_back(std::move(entry));
             address_map_.emplace(host_addr, std::prev(lru_entries_.end()));
             for (ChipId mmio_id : target_mmio_ids) {

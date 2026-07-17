@@ -257,7 +257,8 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteMeshBufferValidSrcSize) {
     std::vector<uint8_t> exact_src_vec(buffer_size, 0);
     std::vector<uint8_t> large_src_vec(buffer_size * 2, 0);
 
-    EXPECT_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, small_src_vec), std::exception);
+    EXPECT_THROW(
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, small_src_vec), std::exception);
     EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, exact_src_vec, true));
     EXPECT_NO_THROW(EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, large_src_vec, true));
 }
@@ -837,8 +838,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
     uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
 
     // Create HostBuffer on top of dst
-    HostBuffer host_buffer(
-        ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = experimental::PinnedMemory::Create(
@@ -893,8 +893,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
     uint32_t* dst_ptr_aligned = reinterpret_cast<uint32_t*>(dst->data());
 
     // Create HostBuffer on top of dst
-    HostBuffer host_buffer(
-        ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_shared = experimental::PinnedMemory::Create(
@@ -963,6 +962,98 @@ TEST_F(MeshBufferTestSuite, PinnedMemoryCacheUpgradesCoverageForSameHostBuffer) 
         experimental::PinnedMemoryCache::instance().try_pin(*mesh_device_, full_range, host_buffer, true);
     ASSERT_TRUE(repeated_full_mesh_pin);
     EXPECT_EQ(repeated_full_mesh_pin.get(), full_mesh_pin.get());
+}
+
+TEST_F(MeshBufferTestSuite, PinnedMemoryCacheReadOnlyRequestReusesReadWriteMapping) {
+    const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0 ||
+        !pinning_params.can_map_to_noc) {
+        GTEST_SKIP() << "Pinned NOC mappings are not available";
+    }
+
+    auto storage = std::make_shared<vector_aligned<uint32_t>>(1024, 0);
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(storage->data(), storage->size()), MemoryPin(storage));
+    const auto coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto range = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto& cache = experimental::PinnedMemoryCache::instance();
+
+    auto read_write =
+        cache.try_pin(*mesh_device_, range, host_buffer, true, experimental::PinnedMemoryDeviceAccess::ReadWrite);
+    ASSERT_TRUE(read_write);
+    ASSERT_EQ(read_write->get_device_access(), experimental::PinnedMemoryDeviceAccess::ReadWrite);
+
+    auto read_only =
+        cache.try_pin(*mesh_device_, range, host_buffer, true, experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    ASSERT_TRUE(read_only);
+    EXPECT_EQ(read_only.get(), read_write.get());
+    EXPECT_EQ(read_only->get_device_access(), experimental::PinnedMemoryDeviceAccess::ReadWrite);
+}
+
+TEST_F(MeshBufferTestSuite, PinnedMemoryCacheCreatesBestSupportedReadOnlyMapping) {
+    const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0 ||
+        !pinning_params.can_map_to_noc) {
+        GTEST_SKIP() << "Pinned NOC mappings are not available";
+    }
+
+    auto storage = std::make_shared<vector_aligned<uint32_t>>(1024, 0);
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(storage->data(), storage->size()), MemoryPin(storage));
+    const auto coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto range = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+
+    auto pinned = experimental::PinnedMemoryCache::instance().try_pin(
+        *mesh_device_, range, host_buffer, true, experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    ASSERT_TRUE(pinned);
+    const auto expected_access = pinning_params.supports_read_only ? experimental::PinnedMemoryDeviceAccess::ReadOnly
+                                                                   : experimental::PinnedMemoryDeviceAccess::ReadWrite;
+    EXPECT_EQ(pinned->get_device_access(), expected_access);
+}
+
+TEST_F(MeshBufferTestSuite, PinnedMemoryCacheReadWriteRequestReplacesUnreferencedReadOnlyMapping) {
+    const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0 ||
+        !pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
+        GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
+    }
+
+    auto storage = std::make_shared<vector_aligned<uint32_t>>(1024, 0);
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(storage->data(), storage->size()), MemoryPin(storage));
+    const auto coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto range = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto& cache = experimental::PinnedMemoryCache::instance();
+
+    auto read_only =
+        cache.try_pin(*mesh_device_, range, host_buffer, true, experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    ASSERT_TRUE(read_only);
+    std::weak_ptr<experimental::PinnedMemory> old_mapping = read_only;
+    read_only.reset();
+
+    auto read_write =
+        cache.try_pin(*mesh_device_, range, host_buffer, true, experimental::PinnedMemoryDeviceAccess::ReadWrite);
+    ASSERT_TRUE(read_write);
+    EXPECT_TRUE(old_mapping.expired());
+    EXPECT_EQ(read_write->get_device_access(), experimental::PinnedMemoryDeviceAccess::ReadWrite);
+}
+
+TEST_F(MeshBufferTestSuite, PinnedMemoryCacheReadWriteRequestRejectsHeldReadOnlyMapping) {
+    const auto pinning_params = experimental::GetMemoryPinningParameters(*mesh_device_);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_pinned_memory_cache_limit_bytes() == 0 ||
+        !pinning_params.can_map_to_noc || !pinning_params.supports_read_only) {
+        GTEST_SKIP() << "Device-read-only pinned NOC mappings are not available";
+    }
+
+    auto storage = std::make_shared<vector_aligned<uint32_t>>(1024, 0);
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(storage->data(), storage->size()), MemoryPin(storage));
+    const auto coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
+    const auto range = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto& cache = experimental::PinnedMemoryCache::instance();
+
+    auto read_only =
+        cache.try_pin(*mesh_device_, range, host_buffer, true, experimental::PinnedMemoryDeviceAccess::ReadOnly);
+    ASSERT_TRUE(read_only);
+    auto read_write =
+        cache.try_pin(*mesh_device_, range, host_buffer, true, experimental::PinnedMemoryDeviceAccess::ReadWrite);
+    EXPECT_EQ(read_write, nullptr);
 }
 
 TEST_F(MeshBufferTestSuite, PinnedMemoryCacheEvictsOldestEntryToStayWithinLimit) {
@@ -1163,8 +1254,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
 
     distributed::MeshCoordinate coord(0, 0);
     {
-        HostBuffer host_buffer(
-            ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+        HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
         auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
             *mesh_device_,
             MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),

@@ -33,6 +33,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
+#include <umd/device/types/host_memory.hpp>
 
 namespace tt {
 namespace llrt {
@@ -254,7 +255,11 @@ public:
     std::unique_ptr<tt::umd::SysmemBuffer> allocate_sysmem_buffer(
         ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc = false) const;
     std::unique_ptr<tt::umd::SysmemBuffer> map_sysmem_buffer(
-        ChipId device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc = false) const;
+        ChipId device_id,
+        void* buffer,
+        size_t sysmem_buffer_size,
+        bool map_to_noc = false,
+        tt::umd::DeviceBufferAccess access = tt::umd::DeviceBufferAccess::ReadWrite) const;
 
     int get_device_aiclk(const ChipId& chip_id) const;
 
@@ -363,6 +368,8 @@ public:
     bool is_iommu_enabled() const;
     // Returns whether NOC mapping is enabled on the system (cached at init time)
     bool is_noc_mapping_enabled() const;
+    // Returns whether device-read-only page pinning is available.
+    bool is_read_only_page_pinning_supported() const;
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
