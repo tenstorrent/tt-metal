@@ -130,7 +130,8 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+            # SP: per-device seed so each sequence shard is masked independently.
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self.sequence_parallel)
 
         return out
 
@@ -182,7 +183,8 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+            # SP: per-device seed so each sequence shard is masked independently.
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self.sequence_parallel)
 
         return out
 
