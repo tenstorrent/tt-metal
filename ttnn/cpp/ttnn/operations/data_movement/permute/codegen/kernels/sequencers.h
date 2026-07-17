@@ -1,3 +1,4 @@
+// ONLY-USES: SEQ_IDENTITY. The rest of this file is unused shared infra for other ports.
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0

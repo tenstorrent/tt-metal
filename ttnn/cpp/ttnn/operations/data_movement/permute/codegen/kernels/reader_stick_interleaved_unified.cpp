@@ -1,3 +1,4 @@
+// ONLY-USES: MODE_SEQUENCED. The rest of this file is unused shared infra for other ports.
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -10,14 +11,19 @@
 // Positional CT args: TensorAccessorArgs (index 0)
 //
 // Modes:
-//   MODE_SEQUENCED (0): Batched stick reads with seq_id-dispatched address.
-//     seq_id selects the address sequencer (same IDs as tile reader).
+//   MODE_SEQUENTIAL (0): Coalesced stick reads, num_reads work units of
+//     sticks_per_read sticks each. (reshape)
 //   MODE_TILEROW (1): TILE_H sticks per tile-row, column chunking. (tilize)
 //   MODE_NONALIGNED (2): 64B-aligned scratch reads. (reshape BH)
 //   MODE_LASTDIM_REPEAT (3): Read stick, replicate N times in L1. (repeat W)
+//   MODE_SEQUENCED (4): Batched stick reads with seq_id-dispatched address.
+//     seq_id selects the address sequencer (same IDs as tile reader).
 //   MODE_TILEROW_PAD (5): Pad-aware tile-row reader. NOC-reads the valid prefix
 //     of each stick, fills column-pad bytes from a packed pad value, and emits
 //     whole pad tile-rows for height/outer padding. (tilize_with_val_padding)
+//   MODE_PARTIAL_READ (6): Read one page's aligned partial slab, then spread
+//     each stick_bytes element onto an L1_ALIGN-aligned slot for scatter
+//     writeback. (reshape scatter parallelization)
 #include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "sequencers.h"
