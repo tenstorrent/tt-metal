@@ -227,12 +227,9 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     // Per-core runtime args. start_shard_id is the core's index in ordered_cores_with_data; the
     // compute block count per core is derived from the page mapping (non-padding blocks).
     // ------------------------------------------------------------------------
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> compute_node_args;
-    reader_node_args.reserve(ordered_cores_with_data.size());
-    writer_node_args.reserve(ordered_cores_with_data.size());
-    compute_node_args.reserve(ordered_cores_with_data.size());
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    KernelRunArgs::RuntimeArgValues compute_node_args;
 
     const auto& mapped_cores = page_mapping.all_cores;
     uint32_t start_shard_id = 0;
@@ -257,12 +254,9 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
             }
         }
 
-        reader_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"start_shard_id", start_shard_id}}});
-        writer_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"start_shard_id", start_shard_id}}});
-        compute_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node, .args = {{"per_core_block_cnt", num_input_blocks_to_process}}});
+        reader_node_args["start_shard_id"][node] = start_shard_id;
+        writer_node_args["start_shard_id"][node] = start_shard_id;
+        compute_node_args["per_core_block_cnt"][node] = num_input_blocks_to_process;
         start_shard_id++;
     }
 

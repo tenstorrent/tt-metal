@@ -204,29 +204,28 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
     // ---- Per-core runtime args (single core) ----
     KernelRunArgs reader_args{
         .kernel = READER,
-        .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-            .node = core.start_coord,
-            .args = {
-                {"num_unpadded_W", static_cast<uint32_t>(input_w)},
-                {"padded_W_diff_blocks", padded_W_diff_blocks},
-                {"num_unpadded_Z", static_cast<uint32_t>(input_z)},
-                {"padded_Z_diff_blocks", padded_Z_diff_blocks},
-                {"num_unpadded_Y", static_cast<uint32_t>(input_y)},
-                {"padded_Y_diff_blocks", padded_Y_diff_blocks},
-                {"num_leftover_Y", num_leftover_Y},
-                {"num_unpadded_X", static_cast<uint32_t>(input_x)},
-                {"padded_X_size", padded_row_size_bytes},
-                {"pad_value", packed_pad_value},
-                {"num_blocks_w_input", num_blocks_w_input},
-                {"num_blocks_w_output", num_blocks_w_output},
-                {"num_blocks_w_diff", num_blocks_w_diff},
-                {"block_row_size", block_row_size},
-                {"block_row_leftover_size", block_row_leftover_size}}}}};
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            core.start_coord,
+            {{"num_unpadded_W", static_cast<uint32_t>(input_w)},
+             {"padded_W_diff_blocks", padded_W_diff_blocks},
+             {"num_unpadded_Z", static_cast<uint32_t>(input_z)},
+             {"padded_Z_diff_blocks", padded_Z_diff_blocks},
+             {"num_unpadded_Y", static_cast<uint32_t>(input_y)},
+             {"padded_Y_diff_blocks", padded_Y_diff_blocks},
+             {"num_leftover_Y", num_leftover_Y},
+             {"num_unpadded_X", static_cast<uint32_t>(input_x)},
+             {"padded_X_size", padded_row_size_bytes},
+             {"pad_value", packed_pad_value},
+             {"num_blocks_w_input", num_blocks_w_input},
+             {"num_blocks_w_output", num_blocks_w_output},
+             {"num_blocks_w_diff", num_blocks_w_diff},
+             {"block_row_size", block_row_size},
+             {"block_row_leftover_size", block_row_leftover_size}})};
 
     KernelRunArgs writer_args{
         .kernel = WRITER,
-        .runtime_arg_values = {KernelRunArgs::NodeRuntimeArgs{
-            .node = core.start_coord, .args = {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}}}}};
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+            core.start_coord, {{"num_pages", static_cast<uint32_t>(num_tiles)}, {"start_id", 0u}})};
 
     ProgramSpec spec{
         .name = "tilize_with_val_padding_single_core",

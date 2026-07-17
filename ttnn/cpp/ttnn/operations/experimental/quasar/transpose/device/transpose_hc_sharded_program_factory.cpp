@@ -443,33 +443,39 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
 
         KernelRunArgs reader_run{.kernel = READER_KERNEL};
         KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-        reader_run.runtime_arg_values.reserve(num_cores);
-        writer_run.runtime_arg_values.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; ++i) {
             const NodeCoord node = node_for_index(i);
             const auto& r = all_runtime_args[i].first;
             const auto& w = all_runtime_args[i].second;
 
-            reader_run.runtime_arg_values.push_back(
-                {node,
-                 {{"read_single_h_block_per_core", r[0]},
-                  {"num_C_blocks_per_core", r[1]},
-                  {"num_sticks_per_shard_core", r[2]},
-                  {"num_cores_read", r[3]},
-                  {"read_stick_stride", r[4]}}});
+            KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+            AddRuntimeArgsForNode(
+                reader_rtas,
+                node,
+                {
+                    {"read_single_h_block_per_core", r[0]},
+                    {"num_C_blocks_per_core", r[1]},
+                    {"num_sticks_per_shard_core", r[2]},
+                    {"num_cores_read", r[3]},
+                    {"read_stick_stride", r[4]},
+                });
             std::vector<uint32_t> r_varargs(r.begin() + 5, r.end());
             r_varargs.resize(max_reader_varargs, 0);
             reader_run.advanced_options.runtime_varargs[node] = std::move(r_varargs);
 
-            writer_run.runtime_arg_values.push_back(
-                {node,
-                 {{"read_single_h_block_per_core", w[0]},
-                  {"num_C_blocks_per_core", w[1]},
-                  {"num_sticks_per_shard_core", w[2]},
-                  {"num_cores_read", w[3]},
-                  {"read_stick_stride", w[4]},
-                  {"src_read_stick_offset", w[5]},
-                  {"dst_write_stick_offset", w[6]}}});
+            KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+            AddRuntimeArgsForNode(
+                writer_rtas,
+                node,
+                {
+                    {"read_single_h_block_per_core", w[0]},
+                    {"num_C_blocks_per_core", w[1]},
+                    {"num_sticks_per_shard_core", w[2]},
+                    {"num_cores_read", w[3]},
+                    {"read_stick_stride", w[4]},
+                    {"src_read_stick_offset", w[5]},
+                    {"dst_write_stick_offset", w[6]},
+                });
             std::vector<uint32_t> w_varargs(w.begin() + 7, w.end());
             w_varargs.resize(max_writer_varargs, 0);
             writer_run.advanced_options.runtime_varargs[node] = std::move(w_varargs);
@@ -506,17 +512,20 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
         reader_spec.advanced_options.num_runtime_varargs = num_cores_x + num_cores_y;
 
         KernelRunArgs reader_run{.kernel = READER_KERNEL};
-        reader_run.runtime_arg_values.reserve(num_cores);
         for (uint32_t i = 0; i < num_cores; ++i) {
             const NodeCoord node = node_for_index(i);
             const auto& r = all_runtime_args[i].first;
-            reader_run.runtime_arg_values.push_back(
-                {node,
-                 {{"num_sticks_per_core", r[0]},
-                  {"start_id", r[1]},
-                  {"curr_c", r[2]},
-                  {"curr_h", r[3]},
-                  {"curr_n", r[4]}}});
+            KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+            AddRuntimeArgsForNode(
+                reader_rtas,
+                node,
+                {
+                    {"num_sticks_per_core", r[0]},
+                    {"start_id", r[1]},
+                    {"curr_c", r[2]},
+                    {"curr_h", r[3]},
+                    {"curr_n", r[4]},
+                });
             reader_run.advanced_options.runtime_varargs[node] = std::vector<uint32_t>(r.begin() + 5, r.end());
         }
 

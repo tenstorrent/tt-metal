@@ -23,6 +23,7 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
+from ...utils.tracing import StateTensor
 
 
 class GemmaConfig:
@@ -110,18 +111,25 @@ class GemmaRotaryEmbedding(Module):
         freqs = torch.outer(t, inv_freq).float()
         self._cos_cached = freqs.cos().unsqueeze(0).unsqueeze(0)  # (1, 1, seq, D/2)
         self._sin_cached = freqs.sin().unsqueeze(0).unsqueeze(0)
+        # seq_len is fixed per pipeline, so the device cos/sin are constant: bind once and
+        # keep resident, mirroring the LTX transformer's StateTensor rope buffers.
+        self._tt_cos = StateTensor()
+        self._tt_sin = StateTensor()
 
-    def forward(self, seq_len: int):
-        """Not used directly — call get_cos_sin instead."""
-        return self.get_cos_sin(seq_len, self.mesh_device)
-
-    def get_cos_sin(self, seq_len: int, device) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Get cos/sin for given sequence length, push to device."""
-        cos = self._cos_cached[:, :, :seq_len, :].bfloat16()
-        sin = self._sin_cached[:, :, :seq_len, :].bfloat16()
-        tt_cos = ttnn.from_torch(cos, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        return tt_cos, tt_sin
+    def forward(self, seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Device cos/sin for the (fixed) sequence length, bound once and reused."""
+        if self._tt_cos.value is None:
+            # HF-format cos/sin for ttnn.experimental.rotary_embedding_hf: duplicate the half-dim
+            # freqs to full head_dim as [c0..c_{d/2-1}, c0..c_{d/2-1}] (concat, not interleave).
+            cos = torch.cat([self._cos_cached, self._cos_cached], dim=-1)[:, :, :seq_len, :].bfloat16()
+            sin = torch.cat([self._sin_cached, self._sin_cached], dim=-1)[:, :, :seq_len, :].bfloat16()
+            self._tt_cos.update(
+                ttnn.from_torch(cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), False
+            )
+            self._tt_sin.update(
+                ttnn.from_torch(sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), False
+            )
+        return self._tt_cos.value, self._tt_sin.value
 
 
 class GemmaAttention(Module):
@@ -162,10 +170,18 @@ class GemmaAttention(Module):
             col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
             col_kwargs["ccl_manager"] = ccl_manager
 
-        self.q_proj = ColParallelLinear(self.hidden_size, self.num_heads * self.head_dim, **col_kwargs)
-        self.k_proj = ColParallelLinear(self.hidden_size, self.num_kv_heads * self.head_dim, **col_kwargs)
-        self.v_proj = ColParallelLinear(self.hidden_size, self.num_kv_heads * self.head_dim, **col_kwargs)
-        self.o_proj = ColParallelLinear(self.num_heads * self.head_dim, self.hidden_size, **col_kwargs)
+        # Fused QKV: one matmul instead of three, laid out per-TP-shard [q|k|v] heads so the
+        # fused output splits cleanly with nlp_create_qkv_heads (GQA: num_kv_heads < num_heads).
+        qkv_out = (self.num_heads + 2 * self.num_kv_heads) * self.head_dim
+        self.wqkv = ColParallelLinear(self.hidden_size, qkv_out, **col_kwargs)
+        # o_proj carries the ccl_manager so its head-input all_gather can fuse into the matmul on
+        # Ring (all_gather_minimal_matmul_async); wqkv's input is replicated so it never needs it.
+        o_proj_kwargs = dict(col_kwargs)
+        o_proj_kwargs.setdefault("ccl_manager", ccl_manager)
+        self.o_proj = ColParallelLinear(self.num_heads * self.head_dim, self.hidden_size, **o_proj_kwargs)
+        # The fused CCL-matmul ops are a ring-write scheme (4x8 FABRIC_1D_RING); on Linear (2x4)
+        # they trip a worker-partitioning assert, so gate them on Ring and fall back to explicit CCL.
+        self._tp_ring = ccl_manager.topology == ttnn.Topology.Ring
 
         self.input_layernorm = GemmaRMSNorm(config, mesh_device)
         # Gemma-3: post-attn norm applied to attn output before residual add
@@ -191,47 +207,51 @@ class GemmaAttention(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        rename_substate(state, "self_attn.q_proj", "q_proj")
-        rename_substate(state, "self_attn.k_proj", "k_proj")
-        rename_substate(state, "self_attn.v_proj", "v_proj")
-        rename_substate(state, "self_attn.o_proj", "o_proj")
-        rename_substate(state, "self_attn.q_norm", "q_norm")
-        rename_substate(state, "self_attn.k_norm", "k_norm")
+        # Fuse q/k/v into one wqkv weight. HF weights are [out, in]; transpose to [in, out],
+        # group heads per TP shard, cat q|k|v on the head axis, flatten back to [out, in] so
+        # ColParallelLinear column-fracturing hands each shard its local [q|k|v] heads.
+        q = pop_substate(state, "q_proj")
+        k = pop_substate(state, "k_proj")
+        v = pop_substate(state, "v_proj")
+        n_dev = self.parallel_config.tensor_parallel.factor
+        d = self.head_dim
 
-    def _apply_rope(self, x, cos, sin):
-        """Apply rotary embedding: split x into halves, rotate."""
-        d = self.head_dim // 2
-        x1 = x[:, :, :, :d]
-        x2 = x[:, :, :, d:]
-        out1 = ttnn.subtract(ttnn.multiply(x1, cos), ttnn.multiply(x2, sin))
-        out2 = ttnn.add(ttnn.multiply(x2, cos), ttnn.multiply(x1, sin))
-        return ttnn.concat([out1, out2], dim=-1)
+        def _heads(w: torch.Tensor, num: int) -> torch.Tensor:
+            return w.T.reshape(self.hidden_size, n_dev, num // n_dev, d)  # [in, n_dev, local_heads, d]
+
+        qkv = torch.cat(
+            [
+                _heads(q["weight"], self.num_heads),
+                _heads(k["weight"], self.num_kv_heads),
+                _heads(v["weight"], self.num_kv_heads),
+            ],
+            dim=2,
+        )
+        state["wqkv.weight"] = qkv.reshape(self.hidden_size, -1).T.contiguous()  # [(H+2KV)*d, in]
+        # o_proj / q_norm / k_norm keep their keys and load as child modules directly.
 
     def forward(self, hidden_states, cos, sin, attn_mask=None):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
-        # QKV projections
-        q = self.q_proj(hidden_states, compute_kernel_config=self.compute_config)
-        k = self.k_proj(hidden_states, compute_kernel_config=self.compute_config)
-        v = self.v_proj(hidden_states, compute_kernel_config=self.compute_config)
-
-        # Split into heads: (B, seq, H*D) → (B, H, seq, D)
-        B, seq_len = q.shape[0], q.shape[1]
-        q = ttnn.reshape(q, (B, seq_len, self.num_local_heads, self.head_dim))
-        q = ttnn.permute(q, (0, 2, 1, 3))
-        k = ttnn.reshape(k, (B, seq_len, self.num_local_kv_heads, self.head_dim))
-        k = ttnn.permute(k, (0, 2, 1, 3))
-        v = ttnn.reshape(v, (B, seq_len, self.num_local_kv_heads, self.head_dim))
-        v = ttnn.permute(v, (0, 2, 1, 3))
+        # Fused QKV projection + fused head split.
+        qkv = self.wqkv(hidden_states, compute_kernel_config=self.compute_config)
+        qkv = ttnn.reshape(qkv, (qkv.shape[0], 1, qkv.shape[1], qkv.shape[2]))  # (B,1,seq,(H+2KV)*D)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.num_local_heads,
+            num_kv_heads=self.num_local_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         # QK normalization (Gemma-3): RMSNorm per head before RoPE
         q = self.q_norm(q)
         k = self.k_norm(k)
 
-        # Apply RoPE
-        q = self._apply_rope(q, cos, sin)
-        k = self._apply_rope(k, cos, sin)
+        # Fused HF RoPE; cos/sin are HF-format [1,1,seq,head_dim] (GemmaRotaryEmbedding.forward).
+        q = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False)
+        k = ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=False)
 
         # GQA: expand KV heads to match Q heads. Must use repeat_interleave (each kv
         # head duplicated contiguously: [kv0,kv0,kv1,kv1,...]) to match HF repeat_kv —
@@ -264,17 +284,25 @@ class GemmaAttention(Module):
         # Concat heads: (B, H, seq, D) → (B, seq, H*D)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
-        # Output projection
+        # Output projection. o_proj input is head-sharded; on Ring the gather-to-full-heads fuses
+        # into the matmul (parallel_config triggers all_gather_minimal_matmul_async), on Linear it
+        # is an explicit all_gather first.
         attn_output = ttnn.unsqueeze(attn_output, 0)
-        if self.parallel_config.tensor_parallel.factor > 1:
-            attn_output = self.ccl_manager.all_gather(
-                attn_output,
-                dim=3,
-                mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                use_hyperparams=True,
+        tp_gt1 = self.parallel_config.tensor_parallel.factor > 1
+        if tp_gt1 and self._tp_ring:
+            output = self.o_proj(
+                attn_output, compute_kernel_config=self.compute_config, parallel_config=self.parallel_config
             )
-        output = self.o_proj(attn_output, compute_kernel_config=self.compute_config)
-        if self.parallel_config.tensor_parallel.factor > 1:
+        else:
+            if tp_gt1:
+                attn_output = self.ccl_manager.all_gather(
+                    attn_output,
+                    dim=3,
+                    mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                    use_hyperparams=True,
+                )
+            output = self.o_proj(attn_output, compute_kernel_config=self.compute_config)
+        if tp_gt1:
             output = self.ccl_manager.all_gather(
                 output,
                 dim=3,
@@ -455,70 +483,46 @@ class GemmaEncoder(Module):
                 del state[k]
         state.update(stripped)
 
-        rename_substate(state, "embed_tokens", "embed_tokens")
-        rename_substate(state, "norm", "norm")
-        rename_substate(state, "layers", "layers")
-        # Remove keys we don't use
+        # Drop text-decoder-unused keys (lm_head, vision tower, multimodal projector).
         pop_substate(state, "lm_head")
         pop_substate(state, "language_model")
-        # Remove vision/multimodal keys
         for prefix_to_remove in ["vision_tower", "multi_modal_projector", "model.vision"]:
             pop_substate(state, prefix_to_remove)
 
-    def forward(self, token_ids: ttnn.Tensor, attention_mask: ttnn.Tensor | None = None) -> list[ttnn.Tensor]:
-        """Run forward and return hidden states from all layers.
+    def build_attn_mask(self, attention_mask, seq_len: int) -> ttnn.Tensor | None:
+        """Host-build the combined causal+padding SDPA mask (B,1,seq,seq) as a device tensor.
+        Kept out of the traced forward: per-prompt host work whose output the trace copies in.
+        TTNN SDPA can't take is_causal + attn_mask together, so causal and padding are merged."""
+        if attention_mask is None:
+            return None
+        mask_host = (
+            attention_mask
+            if isinstance(attention_mask, torch.Tensor)
+            else ttnn.to_torch(ttnn.get_device_tensors(attention_mask)[0])
+        )
+        causal = torch.triu(torch.full((seq_len, seq_len), float("-inf")), diagonal=1)[None, None, :, :]
+        pad_mask = torch.where(mask_host[:, None, None, :].bool(), 0.0, float("-inf"))
+        combined = causal + pad_mask  # broadcasts to (B, 1, seq, seq)
+        return ttnn.from_torch(
+            combined.bfloat16(),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-        Args:
-            token_ids: (B, seq_len) int32 token IDs on device
-            attention_mask: (B, seq_len) float mask on device (1=attend, 0=pad).
-                           If provided, creates a combined causal+padding mask so that
-                           no position attends to padding tokens.
-
-        Returns:
-            List of hidden states: the input embedding, one per decoder layer, and the
-            final-norm output.
-        """
-        # Embed tokens
+    def forward(self, token_ids: ttnn.Tensor, *, tt_attn_mask: ttnn.Tensor | None = None) -> list[ttnn.Tensor]:
+        """Embed → 48 decoder layers → final norm. Returns [embed, L0..L47, final_norm] on device.
+        Pure device graph (mask pre-built by build_attn_mask, RoPE cos/sin resident) so the whole
+        forward replays as one ttnn trace."""
         hidden_states = self.embed_tokens(token_ids)
-
-        # Scale embeddings (Gemma-specific)
         hidden_states = ttnn.multiply(hidden_states, math.sqrt(self.config.hidden_size))
 
-        # Get RoPE cos/sin for this sequence length (global + local variants)
         seq_len = token_ids.shape[-1]
-        cos_g, sin_g = self.rotary_emb_global.get_cos_sin(seq_len, self.mesh_device)
-        cos_l, sin_l = self.rotary_emb_local.get_cos_sin(seq_len, self.mesh_device)
+        cos_g, sin_g = self.rotary_emb_global(seq_len)
+        cos_l, sin_l = self.rotary_emb_local(seq_len)
 
-        # Create combined causal + padding mask for SDPA.
-        # TTNN SDPA doesn't support is_causal + attn_mask simultaneously, so we
-        # build a full (B, 1, seq, seq) mask combining both.
-        tt_attn_mask = None
-        if attention_mask is not None:
-            import torch
-
-            mask_host = (
-                attention_mask
-                if isinstance(attention_mask, torch.Tensor)
-                else ttnn.to_torch(ttnn.get_device_tensors(attention_mask)[0])
-            )
-            B_mask = mask_host.shape[0]
-            # Causal mask: (1, 1, seq, seq), upper triangle = -inf
-            causal = torch.triu(torch.full((seq_len, seq_len), float("-inf")), diagonal=1)
-            causal = causal[None, None, :, :]  # (1, 1, seq, seq)
-            # Padding mask: (B, 1, 1, seq) — -inf for padding columns
-            pad_mask = torch.where(mask_host[:, None, None, :].bool(), 0.0, float("-inf"))
-            # Combined: both masks added (either -inf dominates)
-            combined = causal + pad_mask  # broadcasts to (B, 1, seq, seq)
-            tt_attn_mask = ttnn.from_torch(
-                combined.bfloat16(),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-        # Run through all layers, selecting global vs local RoPE per layer.
-        # Gemma-3: layer is global (full attention) when (idx + 1) % sliding_window_pattern == 0.
+        # Gemma-3: a layer is global (full attention) when (idx + 1) % sliding_window_pattern == 0.
         all_hidden_states = [hidden_states]
         for idx, layer in enumerate(self.layers):
             is_global = (idx + 1) % self.config.sliding_window_pattern == 0
@@ -526,8 +530,6 @@ class GemmaEncoder(Module):
             hidden_states = layer(hidden_states, cos, sin, attn_mask=tt_attn_mask)
             all_hidden_states.append(hidden_states)
 
-        # Final norm
         output = self.norm(hidden_states)
         all_hidden_states.append(output)
-
         return all_hidden_states

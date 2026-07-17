@@ -312,10 +312,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
     // Per-node runtime args. Replicates the legacy per-core work-distribution loop verbatim; the
     // src/dst buffer-address RTAs are dropped (carried by the TensorAccessor bindings).
     // ------------------------------------------------------------------------
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(ncores);
-    writer_node_args.reserve(ncores);
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     const auto& cores = corerange_to_cores(available_grid);
     uint32_t start_row_id = 0;
@@ -358,23 +356,27 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            node,
+            {
                 {"start_id", tile_start_id},
                 {"single_block_size_row_arg", single_block_size_row_arg},
-                {"single_block_size_col_arg", single_block_size_col_arg}}});
+                {"single_block_size_col_arg", single_block_size_col_arg},
+            });
 
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            node,
+            {
                 {"width_size", TILE_WIDTH * el_size * single_block_size_row_arg},
                 {"start_row_id", start_row_id},
                 {"start_column_id", start_column_id},
                 {"single_block_size_row_arg", single_block_size_row_arg},
                 {"single_block_size_col_arg", single_block_size_col_arg},
                 {"sub_block_width_size", TILE_WIDTH * el_size * single_sub_block_size_row_arg},
-                {"single_sub_block_size_row_arg", single_sub_block_size_row_arg}}});
+                {"single_sub_block_size_row_arg", single_sub_block_size_row_arg},
+            });
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % row_size_bytes;

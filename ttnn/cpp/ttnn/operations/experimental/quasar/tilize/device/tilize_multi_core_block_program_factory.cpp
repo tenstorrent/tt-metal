@@ -340,9 +340,13 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         int gi = group_index_of(core);
         TT_FATAL(gi >= 0, "tilize block: core not covered by any work-unit group");
 
-        reader_runs[gi].runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_runs[gi].runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_runs[gi].runtime_arg_values;
+
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
                 {"pad_value", 0u},
                 {"width_size", TILE_WIDTH * a.element_size() * single_block_size_row_arg},
                 {"start_row_id", start_row_id},
@@ -350,14 +354,17 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
                 {"single_block_size_row_arg", single_block_size_row_arg},
                 {"single_block_size_col_arg", single_block_size_col_arg},
                 {"sub_block_width_size", TILE_WIDTH * a.element_size() * single_sub_block_size_row_arg},
-                {"single_sub_block_size_row_arg", single_sub_block_size_row_arg}}});
+                {"single_sub_block_size_row_arg", single_sub_block_size_row_arg},
+            });
 
-        writer_runs[gi].runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
                 {"start_id", tile_start_id},
                 {"single_block_size_row_arg", single_block_size_row_arg},
-                {"single_block_size_col_arg", single_block_size_col_arg}}});
+                {"single_block_size_col_arg", single_block_size_col_arg},
+            });
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * a.element_size());
         start_column_id = end_column_id % row_size_bytes;

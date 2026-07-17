@@ -4394,7 +4394,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         if (in0_block_sharded) {
             m2::AdvancedKernelRunArgs::Varargs v;
             uint32_t in0_mcast_receiver_grid_same_coord;
-            m2::KernelRunArgs::RuntimeArgValues leading;
+            m2::Table<std::string, uint32_t> leading;
             if (transpose_mcast) {
                 in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
                 leading = {
@@ -4460,87 +4460,104 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 v.empty() ? 0u : v.back());
 
             if (in1_idx < num_blocks_x) {
-                in0_sender_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = leading});
+                for (const auto& [name, value] : leading) {
+                    in0_sender_run_args.runtime_arg_values[name][core] = value;
+                }
                 in0_sender_run_args.advanced_options.runtime_varargs.emplace(core, v);
             } else if (has_in0_no_work) {
-                in0_no_work_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = leading});
+                for (const auto& [name, value] : leading) {
+                    in0_no_work_run_args.runtime_arg_values[name][core] = value;
+                }
                 in0_no_work_run_args.advanced_options.runtime_varargs.emplace(core, v);
             }
         } else if (in1_idx == 0) {
             // in0 interleaved sender (left column).
-            m2::KernelRunArgs::RuntimeArgValues args = {
-                {"in0_tensor_start_tile_id", (uint32_t)in0_tensor_start_tile_id_stride * in0_idx},
-                {"in0_mcast_dest_noc_start_x", (uint32_t)in0_mcast_start.x},
-                {"in0_mcast_dest_noc_start_y", (uint32_t)in0_mcast_start.y},
-                {"in0_mcast_dest_noc_end_x", (uint32_t)in0_mcast_end.x},
-                {"in0_mcast_dest_noc_end_y", (uint32_t)in0_mcast_end.y},
-                {"last_block_h", in0_idx == in0_end_idx ? last_out_block_h : out_block_h},
-                {"sparsity_addr", 0u},
-            };
-            in0_sender_run_args.runtime_arg_values.push_back(
-                m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+            m2::KernelRunArgs::RuntimeArgValues& in0_sender_rtas = in0_sender_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in0_sender_rtas,
+                core,
+                {
+                    {"in0_tensor_start_tile_id", (uint32_t)in0_tensor_start_tile_id_stride * in0_idx},
+                    {"in0_mcast_dest_noc_start_x", (uint32_t)in0_mcast_start.x},
+                    {"in0_mcast_dest_noc_start_y", (uint32_t)in0_mcast_start.y},
+                    {"in0_mcast_dest_noc_end_x", (uint32_t)in0_mcast_end.x},
+                    {"in0_mcast_dest_noc_end_y", (uint32_t)in0_mcast_end.y},
+                    {"last_block_h", in0_idx == in0_end_idx ? last_out_block_h : out_block_h},
+                    {"sparsity_addr", 0u},
+                });
         } else {
             // in0 interleaved receiver.
-            m2::KernelRunArgs::RuntimeArgValues args = {
-                {"in0_mcast_sender_noc_x", (uint32_t)in0_mcast_sender.x},
-                {"in0_mcast_sender_noc_y", (uint32_t)in0_mcast_sender.y},
-            };
-            if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
-                in0_receiver_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
-            } else {
-                in0_receiver_other_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
-            }
+            m2::KernelRunArgs::RuntimeArgValues& in0_receiver_rtas =
+                ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y))
+                    ? in0_receiver_run_args.runtime_arg_values
+                    : in0_receiver_other_run_args.runtime_arg_values;
+            m2::AddRuntimeArgsForNode(
+                in0_receiver_rtas,
+                core,
+                {
+                    {"in0_mcast_sender_noc_x", (uint32_t)in0_mcast_sender.x},
+                    {"in0_mcast_sender_noc_y", (uint32_t)in0_mcast_sender.y},
+                });
         }
 
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender (top row).
             if (in0_idx == 0) {
-                m2::KernelRunArgs::RuntimeArgValues args = {
-                    {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * in1_idx},
-                    {"in1_mcast_dest_noc_start_x", (uint32_t)in1_mcast_start.x},
-                    {"in1_mcast_dest_noc_start_y", (uint32_t)in1_mcast_start.y},
-                    {"in1_mcast_dest_noc_end_x", (uint32_t)in1_mcast_end.x},
-                    {"in1_mcast_dest_noc_end_y", (uint32_t)in1_mcast_end.y},
-                    {"sparsity_addr", 0u},
-                    {"out_tensor_start_tile_id", ((uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
-                };
+                m2::KernelRunArgs::RuntimeArgValues& in1_sender_writer_rtas =
+                    in1_sender_writer_run_args.runtime_arg_values;
+                m2::AddRuntimeArgsForNode(
+                    in1_sender_writer_rtas,
+                    core,
+                    {
+                        {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * in1_idx},
+                        {"in1_mcast_dest_noc_start_x", (uint32_t)in1_mcast_start.x},
+                        {"in1_mcast_dest_noc_start_y", (uint32_t)in1_mcast_start.y},
+                        {"in1_mcast_dest_noc_end_x", (uint32_t)in1_mcast_end.x},
+                        {"in1_mcast_dest_noc_end_y", (uint32_t)in1_mcast_end.y},
+                        {"sparsity_addr", 0u},
+                        {"out_tensor_start_tile_id", ((uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
+                    });
                 if (in1_idx == in1_end_idx) {
-                    args.insert({"last_block_w", last_out_block_w});
-                    args.insert({"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h});
-                    args.insert({"out_last_subblock_h", out_subblock_h});
-                    args.insert({"padded_block_tiles_h_skip", 0u});
-                    args.insert({"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                    args.insert({"out_last_num_nonzero_subblocks_w", last_block_num_nonzero_subblocks_w});
-                    args.insert({"out_last_subblock_w", last_subblock_of_last_block_w});
-                    args.insert({"padded_subblock_tiles_addr_skip", last_block_padded_subblock_tiles_addr_skip});
-                    args.insert({"padded_block_tiles_w_skip", last_block_padded_block_tiles_w_skip});
+                    m2::AddRuntimeArgsForNode(
+                        in1_sender_writer_rtas,
+                        core,
+                        {
+                            {"last_block_w", last_out_block_w},
+                            {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
+                            {"out_last_subblock_h", out_subblock_h},
+                            {"padded_block_tiles_h_skip", 0u},
+                            {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                            {"out_last_num_nonzero_subblocks_w", last_block_num_nonzero_subblocks_w},
+                            {"out_last_subblock_w", last_subblock_of_last_block_w},
+                            {"padded_subblock_tiles_addr_skip", last_block_padded_subblock_tiles_addr_skip},
+                            {"padded_block_tiles_w_skip", last_block_padded_block_tiles_w_skip},
+                        });
                 } else {
-                    args.insert({"last_block_w", out_block_w});
-                    args.insert({"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h});
-                    args.insert({"out_last_subblock_h", out_subblock_h});
-                    args.insert({"padded_block_tiles_h_skip", 0u});
-                    args.insert({"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                    args.insert({"out_last_num_nonzero_subblocks_w", out_block_w / out_subblock_w});
-                    args.insert({"out_last_subblock_w", out_subblock_w});
-                    args.insert({"padded_subblock_tiles_addr_skip", 0u});
-                    args.insert({"padded_block_tiles_w_skip", 0u});
+                    m2::AddRuntimeArgsForNode(
+                        in1_sender_writer_rtas,
+                        core,
+                        {
+                            {"last_block_w", out_block_w},
+                            {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
+                            {"out_last_subblock_h", out_subblock_h},
+                            {"padded_block_tiles_h_skip", 0u},
+                            {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                            {"out_last_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
+                            {"out_last_subblock_w", out_subblock_w},
+                            {"padded_subblock_tiles_addr_skip", 0u},
+                            {"padded_block_tiles_w_skip", 0u},
+                        });
                 }
                 if (bias_tensor.has_value()) {
-                    args.insert({"in3_tensor_start_tile_id", (uint32_t)per_core_N * in1_idx});
+                    in1_sender_writer_rtas["in3_tensor_start_tile_id"][core] = (uint32_t)per_core_N * in1_idx;
                 }
                 if (!output_is_sharded) {
-                    args.insert(
-                        {"last_num_blocks_w_dim", in1_idx == in1_end_idx ? last_out_num_blocks_w : out_num_blocks_x});
+                    in1_sender_writer_rtas["last_num_blocks_w_dim"][core] =
+                        in1_idx == in1_end_idx ? last_out_num_blocks_w : out_num_blocks_x;
                 }
-                in1_sender_writer_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
             } else {
                 // in1 receiver.
-                m2::KernelRunArgs::RuntimeArgValues args = {
+                m2::Table<std::string, uint32_t> args = {
                     {"in1_mcast_sender_noc_x", (uint32_t)in1_mcast_sender.x},
                     {"in1_mcast_sender_noc_y", (uint32_t)in1_mcast_sender.y},
                     {"out_tensor_start_tile_id", ((uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
@@ -4602,11 +4619,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     }
                 }
                 if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                    in1_receiver_writer_run_args.runtime_arg_values.push_back(
-                        m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                    for (const auto& [name, value] : args) {
+                        in1_receiver_writer_run_args.runtime_arg_values[name][core] = value;
+                    }
                 } else {
-                    in1_receiver_writer_other_run_args.runtime_arg_values.push_back(
-                        m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                    for (const auto& [name, value] : args) {
+                        in1_receiver_writer_other_run_args.runtime_arg_values[name][core] = value;
+                    }
                 }
             }
         }

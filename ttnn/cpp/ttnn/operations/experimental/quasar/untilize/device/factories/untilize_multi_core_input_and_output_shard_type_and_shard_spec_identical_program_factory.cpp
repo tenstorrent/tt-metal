@@ -130,13 +130,11 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     // Per-core runtime args (uniform across the shard grid).
     auto cores =
         corerange_to_cores(shard_spec.grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     for (const auto& core : cores) {
-        reader_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_tiles_per_core", num_tiles_per_shard}}});
-        writer_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", num_tiles_per_shard}}});
+        reader_node_args["num_tiles_per_core"][core] = num_tiles_per_shard;
+        writer_node_args["num_units"][core] = num_tiles_per_shard;
     }
 
     ProgramSpec spec{

@@ -140,9 +140,9 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     auto cores = corerange_to_cores(grid, std::nullopt, orientation == ShardOrientation::ROW_MAJOR);
     auto page_mapping = distribution_spec.compute_page_mapping();
     const auto& mapped_cores = page_mapping.all_cores;
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> compute_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    KernelRunArgs::RuntimeArgValues compute_node_args;
     for (const auto& core : cores) {
         auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
         uint32_t num_blocks_to_process = 0;
@@ -153,12 +153,9 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
             num_blocks_to_process = num_blocks_per_shard * num_shards_on_core;
             num_tiles_to_process = num_tiles_per_block * num_blocks_to_process;
         }
-        reader_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_tiles_per_core", num_tiles_to_process}}});
-        writer_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", num_tiles_to_process}}});
-        compute_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"per_core_block_cnt", num_blocks_to_process}}});
+        reader_node_args["num_tiles_per_core"][core] = num_tiles_to_process;
+        writer_node_args["num_units"][core] = num_tiles_to_process;
+        compute_node_args["per_core_block_cnt"][core] = num_blocks_to_process;
     }
 
     ProgramSpec spec{

@@ -193,34 +193,49 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     uint32_t tile_start_id = 0;
     uint32_t page_start_id = 0;
     const auto& cores = corerange_to_cores(available_grid);
+    KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+    KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
                 {"num_rows", nblocks_per_core * TILE_HEIGHT},
                 {"num_tiles_per_block", ntiles_per_block},
                 {"block_width_size", page_size},
                 {"num_full_blocks_in_row", 1u},
-                {"start_page_id", page_start_id}}});
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"num_pages", ntiles_per_block * nblocks_per_core}, {"start_id", tile_start_id}}});
+                {"start_page_id", page_start_id},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", ntiles_per_block * nblocks_per_core},
+                {"start_id", tile_start_id},
+            });
         tile_start_id += ntiles_per_block * nblocks_per_core;
         page_start_id += TILE_HEIGHT * nblocks_per_core * num_pages_in_row;
     }
     if (has_cliff) {
         const CoreCoord& core = cores[ncores_full];
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
                 {"num_rows", nblocks_per_core_cliff * TILE_HEIGHT},
                 {"num_tiles_per_block", ntiles_per_block},
                 {"block_width_size", page_size},
                 {"num_full_blocks_in_row", 1u},
-                {"start_page_id", page_start_id}}});
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {{"num_pages", ntiles_per_block * nblocks_per_core_cliff}, {"start_id", tile_start_id}}});
+                {"start_page_id", page_start_id},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", ntiles_per_block * nblocks_per_core_cliff},
+                {"start_id", tile_start_id},
+            });
     }
 
     run_args.kernel_run_args = {reader_run, writer_run};

@@ -461,6 +461,7 @@ class TtModelArgs:
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
+        self.is_blackhole = ttnn.get_arch_name().lower() == "blackhole"
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
@@ -474,10 +475,15 @@ class TtModelArgs:
 
         self.qk_norm = False
         self.is_qwen = False
-        self.unfuse_res_add = False
+        # On the BH no-prefetch path the distributed (non-fused) RMSNorm does not write the residual
+        # sum back in place, so the residual add must be done explicitly in the decoder (its BH branch
+        # handles the mixed-layout add). WH/prefetcher keeps the fused residual path.
+        self.unfuse_res_add = self.is_blackhole and self.num_devices == 32
 
         if self.num_devices == 32:
-            self.use_prefetcher = True
+            # Blackhole galaxy bring-up runs the no-prefetcher path (the prefetcher ring configs
+            # assume Wormhole's 12 DRAM banks / wider tensix grid). Wormhole galaxy is unchanged.
+            self.use_prefetcher = not self.is_blackhole
 
         # Set up prefetcher stuff
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
@@ -621,7 +627,12 @@ class TtModelArgs:
             raise ValueError(
                 f"Unsupported number of devices: {self.num_devices}. Only 32 devices (Galaxy) are supported."
             )
-        self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
+        if self.is_blackhole:
+            # Blackhole galaxy physically exposes 2 inter-chip links (Wormhole 6U exposes 4); the
+            # ring/line CCLs index eth channels by link, so 4 overruns the available channels.
+            self.model_config["GALAXY_NUM_LINKS"] = int(os.getenv("GALAXY_NUM_LINKS", "2"))
+        else:
+            self.model_config["GALAXY_NUM_LINKS"] = {"6U": 4, "4U": 3}.get(self.galaxy_type)
         self.model_config["CCL_TOPOLOGY"] = {"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(self.galaxy_type)
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -2291,7 +2302,9 @@ class TtModelArgs:
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 12
+        # Blackhole exposes 8 DRAM banks vs Wormhole's 12; the shard-width division must match the
+        # actual dram_weight_grid or the shard count exceeds the available banks (TT_FATAL).
+        dram_cores = 8 if self.is_blackhole else 12
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -2307,7 +2320,7 @@ class TtModelArgs:
             """
             return b * math.ceil(a / b)
 
-        num_cores = 24
+        num_cores = 16 if self.is_blackhole else 24
         N_per_shard = round_up(math.ceil(n // num_cores), ttnn.TILE_SIZE)
         N_per_shard_in_dram = N_per_shard * 2
         in1_shard_shape = [k, N_per_shard_in_dram]

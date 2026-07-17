@@ -362,7 +362,7 @@ void DispatchSKernel::ConfigureCore() {
             static_config_.realtime_profiler_msg_addr.value());
 
         TT_ASSERT(static_config_.dispatch_telemetry_control_addr.has_value());
-        DispatchTelemetryControl zero_dispatch_telemetry_control{};
+        dispatch_telemetry_types::DispatchTelemetryControl zero_dispatch_telemetry_control{};
         detail::WriteToDeviceL1(
             device_,
             logical_core_,
@@ -377,9 +377,9 @@ void DispatchSKernel::ConfigureCore() {
         // Dispatch_s needs to init telemetry since it has a dedicated core
         TT_ASSERT(static_config_.dispatch_telemetry_addr.has_value());
         TT_ASSERT(static_config_.dispatch_telemetry_disabled.has_value());
-        DispatchCoreTelemetry zero_dispatch_telemetry{};
+        dispatch_telemetry_types::DispatchCoreTelemetry zero_dispatch_telemetry{};
         if (static_config_.dispatch_telemetry_disabled.value()) {
-            zero_dispatch_telemetry.signature = INVALID_TELEMETRY_SIGNATURE;
+            zero_dispatch_telemetry.signature = dispatch_telemetry_types::INVALID_TELEMETRY_SIGNATURE;
         }
         detail::WriteToDeviceL1(
             device_,

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 
@@ -21,11 +21,11 @@
 // UpdateDynamicCircularBufferAddress updates the backing buffer.
 
 void kernel_main() {
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
 
     Noc noc;
-    CircularBuffer output_cb(output_cb_id);
-    uint32_t dst_base = output_cb.get_write_ptr();
+    DataflowBuffer output_dfb(output_dfb_id);
+    uint32_t dst_base = output_dfb.get_write_ptr();
 
     uint32_t arg_idx = 0;
     uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
@@ -33,7 +33,7 @@ void kernel_main() {
     for (uint32_t t = 0; t < num_transfers; t++) {
         uint32_t src_noc_x = get_arg_val<uint32_t>(arg_idx++);
         uint32_t src_noc_y = get_arg_val<uint32_t>(arg_idx++);
-        uint32_t src_cb_id = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t src_dfb_id = get_arg_val<uint32_t>(arg_idx++);
         uint32_t src_l1_offset = get_arg_val<uint32_t>(arg_idx++);
         uint32_t src_stride = get_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_offset = get_arg_val<uint32_t>(arg_idx++);
@@ -41,8 +41,8 @@ void kernel_main() {
         uint32_t copy_size = get_arg_val<uint32_t>(arg_idx++);
         uint32_t num_rows = get_arg_val<uint32_t>(arg_idx++);
 
-        CircularBuffer src_cb(src_cb_id);
-        uint32_t src_l1_addr = src_cb.get_read_ptr() + src_l1_offset;
+        DataflowBuffer src_dfb(src_dfb_id);
+        uint32_t src_l1_addr = src_dfb.get_read_ptr() + src_l1_offset;
         uint32_t dst_addr = dst_base + dst_offset;
 
         UnicastEndpoint src;

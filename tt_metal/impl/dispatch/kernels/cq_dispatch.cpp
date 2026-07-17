@@ -113,16 +113,19 @@ constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
 constexpr uint32_t upstream_blocked_count_addr =
-    dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_blocked_count);
+    dispatch_telemetry_base +
+    offsetof(tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry, upstream_blocked_count);
 constexpr uint32_t upstream_unblocked_count_addr =
-    dispatch_telemetry_base + offsetof(tt::tt_metal::DispatchCoreTelemetry, upstream_unblocked_count);
+    dispatch_telemetry_base +
+    offsetof(tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry, upstream_unblocked_count);
 using DispatchTelemetryBlockGuard = TelemetryBlockGuard<
     upstream_blocked_count_addr,
     upstream_unblocked_count_addr,
     &upstream_blocked_counter,
     telemetry_enabled>;
-volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl* dispatch_telemetry_control =
-    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl*>(dispatch_telemetry_control_addr);
+volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl* dispatch_telemetry_control =
+    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
+        dispatch_telemetry_control_addr);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -1358,7 +1361,8 @@ re_run_command:
             //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
             if constexpr (telemetry_enabled) {
-                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base)
+                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                    dispatch_telemetry_base)
                     ->program_count = ++program_counter;
             }
             if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&

@@ -128,10 +128,22 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
             remainder--;
         }
         const uint32_t end_page = start_page + num_pages_for_core;
-        reader_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"start_page", start_page}, {"end_page", end_page}}});
-        writer_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"start_page", start_page}, {"end_page", end_page}}});
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"start_page", start_page},
+                {"end_page", end_page},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"start_page", start_page},
+                {"end_page", end_page},
+            });
         start_page = end_page;
     }
 

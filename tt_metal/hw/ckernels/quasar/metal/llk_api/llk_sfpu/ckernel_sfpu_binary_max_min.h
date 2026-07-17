@@ -37,7 +37,7 @@ inline void _init_binary_max_min_() {
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
     }
-        .set(ADDR_MOD_6, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_6);
 }
 
 // Unified element-wise max/min over two Dest tile regions.

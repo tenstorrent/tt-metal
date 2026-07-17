@@ -579,9 +579,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     if (!skip_untilize) {
         KernelRunArgs compute_args{.kernel = COMPUTE};
         for (size_t core_id = 0; core_id < cores.size(); ++core_id) {
-            compute_args.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = NodeCoord{cores[core_id].x, cores[core_id].y},
-                .args = {{"total_blocks", static_cast<uint32_t>(number_of_blocks_per_core[core_id])}}});
+            compute_args.runtime_arg_values["total_blocks"][NodeCoord{cores[core_id].x, cores[core_id].y}] =
+                static_cast<uint32_t>(number_of_blocks_per_core[core_id]);
         }
         run_args.kernel_run_args.push_back(std::move(compute_args));
     }
@@ -600,10 +599,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                 read_index = is_rm_orientation ? core.y : core.x;
             }
             const NodeCoord node{core.x, core.y};
-            reader0_args.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"config_read_index", read_index}}});
-            reader1_args.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"config_read_index", read_index}}});
+            reader0_args.runtime_arg_values["config_read_index"][node] = read_index;
+            reader1_args.runtime_arg_values["config_read_index"][node] = read_index;
         }
     }
     run_args.kernel_run_args.push_back(std::move(reader0_args));

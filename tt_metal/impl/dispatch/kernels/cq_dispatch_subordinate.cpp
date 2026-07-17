@@ -54,8 +54,9 @@ constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
 constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
 constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
-volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl* dispatch_telemetry_control =
-    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchTelemetryControl*>(dispatch_telemetry_control_addr);
+volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl* dispatch_telemetry_control =
+    reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
+        dispatch_telemetry_control_addr);
 
 constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
 constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
@@ -444,7 +445,8 @@ void process_go_signal_mcast_cmd() {
         const uint32_t stream_index = wait_stream - first_stream_used;
         ASSERT(stream_index < max_num_worker_sems);
         auto dispatch_telemetry =
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+                dispatch_telemetry_base);
 
         dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
         dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_timestamp();

@@ -185,24 +185,31 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
     auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     for (const auto& core : cores) {
         if (!full_cores.contains(core)) {
             continue;
         }
         uint32_t ntiles_per_core = ntiles_per_block * nblocks_per_core;
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"num_pages", ntiles_per_core}, {"start_id", tile_start_id}}});
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"num_pages", ntiles_per_core},
+                {"start_id", tile_start_id},
+            });
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
                 {"num_sticks", nsticks_per_core},
                 {"num_tiles_per_core", ntiles_per_core},
                 {"tile_width_size", tile_width_size},
                 {"start_stick_id", 0u},
-                {"offset_within_stick", offset_within_stick}}});
+                {"offset_within_stick", offset_within_stick},
+            });
         tile_start_id += ntiles_per_core;
         offset_within_stick += ntiles_per_core * tile_width_size;
     }
@@ -211,21 +218,28 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
         CoreCoord core = row_major ? CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x}
                                    : CoreCoord{ncores_full / ncores_y, ncores_full % ncores_y};
         uint32_t ntiles_per_core_cliff = ntiles_per_block * nblocks_per_core_cliff;
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"num_pages", ntiles_per_core_cliff}, {"start_id", tile_start_id}}});
+        AddRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"num_pages", ntiles_per_core_cliff},
+                {"start_id", tile_start_id},
+            });
         // NOTE: the legacy cliff writer passed an extra positional `stick_size` arg the kernel never
         // read, mis-aligning all subsequent cliff-core writer args (a latent bug — the full-core path
         // is correct). Metal 2.0 named args bind by name, so this port emits the cliff writer with the
         // same named args the kernel actually reads, correcting the cliff-core behavior. Flagged for
         // owner review in METAL2_PORT_REPORT.md.
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
+        AddRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
                 {"num_sticks", nsticks_per_core},
                 {"num_tiles_per_core", ntiles_per_core_cliff},
                 {"tile_width_size", tile_width_size},
                 {"start_stick_id", 0u},
-                {"offset_within_stick", offset_within_stick}}});
+                {"offset_within_stick", offset_within_stick},
+            });
     }
 
     ProgramSpec spec{
