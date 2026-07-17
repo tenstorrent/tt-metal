@@ -37,11 +37,101 @@ _SYNCED_SUBTREES = (
     "models/common",
 )
 _PROVIDES_MARKERS = ("TT_HW_PLANNER_PROVIDES", "TT_HW_PLANNER_FAMILY")
+_ROOT_MARKER = ".tt_hw_planner_root"
+
+
+@dataclass(frozen=True)
+class Root:
+    """A scanned reusable-source root (fixes-plan Point 10).
+
+    ``kind`` is ``'component'`` (its modules become per-component REUSE/ADAPT
+    targets) or ``'family'`` (its subdirs become rankable sibling families).
+    ``default`` is the classification for a MANIFEST-declared entry; heuristic
+    (non-manifest) derivations are always clamped to ADAPT (never confident
+    REUSE) per the Point 10 caveats."""
+
+    path: str
+    kind: str
+    default: str
+
+
+REUSE_ROOTS: Tuple[Root, ...] = (
+    Root("models/tt_transformers/tt", "component", "reuse"),
+    Root("models/common/modules", "component", "adapt"),
+    Root("models/tt_dit/blocks", "component", "adapt"),
+    Root("models/tt_dit/layers", "component", "adapt"),
+    Root("models/tt_dit/encoders", "component", "adapt"),
+    Root("models/tt_dit/models", "component", "adapt"),
+    Root("models/tt_dit/pipelines", "family", "adapt"),
+)
 
 
 def _cache_root() -> Path:
     base = os.environ.get("TT_HW_PLANNER_CACHE") or (Path.home() / ".cache" / "tt_hw_planner")
     return Path(base)
+
+
+def _sources_path() -> Path:
+    return _cache_root() / "registry_sources.json"
+
+
+def load_extra_sources() -> List[Root]:
+    """User-registered extra scanned roots (fixes-plan Point 10b), persisted by
+    ``sync-registry --add-source`` so every subsequent up/auto-up includes them
+    without a tool edit. [] if none / unreadable."""
+    try:
+        data = json.loads(_sources_path().read_text())
+    except Exception:
+        return []
+    out: List[Root] = []
+    for e in data if isinstance(data, list) else []:
+        p = (e or {}).get("path") if isinstance(e, dict) else None
+        if p:
+            out.append(Root(str(p).strip("/"), (e.get("kind") or "component"), (e.get("default") or "adapt")))
+    return out
+
+
+def add_source(path: str, kind: str = "component", default: str = "adapt") -> List[Root]:
+    """Register (and persist) an extra scanned root; dedup by path. Returns the
+    full persisted source list. Subsequent up/auto-up fetch + scan it."""
+    path = str(path).strip().strip("/")
+    existing = [r for r in load_extra_sources() if r.path != path]
+    existing.append(Root(path, kind, default))
+    p = _sources_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps([{"path": r.path, "kind": r.kind, "default": r.default} for r in existing], indent=2))
+    return existing
+
+
+def _configured_roots() -> List[Root]:
+    return list(REUSE_ROOTS) + load_extra_sources()
+
+
+def _discover_marker_roots(tree_root: Path) -> List[Root]:
+    """Roots self-declared in the fetched tree by a ``.tt_hw_planner_root`` marker
+    (fixes-plan Point 10b), so a new source becomes usable the moment it ships the
+    marker — no flag, no tool edit. Scans only ``models/``. Never raises."""
+    out: List[Root] = []
+    try:
+        base = tree_root / "models"
+        if base.is_dir():
+            for m in base.rglob(_ROOT_MARKER):
+                rel = str(m.parent.relative_to(tree_root))
+                out.append(Root(rel, "component", "adapt"))
+    except Exception:
+        return []
+    return out
+
+
+def _fetch_path_set() -> List[str]:
+    """Sparse-checkout path set: the default synced subtrees plus the top-level of
+    every registered extra source (Point 10b), so extra roots are fetched too."""
+    paths = list(_SYNCED_SUBTREES)
+    for r in load_extra_sources():
+        top = "/".join(r.path.split("/")[:2]) if r.path.startswith("models/") else r.path
+        if top and top not in paths:
+            paths.append(top)
+    return paths
 
 
 @dataclass
@@ -268,7 +358,7 @@ def fetch_upstream_models(repo_root, offline: bool = False, timeout: int = 90) -
         _git(["config", "core.sparseCheckout", "true"], cwd=dest, timeout=20)
         sparse = dest / ".git" / "info" / "sparse-checkout"
         sparse.parent.mkdir(parents=True, exist_ok=True)
-        sparse.write_text("\n".join(f"{s}/*" for s in _SYNCED_SUBTREES) + "\n")
+        sparse.write_text("\n".join(f"{s}/*" for s in _fetch_path_set()) + "\n")
         if _git(["fetch", "--depth", "1", "origin", sha], cwd=dest, timeout=timeout).returncode != 0:
             raise RuntimeError("git fetch failed")
         if _git(["checkout", "-q", "FETCH_HEAD"], cwd=dest, timeout=timeout).returncode != 0:
@@ -316,22 +406,24 @@ def _module_top_classes(py: Path) -> List[str]:
     return [n.name for n in tree.body if isinstance(n, ast.ClassDef)]
 
 
-_REUSE_MODULE_SUBTREES = ("models/tt_transformers/tt", "models/tt_dit", "models/common")
-
-
 def _derive_reuse_concepts(root: Path) -> List[dict]:
     """Derive per-module REUSE/ADAPT targets from the fetched reusable-module
     tree so a component's bring-up can wrap an already-implemented upstream
-    module instead of writing it from scratch (fixes-plan Point 2a).
+    module instead of writing it from scratch (fixes-plan Points 2a/10).
 
-    Each candidate is status ADAPT (never a trusted REUSE): the loop wraps it,
-    emits a PCC test, and the LLM refines on PCC failure — so a wrong auto-match
-    degrades gracefully to NEW rather than silently claiming a wrong module.
-    Keyed by file basename as the concept; consumers match by concept overlap.
+    Scans the ``component`` roots in :data:`REUSE_ROOTS` (the LLM stack
+    ``tt_transformers/tt`` PLUS the v2 sources ``common/modules`` and
+    ``tt_dit/{blocks,layers,encoders,models}``), any ``--add-source`` roots, and
+    ``.tt_hw_planner_root``-marked dirs. Each heuristic candidate is status ADAPT
+    (never a trusted REUSE — Point 10 caveat): the loop wraps it, emits a PCC
+    test, and the LLM refines on PCC failure, so a wrong auto-match degrades to
+    NEW rather than silently claiming a wrong module. Keyed by file basename as
+    the concept; consumers match by concept overlap.
     """
     out: List[dict] = []
-    for sub in _REUSE_MODULE_SUBTREES:
-        d = root / sub
+    roots = [r for r in _configured_roots() if r.kind == "component"] + _discover_marker_roots(root)
+    for r in roots:
+        d = root / r.path
         if not d.is_dir():
             continue
         for py in sorted(d.rglob("*.py")):
@@ -349,6 +441,60 @@ def _derive_reuse_concepts(root: Path) -> List[dict]:
                     "tt_path": rel,
                     "tt_class": max(classes, key=len),
                     "status": "ADAPT",
+                    "default_status": r.default,
+                    "source": "auto-derived-upstream",
+                }
+            )
+    return out
+
+
+_PIPELINE_CATEGORY_HINTS = (
+    ("wan", "Video"),
+    ("mochi", "Video"),
+    ("ltx", "Video"),
+    ("video", "Video"),
+    ("audio", "TTS"),
+    ("music", "TTS"),
+    ("flux", "Image"),
+    ("stable_diffusion", "Image"),
+    ("sd3", "Image"),
+    ("qwenimage", "Image"),
+    ("qwen_image", "Image"),
+    ("sana", "Image"),
+)
+
+_PIPELINE_TAGS = {"Image": ["text-to-image"], "Video": ["text-to-video"], "TTS": ["text-to-audio"]}
+
+
+def _derive_family_roots_candidates(root: Path) -> List[dict]:
+    """Derive rankable sibling families from ``family`` roots — i.e. each subdir
+    of ``tt_dit/pipelines`` (flux1, wan, mochi, ltx, sd35, qwenimage, …) becomes a
+    candidate so scaffold picks a real diffusion/video/audio DiT sibling instead
+    of SD1.4/hf_eager (fixes-plan Point 10a). Category + pipeline_tag inferred
+    from the pipeline name (default Image for tt_dit); model_type_keys = dir name.
+    Low-confidence: ranked below curated, dropped on name/model_type collision."""
+    out: List[dict] = []
+    for r in [x for x in _configured_roots() if x.kind == "family"]:
+        d = root / r.path
+        if not d.is_dir():
+            continue
+        for sub in sorted(p for p in d.iterdir() if p.is_dir()):
+            name = sub.name
+            if name.startswith("_") or name in ("tests", "test"):
+                continue
+            low = name.lower()
+            cat = next((c for k, c in _PIPELINE_CATEGORY_HINTS if k in low), "Image")
+            out.append(
+                {
+                    "kind": "family",
+                    "name": f"tt_dit/{name} (auto-upstream)",
+                    "category": cat,
+                    "demo_path": f"{r.path}/{name}",
+                    "routing_mode": "template",
+                    "canonical_hf_id": None,
+                    "model_type_keys": [low],
+                    "pipeline_tags": _PIPELINE_TAGS.get(cat, []),
+                    "notes": "auto-derived tt_dit pipeline (fixes-plan Point 10); low-confidence sibling for diffusion/video/audio DiT, ranked below curated.",
                     "source": "auto-derived-upstream",
                 }
             )
@@ -478,6 +624,13 @@ def refresh_registry(tree_root, sha: str = "LOCAL") -> dict:
     try:
         for f in _derive_demo_families(_list_upstream_demos(root)):
             if f["name"] not in declared_family_names:
+                families.append(f)
+    except Exception:
+        pass
+    try:
+        have = {f.get("name") for f in families}
+        for f in _derive_family_roots_candidates(root):
+            if f["name"] not in have:
                 families.append(f)
     except Exception:
         pass

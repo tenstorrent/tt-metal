@@ -10767,6 +10767,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--check", action="store_true", help="exit non-zero if any mapped registry path is missing from the tree"
     )
     psr.add_argument("--no-unmapped", action="store_true", help="skip the reverse 'unmapped reusable module' hints")
+    psr.add_argument(
+        "--add-source",
+        action="append",
+        metavar="PATH",
+        help="register an extra reusable-source root (e.g. models/tt_v3) — persisted and fetched+scanned on every "
+        "up/auto-up so a new library extends the reuse map + sibling families without a tool edit (Point 10b). Repeatable.",
+    )
+    psr.add_argument(
+        "--kind",
+        choices=("component", "family"),
+        default="component",
+        help="for --add-source: 'component' (modules become REUSE/ADAPT targets) or 'family' (subdirs become sibling families)",
+    )
+    psr.add_argument(
+        "--default",
+        dest="default",
+        choices=("reuse", "adapt"),
+        default="adapt",
+        help="for --add-source: default classification for manifest-declared entries in the root (heuristic stays ADAPT)",
+    )
     psr.set_defaults(func=cmd_sync_registry)
 
     pe2e = sub.add_parser(

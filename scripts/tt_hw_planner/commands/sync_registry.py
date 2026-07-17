@@ -8,10 +8,27 @@ silently mis-pointing at a stale sibling.
 """
 
 from ..discovery import REPO_ROOT
-from ..registry_sync import check_registry_drift, format_drift, has_hard_drift
+from ..registry_sync import add_source, check_registry_drift, format_drift, has_hard_drift, load_extra_sources
 
 
 def cmd_sync_registry(args) -> int:
+    new_sources = getattr(args, "add_source", None) or []
+    if new_sources:
+        kind = getattr(args, "kind", None) or "component"
+        default = getattr(args, "default", None) or "adapt"
+        persisted = []
+        for src in new_sources:
+            persisted = add_source(src, kind=kind, default=default)
+            print(f"[sync-registry] registered source: {src}  (kind={kind}, default={default})")
+        print(f"[sync-registry] {len(persisted)} extra source(s) now scanned on every up/auto-up:")
+        for r in persisted:
+            print(f"    {r.path:40s} kind={r.kind} default={r.default}")
+        print(
+            "\nThese roots are fetched from tenstorrent/tt-metal main and their PROVIDES/FAMILY "
+            "manifests + heuristic modules extend the reuse map + sibling families on the next run."
+        )
+        return 0
+
     issues = check_registry_drift(REPO_ROOT, include_unmapped=not getattr(args, "no_unmapped", False))
     print(format_drift(issues))
     if getattr(args, "check", False) and has_hard_drift(issues):
