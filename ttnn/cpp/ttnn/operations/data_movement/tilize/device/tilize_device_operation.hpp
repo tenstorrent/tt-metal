@@ -37,12 +37,14 @@ struct TilizeDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
 
-    // #48928: the sharded factory is pure CB-bound; opt into the descriptor fast-path on a cache hit.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&,
-        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
+    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses)
+    // from the same factory the miss path picks. See the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 ttnn::Tensor tilize(

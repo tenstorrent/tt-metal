@@ -9,6 +9,8 @@
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
@@ -267,24 +269,20 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> TilizeDeviceOperation::get_dynamic_runtime_args(
+void TilizeDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the sharded factory is CB-bound (in/out addresses ride on the sharded CBs, no Buffer* rt-arg).
-    // Re-apply reader arg0 (num_tiles_per_shard, unchanged) on the first core to trip the fast-path so
-    // apply_resolved_bindings re-patches the CB base addresses instead of rebuilding create_descriptor.
-    if (!std::holds_alternative<TilizeMultiCoreShardedProgramFactory>(
-            select_program_factory(operation_attributes, tensor_args))) {
-        return {};
-    }
-    const auto& shard_spec = tensor_args.input_tensor.shard_spec().value();
-    return {tt::tt_metal::DynamicRuntimeArg{
-        /*kernel_idx=*/0,
-        corerange_to_cores(shard_spec.grid).front(),
-        /*arg_idx=*/0,
-        shard_spec.shape[0] * shard_spec.shape[1] / tt::constants::TILE_HW}};
+    // Re-derive the descriptor from the SAME factory the miss path picks (single source of truth) and
+    // re-apply its per-core args + tensor-backed CB/buffer addresses. Supersedes get_dynamic/resolve_bindings.
+    auto desc = std::visit(
+        [&](auto&& factory) {
+            return factory.create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+        },
+        select_program_factory(operation_attributes, tensor_args));
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 ttnn::Tensor tilize(
