@@ -369,7 +369,6 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
     sfpi::vFloat r;
     sfpi::vFloat p;
@@ -431,7 +430,7 @@ inline void calculate_atan() {
         sfpi::vFloat result;
 
         if constexpr (is_fp32_dest_acc_en) {
-            result = sfpu_atan_fp32<APPROXIMATION_MODE>(in);
+            result = sfpu_atan_fp32(in);
         } else {
             result = sfpu_atan_bf16<APPROXIMATION_MODE>(in);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -492,7 +491,6 @@ sfpi_inline sfpi::vFloat sfpu_acos_bf16(sfpi::vFloat val) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     sfpi::vFloat r;
     sfpi::vFloat ax = sfpi::abs(x);
@@ -536,7 +534,6 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     return r;
 }
 
-template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     sfpi::vFloat r;
     sfpi::vFloat ax = sfpi::abs(x);
@@ -599,7 +596,7 @@ inline void calculate_asin() {
         sfpi::vFloat result;
 
         if constexpr (is_fp32_dest_acc_en) {
-            result = sfpu_asin_fp32<APPROXIMATION_MODE>(in);
+            result = sfpu_asin_fp32(in);
         } else {
             result = sfpu_asin_bf16<APPROXIMATION_MODE>(in);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -617,7 +614,7 @@ inline void calculate_acos() {
         sfpi::vFloat result;
 
         if constexpr (is_fp32_dest_acc_en) {
-            result = sfpu_acos_fp32<APPROXIMATION_MODE>(in);
+            result = sfpu_acos_fp32(in);
         } else {
             result = sfpu_acos_bf16<APPROXIMATION_MODE>(in);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
