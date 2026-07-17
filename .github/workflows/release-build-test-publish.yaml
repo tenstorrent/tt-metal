@@ -219,7 +219,10 @@ jobs:
           emit_failure "timed_out (no result within 60 min)" "$URL" ""
           exit 0
 
-      - name: File Jira issue for the RTL sim failure
+      # Files one RELEASE issue per *relevant* failed test (see the relevance
+      # map .github/actions/scripts/rtl_sim_jira_tests.json). Falls back to a
+      # single aggregate ticket if the check carried no per-test detail.
+      - name: File Jira issue(s) for relevant failed RTL sim tests
         if: ${{ steps.rtl-sim.outputs.sim-failed == 'true' }}
         env:
           JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
@@ -227,22 +230,11 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
           JIRA_PROJECT_KEY: "RELEASE"
           JIRA_ISSUE_TYPE: "Bug"
-          JIRA_SUMMARY: "RTL sim regression failed during release (stable ${{ steps.rtl-sim.outputs.sha }})"
-          JIRA_DESCRIPTION: |
-            The "RTL Sim CI test" check failed on stable HEAD during Package and release.
-
-            Commit:      ${{ steps.rtl-sim.outputs.sha }}
-            Conclusion:  ${{ steps.rtl-sim.outputs.conclusion }}
-            Sim results: ${{ steps.rtl-sim.outputs.url }}
-            Release run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-            Failed tests (from the RTL Sim check output; empty if the sim
-            pipeline has not yet forwarded per-test detail):
-            ${{ steps.rtl-sim.outputs.detail }}
-          JIRA_LABELS: "rtl-sim,ci-failure,release"
-          # One open ticket per recurring sim failure; later releases comment.
-          JIRA_DEDUP_LABEL: "rtl-sim-release-failure"
-        run: python3 .github/actions/scripts/create_jira_issue.py
+          RTL_SIM_DETAIL: ${{ steps.rtl-sim.outputs.detail }}
+          RTL_SIM_SHA: ${{ steps.rtl-sim.outputs.sha }}
+          RTL_SIM_URL: ${{ steps.rtl-sim.outputs.url }}
+          RTL_SIM_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 .github/actions/scripts/file_rtl_sim_jira.py
 
       - name: Re-assert sim failure
         if: ${{ steps.rtl-sim.outputs.sim-failed == 'true' }}

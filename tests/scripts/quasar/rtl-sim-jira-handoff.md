@@ -52,11 +52,16 @@ Example:
    Cap `output.summary` well under GitHub's 65 535-char limit; if there are very many
    failures, list the first N and note the truncation.
 
+**Forward *all* failed tests.** Don't pre-filter — tt-metal keeps its own
+relevance mapping (`.github/actions/scripts/rtl_sim_jira_tests.json`) and files
+one RELEASE ticket per *relevant* failed test, ignoring the rest. So the check
+summary should list every failed test; tt-metal decides which warrant a ticket.
+
 ## Acceptance
 
 After a failing quasar sim run on `stable` HEAD, the `RTL Sim CI test` check run on
 that commit has `output.summary` listing the failed
 `[config] group --gtest_filter=...` lines.
 
-tt-metal's release job then drops that list into the `RELEASE` Jira ticket
-automatically — no further coordination needed.
+tt-metal's release job then files one `RELEASE` Jira ticket per relevant failed
+test automatically — no further coordination needed.

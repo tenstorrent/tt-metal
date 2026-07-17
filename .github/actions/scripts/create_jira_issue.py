@@ -76,16 +76,14 @@ def _find_open_dupe(base, email, token, project, dedup_label):
     return issues[0]["key"] if issues else None
 
 
-def main():
-    base = _env("JIRA_BASE_URL", required=True)
-    email = _env("JIRA_USER_EMAIL", required=True)
-    token = _env("JIRA_API_TOKEN", required=True)
-    project = _env("JIRA_PROJECT_KEY", required=True)
-    summary = _env("JIRA_SUMMARY", required=True)
-    issue_type = _env("JIRA_ISSUE_TYPE", "Bug")
-    description = _env("JIRA_DESCRIPTION", "")
-    labels = [l.strip() for l in (_env("JIRA_LABELS", "") or "").split(",") if l.strip()]
-    dedup_label = _env("JIRA_DEDUP_LABEL", "")
+def file_issue(base, email, token, project, summary, issue_type="Bug",
+               description="", labels=None, dedup_label="", dry_run=False):
+    """Create (or comment onto a de-duped) Jira issue.
+
+    Returns a human-readable result string. When dedup_label is set and an open
+    issue already carries it, a comment is added instead of opening a duplicate.
+    """
+    labels = list(labels or [])
     if dedup_label and dedup_label not in labels:
         labels.append(dedup_label)
 
@@ -98,10 +96,9 @@ def main():
     if labels:
         fields["labels"] = labels
 
-    if _env("JIRA_DRY_RUN"):
-        print("DRY RUN -- would POST /rest/api/3/issue with fields:")
-        print(json.dumps({"fields": fields}, indent=2))
-        return
+    if dry_run:
+        return ("DRY RUN -- would POST /rest/api/3/issue with fields:\n"
+                + json.dumps({"fields": fields}, indent=2))
 
     if dedup_label:
         existing = _find_open_dupe(base, email, token, project, dedup_label)
@@ -114,12 +111,27 @@ def main():
                 f"/rest/api/3/issue/{existing}/comment",
                 {"body": _adf(f"Recurred.\n{summary}\n{description}")},
             )
-            print(f"commented on existing {existing}: {base.rstrip('/')}/browse/{existing}")
-            return
+            return f"commented on existing {existing}: {base.rstrip('/')}/browse/{existing}"
 
     created = _api(base, email, token, "POST", "/rest/api/3/issue", {"fields": fields})
     key = created["key"]
-    print(f"created {key}: {base.rstrip('/')}/browse/{key}")
+    return f"created {key}: {base.rstrip('/')}/browse/{key}"
+
+
+def main():
+    labels = [l.strip() for l in (_env("JIRA_LABELS", "") or "").split(",") if l.strip()]
+    print(file_issue(
+        base=_env("JIRA_BASE_URL", required=True),
+        email=_env("JIRA_USER_EMAIL", required=True),
+        token=_env("JIRA_API_TOKEN", required=True),
+        project=_env("JIRA_PROJECT_KEY", required=True),
+        summary=_env("JIRA_SUMMARY", required=True),
+        issue_type=_env("JIRA_ISSUE_TYPE", "Bug"),
+        description=_env("JIRA_DESCRIPTION", ""),
+        labels=labels,
+        dedup_label=_env("JIRA_DEDUP_LABEL", ""),
+        dry_run=bool(_env("JIRA_DRY_RUN")),
+    ))
 
 
 if __name__ == "__main__":
