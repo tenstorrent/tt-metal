@@ -587,7 +587,7 @@ unit + fused-debug + precision-matrix + perf/guard **351 passed / 112 skipped**;
 5.8 ms (R3d), and a 6% compute speedup to 5.44 ms (FPU util ≈0.14, still compute-bound) does
 not expose them.
 
-### [ ] Refinement 4 — Causal masking (mask_mode = causal)
+### [x] Refinement 4 — Causal masking (mask_mode = causal)
 
 **Goal**: add `"causal"` to `SUPPORTED["mask_mode"]`, generating the triangular
 bias **on-device** (no mask tensor) driven by the `is_causal` compile-time flag.
@@ -615,6 +615,37 @@ design's "Lamps → 1. Causal masking" section and
 **Done when**: `mask_mode=causal` self-attention golden cells pass; `causal + cross`
 is xfail via the new EXCLUSION; block-skip verified to reduce device-ns on causal
 vs an equivalent full-mask custom run; prior phases green.
+
+**Landed (R4)**: `"causal"` added to `SUPPORTED["mask_mode"]`; the triangular −∞
+bias is generated **on-device** (no mask tensor) from an `is_causal` compile-time
+flag, **reusing R1's generated-mask CB (`cb_kv_mask`) + the phase-3b additive-mask
+compute path** (causal is a generalization of R1's KV-padding mask). Two parts, both
+in the phase-0 per-chunk KV loop: (1) **block-skip** — reader + compute cap the KV
+loop at `n_kv_active = ceil((sq_off+sq_valid)/Skv_chunk_t)`, eliding K/V DRAM reads +
+compute for fully-future chunks (identical predicate on both sides keeps the CB
+counts matched); (2) **per-element diagonal mask** on straddling chunks — the reader
+generates a score-block-shaped triangular mask (`fill_zeros_tile` below-diagonal,
+`fill_neg_mask_tile` above, `fill_causal_diag_tile` on-diagonal), added before the
+row-max. Causal **subsumes** the KV-padding mask (a padding key is always in the
+future of every valid query), so `is_causal` disables R1's vertical-pad path.
+`EXCLUSIONS += {mask_mode:causal, attention_kind:cross}` (causal needs `S_q==S_kv`);
+the `is_causal ∧ attn_mask` ValueError was already present. Golden **1685 passed /
+584 xfailed / 0 failed** (+504 causal cells vs R2's 1181; 0 xpass — SUPPORTED honest);
+unit **370 passed / 112 skipped** (incl. 18 new causal + R1/R1b/R2/R3e regression).
+Causal is **dtype-agnostic** — bf16/fp32/bf8b all pass (PCC ≥ 0.995). **bf8b bug found
++ fixed** (static-analyzer F1): the reader sized the `cb_kv_mask` fill word-count from
+`get_tile_size(cb_q_in)` (input dtype) — for bf8b (1088 B) that under-filled the bf16
+mask tile (2048 B), leaving stale L1 in the tail rows and leaking attention across
+masked columns (bf8b causal PCC 0.29–0.40; bf16/fp32 unaffected). Fixed by sizing from
+the mask CB (`get_tile_size(cb_kv_mask)/4 = 512`) at both the causal and R1 KV-pad
+fill sites → bf8b 0.9999 (also fixes a latent fp32 over-fill OOB in R1's path). Causal
+mask value is a large finite `-1e9` (the reference convention, NaN-safe), not true −∞.
+**Block-skip device-ns verified**: same-process A/B on `(16,8,1024,64)` — causal
+**1.577 ms** vs equivalent full-mask custom **2.310 ms = 1.465× (31.7% reduction)**,
+both proven numerically equal to the torch causal reference. (On low-B·H shapes the
+win dilutes to ~1.11× because naive contiguous work assignment puts near-full high-qc
+work units on the critical-path core; the full ~2× needs **causal load-balancing** —
+work-unit reassignment, a future perf refinement per FlashAttention.md.)
 
 ### [ ] Refinement 5 — Speed up the perf-flagged profile (compute-side)
 

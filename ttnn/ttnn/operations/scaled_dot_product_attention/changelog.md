@@ -537,3 +537,68 @@
   `test_scaled_dot_product_attention_r3e_ab.py` (same-session A/B perf harness,
   `SDPA_FUSE_ROWSUM` toggle). Descriptor gains a measurement-only env knob
   (`SDPA_FUSE_ROWSUM=0` forces the reduce path; unset → normal gate, no-op default).
+
+## Refinement 4 — Causal masking (mask_mode = causal)
+- Date: 2026-07-17
+- What was done: Added `"causal"` to `SUPPORTED["mask_mode"]`. The triangular −∞
+  bias is generated ON-DEVICE (no mask tensor) from an `is_causal` compile-time flag,
+  **reusing R1's generated-mask CB (`cb_kv_mask`) + the phase-3b additive-mask compute
+  path** — causal is a minimal generalization of R1's KV-padding mask, not a new
+  kernel. Two parts, both inside phase-0's per-chunk KV loop:
+  * **Block-skip** whole future KV chunks. Reader + compute cap the KV loop at
+    `n_kv_active = ceil((sq_off + sq_valid) / Skv_chunk_t)`, so fully-future chunks
+    (`skv_off >= sq_off + sq_valid`) are neither read from DRAM nor computed. The
+    identical predicate on both kernels keeps `cb_k_in`/`cb_v_in`/`cb_kv_mask`
+    producer/consumer counts matched. Roughly halves total causal KV work.
+  * **Per-element diagonal mask** on straddling chunks (`skv_off + skv_valid > sq_off`).
+    The reader generates a score-block-shaped triangular additive mask into
+    `cb_kv_mask` — per tile it compares global query tile-row `(sq_off+si)` to global
+    key tile-col `(skv_off+sj)`: below-diagonal `fill_zeros_tile` (0), above-diagonal
+    `fill_neg_mask_tile` (large-negative), on-diagonal `fill_causal_diag_tile`
+    (triangular `c > r`). Compute adds it before the row-max via the existing
+    `add<cb_scores, cb_kv_mask, cb_scores>` path.
+  * Causal **subsumes** R1's KV-padding mask (a padding key at index ≥ S_kv is always
+    in the future of every valid query), so `is_causal` disables the vertical-pad path
+    (`has_kv_pad = has_kv_pad_raw && !is_causal`) — no double-generation.
+  * `EXCLUSIONS += {mask_mode: causal, attention_kind: cross}` (causal requires
+    S_q == S_kv; a rectangular causal case has no real workload). The
+    `is_causal ∧ attn_mask` ValueError was already in `validate()`. `is_causal` is now
+    threaded from the entry point through `create_program_descriptor` to reader +
+    compute CT args; `cb_kv_mask` is allocated when `is_causal or has_kv_pad`, and
+    `_working_set_bytes`/`_fit_l1` now count it (previously uncounted — fine for R1's
+    small non-aligned shapes, but causal shapes can be large).
+- Accuracy achieved: causal is dtype-agnostic — bf16/float32/bfloat8_b all pass the
+  golden `TOLERANCES` (PCC ≥ 0.995 bf16, ≥ 0.999 fp32, ≥ 0.99 bf8b). Probes:
+  all-ones causal → 1.0 (max diff vs torch 6e-8); random causal PCC 0.9999–1.0 across
+  MHA/GQA/MQA/long-context/D=128, both scale modes.
+- Golden test progress: **1685 passed / 584 xfailed / 0 failed** (0 xpass — no SUPPORTED
+  drift), up from 1181 at R2 (+504 causal self-attention cells across dtype ×
+  fp32_dest_acc_en × scale_mode × kv_heads_mode × alignment). `causal + cross` is xfail
+  via the new EXCLUSION; `bf8b + non_aligned` and `float32 + fp32_dest=False` stay
+  xfail (R2 EXCLUSIONS). Unit **370 passed / 112 skipped** (18 new causal tests +
+  R1/R1b/R2/R3e regression suites, all green).
+- Block-skip device-ns (Done-when): same-process A/B (shared AICLK) on `(16,8,1024,64)`
+  — causal (block-skip) **1.577 ms** vs equivalent full-mask custom (triangular tensor,
+  no skip) **2.310 ms = 1.465× (31.7% device-ns reduction)**. Both proven numerically
+  equal to the torch causal reference, so the delta is the block-skip alone. On low-B·H
+  shapes (e.g. `(1,16,4096,64)`) the win dilutes to ~1.11× because naive contiguous work
+  assignment lands near-full high-qc work units on the critical-path core; the full ~2×
+  needs causal load-balancing (work-unit reassignment), a future perf refinement.
+- Issues encountered: **bf8b + causal failed catastrophically at first** (PCC 0.29–0.40;
+  bf16/fp32 perfect). Root-caused via the "try cheap first" ladder — isolated to bf8b by
+  probe (bf8b+custom, the SAME triangular −∞ mask streamed, passed at 0.9999), then a
+  value lever (large-negative) made it WORSE (ruled out value), then the ttnn-static-
+  analyzer found F1: the reader sized the `cb_kv_mask` fill word-count from
+  `get_tile_size(cb_q_in)` (input dtype). For bf8b (1088 B tile) that under-filled the
+  bf16 mask tile (2048 B), leaving stale L1 in the tail rows → attention leaked across
+  masked columns (the row-31 signature). Fixed by sizing from the mask CB
+  (`get_tile_size(cb_kv_mask)/4 = 512`) at both the causal and R1 KV-pad fill sites →
+  bf8b 0.9999; also fixes a latent fp32 over-fill OOB in R1's path. The causal mask
+  value is a large finite `-1e9` (the reference/production convention, NaN-safe), not
+  true −∞. No outstanding issues; op green.
+- Tests added:
+  `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_causal.py`
+  (18 cases: causal self-attn MHA/GQA/MQA/long/D128/non-pow2-heads, both scale modes,
+  all-ones determinism, causal+cross EXCLUSION, is_causal∧attn_mask ValueError) and
+  `test_scaled_dot_product_attention_causal_perf.py` (block-skip vs full-mask device-ns
+  A/B + correctness equivalence gate).
