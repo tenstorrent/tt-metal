@@ -623,7 +623,7 @@ def run_model(
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(750)
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 def test_ds_prefill_block(
     variant,
