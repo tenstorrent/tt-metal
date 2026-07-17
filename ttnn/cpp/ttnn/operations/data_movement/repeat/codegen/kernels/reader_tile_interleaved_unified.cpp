@@ -191,7 +191,7 @@ void kernel_main() {
         // Fill pad tile in scratch CB
         {
             volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(a->cb_pad));
-            for (uint32_t i = 0; i < a->tile_bytes / 4 + 1; ++i) {
+            for (uint32_t i = 0; i < a->tile_bytes / sizeof(uint32_t); ++i) {
                 ptr[i] = a->packed_pad_val;
             }
         }
