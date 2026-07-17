@@ -613,12 +613,15 @@ fi
 # Assemble the ":"-separated MPMD segments for the non-Z multi-host launch,
 # shared by the docker and no-docker paths. Every rank drives the same single
 # mesh (TT_MESH_ID=0) and descriptor; OpenMPI places one rank per --host entry.
+# TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS matches the Z-config / full_rank_binding
+# path so slow ethernet handshakes after reset don't trip the default 10s sync.
 NONZ_SEGMENTS=()
 for ((i = 0; i < NONZ_NUM_RANKS; i++)); do
     [[ $i -gt 0 ]] && NONZ_SEGMENTS+=(":")
     NONZ_SEGMENTS+=(-np 1)
     NONZ_SEGMENTS+=(-x TT_MESH_ID=0)
     NONZ_SEGMENTS+=(-x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH")
+    NONZ_SEGMENTS+=(-x TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=1000000)
     NONZ_SEGMENTS+=("$TEST_BINARY" --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}")
 done
 
@@ -1171,6 +1174,7 @@ elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
         -np 1 \
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
+        -x TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=1000000 \
         "$TEST_BINARY" \
         --test_config "$TEST_CONFIG" "${EXTRA_BINARY_ARGS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
 else
