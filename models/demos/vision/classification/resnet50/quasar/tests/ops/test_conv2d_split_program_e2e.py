@@ -237,6 +237,25 @@ def _run(
         print("  DIAG device[:6,0] =", [round(float(x), 2) for x in dev[:6, 0]])
         print("  DIAG golden[:6,0] =", [round(float(x), 2) for x in gold_mn[:6, 0]])
 
+        # ---- localize a partial (PCC~0.5) failure: per-M-shard (core) and per-N-tile PCC ----
+        # If one core's rows are correct and the other's are garbage -> per-core Program-B issue (mcast/weights).
+        M = dev.shape[0]
+        for frac, lbl in [(4, "quarter"), (2, "half")]:
+            step = M // frac
+            if step == 0:
+                continue
+            segs = " ".join(
+                f"[{i*step}:{(i+1)*step}]={_pcc(dev[i*step:(i+1)*step], gold_mn[i*step:(i+1)*step]):.3f}"
+                for i in range(frac)
+            )
+            print(f"  DIAG PCC by M-{lbl}: {segs}")
+        Ncols = dev.shape[1]
+        if Ncols >= 64:
+            print(
+                f"  DIAG PCC by N-tile: [0:32]={_pcc(dev[:, :32], gold_mn[:, :32]):.3f} "
+                f"[32:64]={_pcc(dev[:, 32:64], gold_mn[:, 32:64]):.3f}"
+            )
+
     assert_with_pcc(torch_golden, tt_out.float(), pcc=PCC)
 
 
