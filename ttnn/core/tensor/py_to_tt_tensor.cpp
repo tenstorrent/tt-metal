@@ -73,8 +73,7 @@ bool can_construct_on_device(
                !preserve_nan_values;
 
     if (optional_tile.has_value()) {
-        res &= (*optional_tile == Tile{}) && !optional_tile->get_transpose_within_face() &&
-               !optional_tile->get_transpose_of_faces();
+        res &= (*optional_tile == Tile{});
     }
 
     return res;

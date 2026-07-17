@@ -49,6 +49,5 @@ Tensor tilize_with_val_padding(
     bool use_multicore,
     bool enough_space_width,
     bool enough_space_height,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    tt::tt_metal::Tile tile);
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim::qsr

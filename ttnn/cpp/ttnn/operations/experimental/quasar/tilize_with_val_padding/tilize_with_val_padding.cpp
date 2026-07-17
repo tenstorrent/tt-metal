@@ -77,21 +77,13 @@ ttnn::Tensor tilize_with_val_padding(
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
     tt::tt_metal::Tile tile) {
+    if (tt::tt_metal::is_device_tensor(input_tensor)) {
+        TT_FATAL(
+            tile == tt::tt_metal::Tile{},
+            "ttnn::experimental::quasar::tilize_with_val_padding: device tilize only supports the default tile in "
+            "this PR");
+    }
     if (input_tensor.layout() == Layout::TILE) {
-        TT_FATAL(
-            input_tensor.tensor_spec().tile() == tile,
-            "ttnn::experimental::quasar::tilize_with_val_padding: TILE tensor already uses tile {}, cannot "
-            "reinterpret as {}",
-            input_tensor.tensor_spec().tile(),
-            tile);
-        TT_FATAL(
-            !memory_config.has_value() || memory_config.value() == input_tensor.memory_config(),
-            "ttnn::experimental::quasar::tilize_with_val_padding: cannot silently drop requested memory_config on "
-            "already-TILE input");
-        TT_FATAL(
-            !output_dtype.has_value() || output_dtype.value() == input_tensor.dtype(),
-            "ttnn::experimental::quasar::tilize_with_val_padding: cannot silently drop requested dtype on "
-            "already-TILE input");
         return input_tensor;
     }
 
@@ -102,7 +94,7 @@ ttnn::Tensor tilize_with_val_padding(
             output_padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
-                PageConfig(Layout::TILE, tile),
+                PageConfig(Layout::TILE),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
     }
@@ -113,8 +105,8 @@ ttnn::Tensor tilize_with_val_padding(
         output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
                                  : input_single_tile_size;
 
-    uint32_t num_tiles_per_row = output_padded_shape[-1] / tile.get_width();
-    uint32_t num_tiles_per_col = output_padded_shape[-2] / tile.get_height();
+    uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
 
     bool enough_space_width = operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
@@ -131,8 +123,7 @@ ttnn::Tensor tilize_with_val_padding(
             use_multicore,
             enough_space_width,
             enough_space_height,
-            sub_core_grids,
-            tile);
+            sub_core_grids);
     };
 
     return build_ndiml_tilize_val(base_tilize, sub_core_grids)(input_tensor);
@@ -147,6 +138,12 @@ ttnn::Tensor tilize_with_val_padding(
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids,
     tt::tt_metal::Tile tile) {
+    if (tt::tt_metal::is_device_tensor(input_tensor)) {
+        TT_FATAL(
+            tile == tt::tt_metal::Tile{},
+            "ttnn::experimental::quasar::tilize_with_val_padding: device tilize only supports the default tile in "
+            "this PR");
+    }
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
@@ -154,7 +151,7 @@ ttnn::Tensor tilize_with_val_padding(
             ttnn::Shape{output_padded_shape},
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
-                PageConfig(Layout::TILE, tile),
+                PageConfig(Layout::TILE),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
     }
@@ -178,27 +175,19 @@ ttnn::Tensor tilize_with_zero_padding(
     const std::optional<CoreRangeSet>& sub_core_grids,
     tt::tt_metal::Tile tile) {
     using namespace tt::constants;
+    if (tt::tt_metal::is_device_tensor(input_tensor)) {
+        TT_FATAL(
+            tile == tt::tt_metal::Tile{},
+            "ttnn::experimental::quasar::tilize_with_zero_padding: device tilize only supports the default tile in "
+            "this PR");
+    }
     if (input_tensor.layout() == Layout::TILE) {
-        TT_FATAL(
-            input_tensor.tensor_spec().tile() == tile,
-            "ttnn::experimental::quasar::tilize_with_zero_padding: TILE tensor already uses tile {}, cannot "
-            "reinterpret as {}",
-            input_tensor.tensor_spec().tile(),
-            tile);
-        TT_FATAL(
-            !memory_config.has_value() || memory_config.value() == input_tensor.memory_config(),
-            "ttnn::experimental::quasar::tilize_with_zero_padding: cannot silently drop requested memory_config on "
-            "already-TILE input");
-        TT_FATAL(
-            !output_dtype.has_value() || output_dtype.value() == input_tensor.dtype(),
-            "ttnn::experimental::quasar::tilize_with_zero_padding: cannot silently drop requested dtype on "
-            "already-TILE input");
         return input_tensor;
     }
     auto padded_shape = input_tensor.padded_shape();
 
-    padded_shape[-2] = tt::round_up(padded_shape[-2], tile.get_height());
-    padded_shape[-1] = tt::round_up(padded_shape[-1], tile.get_width());
+    padded_shape[-2] = tt::round_up(padded_shape[-2], TILE_HEIGHT);
+    padded_shape[-1] = tt::round_up(padded_shape[-1], TILE_WIDTH);
 
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
@@ -207,7 +196,7 @@ ttnn::Tensor tilize_with_zero_padding(
             padded_shape,
             TensorLayout(
                 output_dtype.value_or(input_tensor.dtype()),
-                PageConfig(Layout::TILE, tile),
+                PageConfig(Layout::TILE),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
     }

@@ -15,10 +15,6 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_w
 from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
-TILIZE_APIS = (
-    ("core", ttnn.tilize),
-    ("quasar", ttnn.experimental.quasar.tilize),
-)
 
 
 @pytest.mark.parametrize(
@@ -752,38 +748,12 @@ def test_tilize_fp32_lossless_via_to_layout(device):
     assert torch.equal(input_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("api_name,tilize_fn", TILIZE_APIS)
-def test_tilize_rejects_custom_tile_on_device(api_name, tilize_fn, device, expect_error):
+def test_tilize_rejects_custom_tile_on_device(device, expect_error):
     torch_input = torch.rand((32, 64), dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    with expect_error(RuntimeError, "Device tilize only supports the default tile"):
-        tilize_fn(tt_input, tile=ttnn.Tile((16, 32)))
-
-
-@pytest.mark.parametrize("api_name,tilize_fn", TILIZE_APIS)
-@pytest.mark.parametrize(
-    "kwargs,error_match",
-    [
-        ({"memory_config": ttnn.L1_MEMORY_CONFIG}, "cannot silently drop requested memory_config"),
-        ({"dtype": ttnn.bfloat8_b}, "cannot silently drop requested dtype"),
-    ],
-    ids=["memory_config", "dtype"],
-)
-def test_tilize_rejects_silent_drop_on_already_tiled_input(
-    api_name, tilize_fn, device, kwargs, error_match, expect_error
-):
-    torch_input = torch.rand((32, 64), dtype=torch.bfloat16)
-    tt_input = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    with expect_error(RuntimeError, error_match):
-        tilize_fn(tt_input, **kwargs)
+    with expect_error(RuntimeError, "device tilize only supports the default tile"):
+        ttnn.tilize(tt_input, tile=ttnn.Tile((16, 32)))
 
 
 @pytest.mark.parametrize(

@@ -53,6 +53,5 @@ ttnn::Tensor tilize(
     bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    tt::tt_metal::Tile tile);
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

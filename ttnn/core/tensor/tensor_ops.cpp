@@ -185,6 +185,9 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 Tensor to_layout(const Tensor& input_tensor, Layout target_layout, std::optional<Tile> tile) {
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, tile);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_layout conversion");
+    TT_FATAL(
+        target_layout != Layout::ROW_MAJOR || !tile.has_value(),
+        "Tensor::to_layout: tile argument is only supported when converting to TILE layout");
     Tensor output = [&] {
         switch (target_layout) {
             case Layout::ROW_MAJOR: return Tensor(tt::tt_metal::to_row_major_layout(input_tensor.host_tensor()));

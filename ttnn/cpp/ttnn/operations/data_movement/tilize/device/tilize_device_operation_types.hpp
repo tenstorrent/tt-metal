@@ -12,7 +12,6 @@ namespace ttnn::prim {
 struct TilizeParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     tt::tt_metal::DataType output_dtype;
-    tt::tt_metal::Tile tile{};
     bool use_multicore = false;
     bool enough_space_width = false;
     bool enough_space_height = false;

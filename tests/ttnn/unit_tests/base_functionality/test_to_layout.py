@@ -18,11 +18,6 @@ from tests.ttnn.utils_for_testing import (
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 from models.common.utility_functions import torch_random, run_for_blackhole
 
-TO_LAYOUT_APIS = (
-    ("core", ttnn.to_layout),
-    ("quasar", ttnn.experimental.quasar.to_layout),
-)
-
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
 def test_wan22_failure_t3k(mesh_device):
@@ -1006,15 +1001,14 @@ def test_to_layout_pad_value_default_is_zero(device, shape):
     assert torch.equal(output_default, torch_output_tensor)
 
 
-@pytest.mark.parametrize("api_name,to_layout_fn", TO_LAYOUT_APIS)
 @pytest.mark.parametrize("tile_shape", [(16, 32), (32, 16), (16, 16)])
-def test_to_layout_custom_tile_host_roundtrip(api_name, to_layout_fn, tile_shape):
+def test_to_layout_custom_tile_host_roundtrip(tile_shape):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((30, 50), dtype=torch.bfloat16)
     tile = ttnn.Tile(tile_shape)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-    tiled = to_layout_fn(input_tensor, ttnn.TILE_LAYOUT, tile=tile)
+    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=tile)
 
     assert tiled.layout == ttnn.TILE_LAYOUT
     assert tiled.tile == tile
@@ -1023,20 +1017,19 @@ def test_to_layout_custom_tile_host_roundtrip(api_name, to_layout_fn, tile_shape
         ((torch_input_tensor.shape[-1] + tile_shape[1] - 1) // tile_shape[1]) * tile_shape[1],
     ]
 
-    round_tripped = to_layout_fn(tiled, ttnn.ROW_MAJOR_LAYOUT)
+    round_tripped = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
     assert round_tripped.layout == ttnn.ROW_MAJOR_LAYOUT
     assert round_tripped.tile == tile
     assert_equal(torch_input_tensor, ttnn.to_torch(round_tripped))
 
 
-@pytest.mark.parametrize("api_name,to_layout_fn", TO_LAYOUT_APIS)
-def test_to_layout_custom_tile_host_no_padding_fast_path(api_name, to_layout_fn):
+def test_to_layout_custom_tile_host_no_padding_fast_path():
     torch.manual_seed(1)
     torch_input_tensor = torch.rand((64, 64), dtype=torch.bfloat16)
     tile = ttnn.Tile((16, 32))
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-    tiled = to_layout_fn(input_tensor, ttnn.TILE_LAYOUT, tile=tile)
+    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=tile)
 
     assert tiled.layout == ttnn.TILE_LAYOUT
     assert tiled.tile == tile
@@ -1044,34 +1037,30 @@ def test_to_layout_custom_tile_host_no_padding_fast_path(api_name, to_layout_fn)
     assert_equal(torch_input_tensor, ttnn.to_torch(tiled))
 
 
-@pytest.mark.parametrize("api_name,to_layout_fn", TO_LAYOUT_APIS)
-def test_to_layout_rejects_tile_kwarg_for_row_major(api_name, to_layout_fn, expect_error):
+def test_to_layout_rejects_tile_kwarg_for_row_major(expect_error):
     input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT)
 
     with expect_error(RuntimeError, "tile argument is only supported"):
-        to_layout_fn(input_tensor, ttnn.ROW_MAJOR_LAYOUT, tile=ttnn.Tile((16, 16)))
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, tile=ttnn.Tile((16, 16)))
 
 
-@pytest.mark.parametrize("api_name,to_layout_fn", TO_LAYOUT_APIS)
-def test_to_layout_rejects_transpose_only_tile_mismatch(api_name, to_layout_fn, expect_error):
+def test_to_layout_rejects_transpose_only_tile_mismatch(expect_error):
     input_tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
 
     with expect_error(RuntimeError, "cannot convert to tile"):
-        to_layout_fn(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, 32), transpose_tile=True))
+        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((32, 32), transpose_tile=True))
 
 
-@pytest.mark.parametrize("api_name,to_layout_fn", TO_LAYOUT_APIS)
-def test_to_layout_device_rejects_custom_tilize(api_name, to_layout_fn, device, expect_error):
+def test_to_layout_device_rejects_custom_tilize(device, expect_error):
     input_tensor = ttnn.from_torch(
         torch.rand((32, 64), dtype=torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
     )
 
     with expect_error(RuntimeError, "device tilize only supports the default tile"):
-        to_layout_fn(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32)))
+        ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32)))
 
 
-@pytest.mark.parametrize("api_name,to_layout_fn", TO_LAYOUT_APIS)
-def test_to_layout_device_rejects_custom_untilize(api_name, to_layout_fn, device, expect_error):
+def test_to_layout_device_rejects_custom_untilize(device, expect_error):
     tile = ttnn.Tile((16, 32))
     input_tensor = ttnn.from_torch(
         torch.rand((32, 64), dtype=torch.bfloat16),
@@ -1082,7 +1071,7 @@ def test_to_layout_device_rejects_custom_untilize(api_name, to_layout_fn, device
     input_tensor = ttnn.to_device(input_tensor, device)
 
     with expect_error(RuntimeError, "device untilize only supports the default tile"):
-        to_layout_fn(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
 
 def test_from_torch_device_typecast_preserves_custom_tile(device):

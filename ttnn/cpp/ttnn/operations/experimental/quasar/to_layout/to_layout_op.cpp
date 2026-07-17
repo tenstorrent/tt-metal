@@ -149,20 +149,26 @@ Tensor to_layout_impl(
     if (tt::tt_metal::is_device_tensor(tensor_arg)) {
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = true;
+        const bool converting_to_row_major = layout == ttnn::ROW_MAJOR_LAYOUT;
+        const bool converting_to_tile = layout == ttnn::TILE_LAYOUT;
+
+        if (converting_to_row_major) {
+            TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
+            TT_FATAL(
+                tensor.tensor_spec().tile() == tt::tt_metal::Tile{},
+                "ttnn::experimental::quasar::to_layout: device untilize only supports the default tile in this PR");
+        } else if (converting_to_tile) {
+            TT_FATAL(
+                effective_tile == tt::tt_metal::Tile{},
+                "ttnn::experimental::quasar::to_layout: device tilize only supports the default tile in this PR");
+        }
 
         if (not requires_padding_change(tensor, layout, effective_tile)) {
-            if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-                TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
-                TT_FATAL(
-                    tensor.tensor_spec().tile() == tt::tt_metal::Tile{},
-                    "ttnn::experimental::quasar::to_layout: device untilize only supports the default tile in this PR");
+            if (converting_to_row_major) {
                 return ttnn::operations::experimental::quasar::untilize(
                     tensor, output_memory_config, use_multicore_untilize, sub_core_grids);
             }
-            if (layout == ttnn::TILE_LAYOUT) {
-                TT_FATAL(
-                    effective_tile == tt::tt_metal::Tile{},
-                    "ttnn::experimental::quasar::to_layout: device tilize only supports the default tile in this PR");
+            if (converting_to_tile) {
                 if (tensor.is_sharded()) {
                     uint32_t tile_height = effective_tile.get_height();
                     uint32_t tile_width = effective_tile.get_width();
@@ -193,12 +199,7 @@ Tensor to_layout_impl(
             }
             throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
         }
-        if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-            TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
-            TT_FATAL(
-                tensor.tensor_spec().tile() == tt::tt_metal::Tile{},
-                "ttnn::experimental::quasar::to_layout: device untilize only supports the default tile in this PR");
-
+        if (converting_to_row_major) {
             if (tensor.is_sharded()) {
                 output_memory_config =
                     memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
@@ -211,16 +212,15 @@ Tensor to_layout_impl(
             return ttnn::operations::experimental::quasar::untilize_with_unpadding(
                 tensor, output_tensor_end, output_memory_config, use_multicore_untilize, sub_core_grids);
         }
-        if (layout == ttnn::TILE_LAYOUT) {
-            TT_FATAL(
-                effective_tile == tt::tt_metal::Tile{},
-                "ttnn::experimental::quasar::to_layout: device tilize only supports the default tile in this PR");
+        if (converting_to_tile) {
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                ttsl::SmallVector<std::array<uint32_t, 2>> padding(tensor.logical_shape().rank(), {0, 0});
-                padding[padding.size() - 2] = {0, padded_output_shape[-2] - output_shape[-2]};
-                padding[padding.size() - 1] = {0, padded_output_shape[-1] - output_shape[-1]};
+                ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
+                    {0, 0},
+                    {0, 0},
+                    {0, padded_output_shape[2] - output_shape[2]},
+                    {0, padded_output_shape[3] - output_shape[3]}};
                 TT_FATAL(!sub_core_grids.has_value(), "Pad OP does not currently support sub core grid");
                 tensor = ttnn::operations::experimental::quasar::pad(tensor, padding, pad_value, true, std::nullopt);
                 return ttnn::operations::experimental::quasar::tilize(
@@ -273,11 +273,7 @@ Tensor to_layout_impl(
             layout, layout == ttnn::TILE_LAYOUT ? std::make_optional(effective_tile) : std::nullopt);
     }
     if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-        const auto source_tile = tensor.tensor_spec().tile();
         tensor = tensor.to_layout(layout);
-        TT_FATAL(
-            tensor.tensor_spec().tile() == source_tile,
-            "ttnn::experimental::quasar::to_layout: host untilize must preserve source tile metadata for unpadding");
         tensor = tensor.unpad_from_tile(tensor.logical_shape());
         return ttnn::operations::experimental::quasar::reshape(
             tensor,
@@ -288,19 +284,6 @@ Tensor to_layout_impl(
             sub_core_grids);
     }
     if (layout == ttnn::TILE_LAYOUT) {
-        if (tensor.layout() == Layout::ROW_MAJOR && tensor.tensor_spec().tile() != effective_tile) {
-            tensor = Tensor(tt::tt_metal::HostTensor::from_buffer(
-                tensor.host_tensor().buffer(),
-                TensorSpec(
-                    tensor.logical_shape(),
-                    tt::tt_metal::TensorLayout::fromPaddedShape(
-                        tensor.dtype(),
-                        tt::tt_metal::PageConfig(Layout::ROW_MAJOR, effective_tile),
-                        tensor.memory_config(),
-                        tensor.logical_shape(),
-                        tensor.padded_shape())),
-                tensor.tensor_topology()));
-        }
         ttsl::SmallVector<uint32_t> padded_input_start;
         for (int index = 0; index < padded_output_shape.rank(); ++index) {
             padded_input_start.push_back(0);
