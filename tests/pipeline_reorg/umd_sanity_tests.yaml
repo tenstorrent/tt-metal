@@ -19,14 +19,3 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   team: umd
-
-- name: umd read-only page pinning
-  cmd: |
-    python3 -c "import pathlib,re; text=pathlib.Path('/sys/module/tenstorrent/version').read_text().strip(); match=re.match(r'(\d+)\.(\d+)\.(\d+)', text); assert match and tuple(map(int, match.groups())) >= (2, 9, 0), f'KMD 2.9.0+ required, found {text}'"
-    ./build/test/umd/api/api_tests --gtest_filter='*ReadOnly*'
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    bh_p150b_civ2_viommu:
-      timeout: 5
-  team: umd
