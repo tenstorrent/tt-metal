@@ -16,6 +16,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -199,6 +200,27 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& di
     return true;
 }
 
+bool is_permute_layout_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& dims) {
+    if (a.is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = a.logical_shape();
+    bool has_previous_axis = false;
+    uint32_t previous_axis = 0;
+    for (const uint32_t axis : dims) {
+        if (shape[axis] <= 1) {
+            continue;
+        }
+        if (has_previous_axis && axis < previous_axis) {
+            return false;
+        }
+        previous_axis = axis;
+        has_previous_axis = true;
+    }
+    return true;
+}
+
 }  // namespace ttnn::operations::data_movement::detail
 
 namespace ttnn {
@@ -220,25 +242,34 @@ ttnn::Tensor permute(
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
 
-    {
-        namespace permute_codegen = operations::data_movement::permute_codegen;
-        const auto selector = permute_codegen::parse_implementation(implementation);
-        if (selector == permute_codegen::ImplementationSelector::Codegen) {
-            TT_FATAL(
-                permute_codegen::supported_by_codegen(input_tensor, normalized_dims),
-                "ttnn::permute: implementation=\"codegen\" requested but this input is not supported by the "
-                "codegen implementation");
-            return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
-        }
-        if (selector == permute_codegen::ImplementationSelector::Auto &&
-            permute_codegen::supported_by_codegen(input_tensor, normalized_dims) &&
-            !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
-            return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
-        }
-    }
+    namespace permute_codegen = operations::data_movement::permute_codegen;
+    const auto selector = permute_codegen::parse_implementation(implementation);
 
     if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
+    }
+
+    if (operations::data_movement::detail::is_permute_layout_nop(input_tensor, normalized_dims)) {
+        const auto& input_shape = input_tensor.logical_shape();
+        ttsl::SmallVector<uint32_t> output_shape(normalized_dims.size());
+        std::transform(
+            normalized_dims.begin(), normalized_dims.end(), output_shape.begin(), [&input_shape](uint32_t dim) {
+                return input_shape[dim];
+            });
+        return ttnn::reshape(input_tensor, ttnn::Shape(std::move(output_shape)), memory_config);
+    }
+
+    if (selector == permute_codegen::ImplementationSelector::Codegen) {
+        TT_FATAL(
+            permute_codegen::supported_by_codegen(input_tensor, normalized_dims),
+            "ttnn::permute: implementation=\"codegen\" requested but this input is not supported by the "
+            "codegen implementation");
+        return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
+    }
+    if (selector == permute_codegen::ImplementationSelector::Auto &&
+        permute_codegen::supported_by_codegen(input_tensor, normalized_dims) &&
+        !permute_codegen::is_demoted(input_tensor, normalized_dims)) {
+        return ttnn::prim::permute_codegen(input_tensor, normalized_dims, memory_config, std::nullopt);
     }
 
     auto adjust_order = [](const ttsl::SmallVector<uint32_t>& dims) {

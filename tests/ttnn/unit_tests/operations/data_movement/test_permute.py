@@ -429,6 +429,27 @@ def test_permute_identity(device, shape, dtype):
     assert_equal(torch_output, output_tensor)
 
 
+@pytest.mark.parametrize(
+    "shape, perm",
+    [
+        ((1, 1, 32, 64), (0, 1, 2, 3)),
+        ((1, 1, 32, 64), (1, 0, 2, 3)),
+        ((1, 2, 3, 32, 64), (1, 2, 0, 3, 4)),
+    ],
+)
+@pytest.mark.parametrize("implementation", ["auto", "codegen"])
+def test_permute_noop_bypasses_codegen(device, shape, perm, implementation):
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    cache_entries_before = device.num_program_cache_entries()
+
+    output_tensor = ttnn.permute(input_tensor, perm, implementation=implementation)
+
+    assert output_tensor.buffer_address() == input_tensor.buffer_address()
+    assert device.num_program_cache_entries() == cache_entries_before
+    assert_equal(torch.permute(torch_tensor, perm), ttnn.to_torch(output_tensor))
+
+
 @pytest.mark.parametrize("shape", [[2, 2, 67, 67, 65]])
 @pytest.mark.parametrize("perm", [(0, 1, 3, 2, 4)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
