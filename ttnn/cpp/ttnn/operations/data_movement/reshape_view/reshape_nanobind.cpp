@@ -34,10 +34,12 @@ ttnn::Tensor reshape_shape_vector_wrapper(
 
 void bind_reshape_view_operation(nb::module_& mod) {
     const auto* doc = R"doc(
-            Reshape always copies data and returns a tensor with independent device memory.
-            The result never aliases (shares memory with) the input tensor, so it is always
-            safe to deallocate the input after reshaping. Use ``ttnn.experimental.view`` when
-            zero-copy aliasing is explicitly desired.
+            On device tensors, reshape returns independent storage (not a zero-copy alias
+            of the input).  It is therefore safe to deallocate the input after reshaping.
+            Exception: ND_SHARDED device tensors currently retain zero-copy behavior
+            because CloneOperation does not yet support ND shard specs (tracked as TODO #40547).
+            Host tensors and zero-volume tensors may still be returned without a copy.
+            Use ``ttnn.experimental.view`` when zero-copy aliasing is explicitly desired.
 
             Args:
                 * input_tensor: Input Tensor.
