@@ -216,25 +216,25 @@ class Qwen36ModelArgs(ModelArgs):
     def ccl_topology(self):
         """CCL topology for the 8-device P150 (1,8) mesh (MESH_DEVICE="(1, 8)").
 
-        History: with FABRIC_1D this deployment opened as a bare 1xN line with no ring-closing
-        dev(N-1)->dev0 link, so a Ring reduce-scatter under-drained the shared, double-buffered
-        fabric semaphores (a later reduce-scatter waited on a stale completion -> device timeout);
-        the fix then was to force Linear. That constraint is gone: the 8-device deployment now runs
-        on FABRIC_1D_RING (dateline deadlock avoidance), which closes the ring via the wrap-around
-        mesh, so Ring CCL has its dev(N-1)->dev0 link and drains cleanly — and Ring is required so
-        the CCL routing matches the ring fabric under sustained (chunked-prefill replay) load.
-        Default Ring; QWEN36_CCL_TOPOLOGY=Linear forces the old line behavior (FABRIC_1D fallback).
-        Scoped to num_devices>=8 lines so the validated 4-device configs (P300X2 / P150X4) are
-        untouched.
+        Default Linear. The 8-device fabric deadlock is fixed at the FABRIC layer (FABRIC_1D_RING
+        provides dateline deadlock avoidance), independent of the CCL op topology. Given that,
+        Linear is the correct CCL topology: it works for single-request prefill+decode (validated
+        traced_64k: ttft ~33s, decode ~16 tok/s) AND drains the shared double-buffered fabric
+        semaphores cleanly under SUSTAINED serving. Ring also runs single requests, but under
+        sustained vLLM serving its semaphore drain drifts and wedges the decode (device timeout);
+        an earlier attempt to default to Ring was a mistake — it was chasing a watchdog false-trip
+        (a >120s recoverable prefill stall the too-short op-timeout killed), not a real Ring win.
+        QWEN36_CCL_TOPOLOGY=Ring forces Ring for experiments only. Scoped to num_devices>=8 lines so
+        the validated 4-device configs (P300X2 / P150X4) are untouched.
         """
         import os
 
         import ttnn
 
         if self.num_devices >= 8 and 1 in tuple(getattr(self, "cluster_shape", ()) or ()):
-            if os.environ.get("QWEN36_CCL_TOPOLOGY", "Ring") == "Linear":
-                return ttnn.Topology.Linear
-            return ttnn.Topology.Ring
+            if os.environ.get("QWEN36_CCL_TOPOLOGY", "Linear") == "Ring":
+                return ttnn.Topology.Ring
+            return ttnn.Topology.Linear
         return super().ccl_topology()
 
     def _set_hf_params(self, checkpoint_dir):
