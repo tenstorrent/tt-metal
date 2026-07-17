@@ -39,8 +39,6 @@ void bind_dispatch(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): Input token embeddings.
                 Shape per device: (1, seq_len_per_chip, hidden_dim).
-            weights_tensor (ttnn.Tensor): Router weights for each token's top-k experts.
-                Shape per device: (1, seq_len_per_chip, num_experts_per_tok).
             indices_tensor (ttnn.Tensor): Top-k expert indices for each token.
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok).
             expert_offsets_tensor (ttnn.Tensor): Starting token index per source device per expert
@@ -56,8 +54,8 @@ void bind_dispatch(nb::module_& mod) {
             experts_per_chip (int): Number of experts hosted on each destination device.
             num_routed_experts (int): Total number of routed experts across all devices.
             num_experts_per_tok (int): Number of experts each token is routed to (top-k).
-            metadata_len (int): Number of fields per token in the metadata buffer (5:
-                linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight).
+            metadata_len (int): Number of fields per token in the metadata buffer (3:
+                linearized_mesh_coord, token_idx, topk_idx).
             max_dispatch_buffer_token_size (int): Total token capacity of the flat dispatch
                 buffer per chip (shared across all local experts via dynamic offsets).
                 Used as the in-kernel bounds check ceiling.
@@ -88,13 +86,12 @@ void bind_dispatch(nb::module_& mod) {
                 dispatched_buffer: Flat expert-centric token buffer on each destination device.
                     Shape per device: (1, 1, max_dispatch_buffer_token_size, hidden_dim).
                 metadata: Per-token metadata written alongside dispatched_buffer.
-                    Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5).
-                    Fields: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
+                    Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=3).
+                    Fields: [linearized_mesh_coord, token_idx, topk_idx].
                     Used by the combine op to route processed tokens back to their origin.
         )doc",
         &dispatch,
         nb::arg("input_tensor").noconvert(),
-        nb::arg("weights_tensor").noconvert(),
         nb::arg("indices_tensor").noconvert(),
         nb::arg("expert_offsets_tensor").noconvert(),
         nb::arg("expert_dispatch_table_tensor").noconvert(),

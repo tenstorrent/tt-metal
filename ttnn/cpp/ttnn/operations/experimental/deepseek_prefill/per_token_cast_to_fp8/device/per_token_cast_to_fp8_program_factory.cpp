@@ -53,7 +53,7 @@ uint32_t rows_for_core_from_split(
 }  // namespace
 
 PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactory::create(
-    const PerTokenCastToFp8Params& /*operation_attributes*/,
+    const PerTokenCastToFp8Params& operation_attributes,
     const PerTokenCastToFp8Inputs& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
@@ -131,12 +131,12 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
                                          .set_page_size(cb_in_idx, in_tile_bytes);
     CreateCircularBuffer(program, all_cores, cb_in_cfg);
 
-    make_fp32_tile_cb(cb_tile_idx, tiles_per_block);                  // tilized input
-    make_fp32_tile_cb(cb_scaler_idx, 1);                              // reduce scaler (1.0), reader-filled
-    make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);                      // abs tiles for one block row
-    make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht);              // col0 = scale
-    make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht);          // col0 = 1/scale
-    make_fp32_tile_cb(cb_out_tile_idx, tiles_per_block);              // divided tiles -> untilize
+    make_fp32_tile_cb(cb_tile_idx, tiles_per_block);          // tilized input
+    make_fp32_tile_cb(cb_scaler_idx, 1);                      // reduce scaler (1.0), reader-filled
+    make_fp32_tile_cb(cb_abs_idx, 2 * block_wt);              // abs tiles for one block row
+    make_fp32_tile_cb(cb_scale_tiles_idx, 2 * block_ht);      // col0 = scale
+    make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * block_ht);  // col0 = 1/scale
+    make_fp32_tile_cb(cb_out_tile_idx, tiles_per_block);      // divided tiles -> untilize
 
     // cb_output_e4m3: output_e4m3 row-major output, one tile per page; tiles_per_block pages = one
     // block, double-buffered.
@@ -190,7 +190,7 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     // Compute (TRISC): tilize -> block amax scale + 1/scale -> divide -> untilize to output_e4m3.
     const uint32_t clamp_min_bits = std::bit_cast<uint32_t>(fp8::SCALE_CLAMP_MIN);
     const uint32_t clamp_max_bits = std::bit_cast<uint32_t>(3.0e38f);
-    const uint32_t inv_e4m3_max_bits = std::bit_cast<uint32_t>(1.0f / fp8::E4M3_MAX_NORMAL);
+    const uint32_t inv_448_bits = std::bit_cast<uint32_t>(1.0f / fp8::E4M3_MAX_NORMAL);
     std::vector<uint32_t> compute_ct_args = {
         cb_in_idx,
         cb_tile_idx,
@@ -202,8 +202,9 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         cb_output_e4m3_idx,
         clamp_min_bits,
         clamp_max_bits,
-        inv_e4m3_max_bits,
-        tile_w};
+        inv_448_bits,
+        tile_w,
+        static_cast<uint32_t>(operation_attributes.round_scale_to_power_of_two)};
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (output_e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     KernelHandle compute_kernel_id = CreateKernel(
@@ -215,20 +216,14 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
 
     // Each core owns rows [row_offset, row_offset+rows_for_core). Its 128-element scale blocks
     // form a flat stream read/written in tile_h-block batches.
-    const uint32_t scale_blocks_per_core_row = scale_blocks_per_row;  // H / 128
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t row_offset = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
         const uint32_t rows_for_core =
             rows_for_core_from_split(core, core_range_set_1, core_range_set_2, rows_per_core_g1, rows_per_core_g2);
-        const uint32_t total_scale_blocks = rows_for_core * scale_blocks_per_core_row;
+        const uint32_t total_scale_blocks = rows_for_core * scale_blocks_per_row;
         const uint32_t num_blocks = tt::div_up(total_scale_blocks, tile_h);  // last block may be partial
-
-        // Host-side invariant checks (no LLK investigation needed downstream if these hold).
-        TT_FATAL(
-            num_blocks == tt::div_up(rows_for_core * scale_blocks_per_core_row, tile_h),
-            "per_token_cast_to_fp8: num_blocks invariant violated on a core");
 
         SetRuntimeArgs(
             program, reader_kernel_id, core, {src_buffer->address(), num_blocks, row_offset, rows_for_core, H});

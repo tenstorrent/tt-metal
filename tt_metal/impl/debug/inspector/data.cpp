@@ -302,10 +302,10 @@ void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builde
         build_info.setBuildKey(build_env.build_key);
         build_info.setFirmwarePath(build_env.firmware_root_path);
         build_info.setFwCompileHash(fw_compile_hash);
-        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only)
-        // This reflects the runtime option used when initializing HAL on silicon.
+        // Surface whether DRAM programmable RISC cores are enabled (Blackhole only).
+        // Reflects what the HAL registered at init; see MetalEnvImpl for the enable conditions.
         build_info.setDramProgrammableCoresEnabled(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_enable_blackhole_dram_programmable_cores());
+            tt::tt_metal::MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM));
         build_info.setTensixFwLaunchAddrValue(tensix_fw_launch_addr_value);
     }
 }

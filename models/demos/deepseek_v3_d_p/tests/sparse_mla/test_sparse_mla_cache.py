@@ -10,8 +10,8 @@ never dense), completeness covers the indexer files, and a sparse cache-only con
 warns and stays sparse (mirrors dense's lenient placeholder load) instead of silently going dense.
 
 The `matches_config` test is host-only (no device); the build→cache-only→PCC test runs on a TP>=2
-mesh so the sparse epilogue / GLM (TP≤2) fit. Validity gating (so collected==run) is the same as
-test_sparse_mla.py — here we just fix one (4,2) mesh that both variants support.
+mesh so the dense 128-head epilogue fits (TP=1 overflows L1). Validity gating (so collected==run) is
+the same as test_sparse_mla.py — here we just fix one (4,2) mesh that both variants support.
 """
 
 import shutil
@@ -25,8 +25,14 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
+from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config, glm_5_2_hf_config
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
+    ReuseIndexer,
+    TtIndexer,
+    indexer_layer_is_reused,
+    resolve_has_indexer,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
@@ -43,11 +49,48 @@ SP_AXIS, TP_AXIS = 0, 1
 # variant's runtime config stops carrying the DSA fields would be masked by the PCC test below (it can
 # resolve sparse via the cache), so assert matches_config / resolve_has_indexer directly.
 # --------------------------------------------------------------------------------------------------
-@pytest.mark.parametrize("variant", ["deepseek_v32", "glm_5_1"], indirect=True, ids=["deepseek_v32", "glm_5_1"])
+@pytest.mark.parametrize(
+    "variant", ["deepseek_v32", "glm_5_1", "glm_5_2"], indirect=True, ids=["deepseek_v32", "glm_5_1", "glm_5_2"]
+)
 def test_matches_config_detects_dsa(variant, config_only):
     assert TtIndexer.matches_config(config_only), f"{variant.name}: runtime config should carry DSA index_* fields"
     # No host weights, no cache, no explicit override -> still resolves sparse purely from the config.
     assert resolve_has_indexer(config_only) is True
+
+
+# --------------------------------------------------------------------------------------------------
+# Host-only: GLM-5.2 indexer-reuse map + gating. Lock the full/shared generator and the ReuseIndexer
+# contract without a device — the device tests exercise reuse but never assert the map that drives it.
+# --------------------------------------------------------------------------------------------------
+def test_glm52_indexer_types_generator():
+    """full/shared map derives from freq=4/offset=3: full at {0,1,2,6,10,...,74}, length NUM_LAYERS, and
+    the hf_config namespace exposes the same list the device + cache build read."""
+    types = GLM52Config.indexer_types()
+    assert len(types) == GLM52Config.NUM_LAYERS
+    assert set(types) == {"full", "shared"}
+    full = [i for i, t in enumerate(types) if t == "full"]
+    expected_full = [0, 1, 2] + list(range(6, GLM52Config.NUM_LAYERS, 4))
+    assert full == expected_full, f"full layers {full} != expected {expected_full}"
+    assert glm_5_2_hf_config().indexer_types == types
+
+
+def test_indexer_layer_is_reused_gating():
+    """indexer_layer_is_reused is True only on shared layers. A config WITHOUT indexer_types (GLM-5.1 /
+    v3.2) is all-full -> always False: the single source of truth that keeps GLM-5.1 unaffected."""
+    cfg = glm_5_2_hf_config()
+    for i in (0, 1, 2, 6, 10, 74):
+        assert indexer_layer_is_reused(cfg, i) is False, f"L{i} is a full layer"
+    for i in (3, 4, 5, 7, 8, 9, 77):
+        assert indexer_layer_is_reused(cfg, i) is True, f"L{i} is a shared layer"
+    no_map = SimpleNamespace(index_topk=2048, index_n_heads=32, index_head_dim=128)  # GLM-5.1-shaped
+    assert all(indexer_layer_is_reused(no_map, i) is False for i in range(GLM52Config.NUM_LAYERS))
+
+
+def test_reuse_indexer_forward_raises(expect_error):
+    """A shared layer must be handed a prior full layer's top-k; ReuseIndexer.forward must fail loud
+    rather than silently return None (which would drop the layer to a dense path)."""
+    with expect_error(RuntimeError, "reused top-k"):
+        ReuseIndexer().forward()
 
 
 def test_matches_config_rejects_dense():
@@ -173,6 +216,60 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     assert not ttMLA.check_cache_complete(
         CACHE_DIR, "layer_0.mla", has_indexer=True
     ), "missing indexer tensorbin must fail the sparse completeness check"
+    ttnn.synchronize_device(mesh_device)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+            },
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm_5_2"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, variant, config_only):
+    """GLM-5.2 shared layer owns no indexer weights: the cache build skips the indexer tensorbins (no
+    raise), completeness holds without them, and cache-only construction binds ReuseIndexer (sparse
+    attention with reused top-k) — not TtIndexer, not NullIndexer."""
+    config = config_only
+    config.max_seq_len = SEQ_LEN
+    shared_idx = next(i for i, t in enumerate(config.indexer_types) if t == "shared")
+    prefix = f"layer_{shared_idx}.mla"
+
+    # Shared-layer host weights: MLA present, indexer absent (as in the real checkpoint).
+    shared_weights = {k: v for k, v in random_mla_weights(config).items() if not k.startswith("indexer")}
+
+    # Build the cache: must NOT raise on the missing indexer, and must write the MLA tensorbins only.
+    init_checker(CACHE_DIR)
+    ttMLA.build_ttnn_cache(shared_weights, CACHE_DIR, mesh_device, config, shared_idx, SEQ_LEN, SP_AXIS, TP_AXIS)
+    init_checker(CACHE_DIR)
+    assert ttMLA.check_cache_complete(CACHE_DIR, prefix, has_indexer=False), "shared MLA cache should be complete"
+    assert not list(CACHE_DIR.glob(f"{prefix}.indexer_*.tensorbin")), "shared layer must not write indexer tensorbins"
+
+    # Cache-only construct at the shared layer: sparse attention, but a weight-less ReuseIndexer.
+    mla_c = ttMLA(
+        config,
+        {},
+        mesh_device,
+        layer_idx=shared_idx,
+        seq_len=SEQ_LEN,
+        sp_axis=SP_AXIS,
+        tp_axis=TP_AXIS,
+        weight_cache_path=CACHE_DIR,
+    )
+    assert mla_c._has_indexer and mla_c._indexer_reuse, f"{variant.name}: shared layer must be sparse + reuse"
+    assert type(mla_c._indexer).__name__ == "ReuseIndexer", "shared layer must bind ReuseIndexer"
+    logger.info(f"[{variant.name}] shared layer {shared_idx}: cache built without indexer, ReuseIndexer bound")
     ttnn.synchronize_device(mesh_device)
 
 

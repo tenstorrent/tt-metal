@@ -83,7 +83,7 @@ public:
     // Same as the one in cq_prefetch.cpp
     using prefetch_q_ptr_type = uint32_t;
 
-    static constexpr uint32_t MAX_NUM_HW_CQS = 2;
+    static constexpr uint32_t MAX_NUM_HW_CQS = ::MAX_NUM_HW_CQS;
 
     static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = ::DISPATCH_MAX_MESSAGE_ENTRIES;
 

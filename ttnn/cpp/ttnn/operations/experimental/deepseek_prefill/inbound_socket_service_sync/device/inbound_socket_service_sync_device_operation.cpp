@@ -68,27 +68,6 @@ InboundSocketServiceSyncOperation::tensor_return_value_t InboundSocketServiceSyn
     return outputs;
 }
 
-ttsl::hash::hash_t InboundSocketServiceSyncOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Stable across calls for a given (service, config): the changing output
-    // address is a BufferBinding (patched on cache hit), NOT part of the hash.
-    auto program_factory = select_program_factory(args, tensor_args);
-    return operation::hash_operation<InboundSocketServiceSyncOperation>(
-        program_factory.index(),
-        args.data_ready_sem_addr,
-        args.page_size,
-        args.num_pages,
-        args.scratch_cb_index,
-        args.metadata_size_bytes,
-        args.metadata_l1_addr,
-        args.worker_cores,
-        args.mesh_num_cols,
-        args.consumed_addrs,
-        args.service_core_x,
-        args.service_core_y,
-        tensor_args.backing.dtype());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

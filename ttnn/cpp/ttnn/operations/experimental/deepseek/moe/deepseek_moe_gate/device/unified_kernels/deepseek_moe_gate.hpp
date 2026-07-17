@@ -8,6 +8,7 @@
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
 #ifndef REDUCE_OP
@@ -23,6 +24,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_moe_gate.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 namespace deepseek_v3_ops {
@@ -99,8 +101,10 @@ struct DeepseekMoeGate {
             // ================================================================
             // BRISC: Wait for compute to finish
             // ================================================================
-            cb_wait_front(CTArgs::output_indices_cb, 1);
-            cb_wait_front(CTArgs::output_cb, 1);
+            CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
+            CircularBuffer output_cb(CTArgs::output_cb);
+            output_indices_cb.wait_front(1);
+            output_cb.wait_front(1);
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
@@ -112,9 +116,15 @@ struct DeepseekMoeGate {
             // Output indices CB should have the same tile shape as the output CB
             pack_reconfig_data_format<true>(CTArgs::output_cb);
 
+            CircularBuffer input_indices_cb(CTArgs::input_indices_cb);
+            CircularBuffer bias_cb(CTArgs::bias_cb);
+            CircularBuffer input_cb(CTArgs::input_cb);
+            CircularBuffer output_cb(CTArgs::output_cb);
+            CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
+
             // Init portion
-            cb_wait_front(CTArgs::input_indices_cb, 1);
-            cb_wait_front(CTArgs::bias_cb, 1);
+            input_indices_cb.wait_front(1);
+            bias_cb.wait_front(1);
 
             // Compute portion
             copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
@@ -126,25 +136,25 @@ struct DeepseekMoeGate {
 
             reconfig_data_format_srca(CTArgs::input_cb);  // Assumes same tile shape as input indices CB
             deepseek_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-            cb_wait_front(CTArgs::input_cb, 1);
+            input_cb.wait_front(1);
             deepseek_moe_gate<CTArgs::enable_sigmoid>(
                 CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
             // Pop input tile
-            cb_pop_front(CTArgs::input_cb, 1);
+            input_cb.pop_front(1);
 
             tile_regs_commit();
 
-            cb_reserve_back(CTArgs::output_cb, 1);
-            cb_reserve_back(CTArgs::output_indices_cb, 1);
+            output_cb.reserve_back(1);
+            output_indices_cb.reserve_back(1);
 
             tile_regs_wait();
 
             pack_tile(0, CTArgs::output_cb);
-            cb_push_back(CTArgs::output_cb, 1);
+            output_cb.push_back(1);
 
             pack_reconfig_data_format(CTArgs::output_indices_cb);  // Assumes same tile shape as output CB
             pack_tile(1, CTArgs::output_indices_cb);
-            cb_push_back(CTArgs::output_indices_cb, 1);
+            output_indices_cb.push_back(1);
 
             tile_regs_release();
 #endif

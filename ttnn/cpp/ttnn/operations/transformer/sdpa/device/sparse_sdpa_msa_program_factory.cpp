@@ -16,7 +16,10 @@
 namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFactory::create_descriptor(
-    const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t, Tensor& output) {
+    const SparseSDPAMsaParams& attrs,
+    const SparseSDPAMsaInputs& t,
+    Tensor& output,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     // Fixed CB ids shared with the kernels. Function scope avoids unity-build collisions with sparse_sdpa.
     // K/V are separate pre-tiled caches. Reader and writer co-gather each block into shared K/V CBs.
     enum SparseCB : uint32_t {
@@ -41,6 +44,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         cb_recip_scratch,  // 1-tile reciprocal scratch for normalize_row_streaming
         cb_kreq,           // reader->writer dual-NoC handoff {block_id, is_last} (writer co-gathers the lower half)
         cb_kack,           // writer->reader ack that its half of the block landed in cb_k_in/cb_v_in
+        cb_neginf,         // causal mask: persistent all -inf tile (writer-built); masks full future key-tiles
+        cb_vmask,          // causal mask: per-token partial-column "vertical" tile (reader-built) for the boundary
         cb_count
     };
 
@@ -130,6 +135,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     cb(tile_bytes, 1, bf);                   // cb_recip_scratch
     cb(16, 2, bf);                           // cb_kreq : {block_id, is_last} reader->writer (double-buffered)
     cb(16, 2, bf);                           // cb_kack : writer->reader ack (double-buffered)
+    // Mask tiles are touched only under CAUSAL_MASK_ENABLED in the kernels, so skip their L1 when causal
+    // masking is off. Safe to gate: these are the trailing CBs, so omitting them shifts no other buffer index.
+    if (attrs.causal_enabled()) {
+        cb(tile_bytes, 1, bf);  // cb_neginf : persistent all -inf mask tile
+        cb(tile_bytes, 2, bf);  // cb_vmask : per-token partial-column mask tile
+    }
 
     // ---- compile-time args ----
     // Reader args: scalars, derived geometry, CB ids, element sizes, then q/k/v/indices accessors.
@@ -139,8 +150,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     for (uint32_t id : {cb_q_rm, cb_k_in, cb_v_in, cb_idx, cb_ctrl, cb_kreq, cb_kack}) {
         reader_ct.push_back(id);
     }
-    reader_ct.push_back(k_tile_bytes);  // K is tiled: per-tile read size
-    reader_ct.push_back(v_tile_bytes);  // V is tiled: per-tile read size
+    reader_ct.push_back(k_tile_bytes);                      // K is tiled: per-tile read size
+    reader_ct.push_back(v_tile_bytes);                      // V is tiled: per-tile read size
+    reader_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    reader_ct.push_back(block_size);                        // block_size: for diag_block = p/bs, offset = p%bs
+    reader_ct.push_back(cb_vmask);                          // reader builds the per-token partial-column tile
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -170,6 +184,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     }
     writer_ct.push_back(k_tile_bytes);
     writer_ct.push_back(v_tile_bytes);
+    writer_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    writer_ct.push_back(cb_neginf);                         // writer builds the persistent -inf mask tile
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -214,6 +230,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
         }
     }
     compute_ct.push_back(qsb);
+    compute_ct.push_back(attrs.causal_enabled() ? 1u : 0u);  // CAUSAL_MASK_ENABLED
+    compute_ct.push_back(cb_neginf);                         // full -inf mask tile (future key-tiles)
+    compute_ct.push_back(cb_vmask);                          // partial-column mask tile (boundary key-tile)
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/sparse_sdpa_msa_compute.cpp";
@@ -249,6 +268,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     const uint32_t v_group_tile_stride = tiles_per_row * vDHt;
     const uint32_t k_batch_tile_offset = cache_batch_idx * n_kv * k_group_tile_stride;
     const uint32_t v_batch_tile_offset = cache_batch_idx * n_kv * v_group_tile_stride;
+    // Baked per coordinate (one program per device) so each rank masks against its own global position.
+    const uint32_t chunk_start_local =
+        SparseSDPAMsaOperation::compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate);
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t work_start = i * base_work + std::min(i, extra);
@@ -265,7 +287,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
              k_batch_tile_offset,
              v_batch_tile_offset,
              k_group_tile_stride,
-             v_group_tile_stride});
+             v_group_tile_stride,
+             chunk_start_local});  // arg 10: baked per-coordinate; re-patched on cache hits (get_dynamic_runtime_args)
         // Writer args 5/6 are the K/V cache-slot offsets patched on cache hits.
         writer_desc.emplace_runtime_args(
             core,

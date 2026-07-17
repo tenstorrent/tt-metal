@@ -74,6 +74,7 @@ inline void _llk_unpack_matmul_init_(std::uint32_t buf_desc_id_0, std::uint32_t 
 {
     static_assert((TRANSPOSE_EN == false), "TODO: Transpose srcA not available yet");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, TRANSPOSE_EN);
+    cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
 
     _llk_unpack_matmul_mop_config_(buf_desc_id_0, buf_desc_id_1, ct_dim, rt_dim, kt_dim);
 }

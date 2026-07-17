@@ -66,3 +66,17 @@
       timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
+
+- name: L1 accumulate profiler
+  cmd: run_accumulate_profiler_test
+  skus:
+    wh_n150_civ2:
+      timeout: 6
+    wh_n300_civ2:
+      timeout: 6
+    bh_p100a_civ2_viommu:
+      timeout: 6
+    bh_p150b_civ2_viommu:
+      timeout: 6
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: ttnn

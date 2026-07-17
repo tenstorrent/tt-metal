@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -19,9 +19,9 @@
 // [0:2, 0:2, 0:1, 0:1] we wait for the reader to send us the correct tile, and then write it, otherwise we
 // write padding.
 void kernel_main() {
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input_dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t pad_val_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t pad_val_dfb_id = get_compile_time_arg_val(2);
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_dims = get_compile_time_arg_val(4);
     constexpr uint32_t pad_value = get_compile_time_arg_val(5);
@@ -41,12 +41,12 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(dst_args, output_addr);
     Noc noc;
-    CircularBuffer cb_input(input_cb_id);
-    CircularBuffer cb_pad_val(pad_val_cb_id);
+    DataflowBuffer dfb_input(input_dfb_id);
+    DataflowBuffer dfb_pad_val(pad_val_dfb_id);
 
     // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
-    cb_pad_val.reserve_back(1);
-    uint32_t l1_write_addr = cb_pad_val.get_write_ptr();
+    dfb_pad_val.reserve_back(1);
+    uint32_t l1_write_addr = dfb_pad_val.get_write_ptr();
     volatile tt_l1_ptr uint8_t* pad_val_page = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr);
     const volatile tt_l1_ptr uint8_t* pad_val = reinterpret_cast<const volatile tt_l1_ptr uint8_t*>(&pad_value);
     for (uint32_t i = 0; i < num_elements; i++) {
@@ -54,7 +54,7 @@ void kernel_main() {
             pad_val_page[i * element_size + b] = pad_val[b];
         }
     }
-    cb_pad_val.push_back(1);
+    dfb_pad_val.push_back(1);
     // Our scratchpad cb is now a tile full of padding.
 
     bool within_input_region;
@@ -73,12 +73,12 @@ void kernel_main() {
         // We have two cases, if we are within the input region, we wait for the reader to send us the correct tile
         // Otherwise we simply write the padding tile we have in our circular buffer
         if (within_input_region) {
-            cb_input.wait_front(1);
+            dfb_input.wait_front(1);
             noc.async_write(
-                cb_input, s0, page_size, {.offset_bytes = 0}, {.page_id = output_page_offset, .offset_bytes = 0});
+                dfb_input, s0, page_size, {.offset_bytes = 0}, {.page_id = output_page_offset, .offset_bytes = 0});
             noc.async_write_barrier();
             advance_tensor_index(input_id_per_dim, input_page_shape, num_dims);
-            cb_input.pop_front(1);
+            dfb_input.pop_front(1);
         } else {
             CoreLocalMem<uint32_t> pad_src(l1_write_addr);
             noc.async_write(

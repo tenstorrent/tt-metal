@@ -26,12 +26,7 @@ def _seq_memory_config(seq_len):
 
 
 def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5, memory_config=None):
-    """RMSNorm with SiLU gating — fused ttnn.rms_norm (trace-compatible, no try/except).
-
-    Clamps gate activation to prevent sparse float overflow in the multiply.
-    At long sequences (T>512), the chunk delta rule can produce a few extreme
-    values that, when multiplied by silu(gate), exceed bfloat16/float32 range.
-    """
+    """RMSNorm + SiLU gate (trace-compatible). Clips gate to avoid overflow at long T."""
     mc = memory_config
     x_normed = ttnn.rms_norm(x, weight=weight, epsilon=eps, memory_config=mc)
     gate_act = ttnn.silu(gate, memory_config=mc)
@@ -40,26 +35,20 @@ def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5, memory_config=None):
 
 
 def rms_norm_ttnn(x, weight, eps=1e-5, memory_config=None):
-    """Standard RMSNorm — fused ttnn.rms_norm (trace-compatible, no try/except)."""
+    """Standard RMSNorm (trace-compatible)."""
     return ttnn.rms_norm(x, weight=weight, epsilon=eps, memory_config=memory_config)
 
 
 def _causal_conv1d_decode_t1_split(
     x, conv_state_list, kernel_size, device, memory_config=None, weight_taps=None, bias_dev=None
 ):
-    """
-    Optimized conv1d + SiLU for T=1 decode with split conv state.
+    """T=1 decode conv+SiLU with split state (list of [B,1,D]); avoids slice ops.
 
-    Like _causal_conv1d_decode_t1 but takes conv_state as a list of [B, 1, D] tensors
-    instead of a single [B, kernel_size-1, D] tensor, eliminating slice operations.
-
-    Returns:
-        output: [B, 1, D] (TILE_LAYOUT on device)
-        new_state_list: list of [B, 1, D] ttnn tensors on device
+    Returns output [B,1,D], new_state_list.
     """
     mc = memory_config
 
-    # Compute output: weighted sum of state positions and current input
+    # out = sum(weight_taps[k] * state[k]) + weight_taps[K-1] * x
     out = ttnn.multiply(x, weight_taps[kernel_size - 1], memory_config=mc)
     for k in range(kernel_size - 1):
         term = ttnn.multiply(conv_state_list[k], weight_taps[k], memory_config=mc)
@@ -68,7 +57,7 @@ def _causal_conv1d_decode_t1_split(
     if bias_dev is not None:
         out = ttnn.add(out, bias_dev, memory_config=mc)
 
-    # New state: drop oldest (index 0), shift others left, append current input
+    # Shift state left, append x
     new_state_list = conv_state_list[1:] + [x]
 
     return ttnn.silu(out, memory_config=mc), new_state_list
@@ -77,17 +66,7 @@ def _causal_conv1d_decode_t1_split(
 def _causal_conv1d_decode_t1_split_inplace(
     x, conv_state_list, kernel_size, device, memory_config=None, weight_taps=None, bias_dev=None
 ):
-    """Split-state conv1d with inplace update for trace capture.
-
-    Like _causal_conv1d_decode_t1_split but updates state buffers in-place
-    via ttnn.copy() so tensor addresses are stable for trace replay.
-
-    Args:
-        conv_state_list: list of kernel_size-1 pre-allocated [B, 1, D] tensors
-    Returns:
-        output: [B, 1, D] (TILE_LAYOUT on device)
-        conv_state_list: same list, updated in-place
-    """
+    """Split-state T=1 conv; inplace copy for trace-stable addresses."""
     mc = memory_config
 
     out = ttnn.multiply(x, weight_taps[kernel_size - 1], memory_config=mc)
@@ -98,7 +77,7 @@ def _causal_conv1d_decode_t1_split_inplace(
     if bias_dev is not None:
         out = ttnn.add(out, bias_dev, memory_config=mc)
 
-    # Inplace state update: shift left, copy new values into existing buffers
+    # Inplace shift via ttnn.copy
     for k in range(kernel_size - 2):
         ttnn.copy(conv_state_list[k + 1], conv_state_list[k])
     ttnn.copy(x, conv_state_list[kernel_size - 2])
@@ -107,25 +86,10 @@ def _causal_conv1d_decode_t1_split_inplace(
 
 
 def _causal_conv1d_decode_t1(x, conv_state, kernel_size, device, memory_config=None, weight_taps=None, bias_dev=None):
-    """
-    Optimized conv1d + SiLU for T=1 decode with conv state.
-
-    For T=1 with conv_state [B, kernel_size-1, D], we know exactly which
-    positions map to which kernel taps, avoiding concat + slice overhead.
-
-    tap 0 → state[:, 0:1, :] (oldest)
-    tap 1 → state[:, 1:2, :]
-    tap 2 → state[:, 2:3, :] (newest in state)
-    tap 3 → x               (current input)
-
-    Returns:
-        output: [B, 1, D] (TILE_LAYOUT on device)
-        new_state: [B, kernel_size-1, D] ttnn tensor on device
-    """
+    """T=1 decode conv+SiLU; taps 0..K-2 from state[:,k], tap K-1 from x."""
     mc = memory_config
 
-    # Compute output: weighted sum of state positions and current input
-    # Taps 0..kernel_size-2 come from state, tap kernel_size-1 comes from x
+    # out = sum(weight_taps[k] * state[k]) + weight_taps[K-1] * x
     out = ttnn.multiply(x, weight_taps[kernel_size - 1], memory_config=mc)
     for k in range(kernel_size - 1):
         s_k = conv_state[:, k : k + 1, :]
@@ -136,7 +100,7 @@ def _causal_conv1d_decode_t1(x, conv_state, kernel_size, device, memory_config=N
     if bias_dev is not None:
         out = ttnn.add(out, bias_dev, memory_config=mc)
 
-    # New state: drop oldest, append current input
+    # Drop oldest, append x
     new_state = ttnn.concat([conv_state[:, 1:, :], x], dim=1, memory_config=mc)
     new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
 
@@ -146,14 +110,10 @@ def _causal_conv1d_decode_t1(x, conv_state, kernel_size, device, memory_config=N
 def _causal_conv1d_decode_t1_inplace(
     x, conv_buffer, kernel_size, device, memory_config=None, weight_taps=None, bias_dev=None
 ):
-    """Conv1d decode with copy-back to pre-allocated buffer for trace capture.
-
-    conv_buffer: pre-allocated [B, kernel_size-1, D] tensor (fixed address).
-    Computes output, then updates conv_buffer in-place via ttnn.copy().
-    """
+    """T=1 conv; copy-back to pre-allocated conv_buffer for trace capture."""
     mc = memory_config
 
-    # Compute output: weighted sum of state positions and current input
+    # out = sum(weight_taps[k] * state[k]) + weight_taps[K-1] * x
     out = ttnn.multiply(x, weight_taps[kernel_size - 1], memory_config=mc)
     for k in range(kernel_size - 1):
         s_k = conv_buffer[:, k : k + 1, :]
@@ -164,7 +124,7 @@ def _causal_conv1d_decode_t1_inplace(
     if bias_dev is not None:
         out = ttnn.add(out, bias_dev, memory_config=mc)
 
-    # Update conv buffer in-place: shift left and append x
+    # Update conv_buffer in-place
     new_state = ttnn.concat([conv_buffer[:, 1:, :], x], dim=1, memory_config=mc)
     new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
     ttnn.copy(new_state, conv_buffer)
@@ -185,32 +145,15 @@ def _causal_conv1d_fir(
     bias_dev=None,
     valid_len=None,
 ):
-    """
-    Manual FIR decomposition of depthwise causal conv1d + SiLU.
+    """Depthwise causal conv1d + SiLU via K shifted multiply-accumulate slices.
 
-    Decomposes the convolution into K element-wise multiply+accumulate
-    operations on shifted slices.
-
-    Args:
-        x: [B, T, D] input (TILE_LAYOUT on device)
-        weight: conv weight [D, 1, K] (used only if weight_taps is None)
-        bias: conv bias [D] or None (used only if bias_dev is None)
-        kernel_size: int
-        device: ttnn device
-        memory_config: optional memory config
-        conv_state: [B, kernel_size-1, D] previous state — ttnn tensor on device,
-                    or list of [B, 1, D] tensors (split state), or None
-        weight_taps: optional list of K pre-sliced [1, 1, D] ttnn tensors on device
-        bias_dev: optional pre-converted [1, 1, D] ttnn tensor on device
-
-    Returns:
-        output: [B, T, D] (TILE_LAYOUT on device)
-        new_state: [B, kernel_size-1, D] ttnn tensor on device
+    x [B,T,D]; conv_state [B,K-1,D] or list of [B,1,D]; weight_taps/bias_dev optional.
+    Returns output [B,T,D], new_state [B,K-1,D].
     """
     mc = memory_config
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
 
-    # Fast path for T=1 decode with existing state
+    # Fast path: T=1 decode with state + pre-sliced taps
     if T == 1 and conv_state is not None and weight_taps is not None:
         return _causal_conv1d_decode_t1(
             x, conv_state, kernel_size, device, memory_config=mc, weight_taps=weight_taps, bias_dev=bias_dev
@@ -228,26 +171,22 @@ def _causal_conv1d_fir(
         )
         x_padded = ttnn.concat([pad, x], dim=1, memory_config=mc)
 
-    # New conv state: the kernel_size-1 input tokens ending at the real boundary.
+    # new_state: last K-1 tokens; land in DRAM (carry alive across downstream kernel CBs).
     total_len = (kernel_size - 1) + T
     if valid_len is None:
-        # Default: the last kernel_size-1 tokens of x.
         new_state = x_padded[:, total_len - (kernel_size - 1) :, :]
+        # to_layout then to_memory_config: slice keeps L1 if memory_config passed to to_layout
         new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
+        new_state = ttnn.to_memory_config(new_state, ttnn.DRAM_MEMORY_CONFIG)
     else:
-        # Fixed-bucket masking: x is right-padded to a bucket length T but only the first
-        # valid_len positions are real; the decode conv window must come from the real tail
-        # x[valid_len-(K-1):valid_len], i.e. x_padded[:, valid_len : valid_len+(K-1)] (x[i]
-        # is at x_padded index (K-1)+i). A static slice there would compile a new program per
-        # valid_len value — defeating the bounded-program goal — so select those rows with a
-        # one-hot matmul instead: the program depends only on shapes (fixed per bucket), and
-        # only the one-hot VALUES depend on valid_len.
+        # Fixed bucket: select real tail via one-hot matmul (program shape-fixed, values vary by valid_len)
         sel = torch.zeros(B, kernel_size - 1, total_len, dtype=torch.float32)
         for j in range(kernel_size - 1):
             sel[:, j, valid_len + j] = 1.0
         sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=device)
         xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
-        new_state = ttnn.matmul(sel_tt, xp, memory_config=mc)
+        # cross-chunk carry -> DRAM
+        new_state = ttnn.matmul(sel_tt, xp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(sel_tt)
 
     # Precompute weight taps if not provided
@@ -263,26 +202,30 @@ def _causal_conv1d_fir(
             )
 
     total_len = (kernel_size - 1) + T
+    _dram = ttnn.DRAM_MEMORY_CONFIG
+    # Depthwise K-tap FIR via multiply + addcmul; re-tilize k>=1 slices (only k=0 is tile-aligned).
     out = None
     for k in range(kernel_size):
         x_slice = x_padded[:, k : k + T]
-        x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
-        term = ttnn.multiply(x_slice, weight_taps[k], memory_config=mc)
-        out = term if out is None else ttnn.add(out, term, memory_config=mc)
+        if k != 0:
+            x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
+        if out is None:
+            out = ttnn.multiply(x_slice, weight_taps[k], memory_config=mc)
+        else:
+            out = ttnn.addcmul(out, x_slice, weight_taps[k], memory_config=mc)
 
-    # Apply bias
+    # Bias (+ fused SiLU when a bias is present) else standalone SiLU. Conv output lands in DRAM.
+    _silu = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]
     if bias_dev is not None:
-        out = ttnn.add(out, bias_dev, memory_config=mc)
-    elif bias is not None:
-        pass
-
+        return ttnn.add(out, bias_dev, activations=_silu, memory_config=_dram), new_state
+    if bias is not None:
         bias_torch = ttnn.to_torch(bias).reshape(1, 1, D).contiguous()
         bias_dev_tmp = ttnn.from_torch(
             bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
         )
-        out = ttnn.add(out, bias_dev_tmp, memory_config=mc)
-
-    return ttnn.silu(out, memory_config=mc), new_state
+        return ttnn.add(out, bias_dev_tmp, activations=_silu, memory_config=_dram), new_state
+    # Conv output in DRAM (feeds gated_delta_attn_seq; MAC still ran in L1 when mc=L1)
+    return ttnn.silu(out, memory_config=_dram), new_state
 
 
 def causal_conv1d_ttnn(
@@ -297,30 +240,11 @@ def causal_conv1d_ttnn(
     weight_taps=None,
     bias_dev=None,
 ):
-    """
-    Depthwise causal conv1d + SiLU with conv state support.
-
-    Args:
-        x: [B, T, D] input (TILE_LAYOUT on device)
-        weight: conv weight [D, 1, K] (on host, ROW_MAJOR)
-        bias: conv bias [D] or None
-        kernel_size: int
-        device: ttnn device
-        max_conv_len: T threshold; above this, use FIR fallback
-        conv_state: [B, kernel_size-1, D] previous state (ttnn tensor on device) or None
-        weight_taps: optional list of K pre-sliced [1, 1, D] ttnn tensors on device
-        bias_dev: optional pre-converted [1, 1, D] ttnn tensor on device
-
-    Returns:
-        output: [B, T, D] (TILE_LAYOUT on device)
-        new_state: [B, kernel_size-1, D] ttnn tensor on device
-    """
+    """Depthwise causal conv1d + SiLU. FIR fallback when conv_state, T>max_conv_len, or D>2048."""
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
     mc = memory_config
 
-    # Use FIR path when we have conv state, T is large, or D is large enough
-    # that the native ttnn.conv1d circular buffers would exceed per-core L1
-    # (D=4096 overflows by ~9 KB; D=2048 fits comfortably).
+    # FIR when conv_state, T>max_conv_len, or D>2048 (native conv1d CBs overflow L1 at D=4096)
     if conv_state is not None or T > max_conv_len or D > 2048:
         return _causal_conv1d_fir(
             x,
@@ -334,7 +258,7 @@ def causal_conv1d_ttnn(
             bias_dev=bias_dev,
         )
 
-    # No conv state — use native ttnn.conv1d with zero padding (prefill from scratch)
+    # No state: native conv1d with zero padding
     if mc is not None:
         x = ttnn.to_memory_config(x, mc)
     x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -384,8 +308,7 @@ def causal_conv1d_ttnn(
     out = ttnn.reshape(out, [B, T, D])
     out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=mc)
 
-    # Save conv state: last kernel_size-1 tokens from input, kept on device
-    # For prefill we need to get the state — use x directly since it's still on device
+    # Save last K-1 input tokens as conv state
     x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     if T >= kernel_size - 1:
         new_state = x_tile[:, -(kernel_size - 1) :, :]
@@ -448,79 +371,43 @@ def gated_deltanet_forward_ttnn(
     k_dim=None,
     compute_kernel_config=None,
     A_neg_precomputed=None,
-    # Fused conv parameters (optimization for T=1 decode)
     fused_conv_weight_taps=None,
     fused_conv_bias_dev=None,
     fused_conv_state=None,
-    # Split conv state for optimized decode (list of [B, 1, D] tensors)
-    fused_conv_state_split=None,
-    # Fused a+b projection weight (optimization: 1 matmul instead of 2)
-    ab_proj_weight=None,
-    # Mega-fused weight: QKV + a + b + g in one matmul
-    mega_fused_weight=None,
+    fused_conv_state_split=None,  # list of [B,1,D] for decode (no slice)
+    ab_proj_weight=None,  # fused a+b (1 matmul)
+    mega_fused_weight=None,  # QKV+a+b+g in one matmul
     mega_qkv_dim=None,
     mega_a_dim=None,
     mega_b_dim=None,
     mega_g_dim=None,
-    # Trace capture support: inplace state updates via ttnn.copy()
-    use_inplace_state=False,
-    # Pre-cached float32 masks for the chunk-parallel prefill kernel (gated_delta_attn_seq).
-    chunk_seq_masks=None,
-    # Fixed-bucket masked prefill: hidden_states is right-padded to a bucket length T but
-    # only the first valid_len positions are real. Zeros the padded positions out of the
-    # recurrent scan and captures the conv state at the real boundary. None = no padding.
-    valid_len=None,
+    use_inplace_state=False,  # ttnn.copy for trace-stable state
+    chunk_seq_masks=None,  # cached masks for gated_delta_attn_seq prefill
+    valid_len=None,  # fixed-bucket padding; zeros padded positions in scan
 ):
-    """
-    TTNN forward pass for the Gated DeltaNet layer.
+    """Gated DeltaNet forward. mode: recurrent (decode T=1) or chunk (prefill T>1).
 
-    Supports two modes:
-      - "recurrent": token-by-token, best for decode (T=1)
-      - "chunk": chunked parallel, best for prefill (T>1)
-
-    Args:
-        hidden_states: ttnn.Tensor [B, T, hidden_size]
-        *_proj_weight: ttnn.Tensor weight matrices in [in_features, out_features] format
-                       (transposed from PyTorch convention)
-        *_conv_weight: ttnn.Tensor conv1d weights (NOT transposed)
-        A_log: ttnn.Tensor [num_v_heads]
-        dt_bias: ttnn.Tensor [num_v_heads]
-        o_norm_weight: ttnn.Tensor [head_v_dim]
-        g_proj_weight: ttnn.Tensor gate projection (if use_gate)
-        device: ttnn device
-        mode: "recurrent" or "chunk"
-        chunk_size: chunk size for chunked mode
-
-    Returns:
-        output: ttnn.Tensor [B, T, hidden_size]
-        new_state: ttnn.Tensor [B, H, K, V] updated recurrent state
+    Returns output [B,T,hidden], new_state [B,H,K,V], conv states.
     """
     if num_v_heads is None:
         num_v_heads = num_heads
 
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
-    # Masked fixed-bucket prefill (valid_len set) rounds the real length UP to a bucket, so
-    # T is a bucket size rather than the real length. At bucket 512 the GDN's L1 interleaved
-    # buffers clash with its ops' static circular buffers (seq_len 512 sits exactly on the
-    # _seq_memory_config L1 threshold); force DRAM on the masked path so every bucket is
-    # robust. Prefill is compute-bound, so the lost L1 win is marginal. Non-masked paths
-    # (decode, the eager/traced chunk prefill) keep their original L1/DRAM selection.
+    # valid_len path forces DRAM (bucket 512 hits L1 CB clash on _seq_memory_config threshold)
     mc = None if valid_len is not None else _seq_memory_config(T)
 
-    # 1. Linear projections — fused QKV when available (1 matmul instead of 3)
     ckc = compute_kernel_config
 
-    # Mega-fused path: one matmul for QKV + a + b + g instead of 3-5 separate matmuls.
-    # Works for both decode (T=1) and prefill (T>1). Conv path differs by T.
+    # Mega-fused: one matmul for QKV+a+b+g (decode needs conv state; prefill needs fused taps)
     use_mega_fused = (
         mega_fused_weight is not None
         and mega_qkv_dim is not None
-        and (T == 1 or fused_conv_weight_taps is not None)  # T>1 needs fused conv taps for FIR path
-        and (T > 1 or (fused_conv_state is not None and fused_conv_weight_taps is not None))  # T=1 needs conv state
+        and (T == 1 or fused_conv_weight_taps is not None)
+        and (T > 1 or (fused_conv_state is not None and fused_conv_weight_taps is not None))
     )
 
-    # Fused conv decode path: keep QKV concatenated through conv, split after
+    # Fused conv decode: QKV -> fused conv -> split (skip mega path)
     use_fused_conv = (
         not use_mega_fused
         and T == 1
@@ -531,10 +418,8 @@ def gated_deltanet_forward_ttnn(
     )
 
     if use_mega_fused:
-        # Single matmul for everything: [B, T, 4096] × [4096, 12352] → [B, T, 12352]
-        # Saves 2 matmul launches vs separate QKV + ab + g projections.
         mega_out = ttnn.linear(hidden_states, mega_fused_weight, memory_config=mc, compute_kernel_config=ckc)
-        # Split: QKV | a | b | g
+        # Split QKV | a | b | g
         qkv = mega_out[:, :, :mega_qkv_dim]
         qkv = ttnn.to_layout(qkv, ttnn.TILE_LAYOUT)
         a_raw = mega_out[:, :, mega_qkv_dim : mega_qkv_dim + mega_a_dim]
@@ -545,9 +430,9 @@ def gated_deltanet_forward_ttnn(
         gate_raw = ttnn.to_layout(gate_raw, ttnn.TILE_LAYOUT)
         ttnn.deallocate(mega_out)
 
-        # Fused conv1d on QKV — route by T
+        # Fused conv on QKV
         if T > 1:
-            # Prefill: FIR decomposition conv on concatenated QKV
+            # Prefill FIR conv
             qkv, new_fused_conv_state_raw = _causal_conv1d_fir(
                 qkv,
                 None,
@@ -561,7 +446,7 @@ def gated_deltanet_forward_ttnn(
                 valid_len=valid_len,
             )
             new_fused_conv_state = new_fused_conv_state_raw
-            # Extract per-stream conv states for decode transition
+            # Per-stream conv states for decode handoff
             new_conv_q = new_fused_conv_state_raw[:, :, :q_dim]
             new_conv_q = ttnn.to_layout(new_conv_q, ttnn.TILE_LAYOUT)
             new_conv_k = new_fused_conv_state_raw[:, :, q_dim : q_dim + k_dim]
@@ -569,7 +454,7 @@ def gated_deltanet_forward_ttnn(
             new_conv_v = new_fused_conv_state_raw[:, :, q_dim + k_dim :]
             new_conv_v = ttnn.to_layout(new_conv_v, ttnn.TILE_LAYOUT)
         elif fused_conv_state_split is not None:
-            # Decode with split state (eliminates slice+to_layout ops)
+            # Split-state decode (no slice+to_layout)
             conv_fn = _causal_conv1d_decode_t1_split_inplace if use_inplace_state else _causal_conv1d_decode_t1_split
             qkv, new_fused_conv_state = conv_fn(
                 qkv,
@@ -608,12 +493,12 @@ def gated_deltanet_forward_ttnn(
         v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
         ttnn.deallocate(qkv)
 
-        # Pre-extracted a, b, g from mega projection
+        # a/b/g already from mega projection
         _mega_extracted = True
     elif use_fused_conv:
-        # Fused path: QKV projection -> fused conv -> split
+        # Fused decode: QKV proj -> fused conv -> split
         qkv = ttnn.linear(hidden_states, qkv_proj_weight, memory_config=mc, compute_kernel_config=ckc)
-        # Fused conv1d on concatenated QKV [B, 1, D_total]
+        # Fused conv1d on concatenated QKV
         conv_fn = _causal_conv1d_decode_t1_inplace if use_inplace_state else _causal_conv1d_decode_t1
         qkv, new_fused_conv_state = conv_fn(
             qkv,
@@ -638,7 +523,7 @@ def gated_deltanet_forward_ttnn(
         _mega_extracted = False
     elif qkv_proj_weight is not None and q_dim is not None:
         qkv = ttnn.linear(hidden_states, qkv_proj_weight, memory_config=mc, compute_kernel_config=ckc)
-        # Fused conv prefill path: run one conv on concatenated QKV, then split
+        # Fused conv prefill on concatenated QKV
         if T > 1 and fused_conv_weight_taps is not None:
             qkv = ttnn.to_layout(qkv, ttnn.TILE_LAYOUT)
             qkv, new_fused_conv_state_raw = _causal_conv1d_fir(
@@ -661,7 +546,7 @@ def gated_deltanet_forward_ttnn(
             k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
             v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
             ttnn.deallocate(qkv)
-            # Extract per-stream conv states from the fused state
+            # Per-stream conv states from fused state
             D_total = (
                 q_dim + k_dim + (qkv_proj_weight.shape[-1] - q_dim - k_dim)
                 if hasattr(qkv_proj_weight, "shape")
@@ -758,10 +643,10 @@ def gated_deltanet_forward_ttnn(
             bias_dev=v_bias_dev,
         )
 
-    # 3. Reshape to multi-head
-    q = ttnn.reshape(q, [B, T, num_heads, head_k_dim])
-    k = ttnn.reshape(k, [B, T, num_heads, head_k_dim])
-    v = ttnn.reshape(v, [B, T, num_v_heads, head_v_dim])
+    # Reshape to heads (explicit mc keeps decode in L1)
+    q = ttnn.reshape(q, [B, T, num_heads, head_k_dim], memory_config=mc)
+    k = ttnn.reshape(k, [B, T, num_heads, head_k_dim], memory_config=mc)
+    v = ttnn.reshape(v, [B, T, num_v_heads, head_v_dim], memory_config=mc)
 
     # GVA: repeat q,k
     if num_v_heads > num_heads:
@@ -769,9 +654,8 @@ def gated_deltanet_forward_ttnn(
         q = ttnn.repeat_interleave(q, repeats, dim=2)
         k = ttnn.repeat_interleave(k, repeats, dim=2)
 
-    # 4. Compute beta and g
+    # Beta and g
     if _mega_extracted:
-        # a_raw and b_raw already extracted from mega projection
         a = a_raw
         beta = ttnn.sigmoid(b_raw, memory_config=mc)
     elif ab_proj_weight is not None:
@@ -800,13 +684,8 @@ def gated_deltanet_forward_ttnn(
         A_neg = ttnn.neg(A, memory_config=mc)
         g = ttnn.multiply(A_neg, sp, memory_config=mc)
 
-    # 5. Gated delta rule (recurrent or chunked)
-    # Chunk mode uses float32 for state computation, recurrent uses bfloat16.
-    # For prefill (T>1), always prefer chunk mode for precision — the chunk
-    # implementation already handles T < chunk_size via padding.
-    # For decode (T=1), use optimized decode path (fewer ops, no loop).
+    # Gated delta rule: chunk prefill (fp32 seq kernel) vs decode (optimized T=1) vs recurrent fallback
     if mode == "chunk" and T > 1:
-        # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32).
         o, new_state = chunk_gated_delta_rule_seq_adapter(
             q=q,
             k=k,
@@ -851,20 +730,19 @@ def gated_deltanet_forward_ttnn(
             device=device,
         )
 
-    # 6. Output normalization
+    # Output norm + projection (clip before o_proj to avoid sparse overflow)
     if use_gate and g_proj_weight is not None:
         if _mega_extracted:
-            gate = ttnn.reshape(gate_raw, [B, T, num_v_heads, head_v_dim])
+            gate = ttnn.reshape(gate_raw, [B, T, num_v_heads, head_v_dim], memory_config=mc)
         else:
             gate = ttnn.linear(hidden_states, g_proj_weight, memory_config=mc, compute_kernel_config=ckc)
-            gate = ttnn.reshape(gate, [B, T, num_v_heads, head_v_dim])
+            gate = ttnn.reshape(gate, [B, T, num_v_heads, head_v_dim], memory_config=mc)
         o = rms_norm_gated_ttnn(o, gate, o_norm_weight, eps=norm_eps, memory_config=mc)
     else:
         o = rms_norm_ttnn(o, o_norm_weight, eps=norm_eps, memory_config=mc)
 
-    # 7. Reshape and project output — clamp to prevent sparse overflow in o_proj matmul
-    o = ttnn.clip(o, min=-1e4, max=1e4)
-    o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])
+    o = ttnn.clip(o, min=-1e4, max=1e4, memory_config=mc)
+    o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim], memory_config=mc)
     if mc is not None:
         o = ttnn.to_memory_config(o, mc)
     o = ttnn.linear(o, o_proj_weight, memory_config=mc, compute_kernel_config=ckc)

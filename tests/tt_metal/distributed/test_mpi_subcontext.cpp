@@ -44,7 +44,7 @@ constexpr int kTagPrefillIntra = 10;
 constexpr int kTagInterKv = 20;
 constexpr int kTagDecodeIntra = 30;
 
-tt::stl::Span<std::byte> as_byte_span(std::vector<float>& v) {
+ttsl::Span<std::byte> as_byte_span(std::vector<float>& v) {
     return {reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(float)};
 }
 

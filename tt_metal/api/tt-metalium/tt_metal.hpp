@@ -95,7 +95,7 @@ IDevice* GetActiveDevice(ChipId device_id);
  * host_buffer | Buffer on host to copy data from                | Span<const uint8_t> &   | Host buffer size must match
  * buffer               | Yes      |
  */
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer);
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer);
 /**
  * Copies data from a host buffer into the specified buffer
  *
@@ -111,7 +111,7 @@ template <typename DType>
 void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
     WriteToBuffer(
         buffer,
-        tt::stl::Span<const uint8_t>(
+        ttsl::Span<const uint8_t>(
             reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
 }
 template <typename DType>

@@ -18,52 +18,52 @@
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
-#include "tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include "tt_backend_api_types.hpp"
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const T> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile) {
     return pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(data, row_major_input, is_exp_a, tile);
 }
 
 template std::vector<uint32_t> pack_as_bfp4_tiles<bfloat16>(
-    tt::stl::Span<const bfloat16> data,
+    ttsl::Span<const bfloat16> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp4_tiles<float>(
-    tt::stl::Span<const float> data,
+    ttsl::Span<const float> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp4_tiles<int32_t>(
-    tt::stl::Span<const int32_t> data,
+    ttsl::Span<const int32_t> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp4_tiles<uint32_t>(
-    tt::stl::Span<const uint32_t> data,
+    ttsl::Span<const uint32_t> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp4_tiles<uint8_t>(
-    tt::stl::Span<const uint8_t> data,
+    ttsl::Span<const uint8_t> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp4_tiles<uint16_t>(
-    tt::stl::Span<const uint16_t> data,
+    ttsl::Span<const uint16_t> data,
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
 
 std::vector<float> unpack_bfp4_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> bfp_tiles,
+    ttsl::Span<const uint32_t> bfp_tiles,
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
 
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 

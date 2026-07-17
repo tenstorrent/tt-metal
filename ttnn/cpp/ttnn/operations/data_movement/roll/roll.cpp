@@ -17,8 +17,8 @@ namespace ttnn {
 
 ttnn::Tensor roll(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& shifts,
-    const ttnn::SmallVector<int>& input_dims,
+    const ttsl::SmallVector<int>& shifts,
+    const ttsl::SmallVector<int>& input_dims,
     const std::optional<MemoryConfig>& memory_config) {
     ttnn::Tensor result = input_tensor;
     auto size = result.logical_shape();
@@ -49,7 +49,7 @@ ttnn::Tensor roll(
         adjusted_shifts[i] = ((shift % shift_size) + shift_size) % shift_size;
     }
 
-    const ttnn::SmallVector<int> stride_vector(num_dims, 1);
+    const ttsl::SmallVector<int> stride_vector(num_dims, 1);
 
     // Sharded inputs use the native sharded roll device op, applied one dim at a time. A
     // tilized roll is native only when shifts on the last two dims are tile-aligned (a
@@ -121,8 +121,8 @@ ttnn::Tensor roll(
             continue;
         }
 
-        ttnn::SmallVector<int> start_left(num_dims, 0), end_left;
-        ttnn::SmallVector<int> start_right(num_dims, 0), end_right;
+        ttsl::SmallVector<int> start_left(num_dims, 0), end_left;
+        ttsl::SmallVector<int> start_right(num_dims, 0), end_right;
 
         for (int j = 0; j < num_dims; ++j) {
             end_left.push_back(size[j]);
@@ -152,8 +152,8 @@ ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift, const std::
         !input_tensor.is_sharded(),
         "ttnn::roll without dims does not support sharded inputs. Convert to interleaved first.");
 
-    ttnn::SmallVector<int> shifts = {shift};
-    ttnn::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
+    ttsl::SmallVector<int> shifts = {shift};
+    ttsl::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
 
     auto original_shape = input_tensor.logical_shape();
 
@@ -178,8 +178,8 @@ ttnn::Tensor roll(
     const int shift,
     const int dim,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::SmallVector<int> shifts = {shift};
-    ttnn::SmallVector<int> dims = {dim};
+    ttsl::SmallVector<int> shifts = {shift};
+    ttsl::SmallVector<int> dims = {dim};
 
     return roll(input_tensor, shifts, dims, memory_config);
 }

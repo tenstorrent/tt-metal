@@ -4,12 +4,41 @@ import pathlib
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
-from infra.data_collection.github.utils import get_job_failure_signature_
+from infra.data_collection.github.utils import (
+    get_job_failure_signature_,
+    _card_type_from_job_labels,
+    _generic_runner_labels,
+    _load_sku_config_skus,
+)
 from infra.data_collection.pydantic_models import JobStatus
 from infra.data_collection.pydantic_models import Step
 from loguru import logger
 
 INFRA_TESTS_DIR = pathlib.Path(__file__).parent.parent
+
+_pipeline_cache = {}
+
+
+def _load_pipeline(workflow_run_gh_environment, data_subdir):
+    if data_subdir not in _pipeline_cache:
+        github_runner_environment = workflow_run_gh_environment
+        workflow_outputs_dir = (INFRA_TESTS_DIR / "_data/data_collection/cicd" / data_subdir).resolve()
+        assert workflow_outputs_dir.is_dir()
+        assert workflow_outputs_dir.exists()
+        _pipeline_cache[data_subdir] = create_cicd_json_for_data_analysis(
+            workflow_outputs_dir,
+            github_runner_environment,
+            str(workflow_outputs_dir / "workflow.json"),
+            str(workflow_outputs_dir / "workflow_jobs.json"),
+        )
+    return _pipeline_cache[data_subdir]
+
+
+def _find_job(pipeline, github_job_id):
+    for job in pipeline.jobs:
+        if job.github_job_id == github_job_id:
+            return job
+    assert False, "Job {} not found in pipeline".format(github_job_id)
 
 
 def test_dummy():
@@ -17,26 +46,7 @@ def test_dummy():
 
 
 def test_create_pipeline_json_with_passing_post_commit(workflow_run_gh_environment):
-    github_runner_environment = workflow_run_gh_environment
-    github_pipeline_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_passing_10662355710/workflow.json"
-    )
-    github_jobs_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_passing_10662355710/workflow_jobs.json"
-    )
-
-    workflow_outputs_dir = (
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_passing_10662355710/"
-    ).resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-
-    pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir,
-        github_runner_environment,
-        github_pipeline_json_filename,
-        github_jobs_json_filename,
-    )
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_passing_10662355710")
 
     assert pipeline.github_pipeline_id == 10662355710
     assert len(pipeline.jobs) == 99, "There should be 99 jobs according to github jobs API"
@@ -53,26 +63,7 @@ def get_non_success_jobs_(pipeline):
 
 
 def test_create_pipeline_json_to_detect_job_timeout_error_v1(workflow_run_gh_environment):
-    github_runner_environment = workflow_run_gh_environment
-    github_pipeline_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_runner_died_12626_10996802864/workflow.json"
-    )
-    github_jobs_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_runner_died_12626_10996802864/workflow_jobs.json"
-    )
-
-    workflow_outputs_dir = (
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_runner_died_12626_10996802864/"
-    ).resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-
-    pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir,
-        github_runner_environment,
-        github_pipeline_json_filename,
-        github_jobs_json_filename,
-    )
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_runner_died_12626_10996802864")
 
     assert pipeline.github_pipeline_id == 10996802864
 
@@ -91,26 +82,7 @@ def test_create_pipeline_json_to_detect_job_timeout_error_v1(workflow_run_gh_env
 
 
 def test_create_pipeline_json_to_detect_runner_comm_error_v1_among_other_failures(workflow_run_gh_environment):
-    github_runner_environment = workflow_run_gh_environment
-    github_pipeline_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_runner_died_12626_11110261767/workflow.json"
-    )
-    github_jobs_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_runner_died_12626_11110261767/workflow_jobs.json"
-    )
-
-    workflow_outputs_dir = (
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_runner_died_12626_11110261767/"
-    ).resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-
-    pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir,
-        github_runner_environment,
-        github_pipeline_json_filename,
-        github_jobs_json_filename,
-    )
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_runner_died_12626_11110261767")
 
     failing_jobs = get_non_success_jobs_(pipeline)
 
@@ -129,60 +101,30 @@ def test_create_pipeline_json_to_detect_runner_comm_error_v1_among_other_failure
             assert job.failure_description is None
 
 
-def test_create_pipeline_json_for_run_github_timed_out_job(workflow_run_gh_environment):
-    github_runner_environment = workflow_run_gh_environment
-    github_pipeline_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_github_timeout_11034942442/workflow.json"
-    )
-    github_jobs_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_github_timeout_11034942442/workflow_jobs.json"
-    )
-
-    workflow_outputs_dir = (
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_github_timeout_11034942442/"
-    ).resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-
-    pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir,
-        github_runner_environment,
-        github_pipeline_json_filename,
-        github_jobs_json_filename,
-    )
+@pytest.mark.parametrize(
+    "github_job_id,check_tests,check_tt_smi",
+    [
+        (30650764191, True, False),
+        (30650754720, False, True),
+    ],
+)
+def test_create_pipeline_json_for_run_github_timed_out_job(
+    workflow_run_gh_environment, github_job_id, check_tests, check_tt_smi
+):
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_github_timeout_11034942442")
 
     assert pipeline.github_pipeline_id == 11034942442
 
-    for job in pipeline.jobs:
-        if job.github_job_id == 30868260202:
-            assert len(job.tests) > 0
-            assert job.job_status == JobStatus.failure
-        if job.github_job_id == 30650754720:
-            assert job.tt_smi_version is not None
+    job = _find_job(pipeline, github_job_id)
+    if check_tests:
+        assert len(job.tests) > 0
+        assert job.job_status == JobStatus.failure
+    if check_tt_smi:
+        assert job.tt_smi_version is not None
 
 
 def test_create_pipeline_json_for_timeout_bad_testcase(workflow_run_gh_environment):
-    github_runner_environment = workflow_run_gh_environment
-    github_pipeline_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_timeout_bad_testcase_13077087562/workflow.json"
-    )
-    github_jobs_json_filename = str(
-        INFRA_TESTS_DIR
-        / "_data/data_collection/cicd/all_post_commit_timeout_bad_testcase_13077087562/workflow_jobs.json"
-    )
-
-    workflow_outputs_dir = (
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_timeout_bad_testcase_13077087562/"
-    ).resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-
-    pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir,
-        github_runner_environment,
-        github_pipeline_json_filename,
-        github_jobs_json_filename,
-    )
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_timeout_bad_testcase_13077087562")
 
     assert pipeline.github_pipeline_id == 13077087562
 
@@ -193,68 +135,40 @@ def test_create_pipeline_json_for_timeout_bad_testcase(workflow_run_gh_environme
             assert job.job_status == JobStatus.failure
 
 
-def test_create_pipeline_json_for_gtest_testcases(workflow_run_gh_environment):
-    github_runner_environment = workflow_run_gh_environment
-    github_pipeline_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_gtest_testcases_13315815702/workflow.json"
-    )
-    github_jobs_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_gtest_testcases_13315815702/workflow_jobs.json"
-    )
-
-    workflow_outputs_dir = (
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_gtest_testcases_13315815702/"
-    ).resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-
-    pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir,
-        github_runner_environment,
-        github_pipeline_json_filename,
-        github_jobs_json_filename,
-    )
+@pytest.mark.parametrize(
+    "github_job_id,job_success,check_failing_tests,dedupe_test_name",
+    [
+        (37190230023, True, False, None),
+        (37190213375, False, True, None),
+        (37190252200, True, False, None),
+        (37190251054, False, True, None),
+        (
+            37190219113,
+            None,
+            False,
+            "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300MeshDeviceFixture::EthValidatePhysicalCoreConversion",
+        ),
+    ],
+)
+def test_create_pipeline_json_for_gtest_testcases(
+    workflow_run_gh_environment, github_job_id, job_success, check_failing_tests, dedupe_test_name
+):
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_gtest_testcases_13315815702")
 
     assert pipeline.github_pipeline_id == 13315815702
 
-    for job in pipeline.jobs:
-        # passing gtest testcase
-        if job.github_job_id == 37190230023:
-            assert len(job.tests) > 0
-            assert job.job_success is True
-            assert job.job_status == JobStatus.success
-        # failing gtest testcase
-        if job.github_job_id == 37190213375:
-            assert len(job.tests) > 0
-            assert job.job_success is False
-            # check that there are failing gtests stored in the pydantic testcase list
-            assert len([x for x in job.tests if not x.success]) > 0
-            assert job.job_status == JobStatus.failure
-        # passing pytest testcase
-        if job.github_job_id == 37190252200:
-            assert len(job.tests) > 0
-            assert job.job_success is True
-            assert job.job_status == JobStatus.success
-        # failing pytest testcase
-        if job.github_job_id == 37190251054:
-            assert len(job.tests) > 0
-            assert job.job_success is False
-            # check that there are failing pytests stored in the pydantic testcase list
-            assert len([x for x in job.tests if not x.success]) > 0
-            assert job.job_status == JobStatus.failure
+    job = _find_job(pipeline, github_job_id)
+
+    if dedupe_test_name is not None:
         # job has two tests with the same full_test_name, should be deduplicated
-        if job.github_job_id == 37190219113:
-            assert (
-                len(
-                    [
-                        x
-                        for x in job.tests
-                        if x.full_test_name
-                        == "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300MeshDeviceFixture::EthValidatePhysicalCoreConversion"
-                    ]
-                )
-                == 1
-            )
+        assert len([x for x in job.tests if x.full_test_name == dedupe_test_name]) == 1
+        return
+
+    assert len(job.tests) > 0
+    assert job.job_success is job_success
+    assert job.job_status == JobStatus.success if job_success else JobStatus.failure
+    if check_failing_tests:
+        assert len([x for x in job.tests if not x.success]) > 0
 
 
 def test_empty_gtest_xml(workflow_run_gh_environment):
@@ -265,83 +179,43 @@ def test_empty_gtest_xml(workflow_run_gh_environment):
     )
 
 
-def test_create_pipeline_json_for_testcases_with_annotations(workflow_run_gh_environment):
-    github_runner_environment = workflow_run_gh_environment
-    github_pipeline_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_test_annotations_13443325356/workflow.json"
-    )
-    github_jobs_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_test_annotations_13443325356/workflow_jobs.json"
-    )
-
-    workflow_outputs_dir = (
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_test_annotations_13443325356/"
-    ).resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-
-    pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir,
-        github_runner_environment,
-        github_pipeline_json_filename,
-        github_jobs_json_filename,
-    )
+@pytest.mark.parametrize(
+    "github_job_id,failure_signature,failure_description_contains",
+    [
+        (37563095078, str(TestErrorV1.CPP_TEST_FAILURE), ".cpp"),
+        (37563108566, str(TestErrorV1.PY_TEST_FAILURE), ".py"),
+    ],
+)
+def test_create_pipeline_json_for_testcases_with_annotations(
+    workflow_run_gh_environment, github_job_id, failure_signature, failure_description_contains
+):
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_test_annotations_13443325356")
 
     assert pipeline.github_pipeline_id == 13443325356
 
-    for job in pipeline.jobs:
-        # failing gtest testcase
-        if job.github_job_id == 37563095078:
-            assert len(job.tests) > 0
-            assert job.job_success is False
-            # check that there are failing gtests stored in the pydantic testcase list
-            assert len([x for x in job.tests if not x.success]) == 1
-            # check that the job signature and description are present
-            assert job.failure_signature == str(TestErrorV1.CPP_TEST_FAILURE)
-            assert job.failure_description is not None and ".cpp" in job.failure_description
-            assert job.job_status == JobStatus.failure
-        # failing pytest testcase
-        if job.github_job_id == 37563108566:
-            assert len(job.tests) > 0
-            assert job.job_success is False
-            # check that there are failing pytests stored in the pydantic testcase list
-            assert len([x for x in job.tests if not x.success]) == 1
-            assert job.failure_signature == str(TestErrorV1.PY_TEST_FAILURE)
-            assert job.failure_description is not None and ".py" in job.failure_description
-            assert job.job_status == JobStatus.failure
+    job = _find_job(pipeline, github_job_id)
+    assert len(job.tests) > 0
+    assert job.job_success is False
+    # check that there are failing gtests/pytests stored in the pydantic testcase list
+    assert len([x for x in job.tests if not x.success]) == 1
+    # check that the job signature and description are present
+    assert job.failure_signature == failure_signature
+    assert job.failure_description is not None and failure_description_contains in job.failure_description
+    assert job.job_status == JobStatus.failure
 
 
-def test_create_pipeline_json_for_ctest_case(workflow_run_gh_environment):
-    github_runner_environment = workflow_run_gh_environment
-    github_pipeline_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/tt_train_post_commit_ctest_13858791332/workflow.json"
-    )
-    github_jobs_json_filename = str(
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/tt_train_post_commit_ctest_13858791332/workflow_jobs.json"
-    )
-
-    workflow_outputs_dir = (
-        INFRA_TESTS_DIR / "_data/data_collection/cicd/tt_train_post_commit_ctest_13858791332/"
-    ).resolve()
-    assert workflow_outputs_dir.is_dir()
-    assert workflow_outputs_dir.exists()
-
-    pipeline = create_cicd_json_for_data_analysis(
-        workflow_outputs_dir,
-        github_runner_environment,
-        github_pipeline_json_filename,
-        github_jobs_json_filename,
-    )
+@pytest.mark.parametrize("github_job_id", [38782158256, 38782157821])
+def test_create_pipeline_json_for_ctest_case(workflow_run_gh_environment, github_job_id):
+    pipeline = _load_pipeline(workflow_run_gh_environment, "tt_train_post_commit_ctest_13858791332")
 
     assert pipeline.github_pipeline_id == 13858791332
 
-    for job in pipeline.jobs:
-        # failing ctest testcase
-        if job.github_job_id == 38782158256 or job.github_job_id == 38782157821:
-            assert len(job.tests) == 190
-            assert job.job_success is False
-            # check that there are failing cpp tests stored in the pydantic testcase list
-            assert len([x for x in job.tests if not x.success]) == 2
+    job = _find_job(pipeline, github_job_id)
+    # failing ctest testcase
+    assert len(job.tests) == 190
+    assert job.job_success is False
+    # check that there are failing cpp tests stored in the pydantic testcase list
+    assert len([x for x in job.tests if not x.success]) == 2
 
 
 def test_pipeline_job_contains_valid_steps():
@@ -443,3 +317,88 @@ def test_non_checkout_git_failure_stays_generic():
         mock_job, "The process '/usr/bin/git' failed with exit code 1", workflow_outputs_dir=None
     )
     assert result == str(InfraErrorV1.GENERIC_FAILURE)
+
+
+@pytest.fixture(autouse=True)
+def clear_sku_config_cache():
+    from infra.data_collection.github.utils import _generic_runner_labels, _root_sku_for, _sku_config_sku_names
+
+    _load_sku_config_skus.cache_clear()
+    _sku_config_sku_names.cache_clear()
+    _generic_runner_labels.cache_clear()
+    _root_sku_for.cache_clear()
+    yield
+    _load_sku_config_skus.cache_clear()
+    _sku_config_sku_names.cache_clear()
+    _generic_runner_labels.cache_clear()
+    _root_sku_for.cache_clear()
+
+
+def test_generic_runner_labels_derived_from_sim_skus():
+    expected_labels: set[str] = set()
+    for sku_name, sku_entry in _load_sku_config_skus().items():
+        if sku_name.startswith("sim_"):
+            expected_labels.update(sku_entry.get("runs_on") or [])
+
+    assert _generic_runner_labels() == frozenset(expected_labels)
+
+
+@pytest.mark.parametrize(
+    "labels,expected_card_type",
+    [
+        (["N300", "cloud-virtual-machine", "in-service"], "wh_n300"),
+        (["N150", "cloud-virtual-machine", "in-service"], "wh_n150"),
+        (
+            ["P300-viommu", "arch-blackhole", "in-service", "pipeline-yyz2-lfc"],
+            "bh_p300",
+        ),
+        (["P300-viommu", "in-service", "pipeline-yyz2-lfc"], "bh_p300"),
+        (["tt-ubuntu-2204-N300-viommu-stable"], "wh_n300"),
+        (
+            ["P150", "arch-blackhole", "in-service", "pipeline-functional"],
+            "bh_p150",
+        ),
+        (["P100", "cloud-virtual-machine", "in-service"], "bh_p100"),
+        (
+            ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+            "wh_llmbox",
+        ),
+        (
+            ["arch-wormhole_b0", "topology-6u", "in-service", "pipeline-perf"],
+            "wh_galaxy",
+        ),
+        # tm-fabric-style runs_on: strict match fails, label fallback applies
+        (["P300-viommu", "arch-blackhole", "in-service"], "bh_p300"),
+        # model perf-style runs_on: missing arch-blackhole for bh_p150_perf
+        (["P150", "pipeline-perf", "bare-metal", "in-service"], "bh_p150"),
+        # legacy partial wh_n300 labels
+        (["N300", "in-service"], "wh_n300"),
+        (["build", "in-service"], None),
+        (["ubuntu-latest"], "ubuntu-latest"),
+        (["tt-ubuntu-2204-large-stable"], "tt-ubuntu-2204-large-stable"),
+    ],
+)
+def test_card_type_from_job_labels(labels, expected_card_type):
+    assert _card_type_from_job_labels(labels) == expected_card_type
+
+
+def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):
+    pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_passing_10662355710")
+
+    wh_n300_labels = {"N300", "cloud-virtual-machine", "in-service"}
+    full_wh_n300_jobs = [
+        job for job in pipeline.jobs if job.job_label and wh_n300_labels.issubset(set(job.job_label.split(",")))
+    ]
+    assert full_wh_n300_jobs
+    assert all(job.card_type == "wh_n300" for job in full_wh_n300_jobs)
+
+    # Legacy post-commit jobs may only carry a subset of wh_n300 runs_on labels.
+    partial_n300_jobs = [
+        job
+        for job in pipeline.jobs
+        if job.job_label
+        and "N300" in job.job_label.split(",")
+        and "cloud-virtual-machine" not in job.job_label.split(",")
+    ]
+    assert partial_n300_jobs
+    assert all(job.card_type == "wh_n300" for job in partial_n300_jobs)

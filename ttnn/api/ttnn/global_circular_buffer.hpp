@@ -100,8 +100,9 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
 //   * `size` minimum is ring_size * largest per-receiver page (= (K_tiles/ring_size) * per_core_N * tile);
 //   * receivers need NOT be uniform per bank and the bank->ring mapping is the strided round-robin one,
 //     so no per-bank-count / contiguous-ring assertions (the matmul op asserts the strided walk);
-//   * `dual_senders_per_bank` may split each bank's receivers across two DRISC sender cores (must match
-//     the StartTensorPrefetcher flag).
+//   * `dual_senders_per_bank` may split each bank's receivers across two DRISC sender cores
+//     (a single-receiver bank falls back to one sender, so mixed single/dual banks are allowed).
+//     The Tensor prefetcher always provisions both cores and targets the subset mapped by this GCB.
 //
 // Per (config, weight) it runs the same recv-contig cross-checks as
 // tensor_prefetcher_block_count_for_matmul_1d (num_shards == ring_size, weight K-tiles divisible by

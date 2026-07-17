@@ -163,19 +163,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
         uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * el_size;
 
         //  writer runtime args
-        writer_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                dst_buffer->address(),
-                i,
-                size_per_row_per_block,
-                number_blocks_per_core,
-                TILE_WIDTH * el_size,
-            });
+        writer_desc.emplace_runtime_args(
+            core, {dst_buffer, i, size_per_row_per_block, number_blocks_per_core, TILE_WIDTH * el_size});
 
         // reader runtime args
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src0_buffer->address(), i, num_tiles_per_row, number_blocks_per_core});
+        reader_desc.emplace_runtime_args(core, {src0_buffer, i, num_tiles_per_row, number_blocks_per_core});
     }
 
     // Insert reader+writer at the start so kernel ordering matches the legacy program: reader is

@@ -65,10 +65,7 @@ inline void calculate_erf() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
-        sfpi::vFloat ax = sfpi::setsgn(x, 0);
-        sfpi::vFloat threshold = 10.0f;
-        sfpi::vec_min_max(ax, threshold);
-        x = sfpi::copysgn(ax, x);
+        x = sfpi::symmetric_clamp(x, 10.0f);
         sfpi::vFloat result = piecewise_rational_eval<
             ERF_NUM_DEGREE,
             ERF_DEN_DEGREE,
@@ -79,10 +76,7 @@ inline void calculate_erf() {
         // Saturate to [-1, 1]: rational fit is not bounded and overshoots by
         // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
         // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
-        sfpi::vFloat neg_one = sfpi::vConstNeg1;
-        sfpi::vFloat pos_one = sfpi::vConst1;
-        sfpi::vec_min_max(neg_one, result);
-        sfpi::vec_min_max(result, pos_one);
+        result = sfpi::clamp(result, -1.0f, +1.0f);
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }

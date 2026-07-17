@@ -151,12 +151,12 @@ public:
 
     template <typename ArrType, std::enable_if_t<tensor_accessor::detail::has_subscript_operator_v<ArrType>, int> = 0>
     FORCE_INLINE std::uint64_t get_shard_noc_addr(
-        [[maybe_unused]] const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
+        const ArrType shard_coord, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         uint32_t shard_id = 0;
         for (uint32_t i = 0; i < dspec().rank(); ++i) {
             // Check that shard_coord is within bounds
-            ASSERT(shard_coord[i] < dspec().shard_shape()[i]);
-            shard_id *= dspec().shard_grid_strides()[i];
+            ASSERT(shard_coord[i] < dspec().shard_grid()[i]);
+            shard_id += shard_coord[i] * dspec().shard_grid_strides()[i];
         }
         return get_shard_noc_addr(shard_id, offset, noc);
     }

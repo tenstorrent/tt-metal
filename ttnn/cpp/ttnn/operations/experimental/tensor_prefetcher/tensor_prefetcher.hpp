@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -19,6 +21,15 @@ class MeshDevice;
 
 namespace ttnn::operations::experimental {
 
+// One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
+// block_count is the number of K-blocks to divide the tensor's K dimension into. rotation
+// (receiver-contiguous layout only; omitted/empty == batched) is the per-receiver streaming
+// ring-rotation table, indexed by global ring position: it delivers that tensor's K-blocks in
+// host-specified ring-rotated FIFO order for a matching stream_in1 matmul. See
+// TensorPrefetcherInput for the rotation contract.
+using TensorPrefetcherQueueTensor =
+    std::variant<std::pair<ttnn::Tensor, uint32_t>, std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>;
+
 // Thin ttnn-side wrappers around the queueable
 // tt::tt_metal::experimental::Start/Queue/Stop TensorPrefetcher API.
 //
@@ -30,8 +41,9 @@ namespace ttnn::operations::experimental {
 //        request), so a single prefetcher can serve GCBs with different
 //        num_receivers values.
 //   2. queue_tensor_prefetcher_request(device, tensors, global_cb, device_subset=None)
-//      - Push one request. `tensors` is the full, flattened list of (weight
-//        tensor, block_count) pairs (at least one), streamed in list order;
+//      - Push one request. `tensors` is the full, flattened list of weights (at
+//        least one), streamed in list order; each item is (weight, block_count)
+//        or (weight, block_count, rotation) (see TensorPrefetcherQueueTensor).
 //        block_count is the number of K-blocks to divide that tensor's K
 //        dimension into. Pass distinct tensors for distinct layers, or repeat a
 //        tensor to replay it. device_subset defaults to the full mesh.
@@ -43,11 +55,11 @@ namespace ttnn::operations::experimental {
 // when start_tensor_prefetcher would otherwise raise.
 bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
-void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device, bool dual_senders_per_bank = false);
+void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
+    const std::vector<TensorPrefetcherQueueTensor>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
     std::optional<uint8_t> cq_id = std::nullopt);

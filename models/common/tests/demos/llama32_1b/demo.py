@@ -466,7 +466,26 @@ def _run_perf_benchmark(
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
     tokenizer = AutoTokenizer.from_pretrained(hf_model)
 
-    traced_executor = TracedLlama32_1BExecutor(model, mesh_device)
+    # On-device sampling toggle for N150/N300 evidence-gathering (see sampling handoff docs):
+    #   host            -> sampling_params=None (host-argmax, the default shipped path)
+    #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
+    #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
+    #                      the [*,32] tuples; PERF.md-parity recipe, faster than force-argmax)
+    sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+    _on_device_params = {
+        "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
+        "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
+    }
+    sampling_params = (
+        _on_device_params[sampling_mode]
+        if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
+        else None
+    )
+    logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+
+    # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
+    # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active).
+    traced_executor = TracedLlama32_1BExecutor(model, mesh_device, ondevice_decode_loop=sampling_params is not None)
     try:
         ma = model.model_args
         assert ma is not None
@@ -485,23 +504,6 @@ def _run_perf_benchmark(
         # Natural-length tokenization (matches TTTv1): the executor buckets each user's real
         # length to get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
         input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
-
-        # On-device sampling toggle for N150/N300 evidence-gathering (see sampling handoff docs):
-        #   host            -> sampling_params=None (host-argmax, the default shipped path)
-        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
-        #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
-        #                      the [*,32] tuples; PERF.md-parity recipe, faster than force-argmax)
-        sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
-        _on_device_params = {
-            "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
-            "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
-        }
-        sampling_params = (
-            _on_device_params[sampling_mode]
-            if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
-            else None
-        )
-        logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
 
         result = run_perf_benchmark(
             traced_executor,

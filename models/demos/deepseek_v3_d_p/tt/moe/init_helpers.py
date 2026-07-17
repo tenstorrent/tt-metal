@@ -476,7 +476,7 @@ def compute_constants(
         experts_per_chip = experts_per_chip_override
     else:
         experts_per_chip = num_routed_experts // num_devices
-    metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
+    metadata_len = 3  # chip, token, topk_idx
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
     # we support replicated experts (See Issue #41293)

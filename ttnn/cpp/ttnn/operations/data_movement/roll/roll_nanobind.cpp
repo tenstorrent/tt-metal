@@ -30,8 +30,8 @@ void bind_roll(nb::module_& mod) {
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
-                const ttnn::SmallVector<int>&,
-                const ttnn::SmallVector<int>&,
+                const ttsl::SmallVector<int>&,
+                const ttsl::SmallVector<int>&,
                 const std::optional<MemoryConfig>&>(&ttnn::roll),
             nb::arg("input_tensor"),
             nb::arg("shifts"),

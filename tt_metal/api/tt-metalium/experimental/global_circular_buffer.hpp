@@ -42,13 +42,14 @@ enum class SenderCoreType : uint8_t {
 // sets across senders must be disjoint and must not collide with the resolved DRAM-sender
 // physical NOC coords.
 //
-// When `dual_senders_per_bank` is true, each bank is driven by two DRISC sender cores
-// (the free subchannel plus the bank's NOC1-endpoint subchannel, both on NOC0); the
-// bank's receivers are split ceil/floor across them. This is only valid for the
-// receiver-contiguous DRAM layout and must match the TensorPrefetcherConfig flag used
-// at StartTensorPrefetcher. Every bank must then have at least two receivers (one
-// receiver cannot be split across two senders); a single-receiver bank is rejected with
-// a TT_FATAL — use `dual_senders_per_bank = false` for such topologies.
+// When `dual_senders_per_bank` is true, each bank with two or more receivers is driven by
+// two DRISC sender cores (the free subchannel plus the bank's NOC1-endpoint subchannel, both
+// on NOC0); the bank's receivers are split ceil/floor across them. This is only valid for the
+// receiver-contiguous DRAM layout. A single-receiver bank cannot split one receiver across two
+// senders, so it falls back to a single sender (the free subchannel) with its secondary core
+// left parked — single- and dual-sender banks may coexist in one dual-mode GCB. The Tensor
+// prefetcher always provisions both cores and routes PREFETCH requests only to this GCB's
+// mapped sender subset.
 //
 // MeshDevice-only: the arena that backs this GCB's pages_sent allocation lives on
 // MeshDeviceImpl, so a bare IDevice cannot construct one.
@@ -84,6 +85,19 @@ DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
 // Physical worker NOC XY for each sender's receivers. The DRISC kernel uses these as
 // runtime args. Empty for worker-sender GCBs.
 const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
+
+// Per-sender bank-local slab indices: entry [s][r] is the bank-local slab index
+// (recv_index_base + r) that sender s's local receiver r reads, in
+// sender_receiver_core_mapping() order. This is the same "slab" the DRAM-sender kernel
+// addresses, and the single source of truth for the recv_index_base accounting (which the
+// GCB owns because it encodes the dual-sender-per-bank split contract).
+//
+// Order-agnostic on purpose: mapping a receiver's (bank, slab index) to a global position
+// depends on the tensor's shard distribution (ROUND_ROBIN_1D strided vs CONTIGUOUS_1D
+// contiguous), which a ring-matmul consumer treats as a "ring position". That is the
+// caller's concept, not the GCB's, so the streaming Tensor prefetcher reads the raw slab
+// indices here and permutes them itself. DRAM-sender GCBs only.
+std::vector<std::vector<uint32_t>> receiver_slab_indices(const GlobalCircularBuffer& gcb);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal

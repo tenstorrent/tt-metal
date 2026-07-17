@@ -231,7 +231,7 @@ void kernel_main() {
         // SUM reduce with reciprocal operation using PRELOADED mode
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
-        cb_wait_front(cb_exps, block_w);
+        cb_exps_obj.wait_front(block_w);
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,

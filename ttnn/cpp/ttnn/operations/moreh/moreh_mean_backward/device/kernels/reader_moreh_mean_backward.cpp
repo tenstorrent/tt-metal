@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 static constexpr int32_t MAX_NUM_DIMENSIONS = 8;
@@ -82,26 +82,26 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 0.0f;
-    CircularBuffer cb_in1(cb_id_in1);
-    fill_cb_with_value(cb_in1, scaler.u);
+    DataflowBuffer dfb_in1(cb_id_in1);
+    fill_cb_with_value(dfb_in1, scaler.u);
 
     scaler.f = 1.0f / num_dim;
-    CircularBuffer cb_in2(cb_id_in2);
-    fill_cb_with_value(cb_in2, scaler.u, 1);
+    DataflowBuffer dfb_in2(cb_id_in2);
+    fill_cb_with_value(dfb_in2, scaler.u, 1);
 
     const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(cb_id_in0);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         auto read_tile_id = get_output_grad_tile(
             i, input_grad_rank, output_grad_dim, output_grad_stride, input_grad_dim, input_grad_stride, need_bcast_dim);
 
-        cb_in0.reserve_back(onetile);
-        noc.async_read(output_grad_addrg, cb_in0, in0_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
+        dfb_in0.reserve_back(onetile);
+        noc.async_read(output_grad_addrg, dfb_in0, in0_tile_bytes, {.page_id = read_tile_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0.push_back(onetile);
+        dfb_in0.push_back(onetile);
     }
 }

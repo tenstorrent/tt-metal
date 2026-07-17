@@ -85,7 +85,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
     tt::tt_metal::HostBuffer host_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
@@ -213,6 +213,20 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     CoreCoord sender_virtual_core;
 
     const auto& cluster = MetalContext::instance().get_cluster();
+
+    // MockChip has no TLB manager (get_tlb_manager() == nullptr), so skip TLB window
+    // setup entirely: pcie_writer_ stays unset. Safe under Mock because the runtime I/O
+    // paths that use pcie_writer_ -- read()/write() and notify_sender() -- never execute
+    // for mock devices (mock only exercises socket construction / JIT).
+    //
+    // TODO(emule): this over-skips for Emule. SWEmuleChip also lacks a TLB manager but has
+    // real memory-backed I/O, so it should skip only the TLB-window path and still install
+    // the cluster.write_core() fallback for pcie_writer_. As written, pcie_writer_ is left
+    // null, so enabling D2H socket runtime I/O under emule would null-deref in
+    // notify_sender().
+    if (cluster.is_mock_or_emulated()) {
+        return;
+    }
 
     if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
@@ -413,9 +427,9 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     }
 }
 
-bool D2HSocket::has_data() {
+bool D2HSocket::has_data(std::optional<uint32_t> num_bytes_to_check) {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
-    uint32_t num_bytes = page_size_;
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }

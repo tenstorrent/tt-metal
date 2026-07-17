@@ -127,8 +127,9 @@ class TestConfig:
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
-    # Artefact directories
-    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build/")
+    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over /tmp (often tmpfs)
+    # so compile artefacts do not accumulate in RAM and OOM the runner (exit 137).
+    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build")
     ARTEFACTS_DIR: ClassVar[Path]
     SHARED_DIR: ClassVar[str]
     SHARED_OBJ_DIR: ClassVar[str]
@@ -347,8 +348,16 @@ class TestConfig:
                 )
 
     @staticmethod
+    def resolve_artefacts_path() -> Path:
+        """Build artefact root: $RUNNER_TEMP/tt-llk-build in GHA, else /tmp/tt-llk-build."""
+        runner_temp = os.environ.get("RUNNER_TEMP")
+        if runner_temp:
+            return Path(runner_temp) / "tt-llk-build"
+        return TestConfig.DEFAULT_ARTEFACTS_PATH
+
+    @staticmethod
     def setup_paths(sources_path: Path):
-        TestConfig.ARTEFACTS_DIR = TestConfig.DEFAULT_ARTEFACTS_PATH
+        TestConfig.ARTEFACTS_DIR = TestConfig.resolve_artefacts_path()
 
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
@@ -462,13 +471,22 @@ class TestConfig:
             in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE)
             else ""
         )
+        # Allow disabling LLK_ASSERT via env var for shape-coverage discovery runs:
+        # with asserts off and DEVICE_PRINT_ENABLED on, LLK_VALIDATE_TENSOR_SHAPE_*
+        # emits newly-seen TensorShapes via DPRINT instead of ebreaking the kernel,
+        # so a single run can enumerate every (fn_name, shape) pair exercised.
+        llk_assert_define = (
+            ""
+            if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
+            else "-DENABLE_LLK_ASSERT "
+        )
         TestConfig.INITIAL_OPTIONS_COMPILE = (
             "-Wall -Werror -Wno-error=deprecated-declarations "
             "-Wunused-parameter "
             "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls "
             "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
-            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = [
@@ -1221,11 +1239,12 @@ class TestConfig:
             )
 
             def build_kernel_part(name: str):
-                optional_kernel_flags = ""
-                if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                    optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
-                        TestConfig.KERNEL_COMPONENTS.index(name)
-                    )
+                # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
+                # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
+                # LLK headers now require COMPILE_FOR_TRISC (see ckernel_addrmod.h), so pass it for Quasar too.
+                optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
+                    TestConfig.KERNEL_COMPONENTS.index(name)
+                )
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
@@ -1270,7 +1289,9 @@ class TestConfig:
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
-                    f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
+                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3) that
+                    # -nostdlib drops; only referenced helpers are linked, so it's a no-op otherwise.
+                    f"-x c++ - -lc -lgcc -o {VARIANT_ELF_DIR / name}.elf"
                 )
 
                 logger.trace(compile_command)

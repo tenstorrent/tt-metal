@@ -87,11 +87,8 @@ struct AllToAllCombineDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // Workaround for PR #44408 cache-hit-on-stale-RTA bug: hash the input
-    // buffer addresses so reallocated tensors force a fresh build (and thus
-    // refresh the baked-in semaphore addresses).  Trace replays reuse the
-    // same buffers so cache hits still happen.  Real fix is a ScalarBinding-
-    // style framework feature for non-Buffer RTAs (Metal 2.0 plan).
+    // Keys on attributes + tensor specs only (address-free); see the .cpp for the op-created-semaphore
+    // invariant that keeps baked addresses valid across cache hits.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::ccl

@@ -31,11 +31,16 @@ static void open_and_close_device() {
     ASSERT_GT(ids.size(), 0);
     const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
 
+    // Open one unit mesh per MMIO chip. Multi-chip boards (e.g. P300) expose more than one
+    // MMIO chip, so assert against the number of chips opened rather than hardcoding a single device.
     auto devices = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
 
-    ASSERT_EQ(devices.size(), 1);
-    devices[0]->close();
+    ASSERT_EQ(devices.size(), ids.size());
+    for (auto& [id, device] : devices) {
+        (void)id;
+        device->close();
+    }
 }
 
 TEST(TensixReleaseOwnership, BasicReleaseOwnership) {

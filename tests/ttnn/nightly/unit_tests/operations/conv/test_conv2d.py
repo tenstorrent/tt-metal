@@ -5774,3 +5774,53 @@ def test_conv2d_fp32_input_no_fp16_saturation(device):
     )
     passed, msg = check_with_pcc_without_tensor_printout(ref, out_nchw, pcc=0.99)
     assert passed, msg
+
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "shard_layout, output_channels, input_channels, input_height, input_width, config",
+    (
+        # Unaligned input channels (not a multiple of 32) -> create_device_tensor alignment path.
+        (WS, 384, 353, 8, 8, None),
+        (BS, 128, 129, 32, 32, None),
+        # Aligned VGG-like block-sharded shapes -> pad-after-shard path.
+        (BS, 256, 256, 56, 56, None),
+        (BS, 512, 512, 28, 28, None),
+        # Height-sharded row-major host input needing H/W padding -> pad-before-shard path.
+        (HS, 64, 64, 224, 224, {"act_block_h": 32}),
+    ),
+)
+def test_conv2d_row_major_host_sharding_alignment_regression(
+    device,
+    torch_tensor_map,
+    shard_layout,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    config,
+):
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        output_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        batch_size=1,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=3,
+        filter_width=3,
+        stride_h=1,
+        stride_w=1,
+        padding=(1, 1, 1, 1),
+        config_override=config,
+        shard_layout=shard_layout,
+        input_dtype=ttnn.bfloat16,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        has_bias=True,
+    )

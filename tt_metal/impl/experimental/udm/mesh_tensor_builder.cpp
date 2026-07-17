@@ -97,15 +97,15 @@ public:
 
     tt::tt_metal::Shape get_mesh_tensor_shape_in_pages() const {
         return tt::tt_metal::Shape(
-            tt::stl::Span<const uint32_t>(mesh_tensor_shape_in_pages_.data(), mesh_tensor_rank_));
+            ttsl::Span<const uint32_t>(mesh_tensor_shape_in_pages_.data(), mesh_tensor_rank_));
     }
 
     tt::tt_metal::Shape get_local_tensor_shape_in_pages() const {
-        return tt::tt_metal::Shape(tt::stl::Span<const uint32_t>(tensor_shape_in_pages_.data(), mesh_tensor_rank_));
+        return tt::tt_metal::Shape(ttsl::Span<const uint32_t>(tensor_shape_in_pages_.data(), mesh_tensor_rank_));
     }
 
     tt::tt_metal::Shape get_mesh_shape() const {
-        return tt::tt_metal::Shape(tt::stl::Span<const uint32_t>(mesh_shape_.data(), mesh_tensor_rank_));
+        return tt::tt_metal::Shape(ttsl::Span<const uint32_t>(mesh_shape_.data(), mesh_tensor_rank_));
     }
 
     const tt::tt_metal::distributed::MeshShape& get_distribution_shape() const { return distribution_shape_; }

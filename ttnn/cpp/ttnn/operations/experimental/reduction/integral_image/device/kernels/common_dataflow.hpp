@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+
 #include "common.hpp"
 
 template <typename addr_gen_t>
@@ -11,9 +14,15 @@ FORCE_INLINE void write_to_dram(
     uint32_t cb, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
     ReadCBGuard read_guard{cb, num_tiles};
 
-    uint32_t l1_read_addr{get_read_ptr(cb)};
-    noc_async_write_page(write_tile_id, addr_gtor, l1_read_addr);
-    noc_async_write_barrier();
+    Noc noc;
+    CircularBuffer cb_obj{cb};
+    noc.async_write(
+        cb_obj,
+        addr_gtor,
+        addr_gtor.get_aligned_page_size(),
+        {.offset_bytes = 0},
+        {.page_id = write_tile_id, .offset_bytes = 0});
+    noc.async_write_barrier();
 }
 
 template <typename addr_gen_type>
@@ -21,9 +30,15 @@ FORCE_INLINE void load_from_dram(
     uint32_t cb, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
     WriteCBGuard write_guard{cb, num_tiles};
 
-    uint32_t l1_write_addr{get_write_ptr(cb)};
-    noc_async_read_page(read_tile_id, addr_gtor, l1_write_addr);
-    noc_async_read_barrier();
+    Noc noc;
+    CircularBuffer cb_obj{cb};
+    noc.async_read(
+        addr_gtor,
+        cb_obj,
+        addr_gtor.get_aligned_page_size(),
+        {.page_id = read_tile_id, .offset_bytes = 0},
+        {.offset_bytes = 0});
+    noc.async_read_barrier();
 }
 
 template <typename InputAccessorArgs, typename OutputAccessorArgs>

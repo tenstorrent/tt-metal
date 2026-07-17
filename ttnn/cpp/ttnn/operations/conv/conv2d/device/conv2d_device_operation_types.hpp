@@ -221,6 +221,7 @@ struct Conv2dParams {
 struct Conv2dHashableParams {
     sliding_window::SlidingWindowConfig sliding_window_config{};
     uint32_t output_channels = 0;
+    uint32_t groups = 0;
     bool untilize_out = false;
     bool has_bias = false;
     std::optional<ttnn::operations::unary::UnaryWithParam> activation;

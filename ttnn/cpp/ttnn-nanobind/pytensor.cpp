@@ -458,7 +458,7 @@ void pytensor_module(nb::module_& mod) {
             "__init__",
             [](Tensor* t,
                std::vector<T>&& data,
-               const ttnn::SmallVector<uint32_t>& shape,
+               const ttsl::SmallVector<uint32_t>& shape,
                DataType data_type,
                Layout layout,
                const std::optional<Tile>& tile,
@@ -512,7 +512,7 @@ void pytensor_module(nb::module_& mod) {
             "__init__",
             [](Tensor* t,
                std::vector<T>&& data,
-               const ttnn::SmallVector<uint32_t>& shape,
+               const ttsl::SmallVector<uint32_t>& shape,
                DataType data_type,
                Layout layout,
                std::optional<MeshDevice*> device,
@@ -567,7 +567,7 @@ void pytensor_module(nb::module_& mod) {
             "__init__",
             [](Tensor* t,
                std::vector<T>&& data,
-               const ttnn::SmallVector<uint32_t>& shape,
+               const ttsl::SmallVector<uint32_t>& shape,
                DataType data_type,
                Layout layout,
                std::optional<MeshDevice*> device,
@@ -908,8 +908,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "pad",
             [](const Tensor& self,
-               const ttnn::SmallVector<uint32_t>& output_tensor_shape,
-               const ttnn::SmallVector<uint32_t>& input_tensor_start,
+               const ttsl::SmallVector<uint32_t>& output_tensor_shape,
+               const ttsl::SmallVector<uint32_t>& input_tensor_start,
                float pad_value) {
                 return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value);
             },
@@ -982,8 +982,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "unpad",
             [](const Tensor& self,
-               const ttnn::SmallVector<uint32_t>& output_tensor_start,
-               const ttnn::SmallVector<uint32_t>& output_tensor_end) {
+               const ttsl::SmallVector<uint32_t>& output_tensor_start,
+               const ttsl::SmallVector<uint32_t>& output_tensor_end) {
                 return self.unpad(ttnn::Shape(output_tensor_start), ttnn::Shape(output_tensor_end));
             },
             R"doc(
@@ -1105,7 +1105,7 @@ void pytensor_module(nb::module_& mod) {
         )doc")
         .def(
             "unpad_from_tile",
-            [](const Tensor& self, const ttnn::SmallVector<uint32_t>& output_tensor_shape) {
+            [](const Tensor& self, const ttsl::SmallVector<uint32_t>& output_tensor_shape) {
                 return self.unpad_from_tile(ttnn::Shape(output_tensor_shape));
             },
             R"doc(
@@ -1506,7 +1506,7 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "reshape",
             [](Tensor& self, int N, int C, int H, int W) {
-                return ttnn::reshape(self, ttnn::SmallVector<int>{N, C, H, W});
+                return ttnn::reshape(self, ttsl::SmallVector<int>{N, C, H, W});
             },
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
@@ -1529,7 +1529,7 @@ void pytensor_module(nb::module_& mod) {
             )doc")
         .def(
             "reshape",
-            [](Tensor& self, const ttnn::SmallVector<int32_t>& shape) -> Tensor { return ttnn::reshape(self, shape); },
+            [](Tensor& self, const ttsl::SmallVector<int32_t>& shape) -> Tensor { return ttnn::reshape(self, shape); },
             nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reshapes TT tensor

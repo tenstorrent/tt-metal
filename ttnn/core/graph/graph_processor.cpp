@@ -304,7 +304,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
 }
 
 void GraphProcessor::track_allocate_cb(
-    const CoreRangeSet& core_range_set,
+    const tt::tt_metal::CoreRangeSet& core_range_set,
     uint64_t addr,
     uint64_t size,
     bool is_globally_allocated,

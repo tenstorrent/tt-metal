@@ -127,17 +127,17 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
  * Must be paired with disable_fp32_dest_acc() when switching back to
  * BF16 accumulation mode within the same kernel.
  *
- * Only available on Wormhole and Blackhole (no-op on Quasar).
+ * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
  *
  * Return value: None
  */
 // clang-format on
-ALWI void enable_fp32_dest_acc() {
 #ifndef ARCH_QUASAR
+ALWI void enable_fp32_dest_acc() {
     MATH((llk_math_set_fp32_dest_acc(true)));
     PACK((llk_pack_set_fp32_dest_acc(true)));
-#endif
 }
+#endif
 
 // clang-format off
 /**
@@ -150,16 +150,16 @@ ALWI void enable_fp32_dest_acc() {
  * reconfiguration that is safe to call mid-kernel without re-running
  * compute_kernel_hw_startup.
  *
- * Only available on Wormhole and Blackhole (no-op on Quasar).
+ * Only available on Wormhole and Blackhole. Not supported on Quasar (compile error)
  *
  * Return value: None
  */
 // clang-format on
-ALWI void disable_fp32_dest_acc() {
 #ifndef ARCH_QUASAR
+ALWI void disable_fp32_dest_acc() {
     MATH((llk_math_set_fp32_dest_acc(false)));
     PACK((llk_pack_set_fp32_dest_acc(false)));
-#endif
 }
+#endif
 
 }  // namespace ckernel

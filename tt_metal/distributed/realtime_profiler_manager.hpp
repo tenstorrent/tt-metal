@@ -29,35 +29,16 @@ namespace distributed {
 class D2HSocket;
 class MeshDevice;
 
-// L1 carve-out addresses for the reserved RT-profiler tensix core. The ring buffer
-// (BRISC->NCRISC handoff) and the D2H socket sender config sit in a single carve-out
-// anchored past dispatch_mem_map's UNRESERVED, bypassing the user-space allocator.
+// L1 carve-out addresses (ring buffer + D2H socket config) for the reserved RT-profiler tensix, anchored past
+// UNRESERVED to bypass the user-space allocator.
 struct RealtimeProfilerCoreL1Addrs {
     uint32_t base = 0;
     uint32_t ring_buffer = 0;
     uint32_t socket_config = 0;
 };
 
-// Owns the full RT-profiler subsystem for a single MeshDevice: per-device state, the
-// background receiver thread, the host-side Tracy handler, and the host-device sync
-// handshake.
-//
-// Lifecycle:
-//   * Constructor runs the eligibility gate, brings up D2H sockets and BRISC/NCRISC
-//     kernels on each eligible device, and starts the receiver thread.
-//   * shutdown() (or destruction) signals receiver termination, joins the thread, and
-//     drops the Tracy handler. Idempotent.
-//   * trigger_sync_check() pauses the receiver, runs a sync handshake only on devices
-//     whose last finish/init sync was at least 60s ago (each device tracked separately),
-//     or on the first finish-path attempt after init (so short runs still get FINISH_SYNC),
-//     then resumes the receiver. Called from the FD command queue's finish path.
-//     Constructor init uses the same interval process-wide per chip_id to throttle full
-//     run_sync + SYNC_CHECK when reopening meshes on the same chips.
-//
-//     Init host-device sync (run_sync + constructor SYNC_CHECK) and finish-path
-//     trigger_sync_check shard work across devices using a small worker pool (up to
-//     hardware_concurrency). ProgramRealtimeProfilerCallbacks invoked from parallel
-//     finish-path workers are serialized — callbacks run outside DataCollector's mutex.
+// Owns the RT-profiler subsystem for one MeshDevice: per-device state, the receiver thread, the Tracy handler, and the
+// host-device sync handshake (sharded across a small worker pool, with a 60s per-chip throttle).
 class RealtimeProfilerManager {
 public:
     explicit RealtimeProfilerManager(const std::shared_ptr<MeshDevice>& mesh_device);
@@ -72,10 +53,8 @@ public:
     // and notifies deactivation. Safe to call multiple times.
     void shutdown();
 
-    // Pauses receiver if at least one device needs a sync, then performs the handshake
-    // only on those devices (others are unchanged). No-op when no devices are active,
-    // the Tracy handler has been released, or every device was synced within the last
-    // 60 seconds (except the first finish-path sync after init, which always runs).
+    // Runs the sync handshake only on devices due for one (last sync >60s ago, or first finish-path sync after init);
+    // pauses the receiver while doing so.
     void trigger_sync_check();
 
     // First active device's D2H socket, or nullptr if no device is active.
@@ -88,9 +67,8 @@ private:
         MeshCoordinate mesh_coord = MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
         std::unique_ptr<D2HSocket> socket;
-        // Owns the BRISC+NCRISC realtime-profiler program so its kernels remain alive for
-        // the lifetime of the manager. If this goes out of scope while the kernels are
-        // still running, downstream tooling (e.g. tt-inspector) loses the kernel metadata.
+        // Owns the BRISC+NCRISC program to keep its kernels (and their metadata for tt-inspector) alive for the
+        // manager's lifetime.
         std::unique_ptr<Program> realtime_profiler_program;
         RealtimeProfilerCoreL1Addrs core_l1;
         uint64_t first_timestamp = 0;
@@ -104,9 +82,8 @@ private:
         // Updated after a successful finish-path or init SYNC_CHECK handshake; used to
         // throttle redundant finish syncs (minimum 60s between attempts per device).
         std::optional<std::chrono::steady_clock::time_point> last_finish_sync_at;
-        // After init, the first finish-path sync bypasses the throttle so short runs still
-        // get a FINISH_SYNC pair even when finish runs within the minimum interval of init.
-        // Cleared after the first successful finish-path handshake for this device.
+        // First finish-path sync bypasses the throttle so short runs still get a FINISH_SYNC pair; cleared after that
+        // handshake.
         bool pending_first_unthrottled_finish_sync = false;
 
         DeviceState();
@@ -119,11 +96,13 @@ private:
 
     void run_sync(DeviceState& dev_state, uint32_t num_samples);
 
-    // ContextId of the owning MeshDevice, captured in the constructor. All MetalContext
-    // accesses inside this manager must go through MetalContext::instance(context_id_)
-    // so a non-default (mock / coexistence) context routes through its own HAL, cluster
-    // and dispatch_mem_map instead of leaking to the silicon DEFAULT_CONTEXT_ID via the
-    // bare instance() inline fallback. See #38445 / #39849 for the broader migration.
+    // Mirror the rt-profiler Tracy calibration onto the device profiler's sync anchor so worker zones host-align to the
+    // same line as rt records.
+    void publish_device_profiler_sync_anchor(
+        uint32_t chip_id, double host_anchor, double device_anchor, double frequency, const std::string& core_label);
+
+    // Owning MeshDevice's ContextId; all MetalContext access must go through instance(context_id_) so a non-default
+    // context doesn't leak to silicon DEFAULT_CONTEXT_ID. See #38445 / #39849.
     ContextId context_id_;
     std::vector<DeviceState> devices_;
     std::thread receiver_thread_;

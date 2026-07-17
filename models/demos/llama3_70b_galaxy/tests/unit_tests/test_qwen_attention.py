@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
+# Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy runs
+# the no-prefetcher bring-up path. The architecture is detected once at import so the pytest
+# parameters (fabric config, paged attention) and the in-body setup select the right path.
 import torch
 import pytest
 from loguru import logger
@@ -19,6 +23,57 @@ from models.common.utility_functions import (
 )
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import (
+    IS_BLACKHOLE as _IS_BLACKHOLE,
+    DECODE_FABRIC_CONFIG as _FABRIC_CONFIG,
+)
+
+
+def _decode_pos_tensor(pos, batch_size, mesh_device, cluster_shape):
+    current_pos = torch.tensor([pos for _ in range(batch_size)])
+    return ttnn.from_torch(
+        current_pos,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0) if batch_size > 1 else (None, None),
+            mesh_shape=cluster_shape,
+        ),
+    )
+
+
+def _tt_attention_output_to_torch(tt_tensor, mesh_device, cluster_shape, batch_size, hidden_dim):
+    """
+    Read decode output to [B,1,dim]. The no-prefetch path replicates full [1,1,B,dim] on every chip.
+    """
+    try:
+        shards = ttnn.get_device_tensors(tt_tensor)
+        if shards:
+            t = ttnn.to_torch(shards[0]).float()
+            if t.dim() == 4 and t.shape[-1] >= hidden_dim:
+                return t[0, 0, :batch_size, :hidden_dim].unsqueeze(1)
+    except Exception as exc:
+        logger.warning(f"[qwen-attn-test] replicated readback failed: {exc}")
+
+    cols = int(cluster_shape[1])
+    try:
+        shards = ttnn.get_device_tensors(tt_tensor)
+        if len(shards) >= cols:
+            col_parts = [ttnn.to_torch(shards[c]).float() for c in range(cols)]
+            merged = torch.cat(col_parts, dim=-1)
+            if merged.dim() == 4 and merged.shape[-1] >= hidden_dim:
+                return merged[0, 0, :batch_size, :hidden_dim].unsqueeze(1)
+    except Exception as exc:
+        logger.warning(f"[qwen-attn-test] column-shard assembly failed: {exc}")
+
+    tt_out = ttnn.to_torch(
+        tt_tensor,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=cluster_shape),
+    )
+    if tt_out.dim() == 4 and tt_out.shape[1] > 1:
+        tt_out = tt_out[:, :1]
+    return tt_out[0, 0, :batch_size, :hidden_dim].unsqueeze(1)
 
 
 @torch.no_grad()
@@ -27,7 +82,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": True,
+            "fabric_config": _FABRIC_CONFIG,
         }
     ],
     indirect=True,
@@ -41,14 +96,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (
-        True,
-        # False,
-    ),
-    ids=(
-        "paged_attention",
-        # "default_attention",
-    ),
+    (False,) if _IS_BLACKHOLE else (True,),
+    ids=("default_attention",) if _IS_BLACKHOLE else ("paged_attention",),
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -74,6 +123,9 @@ def test_qwen_attention_inference(
     pcc = 0.99
 
     model_args = TtQwenModelArgs(mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    if _IS_BLACKHOLE:
+        # Blackhole bring-up runs the unit test without the runtime prefetcher.
+        model_args.use_prefetcher = False
     model_args.n_layers = 1  # For the unit test, just run a sigle layer
 
     state_dict = model_args.load_state_dict()
@@ -91,7 +143,7 @@ def test_qwen_attention_inference(
 
     seq_len = 1
 
-    generation_start_pos = 127
+    generation_start_pos = 0 if _IS_BLACKHOLE else 127
     generation_length = 1
     all_tests_pass = True
 
@@ -137,17 +189,24 @@ def test_qwen_attention_inference(
             ),
         )
 
-    prefetcher_setup = TtLlamaPrefetcherSetup(
-        mesh_device,
-        n_tensors=2,
-        n_layers=1,
-        is_qwen=True,
-    )
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
+    if _IS_BLACKHOLE:
+        # Keep the default device context when prefetcher is disabled; installing a custom subdevice
+        # manager here can conflict with kernel core groups.
+        prefetcher_setup = None
+        worker_sub_device_id = None
+    else:
+        prefetcher_setup = TtLlamaPrefetcherSetup(
+            mesh_device,
+            n_tensors=2,
+            n_layers=1,
+            is_qwen=True,
+        )
+        mesh_device.set_sub_device_stall_group(
+            [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
+        )
+        worker_sub_device_id = prefetcher_setup.worker_sub_device_id
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
+    tt_ccl = TT_CCL(mesh_device, model_args, worker_sub_device_id, is_qwen=True)
 
     tt_model = TtLlamaAttention(
         mesh_device,
@@ -173,18 +232,15 @@ def test_qwen_attention_inference(
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
-    current_pos_tensor = ttnn.from_torch(
-        current_pos,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, 0) if batch_size > 1 else (None, None),
-            mesh_shape=model_args.cluster_shape,
-        ),
-    )
-    # Explicitly allocate global CB to avoid memory fragmentation
-    prefetcher_setup.create_global_cb()
+    current_pos_tensor = _decode_pos_tensor(generation_start_pos, batch_size, mesh_device, model_args.cluster_shape)
+    if not _IS_BLACKHOLE:
+        # Explicitly allocate global CB to avoid memory fragmentation
+        prefetcher_setup.create_global_cb()
+
+    # Blackhole (no prefetcher) uses the non-ring activation sharding and the non-fused rotary op.
+    input_memcfg = model_args.model_config[
+        "SHARDED_ATTN_INPUT_MEMCFG" if _IS_BLACKHOLE else "SHARDED_ATTN_INPUT_RING_MEMCFG"
+    ]
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
@@ -194,19 +250,23 @@ def test_qwen_attention_inference(
 
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
-            model_args.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
+            input_memcfg,
             force_replicated=False,
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
+        if _IS_BLACKHOLE:
+            rot_mats = rope_setup.get_rot_mats(current_pos)
+        else:
+            rot_mats = rope_setup.get_rm_rot_mats(current_pos)
 
-        ttnn.dram_prefetcher(
-            prefetcher_setup.get_input_tensors(),
-            num_layers=1,
-            global_cb=prefetcher_setup.global_circular_buffer,
-        )
-        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+        if not _IS_BLACKHOLE:
+            ttnn.dram_prefetcher(
+                prefetcher_setup.get_input_tensors(),
+                num_layers=1,
+                global_cb=prefetcher_setup.global_circular_buffer,
+            )
+            mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
         logger.info("Starting attention computation")
 
@@ -218,12 +278,17 @@ def test_qwen_attention_inference(
             page_table=page_table_tt,
         )
 
-        # multi-device attention module returns replicated output
-        tt_out = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-        )
-        tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
+        if _IS_BLACKHOLE:
+            tt_output_torch = _tt_attention_output_to_torch(
+                tt_out, mesh_device, model_args.cluster_shape, batch_size, model_args.dim
+            )
+        else:
+            # multi-device attention module returns replicated output
+            tt_out = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+            )
+            tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
         # In this test all users have the same position (if using batch > 1)
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
@@ -241,17 +306,9 @@ def test_qwen_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
-        current_pos_tensor = ttnn.from_torch(
-            current_pos,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, 0) if batch_size > 1 else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
+        next_pos = generation_start_pos + i + 1
+        current_pos = torch.tensor([next_pos for _ in range(batch_size)])
+        current_pos_tensor = _decode_pos_tensor(next_pos, batch_size, mesh_device, model_args.cluster_shape)
     tt_ccl.close()
     if all_tests_pass:
         logger.info("Qwen Attention output Passed!")

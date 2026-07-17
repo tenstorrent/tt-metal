@@ -431,7 +431,7 @@ Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         s_a[1]);
     Tensor b = input_b;
     if (s_a.rank() > 2) {
-        SmallVector<uint32_t> reshape(s_a.rank(), 1);
+        ttsl::SmallVector<uint32_t> reshape(s_a.rank(), 1);
         reshape[1] = s_a[1];
         b = ttnn::operations::experimental::quasar::reshape(input_b, ttnn::Shape(reshape));
     }

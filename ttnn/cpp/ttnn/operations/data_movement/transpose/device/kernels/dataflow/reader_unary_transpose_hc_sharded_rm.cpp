@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -22,21 +22,21 @@ void kernel_main() {
     tt_l1_ptr uint32_t* noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_cores_read));
     tt_l1_ptr uint32_t* noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_cores_read * 2));
 
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(2);
 
     Noc noc;
-    CircularBuffer cb_in(cb_in0);
-    CircularBuffer cb_out(cb_out0);
+    DataflowBuffer dfb_in(dfb_in0);
+    DataflowBuffer dfb_out(dfb_out0);
 
     if (read_single_h_block_per_core) {
         uint32_t write_stick_stride = stick_size_bytes * num_cores_read;
         uint32_t l1_write_offset = 0;
 
         for (uint32_t core = 0; core < num_cores_read; ++core) {
-            uint32_t src_addr = cb_in.get_read_ptr() + read_stick_offset[core];
-            uint32_t l1_write_addr = cb_out.get_write_ptr() + l1_write_offset;
+            uint32_t src_addr = dfb_in.get_read_ptr() + read_stick_offset[core];
+            uint32_t l1_write_addr = dfb_out.get_write_ptr() + l1_write_offset;
 
             noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                 UnicastEndpoint{},
@@ -58,8 +58,8 @@ void kernel_main() {
             noc.async_read_barrier();
         }
     } else {
-        uint32_t l1_write_addr = cb_out.get_write_ptr();
-        uint32_t l1_read_addr = cb_in.get_read_ptr();
+        uint32_t l1_write_addr = dfb_out.get_write_ptr();
+        uint32_t l1_read_addr = dfb_in.get_read_ptr();
 
         for (uint32_t c = 0; c < num_C_blocks_per_core; ++c) {
             for (uint32_t core = 0; core < num_cores_read; ++core) {
@@ -90,8 +90,8 @@ void kernel_main() {
 
 #else
 
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t N = get_compile_time_arg_val(2);
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr uint32_t C = get_compile_time_arg_val(4);
@@ -117,11 +117,11 @@ void kernel_main() {
     const uint32_t stick_size_bytes = W_size_bytes;
 
     Noc noc;
-    CircularBuffer cb_in(cb_in0);
-    CircularBuffer cb_out(cb_out0);
+    DataflowBuffer dfb_in(dfb_in0);
+    DataflowBuffer dfb_out(dfb_out0);
 
-    cb_out.reserve_back(num_sticks_per_core);
-    uint32_t l1_write_addr = cb_out.get_write_ptr();
+    dfb_out.reserve_back(num_sticks_per_core);
+    uint32_t l1_write_addr = dfb_out.get_write_ptr();
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core; ++iter) {
@@ -146,7 +146,7 @@ void kernel_main() {
             worker_y_physical = shard_grid_y_map[shard_grid_inner_dim_id];
         }
 
-        uint32_t l1_read_addr = cb_in.get_read_ptr() + stick_id_in_shard * stick_size_bytes;
+        uint32_t l1_read_addr = dfb_in.get_read_ptr() + stick_id_in_shard * stick_size_bytes;
 
         CoreLocalMem<uint32_t> dst(l1_write_addr);
         noc.async_read(
@@ -174,7 +174,7 @@ void kernel_main() {
     }
 
     noc.async_read_barrier();
-    cb_out.push_back(num_sticks_per_core);
+    dfb_out.push_back(num_sticks_per_core);
 
 #endif
 }

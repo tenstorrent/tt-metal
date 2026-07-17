@@ -124,7 +124,7 @@ def test_topk_large_indices_supported_ranks(device, shape, k):
 
 def test_topk_large_indices_requires_explicit_k(device):
     torch_input = _make_bf16_exact_input(num_rows=1, n=512)
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: host binding TypeError (missing kwarg), not a device fault
         ttnn.experimental.topk_large_indices(_to_device(torch_input, device))
 
 
@@ -268,3 +268,136 @@ def test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentin
     expected = expected_row.unsqueeze(0).repeat(2, 1)
 
     _assert_indices(tt_indices, expected, [2, k])
+
+
+# ---------------------------------------------------------------------------
+# valid_length: bound the search to the first N columns of each (wider) row.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "k,n,valid_length",
+    [
+        (512, 1024, 512),
+        (256, 2048, 512),
+        (16, 4096, 64),
+        (512, 4096, 1024),
+        (1024, 4096, 2048),
+        (2048, 4096, 2048),
+        (256, 2048, 600),  # valid_length not a multiple of the LLK window
+        (512, 4096, 513),  # odd valid_length (partial tail chunk)
+    ],
+)
+def test_topk_large_indices_valid_length_ignores_stale_tail(device, k, n, valid_length):
+    # _make_bf16_exact_input rows are strictly increasing, so the LARGEST values of the full row live in the
+    # tail [valid_length:n]. A correct valid_length must return only indices < valid_length (matching a top-k
+    # over the prefix); if the tail leaked, indices >= valid_length would appear. This is the core guarantee.
+    num_rows = 2
+    torch_input = _make_bf16_exact_input(num_rows, n)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+    _, ref_indices = torch.topk(torch_input[:, :valid_length].float(), k, dim=-1, largest=True, sorted=True)
+    assert int(ref_indices.max()) < valid_length
+    _assert_indices(tt_indices, ref_indices, [num_rows, k])
+
+
+@pytest.mark.parametrize(
+    "k,num_rows,n,valid_length",
+    [
+        (512, 2, 1024, 512),
+        (1536, 2, 3000, 2000),
+        (2048, 2, 4096, 2049),
+        (16, 1, 8192, 100),
+        (1536, 2, 102400, 56320),  # the production case: 100K allocated, 50K+5K written
+    ],
+)
+def test_topk_large_indices_valid_length_matches_sliced_input(device, k, num_rows, n, valid_length):
+    # valid_length=L must be numerically identical to physically slicing the row to [0, L) and running the
+    # full-width op. Both compute top-k over the exact same prefix, so the indices are bit-identical.
+    torch.manual_seed(0)
+    torch_input = torch.randn(num_rows, n, dtype=torch.bfloat16)
+
+    bounded = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+    sliced = ttnn.experimental.topk_large_indices(_to_device(torch_input[:, :valid_length].contiguous(), device), k=k)
+
+    bounded_t = ttnn.to_torch(bounded, dtype=torch.uint32).to(torch.int64)
+    sliced_t = ttnn.to_torch(sliced, dtype=torch.uint32).to(torch.int64)
+    _assert_index_metadata(bounded, [num_rows, k])
+    assert_equal(bounded_t, sliced_t)
+
+
+def test_topk_large_indices_valid_length_full_width_is_noop(device):
+    # valid_length == n must behave exactly like omitting valid_length.
+    num_rows, n, k = 2, 4096, 1024
+    torch_input = _make_bf16_exact_input(num_rows, n)
+    with_arg = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=n)
+    without = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+    assert_equal(
+        ttnn.to_torch(with_arg, dtype=torch.uint32).to(torch.int64),
+        ttnn.to_torch(without, dtype=torch.uint32).to(torch.int64),
+    )
+
+
+@pytest.mark.parametrize("k", [16, 512, 1024])
+def test_topk_large_indices_valid_length_all_neginf_prefix_is_sentinel(device, k):
+    # Prefix [0, k) is all -inf while the ignored tail holds large FINITE values. A correct bound returns
+    # k sentinels (the tail must never be selected even though it is finite and larger).
+    sentinel = 0xFFFFFFFF
+    n = k + 64
+    torch_input = torch.full((2, n), -float("inf"), dtype=torch.bfloat16)
+    torch_input[:, k:] = 5.0  # large finite values living in the ignored tail
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=k)
+    _assert_indices(tt_indices, torch.full((2, k), sentinel, dtype=torch.int64), [2, k])
+
+
+@pytest.mark.parametrize("k", [16, 512, 1024])
+def test_topk_large_indices_valid_length_mixed_prefix_ignores_finite_tail(device, k):
+    # 16 finite values at the start of the valid prefix, the rest of the prefix -inf, and a large finite tail.
+    # Expect the 16 real indices then sentinels -- never the tail.
+    sentinel = 0xFFFFFFFF
+    n = k + 64
+    valid_length = k
+    finite_count = 16
+    torch_input = torch.full((2, n), -float("inf"), dtype=torch.bfloat16)
+    torch_input[:, :finite_count] = torch.arange(finite_count, dtype=torch.float32).to(torch.bfloat16)
+    torch_input[:, valid_length:] = 100.0  # large finite tail that must be ignored
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+    expected_prefix = torch.arange(finite_count - 1, -1, -1, dtype=torch.int64)
+    expected_suffix = torch.full((k - finite_count,), sentinel, dtype=torch.int64)
+    expected = torch.cat([expected_prefix, expected_suffix]).unsqueeze(0).repeat(2, 1)
+    _assert_indices(tt_indices, expected, [2, k])
+
+
+def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(device):
+    # A serving loop grows valid_length each step; because valid_length is a runtime arg (hash-excluded),
+    # every step must reuse a single cached program.
+    k = 1536
+    n = 102400
+    torch_input = _make_large_index_input(num_rows=2, n=n, k=k)
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        entries = []
+        for valid_length in (2048, 20480, 56320, n):
+            ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+            entries.append(device.num_program_cache_entries())
+        assert entries[0] > 0
+        assert max(entries) == min(entries)  # no recompile as valid_length grew
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
+    "k,n,valid_length",
+    [
+        (512, 1024, 496),  # valid_length < k
+        (512, 1024, 2048),  # valid_length > n
+    ],
+)
+def test_topk_large_indices_valid_length_out_of_range_raises(device, expect_error, k, n, valid_length):
+    torch_input = _make_bf16_exact_input(num_rows=1, n=n)
+    with expect_error(RuntimeError, "valid_length"):
+        ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)

@@ -114,7 +114,7 @@ void deassert_trisc() {
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
-volatile KernelBarrier g_kernel_barrier __attribute__((used));
+volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -338,7 +338,8 @@ extern "C" uint32_t _start1() {
                 WAYPOINT("R");
                 if (enables & (1u << index)) {
                     uintptr_t kernel_lma =
-                        (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                        (static_cast<uint32_t>(kernel_config_base) +
+                         launch_msg_address->kernel_config.kernel_text_offset[index]);
                     // Invalidate the i$ now the kernels have loaded and before running
                     invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
                     invalidate_l1_icache();
@@ -416,7 +417,7 @@ extern "C" uint32_t _start1() {
         int index = hartid;
 
         uintptr_t kernel_lma =
-            kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+            static_cast<uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);

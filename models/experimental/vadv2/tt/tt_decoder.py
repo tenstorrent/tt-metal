@@ -92,7 +92,6 @@ class TtDetectionTransformerDecoder:
                         tmp = ttnn.relu(tmp)
                 assert reference_points.shape[-1] == 3
 
-                new_reference_points = ttnn.zeros_like(reference_points, memory_config=ttnn.L1_MEMORY_CONFIG)
                 updated_xy = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])  # shape (..., 2)
                 updated_z = tmp[..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])  # shape (..., 1)
 
@@ -197,8 +196,6 @@ class TtMapDetectionTransformerDecoder:
                         tmp = ttnn.relu(tmp)
 
                 assert reference_points.shape[-1] == 2
-
-                new_reference_points = ttnn.zeros_like(reference_points, memory_config=ttnn.L1_MEMORY_CONFIG)
 
                 updated_xy = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])
 

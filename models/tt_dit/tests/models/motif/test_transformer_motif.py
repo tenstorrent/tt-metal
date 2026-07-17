@@ -165,6 +165,7 @@ def test_transformer_motif(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=submesh_device.shape,
+        mesh_device=submesh_device,
         get_torch_state_dict=get_state_dict,
     )
 

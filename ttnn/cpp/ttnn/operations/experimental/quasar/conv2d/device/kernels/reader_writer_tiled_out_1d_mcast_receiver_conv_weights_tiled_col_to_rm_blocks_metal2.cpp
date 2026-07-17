@@ -23,10 +23,8 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
-#include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
 
 void kernel_main() {
-    DPRINT("WR start\n");  // DEBUG: conv2d layer3 hang
     constexpr uint32_t num_blocks_weight_h = get_arg(args::num_blocks_weight_h);
     constexpr uint32_t weight_block_num_tiles = get_arg(args::weight_block_num_tiles);
 
@@ -248,5 +246,4 @@ void kernel_main() {
     // the legacy runtime did, so returning with an un-acked atomic leaves the core "running" and it
     // never signals program completion -> dispatch process_wait hangs.
     noc.async_full_barrier();
-    DPRINT("WR end\n");  // DEBUG: conv2d layer3 hang
 }

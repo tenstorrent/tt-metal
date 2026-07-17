@@ -20,8 +20,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         mod,
         R"doc(
             Return True if the Tensor prefetcher (DRISC) is supported on `mesh_device`,
-            i.e. programmable DRAM cores are available (Blackhole with
-            TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1). When this returns False,
+            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0
+            and either no harvested DRAM channels or a single device). When this returns False,
             start_tensor_prefetcher would raise, so callers can use this to skip instead.
 
             Args:
@@ -48,14 +48,12 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
-                dual_senders_per_bank (bool): if True, run two DRISC sender kernels per DRAM
-                    bank (the free subchannel plus the NOC1-endpoint subchannel, both on NOC0)
-                    and split each bank's receivers across them. Recv-contig layout only; the
-                    GCB must be created with the matching flag. Defaults to False.
+
+            Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
+            or both senders per bank; unused senders remain parked on their sockets.
         )doc",
         &start_tensor_prefetcher,
-        nb::arg("mesh_device"),
-        nb::arg("dual_senders_per_bank") = false);
+        nb::arg("mesh_device"));
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,
@@ -67,12 +65,22 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to queue on.
-                tensors (List[Tuple[ttnn.Tensor, int]]): the full, flattened list of
-                    (weight tensor, block_count) pairs to prefetch (at least one), streamed
-                    in list order. block_count is the number of K-blocks to divide that
-                    tensor's K dimension into (the consumer matmul waits on block_count
-                    pages per layer). Pass distinct tensors for distinct layers, or repeat
-                    a tensor to replay it.
+                tensors (List[Tuple[ttnn.Tensor, int] | Tuple[ttnn.Tensor, int, List[int]]]): the
+                    full, flattened list of weights to prefetch (at least one), streamed in
+                    list order. Each item is (weight, block_count) or, to enable per-tensor
+                    streaming, (weight, block_count, rotation). block_count is the number of
+                    K-blocks to divide that tensor's K dimension into (the consumer matmul
+                    waits on block_count pages per layer). Pass distinct tensors for distinct
+                    layers, or repeat a tensor to replay it.
+
+                    rotation (receiver-contiguous layout only; omit/empty == batched) is the
+                    per-receiver streaming ring-rotation table, indexed by global ring position
+                    and of length total_receivers (== ring_size == block_count), each entry in
+                    [0, block_count). It makes the kernel deliver that tensor's K-blocks in the
+                    host-specified ring-rotated order so the consuming matmul can stream them FIFO
+                    (and start before the whole tensor lands, allowing a shallow GCB). rotation[r]
+                    = r reproduces the natural topology order; the matmul must consume in the
+                    matching order, else it deadlocks.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
                     ttnn.experimental.create_global_circular_buffer_with_dram_senders).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
@@ -147,7 +155,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 size: Per-receiver fifo size in bytes.
                 buffer_type: Buffer type (L1 or L1_SMALL).
                 dual_senders_per_bank: If True, split each bank's receivers across two DRISC
-                    sender cores (recv-contig layout only); must match the prefetcher config.
+                    sender cores (receiver-contiguous layout only). Otherwise, the GCB targets
+                    only the primary sender and the second provisioned prefetcher sender remains idle.
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_with_dram_senders,
         nb::keep_alive<0, 1>(),
@@ -220,7 +229,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 size: GCB size in bytes (>= ring_size * largest per-receiver page).
                 buffer_type: Buffer type (L1 or L1_SMALL).
                 dual_senders_per_bank: If True, split each bank's receivers across two DRISC sender cores
-                    (must match the StartTensorPrefetcher flag).
+                    instead of targeting only the primary sender.
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d_recv_contig,
         nb::keep_alive<0, 1>(),

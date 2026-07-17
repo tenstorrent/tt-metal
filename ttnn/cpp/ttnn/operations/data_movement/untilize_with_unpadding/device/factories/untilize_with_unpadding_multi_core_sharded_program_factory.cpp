@@ -155,6 +155,17 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                 : "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
                   "writer_unary_unpad_batch_rows_sharded.cpp";
         writer_desc.compile_time_args = std::move(writer_ct_args);
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // Height-sharded -> interleaved uses a dedicated writer that walks each core's absolute rows
+        // and drops both interior (row) and column padding per matrix. It handles any alignment of
+        // matrices to core boundaries (whole matrices per core, a single matrix split across cores,
+        // or a batch whose matrices straddle cores), so there is no unbatched restriction.
+        std::vector<uint32_t> writer_ct_args;
+        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+            "writer_unary_unpad_sharded_to_interleaved.cpp";
+        writer_desc.compile_time_args = std::move(writer_ct_args);
     } else {
         std::vector<uint32_t> writer_ct_args = {
             (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
@@ -233,6 +244,35 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
         for (const auto& core : all_core_coords) {
             writer_desc.runtime_args.emplace_back(core, writer_rt_args);
         }
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // General height-sharded -> interleaved. Each core owns the absolute padded rows
+        // [i * shard_h, (i + 1) * shard_h) of the flattened [global_batch * H_padded, W_padded] row
+        // space (enumerated in shard/core order). The kernel maps every row to its (matrix,
+        // row-in-matrix) and writes the real rows to their logical interleaved page, dropping both
+        // interior (row) and column padding. This is correct for any alignment of matrices to core
+        // boundaries, so there is no unbatched restriction.
+        const uint32_t matrix_h_padded = a.padded_shape()[-2];
+        const uint32_t matrix_h_logical = output.logical_shape()[-2];
+        const uint32_t shard_height = shard_spec.shape[0];
+        const uint32_t cb_row_size = shard_spec.shape[1] * output.element_size();  // CB row stride (padded width)
+        const uint32_t row_size_unpadded =
+            output.logical_shape()[-1] * output.element_size();  // bytes written per row (logical width)
+
+        writer_desc.runtime_args.reserve(all_core_coords.size());
+        for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
+            const CoreCoord& core = all_core_coords[i];
+            const uint32_t start_padded_row = i * shard_height;
+            writer_desc.emplace_runtime_args(
+                core,
+                {dst_buffer,  // dst_addr
+                 start_padded_row,
+                 shard_height,
+                 matrix_h_padded,
+                 matrix_h_logical,
+                 cb_row_size,
+                 row_size_unpadded,
+                 ntiles_per_block});
+        }
     } else {
         writer_desc.runtime_args.reserve(all_core_coords.size());
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
@@ -254,18 +294,6 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                     if (i == last_idx) {
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
-                }
-            } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-                block_start_row_offset = 0;
-                block_start_row_id_offset = i * num_rows_block;
-                if (i > last_idx) {
-                    row_size_unpadded = 0;
-                    num_rows_unpadded = 0;
-                } else {
-                    if (i == last_idx) {
-                        num_rows_unpadded = num_output_rows_unpadded;
-                    }
-                    row_size_unpadded = last_block_row_size_unpadded;
                 }
             } else {
                 if (row_major) {

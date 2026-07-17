@@ -38,6 +38,13 @@ class GateComputeMode(Enum):
     HOST_GROUPED_GATE = "host_grouped_gate"  # matmul device, grouped gate host
     HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device (bf16)
     HOST_ALL = "host_all"  # matmul host, grouped gate host
+    # DeepSeek-V4 hash routing: expert indices come from a static tid2eid[input_ids] table
+    # (not top-k); weights are still score_func(x@W) gathered at those indices, normalized, scaled.
+    # Host-first implementation reusing the V4 reference HashRouter.
+    HASH_HOST = "hash_host"
+    # DeepSeek-V4 hash routing fully on device: matmul device, moe_hash_gate device. The tid2eid[input_ids]
+    # lookup is fused into the op's reader kernel; weights reuse the shared activation/normalize/scale path.
+    HASH_DEVICE = "hash_device"
 
 
 @dataclass
@@ -132,6 +139,8 @@ class TtMoEGateConfig:
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
             n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
             route_scale=model_cfg.ROUTE_SCALE,
+            # V4 variants ship SCORE_FUNC="sqrtsoftplus"; V3/Kimi omit it and keep the sigmoid default.
+            score_func=getattr(model_cfg, "SCORE_FUNC", cls.score_func),
             **overrides,
         )
 
@@ -273,6 +282,7 @@ class TtMoEGatePrefill(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         is_balanced: bool = False,
+        hash_table: torch.Tensor = None,
     ):
         """
         Args:
@@ -280,6 +290,8 @@ class TtMoEGatePrefill(LightweightModule):
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
             is_balanced: If True, uses zigzag (balanced) sequence placement across SP devices.
                 Affects per-device real token count computation for padding awareness.
+            hash_table: DeepSeek-V4 hash routing tid2eid table, shape (vocab_size, n_activated_experts).
+                Required for GateComputeMode.HASH_HOST and GateComputeMode.HASH_DEVICE; ignored otherwise.
         """
         self.config = config
         self.mesh_device = mesh_device
@@ -350,6 +362,34 @@ class TtMoEGatePrefill(LightweightModule):
             self.reference_model.weight.data = self.torch_weight  # (n_experts, dim)
             self.reference_model.e_score_correction_bias.data = self.torch_bias  # (n_experts,)
 
+        # DeepSeek-V4 hash routing: reuse the V4 reference HashRouter on host (indices via tid2eid
+        # lookup; weights via score_func(x@W) gathered/normalized/scaled). No bespoke gate math here.
+        if fallback_mode == GateComputeMode.HASH_HOST:
+            from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import DeepseekV4HashRouter
+
+            if hash_table is None:
+                raise ValueError("GateComputeMode.HASH_HOST requires a hash_table (tid2eid).")
+            self.hash_ref_config = SimpleNamespace(
+                num_experts_per_tok=config.n_activated_experts,
+                num_local_experts=config.n_routed_experts,
+                hidden_size=config.dim,
+                scoring_func=config.score_func,
+                routed_scaling_factor=config.route_scale,
+                vocab_size=hash_table.shape[0],
+            )
+            self.hash_router = DeepseekV4HashRouter(self.hash_ref_config)
+            self.hash_router.eval()
+            self.hash_router.weight.data = self.torch_weight  # (n_experts, dim), HF convention
+            self.hash_router.tid2eid.data = hash_table.to(torch.long)
+
+        # DeepSeek-V4 hash routing on device: ship the tid2eid table (replicated across the mesh) so the
+        # moe_hash_gate reader can fuse tid2eid[input_ids]. Rows are padded to 16 uint16 (32-byte aligned)
+        # for NoC page reads; the first n_activated_experts columns hold the expert ids.
+        if fallback_mode == GateComputeMode.HASH_DEVICE:
+            if hash_table is None:
+                raise ValueError("GateComputeMode.HASH_DEVICE requires a hash_table (tid2eid).")
+            self.tid2eid_dev = self._prepare_tid2eid_device(hash_table)
+
     # ------------------------------------------------------------------
     # Helpers: compose / shard patterns reused across fallback modes
     # ------------------------------------------------------------------
@@ -407,6 +447,55 @@ class TtMoEGatePrefill(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 dims=(0, None),
+                mesh_shape=self.mesh_device.shape,
+            ),
+        )
+
+    def _prepare_tid2eid_device(self, hash_table: torch.Tensor) -> ttnn.Tensor:
+        """Ship the tid2eid table replicated to all devices for the device hash gate.
+
+        hash_table is (vocab_size, n_activated_experts). Rows are padded to 16 uint16 columns so each
+        table row is a 32-byte NoC page (the moe_hash_gate reader indexes it by token id). Expert ids
+        fit exactly in uint16 (unlike bf16, which cannot represent ids > 256 -> matters for dsv4_pro's
+        384 experts), so this stays exact for any expert count.
+        """
+        vocab_size, n_act = hash_table.shape
+        padded_cols = 16
+        # int16 (not int32) host source: ttnn.from_torch does not narrow int32 -> uint16, so an int32
+        # source leaves each expert id as 4 bytes (id, 0) and the uint16 reader reads every other slot
+        # as 0. int16 matches the on-device uint16 element width (expert ids fit in int16).
+        padded = torch.zeros((vocab_size, padded_cols), dtype=torch.int16)
+        padded[:, :n_act] = hash_table.to(torch.int16)
+        return ttnn.from_torch(
+            padded,
+            device=self.mesh_device,
+            dtype=ttnn.uint16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def _input_ids_to_device(self, input_ids: torch.Tensor) -> ttnn.Tensor:
+        """Shard host input_ids to device to match x's SP token order.
+
+        input_ids (any shape, flattened to [total_tokens]) is reshaped to [total_tokens/32, 32] and
+        SP-sharded on axis 0 / TP-replicated, so device d holds the same tokens as its logits rows.
+        One ROW_MAJOR page = 32 uint32 token ids = one score height tile. (Assumes sequential SP
+        placement; balanced/zigzag would need a matching token permutation.)
+        """
+        ids = input_ids.reshape(-1)
+        total_tokens = ids.shape[0]
+        assert total_tokens % 32 == 0, f"input_ids length ({total_tokens}) must be a multiple of 32"
+        ids = ids.reshape(total_tokens // 32, 32)
+        return ttnn.from_torch(
+            ids.to(torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(0, None),  # shard tokens across SP, replicate across TP
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -582,10 +671,49 @@ class TtMoEGatePrefill(LightweightModule):
             route_scale=self.config.route_scale,
             stable_sort=True,
             epsilon=1e-20,
+            score_func=self.config.score_func,
             padding_config=padding_config,
         )
         ttnn.deallocate(logits_f32)
         ttnn.deallocate(bias_f32)
+        if owns_padding_config and padding_config is not None:
+            ttnn.deallocate(padding_config)
+        return ttnn_scores, ttnn_top_k_experts_indices
+
+    def _device_hash_gate(
+        self,
+        logits: ttnn.Tensor,
+        input_ids: torch.Tensor,
+        actual_isl: int = None,
+        padding_side: str = "right",
+        padding_config: ttnn.Tensor = None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run moe_hash_gate on device: fused tid2eid[input_ids] routing + score_func/normalize/scale.
+
+        Mirrors _device_grouped_gate_fp32's fp32 typecast and padding-config ownership, but expert
+        selection comes from the hash table instead of top-k.
+        """
+        if input_ids is None:
+            raise ValueError("GateComputeMode.HASH_DEVICE forward requires input_ids for the tid2eid lookup.")
+
+        owns_padding_config = padding_config is None
+        if owns_padding_config:
+            padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
+
+        logits_f32 = ttnn.typecast(logits, ttnn.float32)
+        input_ids_dev = self._input_ids_to_device(input_ids)
+        ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_hash_gate(
+            logits_f32,
+            input_ids_dev,
+            self.tid2eid_dev,
+            n_activated_experts=self.config.n_activated_experts,
+            route_scale=self.config.route_scale,
+            epsilon=1e-20,
+            score_func=self.config.score_func,
+            padding_config=padding_config,
+        )
+        ttnn.deallocate(logits_f32)
+        ttnn.deallocate(input_ids_dev)
         if owns_padding_config and padding_config is not None:
             ttnn.deallocate(padding_config)
         return ttnn_scores, ttnn_top_k_experts_indices
@@ -613,14 +741,22 @@ class TtMoEGatePrefill(LightweightModule):
         actual_isl: int = None,
         padding_side: str = "right",
         padding_config: ttnn.Tensor = None,
+        input_ids: torch.Tensor = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         mode = self.fallback_mode
         logger.debug(f"[MoeGate] fallback_mode={mode.value}")
 
         # ---- Phase 1: Logits (matmul) ----
         signpost(header="moe_gate_linear")
-        if mode in (GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32, GateComputeMode.HOST_GROUPED_GATE):
+        if mode in (
+            GateComputeMode.DEVICE,
+            GateComputeMode.DEVICE_FP32,
+            GateComputeMode.HOST_GROUPED_GATE,
+            GateComputeMode.HASH_DEVICE,
+        ):
             logits = self._device_matmul(x)
+        elif mode == GateComputeMode.HASH_HOST:
+            pass  # the reference HashRouter computes logits from composed host x in Phase 2
         else:  # HOST_MATMUL, HOST_ALL
             host_logits = self._host_matmul(x)
         signpost(header="moe_gate_linear")
@@ -660,6 +796,25 @@ class TtMoEGatePrefill(LightweightModule):
             ttnn_scores = self._host_scores_to_device(host_scores)
             ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
             logits = self._host_logits_to_device(host_logits)
+
+        elif mode == GateComputeMode.HASH_HOST:
+            if input_ids is None:
+                raise ValueError("GateComputeMode.HASH_HOST forward requires input_ids for the tid2eid lookup.")
+            host_x = self._compose_x_to_host(x)
+            # Reference HashRouter returns (raw logits, weights * route_scale, expert indices).
+            host_logits, host_scores, host_indices = self.hash_router(host_x, input_ids)
+            ttnn_scores = self._host_scores_to_device(host_scores)
+            ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
+            logits = self._host_logits_to_device(host_logits)
+
+        elif mode == GateComputeMode.HASH_DEVICE:
+            ttnn_scores, ttnn_top_k_experts_indices = self._device_hash_gate(
+                logits,
+                input_ids,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+                padding_config=padding_config,
+            )
         signpost(header="moe_gate_grouped_gate")
 
         return (

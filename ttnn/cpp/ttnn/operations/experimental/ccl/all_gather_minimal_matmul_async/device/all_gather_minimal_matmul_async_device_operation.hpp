@@ -68,6 +68,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<uint32_t> fsdp_cluster_axis = std::nullopt,
     const std::vector<GlobalSemaphore>& fsdp_multi_device_global_semaphore = {},
     const std::optional<ttnn::Tensor>& persistent_weight_buffer = std::nullopt,
-    std::optional<ttnn::ccl::Topology> fsdp_topology = std::nullopt);
+    std::optional<ttnn::ccl::Topology> fsdp_topology = std::nullopt,
+    bool fuse_swiglu = false);
 
 }  // namespace ttnn::prim

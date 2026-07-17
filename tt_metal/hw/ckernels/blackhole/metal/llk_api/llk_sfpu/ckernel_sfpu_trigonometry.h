@@ -48,19 +48,19 @@ sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat a, sfpi::vInt i) {
     v_if(i < 0) {
         // Compensated residual for the reciprocal-correction branch.
         // This preserves precision when tan(x) is near its poles.
-        s = sfpi::vConstNeg1 * r + a;
+        s = -1.0f * r + a;
         s = t * a + s;
 
         t = sfpi::approx_recip(r);
 
         // Newton-Raphson refinement.
         // e = 1 - r*t, then t <- t*(1 + e) = t*(2 - r*t)
-        sfpi::vFloat e = -r * t + sfpi::vConst1;
+        sfpi::vFloat e = -r * t + 1.0f;
         // Negate to get t = -1/r.
         t = -t * e - t;
 
         // Reconstruct tan from corrected reciprocal terms.
-        r = r * t + sfpi::vConst1;
+        r = r * t + 1.0f;
         r = s * t + r;
         r = r * t + t;
     }
@@ -84,7 +84,7 @@ sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat a, sfpi::vInt i) {
     v_if(i < 0) {
         t = sfpi::approx_recip(r);
         // Newton-Raphson refinement resulting in r = -1/r.
-        sfpi::vFloat e = -r * t + sfpi::vConst1;
+        sfpi::vFloat e = -r * t + 1.0f;
         // Negate to get t = -1/r.
         r = -t * e - t;
     }
@@ -243,7 +243,7 @@ inline void calculate_cosine() {
         // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
         sfpi::vFloat half = sfpi::sFloat16b(0.5f);
         sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
-        sfpi::vFloat neg_one = sfpi::vConstNeg1;
+        sfpi::vFloat neg_one = -1.0f;
 
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
         // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
@@ -298,14 +298,14 @@ inline void calculate_cosine() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
     sfpi::vFloat t0 = sfpi::abs(val);
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
 
     // If input is NaN then output must be NaN as well
-    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt exponent = sfpi::exexp(val, sfpi::ExponentMode::Biased);
     sfpi::vInt mantissa = sfpi::exman(val);
     v_if(exponent == 255 && mantissa != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
     v_else {
-        sfpi::vFloat absval_minus_1 = t0 - sfpi::vConst1;
+        sfpi::vFloat absval_minus_1 = t0 - 1.0f;
 
         v_if(absval_minus_1 > 0.0f) { t0 = sfpu_reciprocal<false>(t0); }
         v_endif;
@@ -326,7 +326,7 @@ sfpi_inline sfpi::vFloat sfpu_atan(sfpi::vFloat val) {
             // > fpminimax(atan(x), [|1,3,5,7,9,11,13,15,17|], [|single...|], [2^(-40); 1], relative);
             t1 = PolynomialEvaluator::eval(
                 t1,
-                sfpi::vConst1,
+                1.0f,
                 -0.3333314359188079833984375f,
                 0.19993579387664794921875f,
                 -0.14209578931331634521484375f,
@@ -385,7 +385,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_ratio_poly_direct(sfpi::vFloat val) {
         // Higher-degree series coefficients for fp32 destination path.
         ratio = PolynomialEvaluator::eval(
             z2,
-            sfpi::vConst1,
+            1.0f,
             0.16666666666666666f,
             0.075f,
             0.044642857142857144f,
@@ -424,7 +424,7 @@ inline void calculate_asin_acos_impl() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
-        v_if(sfpi::abs(v) <= sfpi::vConst1) {
+        v_if(sfpi::abs(v) <= 1.0f) {
             sfpi::vFloat a = sfpu_asin_range_reduced<APPROXIMATION_MODE, is_fp32_dest_acc_en>(v);
             if constexpr (IS_ACOS) {
                 result = PI_2 - a;
@@ -555,7 +555,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
 
         r = 8.361816406e-03f;
         r = r * f + 4.177856445e-02f;
-        s = f * f; // hide SFPMAD latency
+        s = f * f;  // hide SFPMAD latency
         r = r * f + sfpi::vConstFloatPrgm2;
         c0 = 0.5f;
         r = __builtin_rvtt_sfpmad(r.get(), f.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
@@ -568,7 +568,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
         r = r * f + 1.393107930e-3f;
         r = r * f + 8.333439939e-3f;
         r = r * f + 4.166680202e-2f;
-        s = f * f; // hide SFPMAD latency
+        s = f * f;  // hide SFPMAD latency
         r = r * f + sfpi::vConstFloatPrgm2;
         r = r * f + 4.999999702e-1f;
     }
@@ -802,8 +802,8 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
     // for the high-precision path) followed by Newton-Raphson refinement of
     // y ~= 1 / sqrt(x): y <- y * (1.5 - 0.5 * x * y * y).
     sfpi::vFloat half_x = sfpi::addexp(x, -1);  // 0.5 * x
-    sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(x) >> 1);
-    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(0x5f1110a0 - i);
+    sfpi::vInt i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 1);
+    sfpi::vFloat y = sfpi::as<sfpi::vFloat>(0x5f1110a0 - i);
 
     y = y * (1.5f - half_x * y * y);
     y = y * (1.5f - half_x * y * y);
@@ -817,7 +817,7 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
     a = a + 0.5f * (x - a * a) * y;
 
     // sqrt(0) must be exactly 0; the reciprocal seed produces inf*0 = NaN there.
-    v_if(x == 0.0f) { a = sfpi::vConst0; }
+    v_if(x == 0.0f) { a = 0.0f; }
     v_endif;
     return a;
 }
@@ -854,10 +854,8 @@ inline void calculate_acosh() {
         //   1 < x < 2^28     -> arg += sqrt((x-1)(x+1))     (sqrt(x^2-1) without the
         //                                                    x^2-1 cancellation)
         // The large region falls through the predicated block and keeps arg = x-1.
-        sfpi::vFloat arg = inp - sfpi::vConst1;
-        v_if(inp < LOG1P_LARGE) {
-            arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>((inp + sfpi::vConst1) * arg);
-        }
+        sfpi::vFloat arg = inp - 1.0f;
+        v_if(inp < LOG1P_LARGE) { arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>((inp + 1.0f) * arg); }
         v_endif;
         sfpi::dst_reg[0] = arg;
 
@@ -867,12 +865,12 @@ inline void calculate_acosh() {
         v_endif;
 
         // Domain fix-ups: x == 1 -> +0, x < 1 -> NaN.
-        v_if(inp == sfpi::vConst1) { res = sfpi::vConst0; }
-        v_elseif(inp < sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(inp == 1.0f) { res = 0.0f; }
+        v_elseif(inp < 1.0f) { res = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
@@ -914,14 +912,11 @@ inline void calculate_asinh() {
         // which avoids the subtract-1 cancellation that otherwise costs ~3-4 ulp
         // near the crossover. Lanes below 0.75 are clamped here and overwritten by
         // the polynomial after log1p.
-        sfpi::vFloat arg = sfpi::vConst0;
-        v_if(sfpi::abs(inp) >= LOG1P_LARGE) {
-            arg = sfpi::abs(inp) - sfpi::vConst1;
-        }
+        sfpi::vFloat arg = 0.0f;
+        v_if(sfpi::abs(inp) >= LOG1P_LARGE) { arg = sfpi::abs(inp) - 1.0f; }
         v_elseif(sfpi::abs(inp) >= 0.75f) {
-            sfpi::vFloat root = _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(inp * inp + sfpi::vConst1);
-            arg = sfpi::abs(inp) +
-                  (inp * inp) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(sfpi::vConst1 + root);
+            sfpi::vFloat root = _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(inp * inp + 1.0f);
+            arg = sfpi::abs(inp) + (inp * inp) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(1.0f + root);
         }
         v_endif;
         sfpi::dst_reg[0] = arg;
@@ -949,7 +944,7 @@ inline void calculate_asinh() {
         res = sfpi::copysgn(res, inp);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
@@ -973,7 +968,7 @@ inline void calculate_atanh() {
 
         // Clamp |x| >= 1 lanes to 0 so the interior formula stays finite there;
         // those lanes are overwritten by the boundary fix-up below.
-        v_if(a >= sfpi::vConst1) { a = sfpi::vConst0; }
+        v_if(a >= 1.0f) { a = 0.0f; }
         v_endif;
 
         // Build the log1p argument, then materialise it to DST before the log1p
@@ -981,7 +976,7 @@ inline void calculate_atanh() {
         // expression so the SFPU register allocator does not exceed its reload
         // budget (the fused form overflows it). The boundary lanes are restored
         // from `inp` afterwards, so clobbering DST here is safe.
-        sfpi::vFloat den = sfpi::vConst1 - a;
+        sfpi::vFloat den = 1.0f - a;
         sfpi::dst_reg[0] = (a + a) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(den);
 
         sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
@@ -990,15 +985,15 @@ inline void calculate_atanh() {
         // Boundary fix-ups: |x| == 1 -> +/-inf, |x| > 1 -> NaN. abs(inp) is
         // recomputed inline here rather than cached in a register; a cached
         // |x| - 1 variant pushed the allocator past the reload budget.
-        v_if(sfpi::abs(inp) > sfpi::vConst1) { res = std::numeric_limits<float>::quiet_NaN(); }
-        v_elseif(sfpi::abs(inp) == sfpi::vConst1) {
+        v_if(sfpi::abs(inp) > 1.0f) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_elseif(sfpi::abs(inp) == 1.0f) {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
             res = sfpi::copysgn(inf, inp);
         }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;

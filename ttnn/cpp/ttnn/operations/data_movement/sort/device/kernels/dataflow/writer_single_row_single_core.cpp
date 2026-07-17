@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 #include "sort_dataflow_common.hpp"
@@ -40,7 +40,7 @@ void kernel_main() {
     // when the sort kernel runs in 32-bit DEST mode.
     constexpr bool is_32_bit_data = get_compile_time_arg_val(7) == 1;
     constexpr bool is_row_major = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t rm_value_output_cb_index = get_compile_time_arg_val(9);
+    constexpr uint32_t rm_value_output_dfb_index = get_compile_time_arg_val(9);
     constexpr uint32_t W_value_bytes = get_compile_time_arg_val(10);
 
     constexpr auto value_tensor_args = TensorAccessorArgs<11>();
@@ -53,8 +53,8 @@ void kernel_main() {
     const auto value_accessor = TensorAccessor(value_tensor_args, value_tensor_buffer_addr);
 
     Noc noc;
-    CircularBuffer value_tensor_cb(value_tensor_cb_index);
-    CircularBuffer rm_value_output_cb(rm_value_output_cb_index);
+    DataflowBuffer value_tensor_dfb(value_tensor_cb_index);
+    DataflowBuffer rm_value_output_dfb(rm_value_output_dfb_index);
     constexpr uint32_t value_tensor_tile_size = get_tile_size(value_tensor_cb_index);
 
     if constexpr (!is_row_major) {
@@ -71,17 +71,17 @@ void kernel_main() {
                 }
             }
 
-            // Write sorted value tiles from value_tensor_cb → DRAM
+            // Write sorted value tiles from value_tensor_dfb → DRAM
             for (uint32_t w = 0; w < Wt; w++) {
-                value_tensor_cb.wait_front(one_tile);
+                value_tensor_dfb.wait_front(one_tile);
                 noc.async_write(
-                    value_tensor_cb,
+                    value_tensor_dfb,
                     value_accessor,
                     value_tensor_tile_size,
                     {.offset_bytes = 0},
                     {.page_id = h * Wt + w, .offset_bytes = 0});
                 noc.async_write_barrier();
-                value_tensor_cb.pop_front(one_tile);
+                value_tensor_dfb.pop_front(one_tile);
             }
         }
     } else {
@@ -93,7 +93,7 @@ void kernel_main() {
         // Per loop iteration we handle one tile-row = 32 consecutive rows:
         //   Input:  generate Wt TILE-format index tiles into index_tensor_cb
         //           (compute kernel sorts them alongside the tilized values).
-        //   Output: drain 32 untilized value pages from rm_value_output_cb
+        //   Output: drain 32 untilized value pages from rm_value_output_dfb
         //           → write via noc.async_write → value DRAM buffer.
         // ------------------------------------------------------------------
         constexpr uint32_t TILE_H = 32;  // TILE_HEIGHT
@@ -113,18 +113,18 @@ void kernel_main() {
                 }
             }
 
-            // Drain 32 sorted RM value rows from rm_value_output_cb → DRAM
+            // Drain 32 sorted RM value rows from rm_value_output_dfb → DRAM
             const uint32_t row_base = h * TILE_H;
             for (uint32_t row = 0; row < TILE_H; row++) {
-                rm_value_output_cb.wait_front(one_tile);
+                rm_value_output_dfb.wait_front(one_tile);
                 noc.async_write(
-                    rm_value_output_cb,
+                    rm_value_output_dfb,
                     value_accessor,
                     W_value_bytes,
                     {.offset_bytes = 0},
                     {.page_id = row_base + row, .offset_bytes = 0});
                 noc.async_write_barrier();
-                rm_value_output_cb.pop_front(one_tile);
+                rm_value_output_dfb.pop_front(one_tile);
             }
         }
     }

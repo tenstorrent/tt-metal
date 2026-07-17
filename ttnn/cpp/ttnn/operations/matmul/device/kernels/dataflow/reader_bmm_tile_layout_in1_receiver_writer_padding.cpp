@@ -106,6 +106,9 @@ void kernel_main() {
 
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
+    // `s` is only consumed inside the `#ifndef OUT_SHARDED` write path below; mark it used so
+    // sharded builds don't warn (-Wunused-but-set-variable).
+    (void)s;
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;

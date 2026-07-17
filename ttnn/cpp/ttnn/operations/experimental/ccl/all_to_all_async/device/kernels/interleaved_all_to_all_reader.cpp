@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 
@@ -39,6 +42,9 @@ void kernel_main() {
     constexpr auto tensor0_args = TensorAccessorArgs<7>();
     auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0);
 
+    Noc noc_obj;
+    CircularBuffer cb0(cb0_id);
+
     bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
     uint32_t forward_hops = 1;
     uint32_t backward_hops = 1;
@@ -69,19 +75,21 @@ void kernel_main() {
             for (uint32_t col_tile_id = shard_col_start_id; col_tile_id < shard_col_end_id;
                  col_tile_id += packet_size_in_pages) {
                 uint32_t tile_id = row_tile_id * in_col_tiles + col_tile_id;
-                cb_reserve_back(cb0_id, packet_size_in_pages);
-                const uint32_t l1_write_addr_base = get_write_ptr(cb0_id);
-                uint32_t l1_write_addr = l1_write_addr_base;
+                cb0.reserve_back(packet_size_in_pages);
 
                 uint32_t num_pages_to_read = std::min(shard_col_end_id - col_tile_id, packet_size_in_pages);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
-                    noc_async_read_page(tile_id, tensor0_addrgen, l1_write_addr);
-                    l1_write_addr += tensor0_page_size;
+                    noc_obj.async_read(
+                        tensor0_addrgen,
+                        cb0,
+                        tensor0_page_size,
+                        {.page_id = tile_id},
+                        {.offset_bytes = j * tensor0_page_size});
                     tile_id++;
                 }
 
-                noc_async_read_barrier();
-                cb_push_back(cb0_id, packet_size_in_pages);
+                noc_obj.async_read_barrier();
+                cb0.push_back(packet_size_in_pages);
             }
         }
     }

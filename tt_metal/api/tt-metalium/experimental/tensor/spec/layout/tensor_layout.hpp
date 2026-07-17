@@ -88,12 +88,6 @@ public:
     Shape2D compute_page_shape(const Shape2D& physical_size) const;
     size_t compute_page_size_bytes(const Shape2D& page_size) const;
 
-    TensorLayout with_memory_config(MemoryConfig memory_config) const {
-        TensorLayout result = *this;
-        result.memory_config_ = std::move(memory_config);
-        return result;
-    }
-
     bool operator==(const TensorLayout&) const = default;
     bool operator!=(const TensorLayout&) const = default;
 

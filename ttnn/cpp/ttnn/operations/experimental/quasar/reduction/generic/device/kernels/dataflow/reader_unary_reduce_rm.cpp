@@ -80,7 +80,9 @@ void reduce_rm_reader() {
     const auto clear_template_src = experimental::local_addr(cb_clear_value.get_read_ptr(), noc.get_noc_id());
 
     const auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
-    const uint32_t page_bytes = get_local_cb_interface(cb_id_rm).fifo_page_size;
+    // QSR: read entry size from the DFB object; the legacy get_local_cb_interface().fifo_page_size is stale for
+    // Metal-2.0 DFBs.
+    const uint32_t page_bytes = cb_rm.get_entry_size();
     const uint32_t valid_row_bytes = W_logical * elem_bytes;
 
     // Stage one h-tile slab (TILE_HEIGHT pages) for the given W chunk:

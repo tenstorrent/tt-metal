@@ -36,10 +36,10 @@ bool uses_multicore_path(const ArgmaxParams& args, const ArgmaxInputs& tensor_ar
  * @param keepdim Whether to keep the reduced dimension.
  * @return The output shape.
  */
-ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim) {
+ttsl::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const std::optional<int>& dim, bool keepdim) {
     auto input_shape = input_tensor.logical_shape();
     int rank = input_shape.size();
-    ttnn::SmallVector<uint32_t> output_shape;
+    ttsl::SmallVector<uint32_t> output_shape;
 
     // If no reduction dims are specified, we reduce all dimensions
     auto all_dim_reduce = not dim.has_value();

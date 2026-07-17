@@ -1611,3 +1611,26 @@ def test_slice_rm_nd_misaligned_last_dim(device, shape, slice_start, slice_end):
         slice_start[4] : slice_end[4],
     ]
     assert_with_pcc(torch_expected, ttnn.to_torch(tt_output), 0.9999)
+
+
+# 258112 exercises last_chunk_size < chunk_size (256 B tail); 262144 exercises the exact-divisor branch (last_chunk_size == chunk_size).
+@pytest.mark.parametrize("last_dim", [258112, 262144])
+def test_slice_rm_wide_row_chunking(device, last_dim):
+    """RM slice with a last-dim row wider than the double-buffered CB L1 budget."""
+    begins = [0, 2, 0]
+    ends = [6, 3, last_dim]
+    step = [1, 1, 1]
+
+    torch_input = torch.rand([6, 3, last_dim], dtype=torch.float32)
+    torch_output = torch_input[0:6, 2:3, 0:last_dim]
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.float32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))

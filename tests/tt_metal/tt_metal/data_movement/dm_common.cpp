@@ -8,6 +8,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
 #include <distributed/mesh_device_impl.hpp>
+#include "impl/emulation/emule_live_ranges.hpp"
+#include "impl/emulation/host_sanitizers.hpp"
 
 namespace tt::tt_metal::unit_tests::dm {
 
@@ -31,6 +33,21 @@ L1AddressInfo get_l1_address_and_size(
     HalProgrammableCoreType core_type = device->get_programmable_core_type(physical_core);
     uint64_t core_l1_base_address = hal.get_dev_addr(core_type, HalL1MemAddrType::DEFAULT_UNRESERVED);
     uint64_t core_l1_size = hal.get_dev_size(core_type, HalL1MemAddrType::DEFAULT_UNRESERVED);
+
+    // The DM micro-benchmarks use this unreserved-L1 extent as raw scratch (no
+    // Buffer allocation, so it's invisible to LiveL1Ranges). Under emule ASAN,
+    // register it as host-managed L1 so the OOB check accepts the kernels' raw
+    // reads/writes — including outputs the host only reads back AFTER launch,
+    // which the per-poke WriteToDeviceL1 hook can't see in time. See
+    // SANITIZER_CHECKS.md "Host-poked L1 regions".
+    if constexpr (emule::kEmuleAsanBuild) {
+        if (emule::emule_asan_enabled()) {
+            emule::LiveL1HostPokeRanges::add(
+                device->id(),
+                static_cast<uint32_t>(core_l1_base_address),
+                static_cast<uint32_t>(core_l1_base_address + core_l1_size));
+        }
+    }
 
     return {core_l1_base_address, core_l1_size};
 }

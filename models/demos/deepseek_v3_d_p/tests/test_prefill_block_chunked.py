@@ -75,7 +75,7 @@ def _resolve_trace_dir(variant) -> Path:
     overrides the variant's prefill_trace_default. A vllm trace nests metadata.json + kv_cache under
     one run-hash subdir, so if the dir itself has no metadata.json, descend into the sole subdir that
     does."""
-    path = Path(os.environ.get("PREFILL_TRACE_DIR", variant.prefill_trace_default))
+    path = Path(os.environ.get("PREFILL_TRACE_DIR", variant.test_prefill_trace_default))
     if (path / "metadata.json").exists():
         return path
     subs = [d for d in sorted(path.iterdir()) if d.is_dir() and (d / "metadata.json").exists()]
@@ -868,7 +868,7 @@ def test_ds_prefill_block_chunked_padded(
 # gate) and KimiK26Config fabric payload size. Kimi has a single dense layer (NUM_DENSE_LAYERS=1,
 # layer 0); the block test reads layer L-1's decoder output as layer L's input, so we cannot drive
 # the lone dense layer (would need layer -1) — only the first MoE layer (layer 1) is exercised.
-# These skip until the Kimi golden trace lands (set PREFILL_TRACE_DIR; see model_variants.py).
+# These skip until the Kimi golden trace lands (set PREFILL_TRACE_DIR; see tt/runners/adapters/).
 
 
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])

@@ -30,6 +30,7 @@
 #include <tt_stl/type_name.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <cstdint>
 
 // NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
 
@@ -817,8 +818,8 @@ template <typename T>
 struct update_object_of_type_t;
 
 /**
-* Recursively visits all elements in `object` that are instances of `object_t`,
-* calls the `callback` function with those instance in anticipation for an inplace modification.
+ * Recursively visits all elements in `object` that are instances of `object_t`,
+ * calls the `callback` function with those instance in anticipation for an inplace modification.
  */
 template <typename object_t, typename T>
 void update_object_of_type(auto&& callback, T& object) {
@@ -1471,9 +1472,7 @@ inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
 // The one lossy leaf is a type exposing ONLY to_hash(): its 8 hash bytes are appended, so for
 // such a type equality degrades to hash equality -- no worse than today, and none occur on the
 // tensor/shape path (TensorSpec is walked structurally down to the shape integers).
-inline void append_bytes(std::string& out, const void* p, std::size_t n) {
-    out.append(static_cast<const char*>(p), n);
-}
+inline void append_bytes(std::string& out, const void* p, std::size_t n) { out.append(static_cast<const char*>(p), n); }
 
 template <typename T>
 inline void append_canonical(std::string& out, const T& object);
@@ -1546,9 +1545,7 @@ inline void append_canonical(std::string& out, const T& object) {
         for (auto it = object.begin(); it != object.end(); ++it) {
             iterators.push_back(it);
         }
-        std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) {
-            return a->first < b->first;
-        });
+        std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) { return a->first < b->first; });
         const std::uint64_t n = object.size();
         append_bytes(out, &n, sizeof(n));
         for (const auto& it : iterators) {
@@ -1839,7 +1836,7 @@ struct to_json_t<std::unordered_map<K, V>> {
 
 template <typename K, typename V>
 struct from_json_t<std::unordered_map<K, V>> {
-    std::map<K, V> operator()(const nlohmann::json& json_object) {
+    std::unordered_map<K, V> operator()(const nlohmann::json& json_object) {
         std::unordered_map<K, V> object;
         for (const auto& [key, value] : json_object.items()) {
             object[from_json<K>(nlohmann::json::parse(key))] = from_json<V>(value);

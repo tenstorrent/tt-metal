@@ -216,8 +216,14 @@ public:
     std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
         FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
 
-    size_t get_num_available_routing_planes_in_direction(
-        FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+    // Number of routing planes usable for workload traffic in a given direction: the live (post-health-check)
+    // routing plane count minus any planes that have been reserved.
+    size_t get_num_usable_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
+
+    // Reserve `num_reserved` routing planes in `routing_direction` from `fabric_node_id` so they are excluded
+    // from the usable count. Not intended as a query API. Set semantics: the latest call wins, so repeated
+    // invocation during fabric re-init is idempotent (reserving 0 is a no-op).
+    void reserve_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction, size_t num_reserved);
 
     std::set<std::pair<chan_id_t, eth_chan_directions>> get_active_fabric_eth_channels(
         FabricNodeId fabric_node_id) const;
@@ -362,6 +368,10 @@ private:
     std::map<FabricNodeId, std::unordered_map<RoutingDirection, size_t>>
         router_port_directions_to_num_routing_planes_map_;
 
+    // map[mesh_fabric_id][direction] has the number of reserved routing planes in that direction
+    std::map<FabricNodeId, std::unordered_map<RoutingDirection, size_t>>
+        router_port_directions_to_num_reserved_planes_map_;
+
     // tables[mesh_fabric_id][eth_chan]
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
@@ -407,6 +417,8 @@ private:
 
     void load_physical_chip_mapping(
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+    // Live routing planes in a given direction: the post-health-check active plane count.
+    // Note: this includes reserved planes as well, as opposed to get_num_usable_routing_planes.
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
         const IntraMeshConnectivity& intra_mesh_connectivity,

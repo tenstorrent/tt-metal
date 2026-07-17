@@ -4,7 +4,7 @@
 
 /**
  * Reads border tiles from the tensor (DRAM interleaved or sharded) into the
- * double-buffered cb_tile_in. The writer (BRISC) applies the padding-fill mask
+ * double-buffered dfb_tile_in. The writer (BRISC) applies the padding-fill mask
  * in L1 and writes each tile back.
  *
  * Unified border-tile split. The host enumerates border tiles across all
@@ -53,7 +53,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -87,7 +87,7 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, buf_addr, tile_bytes);
 
     Noc noc;
-    CircularBuffer cb_tile_in(cb_tile_in_idx);
+    DataflowBuffer dfb_tile_in(cb_tile_in_idx);
 
     // ---- Right phase ----
     // Maintain (slice, row) incrementally instead of dividing every iteration
@@ -97,10 +97,10 @@ void kernel_main() {
         uint32_t row = num_right ? start_right - slice * right_slice_stride : 0u;
         for (uint32_t i = 0; i < num_right; ++i) {
             const uint32_t tile_id = slice * H_tiles * W_tiles + row * W_tiles + (W_tiles - 1u);
-            cb_tile_in.reserve_back(1);
-            noc.async_read(s, cb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+            dfb_tile_in.reserve_back(1);
+            noc.async_read(s, dfb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_tile_in.push_back(1);
+            dfb_tile_in.push_back(1);
             ++row;
             if (row == right_slice_stride) {
                 row = 0;
@@ -115,10 +115,10 @@ void kernel_main() {
         uint32_t col = num_bottom ? start_bottom - slice * bottom_slice_stride : 0u;
         for (uint32_t j = 0; j < num_bottom; ++j) {
             const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + col;
-            cb_tile_in.reserve_back(1);
-            noc.async_read(s, cb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+            dfb_tile_in.reserve_back(1);
+            noc.async_read(s, dfb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_tile_in.push_back(1);
+            dfb_tile_in.push_back(1);
             ++col;
             if (col == bottom_slice_stride) {
                 col = 0;
@@ -132,10 +132,10 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_corner; ++k) {
             const uint32_t slice = start_corner + k;
             const uint32_t tile_id = slice * H_tiles * W_tiles + (H_tiles - 1u) * W_tiles + (W_tiles - 1u);
-            cb_tile_in.reserve_back(1);
-            noc.async_read(s, cb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+            dfb_tile_in.reserve_back(1);
+            noc.async_read(s, dfb_tile_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_tile_in.push_back(1);
+            dfb_tile_in.push_back(1);
         }
     }
 }

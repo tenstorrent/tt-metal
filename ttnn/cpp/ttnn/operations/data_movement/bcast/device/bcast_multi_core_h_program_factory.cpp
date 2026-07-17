@@ -169,16 +169,16 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreHProgramFactory::create_descriptor
         }
         const uint32_t num_tensor_tiles_per_core = NC * Ht_per_core * Wt;
 
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                src0_buffer->address(),     // 0
-                0,                          // 1
-                0,                          // 2
+            {
+                src0_buffer,                // 0
+                0u,                         // 1
+                0u,                         // 2
                 num_tensor_tiles_per_core,  // 3
-                src1_buffer->address(),     // 4
-                0,                          // 5
-                0,                          // 6
+                src1_buffer,                // 4
+                0u,                         // 5
+                0u,                         // 6
                 num_btensor_tiles,          // 7
                 num_tensor_tiles_per_core,  // 8
                 NC,                         // 9
@@ -197,16 +197,16 @@ tt::tt_metal::ProgramDescriptor BcastMultiCoreHProgramFactory::create_descriptor
                 Wt            // Wt
             });
 
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                dst_buffer->address(),
-                0,
-                0,
+            {
+                dst_buffer,
+                0u,
+                0u,
                 Ht_per_core,
                 Wt,
                 num_Wtiles_read,
-                0,
+                0u,
                 NC,
                 Ht * Wt,
             });

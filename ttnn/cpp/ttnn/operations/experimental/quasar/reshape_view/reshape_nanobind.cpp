@@ -22,7 +22,7 @@ namespace detail {
 
 ttnn::Tensor reshape_shape_vector_wrapper(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int32_t>& shape,
+    const ttsl::SmallVector<int32_t>& shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_tile_mode,
@@ -98,7 +98,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("skip_padding_fill") = false),
 
-        // Overload 3: shape vector (SmallVector<int32_t>)
+        // Overload 3: shape vector (ttsl::SmallVector<int32_t>)
         ttnn::overload_t(
             &reshape_shape_vector_wrapper,
             nb::arg("input_tensor"),

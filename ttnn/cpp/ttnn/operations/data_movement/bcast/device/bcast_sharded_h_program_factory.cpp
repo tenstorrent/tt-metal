@@ -187,15 +187,15 @@ tt::tt_metal::ProgramDescriptor BcastShardedHProgramFactory::create_descriptor(
             Ht_per_core = Ht / bN;
         }
         const uint32_t tile_offset = Wt * ncores;  // used in multi batch weight for block sharded
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                b.buffer()->address(),  // 0
-                Ht,                     // 1
-                Wt,                     // 2
-                offset,                 // 3
-                Ht_per_core,            // 4
-                tile_offset,            // 5
+            {
+                b.buffer(),   // 0
+                Ht,           // 1
+                Wt,           // 2
+                offset,       // 3
+                Ht_per_core,  // 4
+                tile_offset,  // 5
             });
 
         compute_desc.runtime_args.emplace_back(

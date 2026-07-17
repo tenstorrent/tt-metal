@@ -73,7 +73,7 @@ def _is_galaxy_env() -> bool:
     or even in-test before `run_device_perf` spawns its tracy subprocess, the parent
     holds chip locks and the subprocess deadlocks waiting for them.
 
-    CI sets `MESH_DEVICE=TG` for galaxy jobs (see galaxy_deepseek_prefill_tests.yaml
+    CI sets `MESH_DEVICE=TG` for galaxy jobs (see blaze_models_prefill_tests.yaml
     and demo_sp_release_tests.yaml).
     """
     return os.environ.get("MESH_DEVICE", "").upper() in ("TG", "GALAXY")

@@ -81,14 +81,16 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
     // Half-face width in uint32 words: face_c_dim/2 elements × datum_bytes / 4 bytes per uint32
     // BF16: 16*2/4 = 8   FP8: 16*1/4 = 4
     const int half_face_w = config.face_c_dim * static_cast<int>(config.datum_bytes) / 4;
-    for (int x = 0; x < num_rows; x += 32) {
+    // Rows per tile-row: 32 for a full 32x32 tile (2 face-rows), 16 for a 16x32 tiny tile (1 face-row).
+    const int tile_r = config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
+    for (int x = 0; x < num_rows; x += tile_r) {
         for (int y = 0; y < num_cols; y += 2 * half_face_w) {
             int start = (x * num_cols) + y;
 
-            // Top faces
+            // Top faces (face_r_dim rows each, not a hardcoded 16, so shortened faces work)
             for (int j = 0; j < 2; j++) {
                 int start_ = start + (half_face_w * j);
-                for (int k = 0; k < 16; k++) {
+                for (int k = 0; k < config.face_r_dim; k++) {
                     for (int i = 0; i < half_face_w; i++) {
                         int idx = start_ + (num_cols * k) + i;
                         dst_vec.push_back(src_vec.at(idx));
@@ -98,10 +100,10 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
 
             if (config.num_faces > 2) {
                 // Bottom faces
-                start += 16 * num_cols;
+                start += config.face_r_dim * num_cols;
                 for (int j = 0; j < 2; j++) {
                     int start_ = start + (half_face_w * j);
-                    for (int k = 0; k < 16; k++) {
+                    for (int k = 0; k < config.face_r_dim; k++) {
                         for (int i = 0; i < half_face_w; i++) {
                             int idx = start_ + (num_cols * k) + i;
                             dst_vec.push_back(src_vec.at(idx));

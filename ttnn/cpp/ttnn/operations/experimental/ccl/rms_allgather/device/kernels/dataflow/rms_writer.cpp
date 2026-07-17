@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -15,6 +19,7 @@
 #include "reshard_writer.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_in_2 = get_compile_time_arg_val(1);
@@ -54,7 +59,14 @@ void kernel_main() {
     constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(24);
     constexpr auto gamma_args = TensorAccessorArgs<25>();
 
-    uint32_t stats_set_semaphore_addr = get_semaphore(stats_set_semaphore_id);
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb_to_allgather_writer_obj(cb_to_allgather_writer);
+    CircularBuffer cb_signaling(signaling_cb);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+
+    Semaphore<> stats_set_sem(stats_set_semaphore_id);
+
     size_t arg_idx = 0;
     const uint32_t base_post_rt =
         get_arg_val<uint32_t>(arg_idx++);  // RT 0 holds how many pre RTs there are (which can vary core by core)
@@ -98,11 +110,6 @@ void kernel_main() {
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
     ttnn::ccl::address_t tensor_address0 = get_arg_val<ttnn::ccl::address_t>(arg_idx++);
-    const uint64_t multicast_data_noc = get_noc_multicast_addr(
-        mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);
-    const uint64_t stats_set_semaphore_noc_addr = multicast_data_noc | stats_set_semaphore_addr;
-    volatile tt_l1_ptr uint32_t* stats_set_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stats_set_semaphore_addr);
     // Start the all gather part
     if (iteration_number == 0) {
         // Do this only on one of the cores
@@ -121,15 +128,15 @@ void kernel_main() {
                 arg_idx);
 
         // packet header cb
-        cb_reserve_back(reserved_packet_header_cb_id, 1);
-        auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-        cb_push_back(reserved_packet_header_cb_id, 1);
-        cb_reserve_back(reserved_packet_header_cb_id, 1);
-        auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-        cb_push_back(reserved_packet_header_cb_id, 1);
-        cb_reserve_back(reserved_packet_header_cb_id, 1);
-        auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-        cb_push_back(reserved_packet_header_cb_id, 1);
+        cb_packet_header.reserve_back(1);
+        auto packet_header_buffer_addr_forward = cb_packet_header.get_write_ptr();
+        cb_packet_header.push_back(1);
+        cb_packet_header.reserve_back(1);
+        auto packet_header_buffer_addr_backward = cb_packet_header.get_write_ptr();
+        cb_packet_header.push_back(1);
+        cb_packet_header.reserve_back(1);
+        auto packet_header_buffer_seminc = cb_packet_header.get_write_ptr();
+        cb_packet_header.push_back(1);
         // pre-populate packet headers
         volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
@@ -149,8 +156,8 @@ void kernel_main() {
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
         // Send data and the semaphore with the last tile
         uint32_t num_tiles_to_read_this_core = 1;
-        cb_wait_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb_to_allgather_writer);
+        cb_to_allgather_writer_obj.wait_front(num_tiles_to_read_this_core);
+        size_t l1_read_addr = cb_to_allgather_writer_obj.get_read_ptr();
         uint64_t noc0_dest_noc_addr = safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
         fused_write_atomic_and_advance_local_read_address_for_fabric_write(
@@ -165,7 +172,7 @@ void kernel_main() {
             false);
 
         fabric_connection.close_start();
-        cb_pop_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
+        cb_to_allgather_writer_obj.pop_front(num_tiles_to_read_this_core);
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
@@ -186,20 +193,25 @@ void kernel_main() {
         noc_semaphore_set(out_ready_sem_bank_addr_ptr, 0);
         // Signal the other local cores that the semaphore has returned
 
-        noc_semaphore_set(stats_set_semaphore_addr_ptr, VALID);
+        stats_set_sem.set(VALID);
         // num_dests counts the multicast bounding-box cells (loopback includes
         // self), not the worker count.
-        noc_semaphore_set_multicast_loopback_src(
-            stats_set_semaphore_addr, stats_set_semaphore_noc_addr, num_mcast_dests, false);
-        noc_async_write_barrier();
+        stats_set_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+            noc_obj,
+            mcast_dest_noc_start_x,
+            mcast_dest_noc_start_y,
+            mcast_dest_noc_end_x,
+            mcast_dest_noc_end_y,
+            num_mcast_dests);
+        noc_obj.async_write_barrier();
         fabric_connection.close_finish();  // Includes a noc async write barrier
     } else {
         // Wait for the signal that the stats semaphore was written in the all gather core
-        noc_semaphore_wait(stats_set_semaphore_addr_ptr, VALID);
+        stats_set_sem.wait(VALID);
     }
     // Tell the compute kernel it is ok to proceed
-    cb_reserve_back(signaling_cb, 1);
-    cb_push_back(signaling_cb, 1);
+    cb_signaling.reserve_back(1);
+    cb_signaling.push_back(1);
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
@@ -209,23 +221,23 @@ void kernel_main() {
         constexpr uint32_t bytes_in_two_facelines = bytes_in_faceline * 2;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
-        uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
-        cb_reserve_back(cb_gamma, block_w);
+        uint32_t l1_write_addr_gamma = cb_gamma_obj.get_write_ptr();
+        cb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
-            uint64_t gamma_noc_addr = gamma.get_noc_addr(tile_id);
-            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, bytes_in_two_facelines);
-            gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + bytes_in_faceline);
-            noc_async_read_barrier();  // might be faster to do two separate read instead of barrier.
+            noc_obj.async_read(
+                gamma, CoreLocalMem<uint8_t>(l1_write_addr_gamma), bytes_in_two_facelines, {.page_id = tile_id}, {});
+            uint64_t gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + bytes_in_faceline);
+            noc_obj.async_read_barrier();  // might be faster to do two separate read instead of barrier.
             noc_async_read(gamma_noc_addr, l1_write_addr_gamma + mask_read_tile_offset_bytes, bytes_in_faceline);
             l1_write_addr_gamma += gamma_tile_bytes;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_gamma, block_w);
+        noc_obj.async_read_barrier();
+        cb_gamma_obj.push_back(block_w);
     }
 
 #ifndef SKIP_WRITE_BACK
     write_minimal_resharded_data<cb_out, cb_out_resharded, worker_core_stride_w_bytes, storage_core_stride_w_bytes>(
-        num_segments_to_write_back, storage_core_start_offset, segment_args);
+        noc_obj, num_segments_to_write_back, storage_core_start_offset, segment_args);
 #endif
 }

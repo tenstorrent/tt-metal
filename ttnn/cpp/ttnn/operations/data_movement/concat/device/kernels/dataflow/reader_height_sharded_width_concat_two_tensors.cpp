@@ -5,13 +5,13 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
 
     constexpr uint32_t input_stick_size_0 = get_compile_time_arg_val(1);
     constexpr uint32_t input_stick_size_1 = get_compile_time_arg_val(2);
@@ -26,8 +26,8 @@ void kernel_main() {
     const uint32_t input_start_1 = get_compile_time_arg_val(10);
 
     const uint32_t groups = get_compile_time_arg_val(11);
-    constexpr uint32_t input_cb_0_id = get_compile_time_arg_val(12);
-    constexpr uint32_t input_cb_1_id = get_compile_time_arg_val(13);
+    constexpr uint32_t input_dfb_0_id = get_compile_time_arg_val(12);
+    constexpr uint32_t input_dfb_1_id = get_compile_time_arg_val(13);
 
     constexpr uint32_t group_stick_size_0 = input_stick_size_0 / groups;
     constexpr uint32_t group_stick_size_1 = input_stick_size_1 / groups;
@@ -35,14 +35,14 @@ void kernel_main() {
     constexpr uint32_t group_stride_1 = input_stride_1 / groups;
 
     Noc noc;
-    CircularBuffer output_cb(output_cb_id);
-    CircularBuffer input_cb_0(input_cb_0_id);
-    CircularBuffer input_cb_1(input_cb_1_id);
+    DataflowBuffer output_dfb(output_dfb_id);
+    DataflowBuffer input_dfb_0(input_dfb_0_id);
+    DataflowBuffer input_dfb_1(input_dfb_1_id);
 
-    const uint32_t base_l1_write_addr = output_cb.get_write_ptr();
+    const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
 
     uint32_t l1_write_addr_0 = base_l1_write_addr + output_stick_offset;
-    const uint32_t l1_read_addr_0 = input_cb_0.get_read_ptr() + input_start_0;
+    const uint32_t l1_read_addr_0 = input_dfb_0.get_read_ptr() + input_start_0;
     noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},
         group_stick_size_0,
@@ -67,7 +67,7 @@ void kernel_main() {
     }
 
     uint32_t l1_write_addr_1 = base_l1_write_addr + output_stick_offset + group_stick_size_0;
-    const uint32_t l1_read_addr_1 = input_cb_1.get_read_ptr() + input_start_1;
+    const uint32_t l1_read_addr_1 = input_dfb_1.get_read_ptr() + input_start_1;
     noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},
         group_stick_size_1,

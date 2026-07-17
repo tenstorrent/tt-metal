@@ -389,7 +389,7 @@ struct ReduceToOneB1 {
 
                 noc_semaphore_set(ready_sem_ptr, 0);
 
-                fabric_sender.close();
+                fabric_sender.template close<use_posted_transport_writes, forwarder_to_fabric_noc>();
                 return;
             }
 

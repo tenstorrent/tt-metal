@@ -502,8 +502,11 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
                 0u,                                    // Height offset (no height parallelism currently)
                 core_id * Wt_local,                    // Width offset for this core's chunk
                 static_cast<uint32_t>(is32_bit_data),  // Flag indicating if data is 32-bit
-                input_indices_tensor.has_value() ? static_cast<uint32_t>(input_indices_tensor->address())
-                                                 : 0u,  // DRAM address of input indices tensor (if provided)
+                input_indices_tensor.has_value()
+                    ? std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{std::cref(*input_indices_tensor)}
+                    : std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>{0u},  // DRAM address of input
+                                                                                             // indices tensor (if
+                                                                                             // provided)
             });
 
         // Local writer

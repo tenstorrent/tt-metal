@@ -66,6 +66,13 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    // Stream in1 from the GCB in ring-rotated FIFO order (gather_in0 + DRAM-sender GCB only):
+    // consume each weight block as it arrives instead of waiting for the whole tensor, so the
+    // GCB can be sized to a small window. The feeding prefetcher request MUST supply a per-receiver
+    // rotation (the `(weight, block_count, rotation)` form of queue_tensor_prefetcher_request) so it
+    // streams in matching ring-rotated FIFO order, else the matmul deadlocks (it waits for
+    // FIFO-order blocks the batched prefetcher delivers in natural order).
+    bool stream_in1 = false;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {

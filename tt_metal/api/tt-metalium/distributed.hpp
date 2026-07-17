@@ -56,7 +56,8 @@ void ReadShard(
     // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
     // Tracking removal of free function APIs in this file in this issue.
     auto* mesh_device = mesh_cq.device();
-    if (!mesh_device->is_local(coord)) {
+    auto devices = mesh_device->get_view().get_devices(MeshCoordinateRange(coord, coord));
+    if (devices.empty()) {
         return;
     }
 

@@ -6,11 +6,11 @@
 // Device-side NoC logic is unchanged; resource access uses Metal 2.0 named handles. Self-loop DFBs are
 // no longer permitted on data-movement kernels, so:
 //   - The input shard is read via tensor::input (a TensorAccessor over the resident shard): its local L1
-//     base address is recovered with NOC_LOCAL_ADDR_OFFSET(get_noc_addr(0)) and used as the source offset
+//     base address is recovered with NOC_LOCAL_ADDR_OFFSET(s.get_noc_addr(0)) and used as the source offset
 //     for the remote NoC reads against neighbouring shards. (No more cb_in0 borrowed fake-CB self-loop.)
 //   - cb_pad is now a CROSS-KERNEL DFB: this reader PRODUCES the pad-value stick once (fill moved here
 //     from the writer); the writer CONSUMES it. (No more writer self-loop.)
-//   - c_16 output shard is written in place via tensor::output (NOC_LOCAL_ADDR_OFFSET(get_noc_addr(0)));
+//   - c_16 output shard is written in place via tensor::output (NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0)));
 //     the reader writes the gathered real sticks, the writer writes the pad sticks (no borrowed DFB).
 //   - The legacy variable-length arg tail (read_noc_x/y, num_stick_chunks, chunk lists) is runtime varargs.
 #include <stdint.h>

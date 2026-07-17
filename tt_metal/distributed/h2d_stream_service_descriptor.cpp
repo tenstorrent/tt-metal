@@ -214,7 +214,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
         const auto* fb_shape = fb_spec->shape();
         TT_FATAL(fb_shape != nullptr, "Service descriptor missing global_spec.shape");
         desc.global_shape =
-            tt::tt_metal::Shape(tt::stl::Span<const uint32_t>(fb_shape->data(), fb_shape->size()));
+            tt::tt_metal::Shape(ttsl::Span<const uint32_t>(fb_shape->data(), fb_shape->size()));
         desc.global_dtype = static_cast<DataType>(fb_spec->dtype());
     }
 
@@ -222,7 +222,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
         const auto* fb_mesh_shape = fb->mesh_shape();
         TT_FATAL(fb_mesh_shape != nullptr, "Service descriptor missing mesh_shape");
         desc.mesh_shape =
-            MeshShape(tt::stl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
+            MeshShape(ttsl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
     }
 
     {
@@ -237,7 +237,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
         const auto* fb_override = fb->mapper_shape_override();
         if (fb_override != nullptr && fb_override->size() > 0) {
             shape_override =
-                MeshShape(tt::stl::Span<const uint32_t>(fb_override->data(), fb_override->size()));
+                MeshShape(ttsl::Span<const uint32_t>(fb_override->data(), fb_override->size()));
         }
         desc.mapper_config =
             MeshMapperConfig{.placements = placements, .mesh_shape_override = shape_override};
@@ -259,7 +259,7 @@ H2DStreamServiceDescriptor H2DStreamServiceDescriptor::wait_and_read(
     for (const auto* fb_entry : *fb_entries) {
         const auto* fb_coord = fb_entry->coord();
         TT_FATAL(fb_coord != nullptr, "PerCoordEntry missing coord");
-        MeshCoordinate coord(tt::stl::Span<const uint32_t>{fb_coord->data(), fb_coord->size()});
+        MeshCoordinate coord(ttsl::Span<const uint32_t>{fb_coord->data(), fb_coord->size()});
 
         const auto* fb_socket = fb_entry->socket_descriptor();
         TT_FATAL(fb_socket != nullptr, "PerCoordEntry missing socket_descriptor");

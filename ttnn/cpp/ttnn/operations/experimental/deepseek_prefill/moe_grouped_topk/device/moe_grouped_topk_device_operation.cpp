@@ -124,6 +124,7 @@ moe_grouped_topk(
     float route_scale,
     float epsilon,
     bool stable_sort,
+    ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc score_func,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& padding_config) {
     using OperationType =
@@ -137,6 +138,7 @@ moe_grouped_topk(
         route_scale,
         epsilon,
         stable_sort,
+        score_func,
         output_mem_config.value_or(scores.memory_config())};
     auto tensor_args = OperationType::tensor_args_t{scores, bias, padding_config};
 

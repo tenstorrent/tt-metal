@@ -15,86 +15,26 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: "ttsim example: add_2_integers_in_compute"
+- name: "ttsim examples"
   cmd: >-
-    build_dir=$(mktemp -d) &&
-    cmake -G Ninja -S /usr/share/tt-metalium/examples/add_2_integers_in_compute -B "$build_dir" &&
-    cmake --build "$build_dir" &&
-    find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so' -exec {} \;
+    for ex in
+    add_2_integers_in_compute
+    add_2_integers_in_riscv
+    eltwise_binary
+    eltwise_sfpu
+    hello_world_compute_kernel
+    hello_world_datamovement_kernel;
+    do
+    build_dir=$(mktemp -d) || exit 1;
+    cmake -G Ninja -S "/usr/share/tt-metalium/examples/$ex" -B "$build_dir" || exit 1;
+    cmake --build "$build_dir" || exit 1;
+    for exe in $(find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so');
+    do "$exe" || exit 1; done;
+    done
   skus:
     sim_wormhole_b0:
-      timeout: 5
+      timeout: 30
     sim_blackhole:
-      timeout: 5
+      timeout: 30
   team: ttsim
-  owner_id: U08PR765YJ1 Matt Craighead
-
-- name: "ttsim example: add_2_integers_in_riscv"
-  cmd: >-
-    build_dir=$(mktemp -d) &&
-    cmake -G Ninja -S /usr/share/tt-metalium/examples/add_2_integers_in_riscv -B "$build_dir" &&
-    cmake --build "$build_dir" &&
-    find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so' -exec {} \;
-  skus:
-    sim_wormhole_b0:
-      timeout: 5
-    sim_blackhole:
-      timeout: 5
-  team: ttsim
-  owner_id: U08PR765YJ1 Matt Craighead
-
-- name: "ttsim example: eltwise_binary"
-  cmd: >-
-    build_dir=$(mktemp -d) &&
-    cmake -G Ninja -S /usr/share/tt-metalium/examples/eltwise_binary -B "$build_dir" &&
-    cmake --build "$build_dir" &&
-    find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so' -exec {} \;
-  skus:
-    sim_wormhole_b0:
-      timeout: 5
-    sim_blackhole:
-      timeout: 5
-  team: ttsim
-  owner_id: U08PR765YJ1 Matt Craighead
-
-- name: "ttsim example: eltwise_sfpu"
-  cmd: >-
-    build_dir=$(mktemp -d) &&
-    cmake -G Ninja -S /usr/share/tt-metalium/examples/eltwise_sfpu -B "$build_dir" &&
-    cmake --build "$build_dir" &&
-    find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so' -exec {} \;
-  skus:
-    sim_wormhole_b0:
-      timeout: 5
-    sim_blackhole:
-      timeout: 5
-  team: ttsim
-  owner_id: U08PR765YJ1 Matt Craighead
-
-- name: "ttsim example: hello_world_compute_kernel"
-  cmd: >-
-    build_dir=$(mktemp -d) &&
-    cmake -G Ninja -S /usr/share/tt-metalium/examples/hello_world_compute_kernel -B "$build_dir" &&
-    cmake --build "$build_dir" &&
-    find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so' -exec {} \;
-  skus:
-    sim_wormhole_b0:
-      timeout: 5
-    sim_blackhole:
-      timeout: 5
-  team: ttsim
-  owner_id: U08PR765YJ1 Matt Craighead
-
-- name: "ttsim example: hello_world_datamovement_kernel"
-  cmd: >-
-    build_dir=$(mktemp -d) &&
-    cmake -G Ninja -S /usr/share/tt-metalium/examples/hello_world_datamovement_kernel -B "$build_dir" &&
-    cmake --build "$build_dir" &&
-    find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so' -exec {} \;
-  skus:
-    sim_wormhole_b0:
-      timeout: 5
-    sim_blackhole:
-      timeout: 5
-  team: ttsim
-  owner_id: U08PR765YJ1 Matt Craighead
+  owner_id: U08PR765YJ1 # Matt Craighead

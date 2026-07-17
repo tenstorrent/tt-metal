@@ -18,11 +18,25 @@ namespace ttnn::operations::experimental::indexer_score {
 // Future/diagonal tiles are computed and masked to -inf in-band (see valid_prefix_tiles); cost is
 // negligible at high sp_rank (~2x only near sp~0).
 
+/** This q-tile-row's causal diagonal tile (the k-tile holding key == query). Normally chunk_start_tiles +
+ *  q_row_abs, but on the mid-slab BOUNDARY chip the q-rows straddle a slab boundary: rows at/after
+ *  straddle_q_tile jump by straddle_jump_tiles (the global K gap between the two slabs the chip spans).
+ *  straddle_jump_tiles == 0 (every non-boundary device, and the chunk-aligned case) leaves it linear. */
+constexpr uint32_t causal_diag_tile(
+    uint32_t q_row_abs, uint32_t chunk_start_tiles, uint32_t straddle_q_tile, uint32_t straddle_jump_tiles) {
+    return chunk_start_tiles + q_row_abs + (q_row_abs >= straddle_q_tile ? straddle_jump_tiles : 0);
+}
+
 /** Unmasked prefix k-tiles of q-tile-row q_row_abs in a unit (start k_tile_start, k_tiles_in_unit
  *  valid). Tiles [0, this) are below the diagonal (no mask); diagonal and beyond are masked. */
 constexpr uint32_t valid_prefix_tiles(
-    uint32_t q_row_abs, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t chunk_start_tiles) {
-    const uint32_t diag_tile = chunk_start_tiles + q_row_abs;
+    uint32_t q_row_abs,
+    uint32_t k_tile_start,
+    uint32_t k_tiles_in_unit,
+    uint32_t chunk_start_tiles,
+    uint32_t straddle_q_tile,
+    uint32_t straddle_jump_tiles) {
+    const uint32_t diag_tile = causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
     const uint32_t v = diag_tile > k_tile_start ? diag_tile - k_tile_start : 0;
     return v < k_tiles_in_unit ? v : k_tiles_in_unit;
 }

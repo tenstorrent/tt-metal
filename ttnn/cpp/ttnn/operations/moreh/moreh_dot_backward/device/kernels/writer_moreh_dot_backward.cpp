@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -28,25 +28,25 @@ void kernel_main() {
     const auto s1 = TensorAccessor(dst1_args, dst1_addr);
 
     Noc noc;
-    CircularBuffer cb_out0(cb_id_out0);
-    CircularBuffer cb_out1(cb_id_out1);
+    DataflowBuffer dfb_out0(cb_id_out0);
+    DataflowBuffer dfb_out1(cb_id_out1);
     const auto out0_tile_bytes = get_tile_size(cb_id_out0);
     const auto out1_tile_bytes = get_tile_size(cb_id_out1);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {
         if (has_input_grad) {
-            cb_out0.wait_front(onetile);
-            noc.async_write(cb_out0, s0, out0_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+            dfb_out0.wait_front(onetile);
+            noc.async_write(dfb_out0, s0, out0_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
             noc.async_write_barrier();
-            cb_out0.pop_front(onetile);
+            dfb_out0.pop_front(onetile);
         }
 
         if (has_other_grad) {
-            cb_out1.wait_front(onetile);
-            noc.async_write(cb_out1, s1, out1_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+            dfb_out1.wait_front(onetile);
+            noc.async_write(dfb_out1, s1, out1_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
             noc.async_write_barrier();
-            cb_out1.pop_front(onetile);
+            dfb_out1.pop_front(onetile);
         }
     }
 }

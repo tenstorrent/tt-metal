@@ -5,7 +5,7 @@
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 4,  4 ] dim_types: [ RING, RING ] }
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
   host_topology   { dims: [ 2, 1 ] }
   channels { count: 2 policy: STRICT }
 }
@@ -242,3 +242,838 @@ graph_descriptors {
 
 # --- Instantiation ----------------------------------------------------------
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+
+# --- Pinnings ---------------------------------------------------------------
+# All 32 M0 meshes receive the same full set of 6 pinnings.
+
+# M0 (mesh_id 0)
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 1)
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 2)
+pinnings {
+  logical_fabric_node_id { mesh_id: 2 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 2 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 2 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 2 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 2 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 2 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 3)
+pinnings {
+  logical_fabric_node_id { mesh_id: 3 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 3 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 3 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 3 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 3 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 3 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 4)
+pinnings {
+  logical_fabric_node_id { mesh_id: 4 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 4 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 4 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 4 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 4 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 4 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 5)
+pinnings {
+  logical_fabric_node_id { mesh_id: 5 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 5 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 5 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 5 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 5 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 5 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 6)
+pinnings {
+  logical_fabric_node_id { mesh_id: 6 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 6 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 6 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 6 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 6 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 6 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 7)
+pinnings {
+  logical_fabric_node_id { mesh_id: 7 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 7 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 7 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 7 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 7 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 7 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 8)
+pinnings {
+  logical_fabric_node_id { mesh_id: 8 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 8 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 8 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 8 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 8 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 8 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 9)
+pinnings {
+  logical_fabric_node_id { mesh_id: 9 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 9 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 9 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 9 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 9 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 9 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 10)
+pinnings {
+  logical_fabric_node_id { mesh_id: 10 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 10 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 10 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 10 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 10 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 10 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 11)
+pinnings {
+  logical_fabric_node_id { mesh_id: 11 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 11 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 11 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 11 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 11 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 11 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 12)
+pinnings {
+  logical_fabric_node_id { mesh_id: 12 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 12 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 12 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 12 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 12 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 12 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 13)
+pinnings {
+  logical_fabric_node_id { mesh_id: 13 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 13 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 13 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 13 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 13 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 13 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 14)
+pinnings {
+  logical_fabric_node_id { mesh_id: 14 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 14 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 14 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 14 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 14 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 14 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 15)
+pinnings {
+  logical_fabric_node_id { mesh_id: 15 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 15 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 15 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 15 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 15 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 15 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 16)
+pinnings {
+  logical_fabric_node_id { mesh_id: 16 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 16 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 16 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 16 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 16 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 16 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 17)
+pinnings {
+  logical_fabric_node_id { mesh_id: 17 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 17 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 17 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 17 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 17 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 17 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 18)
+pinnings {
+  logical_fabric_node_id { mesh_id: 18 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 18 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 18 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 18 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 18 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 18 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 19)
+pinnings {
+  logical_fabric_node_id { mesh_id: 19 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 19 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 19 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 19 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 19 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 19 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 20)
+pinnings {
+  logical_fabric_node_id { mesh_id: 20 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 20 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 20 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 20 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 20 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 20 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 21)
+pinnings {
+  logical_fabric_node_id { mesh_id: 21 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 21 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 21 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 21 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 21 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 21 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 22)
+pinnings {
+  logical_fabric_node_id { mesh_id: 22 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 22 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 22 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 22 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 22 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 22 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 23)
+pinnings {
+  logical_fabric_node_id { mesh_id: 23 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 23 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 23 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 23 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 23 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 23 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 24)
+pinnings {
+  logical_fabric_node_id { mesh_id: 24 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 24 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 24 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 24 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 24 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 24 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 25)
+pinnings {
+  logical_fabric_node_id { mesh_id: 25 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 25 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 25 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 25 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 25 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 25 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 26)
+pinnings {
+  logical_fabric_node_id { mesh_id: 26 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 26 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 26 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 26 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 26 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 26 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 27)
+pinnings {
+  logical_fabric_node_id { mesh_id: 27 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 27 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 27 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 27 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 27 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 27 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 28)
+pinnings {
+  logical_fabric_node_id { mesh_id: 28 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 28 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 28 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 28 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 28 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 28 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 29)
+pinnings {
+  logical_fabric_node_id { mesh_id: 29 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 29 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 29 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 29 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 29 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 29 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 30)
+pinnings {
+  logical_fabric_node_id { mesh_id: 30 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 30 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 30 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 30 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 30 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 30 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}
+
+# M0 (mesh_id 31)
+pinnings {
+  logical_fabric_node_id { mesh_id: 31 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 31 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 31 chip_id: 14 }
+  physical_asic_position { tray_id: 4 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 31 chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 31 chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 31 chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}

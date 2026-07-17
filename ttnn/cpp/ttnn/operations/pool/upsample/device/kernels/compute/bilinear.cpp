@@ -8,6 +8,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/pack_untilize.h"
 #include "internal/circular_buffer_interface.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // Push 1 stick or partial stick to a cb (a (partial) stick consists of num_pages pages, in our case, size of a page is
@@ -25,12 +26,12 @@ inline void llk_push_pages_bilinear(const std::int32_t operand, const std::int32
 }
 
 template <uint32_t tiles_per_reduction>
-inline void reduce_h_fused(experimental::CB in_cb, experimental::CB scalar_cb, experimental::CB out_cb) {
-    const uint32_t in_cb_id = in_cb.get_cb_id();
-    const uint32_t in_scalar_cb_id = scalar_cb.get_cb_id();
-    const uint32_t out_cb_id = out_cb.get_cb_id();
+inline void reduce_h_fused(DataflowBuffer in_dfb, DataflowBuffer scalar_dfb, DataflowBuffer out_dfb) {
+    const uint32_t in_cb_id = in_dfb.get_id();
+    const uint32_t in_scalar_cb_id = scalar_dfb.get_id();
+    const uint32_t out_cb_id = out_dfb.get_id();
     tile_regs_acquire();
-    in_cb.wait_front(4);
+    in_dfb.wait_front(4);
 
     // Template parameters for unpack_tilizeA_B_block:
     constexpr bool use_neginf_srcA = false;  // Don't use negative infinity for source A
@@ -48,7 +49,7 @@ inline void reduce_h_fused(experimental::CB in_cb, experimental::CB scalar_cb, e
         reduce_tile_math<REDUCE_OP, REDUCE_DIM>(
             c_i, num_faces);  // Reduce the 2 faces (containing 4 rows for bilinear interpolation)
     }
-    in_cb.pop_front(4);
+    in_dfb.pop_front(4);
 
     tile_regs_wait();
     tile_regs_commit();
@@ -87,24 +88,24 @@ void kernel_main() {
     constexpr bool use_neginf_srcA = false;  // Don't use negative infinity for source A
     constexpr bool zero_srcA_reduce = true;  // Zero source A for reduce operation
 
-    experimental::CB tilize_reduce_cb0(tilize_reduce_cb_0);
-    experimental::CB tilize_reduce_cb1(tilize_reduce_cb_1);
-    experimental::CB scalar_cb_1(in_scalar_cb_id1);
-    experimental::CB scalar_cb_2(in_scalar_cb_id2);
-    experimental::CB out_cb(out_cb_id);
+    DataflowBuffer tilize_reduce_dfb0(tilize_reduce_cb_0);
+    DataflowBuffer tilize_reduce_dfb1(tilize_reduce_cb_1);
+    DataflowBuffer scalar_dfb_1(in_scalar_cb_id1);
+    DataflowBuffer scalar_dfb_2(in_scalar_cb_id2);
+    DataflowBuffer out_dfb(out_cb_id);
 
     tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(
         tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id); /* face geometry comes from out_cb metadata */
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
-        experimental::CB cur_in_cb = (i % 2 == 0) ? tilize_reduce_cb0 : tilize_reduce_cb1;
-        experimental::CB cur_scalar_cb = (i % 2 == 0) ? scalar_cb_1 : scalar_cb_2;
+        DataflowBuffer cur_in_dfb = (i % 2 == 0) ? tilize_reduce_dfb0 : tilize_reduce_dfb1;
+        DataflowBuffer cur_scalar_dfb = (i % 2 == 0) ? scalar_dfb_1 : scalar_dfb_2;
 
         for (uint32_t j = 0; j < blocks - 1; j++) {
-            reduce_h_fused<max_tiles_per_iter>(cur_in_cb, cur_scalar_cb, out_cb);
-            cur_scalar_cb.pop_front(1);
+            reduce_h_fused<max_tiles_per_iter>(cur_in_dfb, cur_scalar_dfb, out_dfb);
+            cur_scalar_dfb.pop_front(1);
         }
-        reduce_h_fused<partial_iter_output_tiles>(cur_in_cb, cur_scalar_cb, out_cb);
-        cur_scalar_cb.pop_front(1);
+        reduce_h_fused<partial_iter_output_tiles>(cur_in_dfb, cur_scalar_dfb, out_dfb);
+        cur_scalar_dfb.pop_front(1);
     }
 }  // void kernel_main()

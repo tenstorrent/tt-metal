@@ -28,7 +28,7 @@
 
 #include <tt_stl/small_vector.hpp>
 
-namespace tt::stl {
+namespace ttsl {
 namespace {
 
 constexpr std::size_t kInlineCapacity = 4;
@@ -528,4 +528,4 @@ TEST(SmallVectorEdgeCaseTest, OverAlignedTypesAreProperlyAllocated) {
 }
 
 }  // namespace
-}  // namespace tt::stl
+}  // namespace ttsl

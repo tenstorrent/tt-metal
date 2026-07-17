@@ -193,6 +193,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         torch_weights=torch_weights,
         weights_dtype=weights_dtype,
         weight_cache_path=None,
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
     # The unified op writes its FFN results back into the dispatched buffer in
     # place (no separate output allocation), so each path must run on its own
@@ -238,6 +239,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         weights_dtype=weights_dtype,
         weight_cache_path=CACHE_DIR,
         cache_name_prefix="routed_expert",
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
     profiler.end("cold_load")
     output2_tt = expert_cold(ttnn.clone(dispatched_buffer_tt), expert_token_counts_tt, expert_region_offsets_tt)
@@ -256,6 +258,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         weights_dtype=weights_dtype,
         weight_cache_path=CACHE_DIR,
         cache_name_prefix="routed_expert",
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
     profiler.end("warm_load")
     output3_tt = expert_warm(ttnn.clone(dispatched_buffer_tt), expert_token_counts_tt, expert_region_offsets_tt)

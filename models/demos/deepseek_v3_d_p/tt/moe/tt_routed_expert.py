@@ -201,6 +201,8 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        *,
+        activation: "ttnn.RoutedExpertActivation",
     ):
         """
         Initialize TtRoutedExpert module.
@@ -223,6 +225,11 @@ class TtRoutedExpert(LightweightModule):
                           Produced by sharding ExpertMapping.create_global_expert_idx_table via
                           get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
                           global ids. Required.
+            activation: Required ttnn.RoutedExpertActivation selecting the fused kernel's
+                          activation. Pass RoutedExpertActivation.Silu for the DeepSeek path
+                          (byte-identical) or RoutedExpertActivation.SwiGluOai for the
+                          MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
+                          without a default so the caller must choose explicitly.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -237,6 +244,17 @@ class TtRoutedExpert(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self.global_expert_idx_table = global_expert_idx_table
+        # Activation variant for the fused unified_routed_expert_moe kernel.
+        # Required RoutedExpertActivation, chosen explicitly by the caller (no
+        # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
+        # path (byte-identical) or .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
+        # swigluoai activation. Enforcing presence avoids silently running the
+        # wrong activation when a caller forgets to set it.
+        if activation is None:
+            raise ValueError(
+                "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
+            )
+        self.activation = activation
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -411,6 +429,7 @@ class TtRoutedExpert(LightweightModule):
                 self.down_projs,
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
+                activation=self.activation,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs

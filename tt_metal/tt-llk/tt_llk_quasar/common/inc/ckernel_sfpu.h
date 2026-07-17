@@ -39,7 +39,7 @@ inline void _sfpu_configure_addrmod_()
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_7, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_7);
 }
 
 /**

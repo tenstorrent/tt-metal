@@ -25,16 +25,19 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             pad_align boundary hold stale data; this op clears them so the decode side reads
             clean zeros. The window is up to pad_align-1 tokens (1-4 tiles) and may straddle a
             chip boundary -- each device zeroes its own share, derived from valid_global,
-            chunk_size_global and its coordinate along cluster_axis. The boundary (partial)
-            tile is read, multiplied by an in-kernel row-mask and written back; the fully-pad
-            tiles are written from the L1 zeros buffer.
+            chunk_size_global and its coordinate along cluster_axis. TILE layout uses the
+            mask/compute path: the boundary (partial) tile is read, multiplied by an in-kernel
+            row-mask and written back; fully-pad tiles are written from an L1 zeros buffer.
+            ROW_MAJOR BF16 and FP8_E4M3 caches use a dataflow-only path that zeroes complete
+            token rows directly, so the payload never enters the unpack/compute engine.
 
             Cache slot is linearized users-outer, layers-inner: batch_idx = slot_idx*num_layers
             + layer_idx. ``valid_global`` and ``slot_idx`` are per-call scalars patched on cache
             hits, out of the program hash.
 
             Args:
-                cache (ttnn.Tensor): 4D KV cache tensor on device, TILE layout, head dim 1.
+                cache (ttnn.Tensor): 4D, DRAM-backed KV cache tensor with head dim 1. Supports
+                    TILE layout, or ROW_MAJOR layout with BF16 or FP8_E4M3 dtype.
                 slot_idx (int): user slot in the batched prefill cache.
                 layer_idx (int): Transformer layer index for this call (hashed/structural).
                 num_layers (int): Total layers folded into the cache batch dim (structural).

@@ -5,6 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -311,8 +312,15 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
     const float atol = is_fp32 ? 0.0f : 1.0f / 128.0f;
     const float rtol = is_fp32 ? 1e-6f : 1.0f / 128.0f;
 
+    // The element-wise walk below reads golden_f and device_f in lockstep, so guard their sizes
+    // explicitly instead of relying on them being equal.
+    if (golden_f.size() != device_f.size()) {
+        log_error(tt::LogTest, "Size mismatch: golden={} words, device={} words", golden_f.size(), device_f.size());
+        return false;
+    }
+
     size_t num_mismatches = 0;
-    const size_t max_report = 8;
+    constexpr size_t max_report = 8;
     for (size_t i = 0; i < device_f.size(); ++i) {
         const float g = golden_f[i];
         const float d = device_f[i];

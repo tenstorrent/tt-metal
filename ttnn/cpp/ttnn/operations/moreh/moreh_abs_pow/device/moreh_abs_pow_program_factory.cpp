@@ -245,26 +245,19 @@ ProgramDescriptor MorehAbsPowOperation::create_descriptor(
         }
 
         // reader
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input.buffer()->address(),
-                static_cast<uint32_t>(is_dram(input)),
-                std::bit_cast<uint32_t>(decimal),
-                num_units_per_core,
-                Wt,
-                tile_offset,
-                origin_w});
+            {input.buffer(),
+             static_cast<uint32_t>(is_dram(input)),
+             std::bit_cast<uint32_t>(decimal),
+             num_units_per_core,
+             Wt,
+             tile_offset,
+             origin_w});
 
         // writer
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                output.buffer()->address(),
-                static_cast<uint32_t>(is_dram(output)),
-                num_units_per_core,
-                Wt,
-                tile_offset});
+        writer_desc.emplace_runtime_args(
+            core, {output.buffer(), static_cast<uint32_t>(is_dram(output)), num_units_per_core, Wt, tile_offset});
 
         // compute — runtime args go to the correct kernel descriptor
         KernelDescriptor::CoreRuntimeArgs compute_rt{

@@ -138,7 +138,6 @@ __attribute__((always_inline)) inline void sync_point(bool is_actor, Action acti
 
     const std::uint32_t gen = barrier[TRISC_ID] + 1;
     barrier[TRISC_ID]       = gen;
-    ckernel::invalidate_data_cache();
 
     if (is_actor)
     {

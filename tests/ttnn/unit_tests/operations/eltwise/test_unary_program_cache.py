@@ -293,3 +293,48 @@ def test_unary_sharded_cache_correctness_different_grids(device):
         tt_out = ttnn.to_torch(output)
         torch_ref = torch.abs(torch_tensor)
         assert_equal(torch_ref, tt_out)
+
+
+@pytest.mark.parametrize("first_inplace", [True, False], ids=["inplace_first", "outofplace_first"])
+def test_unary_sharded_mixed_inplace_outofplace(device, first_inplace):
+    """REGRESSION (the exact SDXL failure): sharded unary reused across a MIX of in-place
+    (output_tensor aliases the input) and out-of-place calls sharing ONE cache entry (same shape/
+    config). For sharded ops the input/output addresses ride on tensor-backed CB base addresses,
+    re-patched only by resolved_bindings.cbs — get_dynamic returns rt-args and cannot touch CBs.
+    Combined with first-occurrence alias resolution, a program built under one aliasing pattern and
+    reused under another mis-resolves the output CB to the wrong slot with nothing to correct it →
+    PCC ~0 (SDXL in-place silu). With the parity check built in, this ALSO trips the framework's
+    fast-path-vs-rebuild assertion at the exact stale CB. Both orders must stay correct."""
+    device.cache_entries_counter.reset()
+    shape = (256, 256)
+    mem = ttnn.create_sharded_memory_config(
+        shape=shape,
+        core_grid=ttnn.CoreGrid(x=1, y=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    keep_alive = []
+
+    def do(seed, inplace):
+        torch.manual_seed(seed)
+        t = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_in = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+        if inplace:
+            out = tt_in
+        else:
+            out = ttnn.from_torch(
+                torch.zeros(shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=mem,
+            )
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_in, output_tensor=out)
+        assert tt_out.buffer_address() == out.buffer_address()
+        keep_alive.extend([tt_in, tt_out, out])
+        assert_equal(torch.relu(t), ttnn.to_torch(tt_out))
+
+    for i, inplace in enumerate([first_inplace, not first_inplace, first_inplace, not first_inplace]):
+        do(i, inplace)
+    assert device.cache_entries_counter.total == 1

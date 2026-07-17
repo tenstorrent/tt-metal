@@ -377,6 +377,7 @@ class WanPipelineI2VLora(WanPipelineI2V):
             subfolder=state.checkpoint.subfolder,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=_get_state_dict,
         )

@@ -9,6 +9,9 @@
 #define PROFILER_OPT_DO_DISPATCH_CORES (1 << 1)
 #define PROFILER_OPT_DO_TRACE_ONLY (1 << 2)
 #define PROFILER_OPT_DO_SUM (1 << 3)
+// Accumulate many invocations in L1 (main zones use growing wIndex, not fixed slots), flushing to DRAM only when nearly
+// full; residual read via DRAM_AND_L1.
+#define PROFILER_OPT_DO_ACCUMULATE (1 << 4)
 
 namespace kernel_profiler {
 
@@ -58,6 +61,9 @@ enum ControlBuffer {
     DROPPED_ZONES,
     PROFILER_DONE,
     TRACE_REPLAY_STATUS,
+    // Host-set flag, non-zero on dispatch cores: in accumulate mode keeps the classic guaranteed-slot layout there so
+    // their quick_push feed isn't corrupted.
+    PROFILER_DISPATCH_CORE,
     // Used for device debug dump mode. Needs to come last in the control buffer
     // because we first update the host buffer end index and then the DRAM buffer address
     DRAM_PROFILER_ADDRESS_BR_ER_0,

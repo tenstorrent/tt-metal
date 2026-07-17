@@ -5,6 +5,7 @@
 #pragma once
 
 #include <limits>
+#include <optional>
 
 #include <tt_stl/assert.hpp>
 
@@ -27,6 +28,11 @@ inline uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
 
 struct operation_attributes_t {
     uint32_t k{};
+    // Restrict the search to the first `valid_length` columns of each row instead of the full last
+    // dimension. Lets top-k run over the real prefix of an over-allocated row (whose tail may be stale)
+    // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
+    // validated on cache hit) so a serving loop growing valid_length reuses one program.
+    std::optional<uint32_t> valid_length{};
 };
 
 struct tensor_args_t {

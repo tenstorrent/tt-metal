@@ -24,7 +24,7 @@
 //   1. Signal compute to start untilizing this batch (cb_signal_id).
 //   2. Stream the tiled input stripe from DRAM → cb_input_id, block_ct_dim tiles
 //      at a time, for compute to untilize.
-//   3. Read this batch's indices and weights pages from DRAM.
+//   3. Read this batch's indices pages from DRAM.
 //   4. Take the baton, then build the route plan into cb_plan_id: for each
 //      (token, top-k) routed to this dispatch core, allocate a DRAM page from
 //      offsets[expert] (drop if the dispatch buffer is full), classify it local
@@ -34,8 +34,12 @@
 // After the last batch: push an end-of-plan sentinel — ROUTE_INFO_SENTINEL to
 // compute (cb_signal_id) and a zero-entry sentinel plan page to the writer.
 
+#include "tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -56,6 +60,8 @@ constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
 
+    Noc noc;
+
     // ===== Compile-time args =====
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_signal_id = get_compile_time_arg_val(1);
@@ -66,41 +72,38 @@ void kernel_main() {
     constexpr uint32_t total_workers = get_compile_time_arg_val(6);
 
     constexpr uint32_t cb_indices_id = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_weights_id = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_offsets_id = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_dispatch_table_id = get_compile_time_arg_val(10);
-    constexpr uint32_t cb_plan_id = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_offsets_id = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_dispatch_table_id = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_plan_id = get_compile_time_arg_val(10);
 
-    constexpr uint32_t read_batch_size = get_compile_time_arg_val(12);
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(13);
-    constexpr uint32_t aligned_weights_page_size = get_compile_time_arg_val(14);
-    constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t aligned_dispatch_table_page_size = get_compile_time_arg_val(16);
+    constexpr uint32_t read_batch_size = get_compile_time_arg_val(11);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(12);
+    constexpr uint32_t aligned_offsets_page_size = get_compile_time_arg_val(13);
+    constexpr uint32_t aligned_dispatch_table_page_size = get_compile_time_arg_val(14);
 
-    constexpr uint32_t offsets_pages = get_compile_time_arg_val(17);
-    constexpr uint32_t dispatch_table_pages = get_compile_time_arg_val(18);
+    constexpr uint32_t offsets_pages = get_compile_time_arg_val(15);
+    constexpr uint32_t dispatch_table_pages = get_compile_time_arg_val(16);
 
-    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(19);
-    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(20);
-    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(21);
-    constexpr uint32_t dispatch_core_idx = get_compile_time_arg_val(22);
-    constexpr uint32_t num_dispatch_cores = get_compile_time_arg_val(23);
+    constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(17);
+    constexpr uint32_t n_routed_experts = get_compile_time_arg_val(18);
+    constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(19);
+    constexpr uint32_t dispatch_core_idx = get_compile_time_arg_val(20);
+    constexpr uint32_t num_dispatch_cores = get_compile_time_arg_val(21);
     constexpr uint32_t core_mask = num_dispatch_cores - 1;
     // Batches are assigned round-robin (batch i -> core i % total_workers); all cores
     // grow offsets[] left-to-right from the single shared owner copy under the baton.
 
-    constexpr uint32_t num_devices = get_compile_time_arg_val(24);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(25);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(27);
-    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(28);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(22);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(23);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(24);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(25);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(26);
 
-    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(29);
+    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(27);
 
-    constexpr auto input_args = TensorAccessorArgs<30>();
+    constexpr auto input_args = TensorAccessorArgs<28>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
-    constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
+    constexpr auto offsets_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto dispatch_table_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
 
 #ifdef HAS_PADDING_CONFIG
@@ -129,7 +132,6 @@ void kernel_main() {
     uint32_t rt_idx = 0;
     uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t weights_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t offsets_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t dispatch_table_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_idx++);
@@ -149,7 +151,6 @@ void kernel_main() {
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
-    const auto weights_addr_gen = TensorAccessor(weights_args, weights_tensor_address, aligned_weights_page_size);
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address);
     const auto dispatch_table_addr_gen = TensorAccessor(dispatch_table_args, dispatch_table_tensor_address);
 
@@ -183,7 +184,6 @@ void kernel_main() {
     const uint32_t offsets_bytes = offsets_pages * aligned_offsets_page_size;
     volatile tt_l1_ptr uint32_t* turn_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(turn_semaphore_id));
-    uint64_t owner_offsets_noc_addr = get_noc_addr(owner_noc_x, owner_noc_y, offsets_base_addr);
     uint64_t next_turn_sem_noc_addr = get_noc_addr(next_noc_x, next_noc_y, get_semaphore(turn_semaphore_id));
     if constexpr (IS_OWNER) {
         noc_semaphore_set(turn_sem_ptr, 1);
@@ -197,11 +197,9 @@ void kernel_main() {
         (uint32_t)total_batches,
         (uint32_t)total_workers);
 
-    // ===== Indices / weights scratch (overwritten per batch, single page slot used) =====
+    // ===== Indices scratch (overwritten per batch, single page slot used) =====
     cb_reserve_back(cb_indices_id, read_batch_size);
     uint32_t indices_base = get_write_ptr(cb_indices_id);
-    cb_reserve_back(cb_weights_id, read_batch_size);
-    uint32_t weights_base = get_write_ptr(cb_weights_id);
 
     // Shrink the batch loop to this device's real (unpadded) tokens when right-padded (pad_side == 0).
     // The writer applies the same reduction so they agree on the end-of-plan handshake. Padded tokens
@@ -254,12 +252,14 @@ void kernel_main() {
             cb_push_back(cb_input_id, block_ct_dim);
         }
 
-        // 3. Read this batch's indices and weights pages
-        for (uint32_t t = 0; t < batch_count; t++) {
-            noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
-            noc_async_read_page(batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
+        // 3. Read this batch's indices pages
+        {
+            // DeviceZoneScopedN("batch-DRAM-read-indices-weights");
+            for (uint32_t t = 0; t < batch_count; t++) {
+                noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
+            }
+            noc_async_read_barrier();
         }
-        noc_async_read_barrier();
 
         // 4. Build per-batch route plan into c_14.
         DPRINT_DISPATCH(
@@ -285,15 +285,18 @@ void kernel_main() {
         DPRINT_DISPATCH("[R s={} c={}] b={} GOT baton\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id, batch_idx);
         turn_expected++;
         if constexpr (!IS_OWNER) {
-            noc_async_read(owner_offsets_noc_addr, offsets_base_addr, offsets_bytes);
+            noc.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(offsets_base_addr),
+                offsets_bytes,
+                {.noc_x = owner_noc_x, .noc_y = owner_noc_y, .addr = offsets_base_addr},
+                {});
             noc_async_read_barrier();
         }
 
         for (uint32_t t = 0; t < batch_count; t++) {
             tt_l1_ptr uint16_t* indices_t =
                 reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
-            tt_l1_ptr uint16_t* weights_t =
-                reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
             uint32_t token_idx = batch_start + t;
 
             // Walk this token's top-k experts; emit a plan entry for each one routed to this
@@ -323,7 +326,6 @@ void kernel_main() {
 
                 uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
                 bool is_local = (expert_chip == linearized_mesh_coord);
-                int16_t weight = (int16_t)weights_t[k];
 
                 volatile tt_l1_ptr PlanEntry* entry = &entries[entry_count];
                 entry->flags = is_local ? PLAN_FLAG_LOCAL : 0;
@@ -332,7 +334,7 @@ void kernel_main() {
                 entry->page_idx = page_idx;
                 entry->token_idx = token_idx;
                 // Single aligned 32-bit store: baby-RISC sub-word L1 stores are unreliable on BH.
-                entry->weight_k = pack_weight_k(weight, (uint16_t)k);
+                entry->weight_k = pack_weight_k(0, (uint16_t)k);
                 // Linearized destination device index. Under 1D it is unused by the fabric writer
                 // (route/distance drive the send); under 2D it is the only routing input — the
                 // writer recomputes the EDM direction and (mesh,chip) header from it.
@@ -357,7 +359,12 @@ void kernel_main() {
         }
 
         if constexpr (!IS_OWNER) {
-            noc_async_write(offsets_base_addr, owner_offsets_noc_addr, offsets_bytes);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(offsets_base_addr),
+                UnicastEndpoint{},
+                offsets_bytes,
+                {},
+                {.noc_x = owner_noc_x, .noc_y = owner_noc_y, .addr = offsets_base_addr});
             noc_async_write_barrier();
         }
         if (batch_idx + 1 < effective_total_batches) {

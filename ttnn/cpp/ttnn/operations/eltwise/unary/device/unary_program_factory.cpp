@@ -432,10 +432,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             uint32_t o_tiles = out_shard_pages(core);
             uint32_t out_start_id = ((i / num_shards_per_width) * (out_shard_height * oWt)) +
                                     ((i % num_shards_per_width) * out_shard_width);
-            reader_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), in_tiles, out_start_id});
-            writer_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), o_tiles, out_start_id});
+            reader_desc.emplace_runtime_args(core, {input.buffer(), in_tiles, out_start_id});
+            writer_desc.emplace_runtime_args(core, {output.buffer(), o_tiles, out_start_id});
             compute_desc.runtime_args.emplace_back(
                 core, KernelDescriptor::CoreRuntimeArgs{o_tiles, packed_scalar1, packed_scalar2});
         }
@@ -476,39 +474,31 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             }
 
             if (rm_interleaved) {
-                reader_desc.runtime_args.emplace_back(
+                reader_desc.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input.buffer()->address(),
-                        npc,
-                        start_tile_id,
-                        chunks_per_row,
-                        input_chunk_size,
-                        input_last_chunk_size,
-                        rows_per_tile,
-                        total_rows});
-                writer_desc.runtime_args.emplace_back(
+                    {input.buffer(),
+                     npc,
+                     start_tile_id,
+                     chunks_per_row,
+                     input_chunk_size,
+                     input_last_chunk_size,
+                     rows_per_tile,
+                     total_rows});
+                writer_desc.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        output.buffer()->address(),
-                        npc,
-                        start_tile_id,
-                        chunks_per_row,
-                        output_chunk_size,
-                        output_last_chunk_size,
-                        rows_per_tile,
-                        total_rows});
+                    {output.buffer(),
+                     npc,
+                     start_tile_id,
+                     chunks_per_row,
+                     output_chunk_size,
+                     output_last_chunk_size,
+                     rows_per_tile,
+                     total_rows});
                 compute_desc.runtime_args.emplace_back(
                     core, KernelDescriptor::CoreRuntimeArgs{npc * chunks_per_row, packed_scalar1, packed_scalar2});
             } else {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        output.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                reader_desc.emplace_runtime_args(core, {input.buffer(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                writer_desc.emplace_runtime_args(core, {output.buffer(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
                 compute_desc.runtime_args.emplace_back(
                     core, KernelDescriptor::CoreRuntimeArgs{npc, packed_scalar1, packed_scalar2});
             }
@@ -522,6 +512,27 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> UnaryDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Recompute the descriptor for the current tensors and re-apply every per-core runtime arg
+    // (kernels pushed in create_descriptor order: reader=0, writer=1, compute=2). Buffer slots hold
+    // the current address here too, matching the bindings, so re-applying them is a no-op; the point
+    // is the volume-dependent work-split args, which the fast path would otherwise leave frozen.
+    auto desc = ProgramFactory::create_descriptor(operation_attributes, tensor_args, output);
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    for (uint32_t kernel_idx = 0; kernel_idx < desc.kernels.size(); ++kernel_idx) {
+        for (const auto& [core, args] : desc.kernels[kernel_idx].runtime_args) {
+            for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
+                dynamic_args.push_back({kernel_idx, core, arg_idx, args[arg_idx]});
+            }
+        }
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::unary

@@ -383,8 +383,10 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
     // All matmuls share the GCB receiver rectangle, so they must agree on the ring shape, and that
     // ring must match bank_to_receivers' total receiver count.
     uint32_t max_page_bytes = 0;
+    bool all_configs_stream = true;
     for (size_t i = 0; i < program_configs.size(); ++i) {
         const auto& cfg = program_configs[i];
+        all_configs_stream = all_configs_stream && cfg.stream_in1;
         const auto& grid = cfg.compute_with_storage_grid_size;
         const uint32_t cfg_ring_size = grid.x * grid.y;
         TT_FATAL(
@@ -412,19 +414,27 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
         max_page_bytes = std::max(max_page_bytes, page_bytes);
     }
 
-    // The matmul does wait_front(ring_size) per layer, so the GCB must hold at least one full layer's
-    // worth of pages. Same cap as the K-row-major builder (see create_global_circular_buffer_for_matmul_1d
-    // for why kMaxCbPagesBytes exists); no L1 budget check — callers size to fit their own receiver L1.
+    // A batched matmul does wait_front(ring_size) per layer, so the GCB must hold at least one full
+    // layer's worth of pages. A stream_in1 matmul instead consumes K-blocks FIFO as they land, so a
+    // shallow window is valid -- and shrinking the GCB is the whole point of streaming. Relax the
+    // floor to a double-buffer (one page filling while another drains) when every matmul sharing this
+    // GCB streams; a GCB shared with any batched matmul keeps the full-layer floor. Same cap as the
+    // K-row-major builder (see create_global_circular_buffer_for_matmul_1d for why kMaxCbPagesBytes
+    // exists); no L1 budget check — callers size to fit their own receiver L1.
     constexpr uint32_t kMaxCbPagesBytes = 131072u * 16u;
-    const uint32_t min_size = max_page_bytes * ring_size;
+    constexpr uint32_t kStreamMinWindowBlocks = 2;  // double-buffer floor for stream_in1
+    const uint32_t min_blocks = all_configs_stream ? kStreamMinWindowBlocks : ring_size;
+    const uint32_t min_size = max_page_bytes * min_blocks;
     TT_FATAL(
         size >= min_size,
-        "GCB size ({} B) must be at least ring_size * largest page ({} * {} = {} B); the matmul does "
-        "wait_front(ring_size) so it needs that many pages buffered before it consumes.",
+        "GCB size ({} B) must be at least {} * largest page ({} B) = {} B. {}",
         size,
-        ring_size,
+        min_blocks,
         max_page_bytes,
-        min_size);
+        min_size,
+        all_configs_stream ? "stream_in1 matmuls consume K-blocks FIFO but still need a double-buffered window."
+                           : "The matmul does wait_front(ring_size), so it needs a full layer buffered before "
+                             "it consumes.");
     TT_FATAL(
         size <= kMaxCbPagesBytes,
         "GCB size ({} B) exceeds the remote-CB page-count cap ({} B). Reduce size.",

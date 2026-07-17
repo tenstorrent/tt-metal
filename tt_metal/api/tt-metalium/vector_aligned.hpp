@@ -14,6 +14,6 @@ namespace tt::tt_metal {
 static constexpr uint32_t MEMCPY_ALIGNMENT = 16;  // sizeof(__m128i);
 
 template <typename T>
-using vector_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
+using vector_aligned = std::vector<T, ttsl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
 
 }  // namespace tt::tt_metal

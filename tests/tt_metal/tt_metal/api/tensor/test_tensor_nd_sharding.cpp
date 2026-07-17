@@ -39,6 +39,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <tuple>
 
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
@@ -1217,9 +1218,7 @@ TEST_P(NDShardingTests, LoopbackTest) {
 
     size_t volume = params.shape.volume();
     std::vector<uint16_t> data(volume);
-    for (size_t i = 0; i < volume; i++) {
-        data[i] = static_cast<uint16_t>(i);
-    }
+    std::iota(data.begin(), data.end(), uint16_t{0});
 
     auto host_tensor = HostTensor::from_vector(data, tensor_spec);
     auto& cq = mesh_device_->mesh_command_queue();
@@ -1322,9 +1321,7 @@ TEST_F(NDShardingPerfTests, TestBatchShardingPerf) {
 
     size_t volume = tensor_shape.volume();
     std::vector<uint16_t> data(volume);
-    for (size_t i = 0; i < volume; i++) {
-        data[i] = static_cast<uint16_t>(i);
-    }
+    std::iota(data.begin(), data.end(), uint16_t{0});
 
     auto measure_to_device_time_ns = [&](const TensorSpec& tensor_spec) -> double {
         auto host_tensor = HostTensor::from_vector(data, tensor_spec);

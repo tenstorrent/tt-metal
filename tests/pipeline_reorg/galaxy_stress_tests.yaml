@@ -15,7 +15,10 @@
   team: scaleout
   owner_id: U08FXFFH7L0 # Abhishek Agarwal
   cmd: |
-    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_6U_galaxy.yaml
+    # 0 disables the metal per-op timeout (overrides setup-job's 5s default), which
+    # else false-fails legitimately slow subtests (size_4096 unicast ~6.2s). A real
+    # hang is bounded by the SKU job timeout below.
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_6U_galaxy.yaml
   skus:
     wh_galaxy_perf:
       timeout: 100

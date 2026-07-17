@@ -11,7 +11,7 @@
 namespace ttnn::operations::moreh::moreh_sum_backward {
 struct MorehSumBackwardOperation {
     struct operation_attributes_t {
-        const ttnn::SmallVector<int64_t> dims;
+        const ttsl::SmallVector<int64_t> dims;
         const bool keepdim;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
