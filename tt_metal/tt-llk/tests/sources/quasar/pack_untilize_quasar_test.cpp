@@ -173,11 +173,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     tdma_descriptor_t tdma_desc;
     std::uint32_t const buf_desc_id = 31;
 
-    tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
     if (tensor_shape.face_r_dim < ckernel::pack::PACR_STRIDE_OFFSET_ROWS)
     {
-        // PACR_STRIDE quirk: need to set BD as 1x1x16 to index rows as tiles
-        tdma_desc.buf_desc.f.y_dim = 1;
+        // PACR_STRIDE quirk: tiny-tiles index L1 rows as tiles, so the BD is built with y_dim = 1.
+        tdma_desc = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
+            tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
+    }
+    else
+    {
+        tdma_desc = ckernel::trisc::construct_tdma_desc(tensor_shape, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
     }
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
