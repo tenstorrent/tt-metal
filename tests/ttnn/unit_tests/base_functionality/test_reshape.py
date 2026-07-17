@@ -934,3 +934,23 @@ def test_reshape_rm_interleaved_wide_multi_page(device, input_shape, output_shap
     )
     y = ttnn.reshape(x, output_shape)
     assert_equal(t.reshape(*output_shape), ttnn.to_torch(y))
+
+    
+def test_reshape_no_aliasing(device):
+    """Reshape must return a tensor with independent device memory.
+    Deallocating the original must not invalidate the reshaped tensor."""
+    torch_a = torch.randn(1, 2, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    b = ttnn.reshape(a, (1, 1, 1, 1, 1, 2))
+    assert b.is_allocated()
+
+    ttnn.deallocate(a, force=True)
+    assert not a.is_allocated(), "Original tensor should be deallocated"
+
+    assert b.is_allocated(), "Reshaped tensor must survive original's deallocation"
+    c = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
+    assert c.is_allocated()
+
+    result = ttnn.to_torch(b)
+    assert torch.equal(torch_a.reshape(1, 1, 1, 1, 1, 2), result)

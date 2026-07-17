@@ -34,9 +34,10 @@ ttnn::Tensor reshape_shape_vector_wrapper(
 
 void bind_reshape_view_operation(nb::module_& mod) {
     const auto* doc = R"doc(
-            Note: for a 0 cost view, the following conditions must be met:
-                * the last dimension must not change
-                * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+            Reshape always copies data and returns a tensor with independent device memory.
+            The result never aliases (shares memory with) the input tensor, so it is always
+            safe to deallocate the input after reshaping. Use ``ttnn.experimental.view`` when
+            zero-copy aliasing is explicitly desired.
 
             Args:
                 * input_tensor: Input Tensor.
