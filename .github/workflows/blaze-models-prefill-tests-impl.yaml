@@ -234,7 +234,7 @@ jobs:
 
           sudo rm -rf /home/user/tt-metal
           sudo mkdir -p /home/user/tt-metal
-          sudo chown -R "$(id -u):$(id -g)" /home/user
+          sudo chown "$(id -u):$(id -g)" /home/user/tt-metal
           tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
