@@ -59,7 +59,7 @@ ttnn::Tensor tilize(
     uint32_t input_tile_height = tile.get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
-    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-1] / input_tile_height;
+    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / input_tile_height;
 
     bool enough_space_width = ttnn::operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
