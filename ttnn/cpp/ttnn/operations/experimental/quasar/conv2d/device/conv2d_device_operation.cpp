@@ -60,8 +60,14 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
         const uint32_t padded_w = num_cores_nhw * m_ntiles * tt::constants::TILE_HEIGHT;
         const uint32_t padded_c = k_ntiles * tt::constants::TILE_WIDTH;
         ttnn::Shape tilized_shape({1, 1, padded_w, padded_c});
+        // QSR OUT headroom (SAME as the fused branch below): the tilize-only OUT is a borrowed compute self-loop
+        // (degenerate consumer, never pops); the Quasar DFB ring keeps ~1 slot free, so the last reserve blocks at
+        // exact-fill (confirmed: dprint_tr2). +1 SHARD tile-row matches the factory's +1 to OUT num_entries so the
+        // extra entry has L1 to land in. The LOGICAL tilized_shape stays un-padded (to_torch drops the pad row), so
+        // the readback [M, full_K] stays aligned. Gated to the Quasar unpack-to-dest path.
+        const uint32_t out_headroom_ntiles = (std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) ? 1u : 0u;
         std::array<uint32_t, 2> shard_shape = {
-            m_ntiles * tt::constants::TILE_HEIGHT, k_ntiles * tt::constants::TILE_WIDTH};
+            (m_ntiles + out_headroom_ntiles) * tt::constants::TILE_HEIGHT, k_ntiles * tt::constants::TILE_WIDTH};
         auto shard_grid = args.memory_config.shard_spec().value().grid;
         auto shard_spec =
             tt::tt_metal::ShardSpec{shard_grid, shard_shape, args.memory_config.shard_spec().value().orientation};

@@ -1189,6 +1189,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .num_entries = per_core_out_matrix_height_ntiles * full_k_ntiles,
                 .data_format_metadata = tilized_info.data_format,
             };
+            // QSR OUT headroom (SAME reason as the fused else-branch below): tilize-only OUT is a borrowed
+            // compute self-loop with a DEGENERATE consumer that never pops, so the producer writes exactly
+            // num_entries (= M*full_K = the full tilized activation) with no drain. The Quasar DFB ring reserves
+            // one slot (holds num_entries-1), so the LAST reserve_back blocks at exact-fill (confirmed:
+            // dprint_tr2 blocked on the final cb=OUT reserve, PB=N-1/RB=N). +1 entry gives the free slot so the
+            // last block completes. compute_output_specs adds the matching +1 tile-row of shard headroom on the
+            // UNPACK_TO_DEST path, so the extra entry fits; logical output unchanged.
+            if (arch_is_quasar && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) {
+                dfb.num_entries += 1;
+            }
         } else {
             dfb = make_dfb(DFB_OUT, Conv2dCb::OUT);
             // QSR OUT headroom: match the +1 tile-row of shard headroom compute_output_specs adds to the
