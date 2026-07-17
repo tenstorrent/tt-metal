@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Sequence
 
 import torch
@@ -193,9 +194,14 @@ class LTXCausalConv3d(Module):
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
-        # Width pre-conv mul-mask: zero pad columns before the halo (neighbor_pad has no W-mask).
+        # Fold-halo path (default when both H and W are sharded): the halo op fuses logical_h/logical_w,
+        # so the separate pre-conv W-mul below is only needed on the old-NP path. LTX_OLD_NP forces old NP.
+        use_halo = h_pad_needed and w_pad_needed and os.environ.get("LTX_OLD_NP") is None
+
+        # Width pre-conv mul-mask (old-NP path only): zero pad columns before the halo (old NP has no W-mask).
         if (
-            logical_w > 0
+            not use_halo
+            and logical_w > 0
             and self.parallel_config.width_parallel.factor > 1
             and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
         ):
@@ -226,18 +232,32 @@ class LTXCausalConv3d(Module):
                 )
                 links.append(_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
-                x_BTHWC,
-                dims=dims,
-                pad_left=pad_left,
-                pad_right=pad_right,
-                padding_mode="zeros",
-                axes=axes,
-                neighbor_sems=neighbor_sems,
-                num_links=links,
-                logical_h=(logical_h if h_pad_needed else 0),
-                t_front_pad=0,
-            )
+            if use_halo:
+                x_BTHWC = self.ccl_manager.neighbor_pad_halo_full(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    padding_mode="zeros",
+                    logical_h=logical_h,
+                    logical_w=logical_w,
+                )
+            else:
+                x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    padding_mode="zeros",
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    logical_h=(logical_h if h_pad_needed else 0),
+                    t_front_pad=0,
+                )
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
