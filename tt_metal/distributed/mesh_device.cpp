@@ -298,7 +298,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return MeshDeviceImpl::create(
         config,
@@ -316,7 +316,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return create(
         DEFAULT_CONTEXT_ID,
@@ -336,7 +336,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     auto& ctx = MetalContext::instance(context_id);
     const auto& mesh_graph = ctx.get_control_plane().get_mesh_graph();
@@ -445,7 +445,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return MeshDeviceImpl::create_unit_meshes(
         device_ids,
@@ -463,7 +463,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return create_unit_meshes(
         DEFAULT_CONTEXT_ID,
@@ -483,7 +483,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
+    ttsl::Span<const std::uint32_t> /*l1_bank_remap*/,
     size_t worker_l1_size) {
     TT_FATAL(
         !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
@@ -554,7 +554,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return MeshDeviceImpl::create_unit_mesh(
         device_id,
@@ -572,7 +572,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return create_unit_mesh(
         DEFAULT_CONTEXT_ID,
@@ -592,7 +592,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
     return create_unit_meshes(
                context_id,
@@ -633,7 +633,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         return MeshCoordinate::zero_coordinate(submesh_shape.dims());
     }();
 
-    tt::stl::SmallVector<uint32_t> end_coords;
+    ttsl::SmallVector<uint32_t> end_coords;
     for (size_t i = 0; i < submesh_shape.dims(); i++) {
         TT_FATAL(
             offset_coord[i] + submesh_shape[i] - 1 < view_->shape()[i],
@@ -703,7 +703,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
 std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
     const std::shared_ptr<MeshDevice>& parent_mesh, const MeshShape& submesh_shape) {
     // Calculate how many submeshes fit in each dimension.
-    tt::stl::SmallVector<uint32_t> steps;
+    ttsl::SmallVector<uint32_t> steps;
     for (size_t dim = 0; dim < shape().dims(); dim++) {
         TT_FATAL(
             shape()[dim] % submesh_shape[dim] == 0,
@@ -718,7 +718,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_submeshes(
     // Stamp `submesh_shape` along each dimension, `steps` number of times.
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
     for (const auto& step_position : MeshCoordinateRange(MeshShape(steps))) {
-        tt::stl::SmallVector<uint32_t> offset_coords;
+        ttsl::SmallVector<uint32_t> offset_coords;
         for (size_t dim = 0; dim < submesh_shape.dims(); dim++) {
             offset_coords.push_back(step_position[dim] * submesh_shape[dim]);
         }
@@ -884,7 +884,7 @@ bool MeshDeviceImpl::close() {
 }
 
 bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
-    ZoneScoped;
+    TTZoneScopedD(MISC);
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
@@ -934,6 +934,13 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
                         }
                     }
                 }
+            }
+        }
+
+        for (auto* device : view_->get_devices()) {
+            if (auto* physical_device = dynamic_cast<Device*>(device)) {
+                // Ensure slow dispatch is disabled regardless of current state
+                physical_device->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
             }
         }
 
@@ -1089,7 +1096,7 @@ SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
 }
 
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
@@ -1348,7 +1355,7 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
 }
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    ZoneScoped;
+    TTZoneScopedD(DISPATCH);
     TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     const auto& trace_buffer = active_sub_device_manager->get_trace(trace_id);
@@ -1375,7 +1382,7 @@ bool MeshDeviceImpl::initialize(
     size_t /*l1_small_size*/,
     size_t /*trace_region_size*/,
     size_t /*worker_l1_size*/,
-    tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
+    ttsl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
     TT_THROW("initialize() is not supported on MeshDeviceImpl - use initialize_impl() instead");
     return false;
@@ -1388,7 +1395,7 @@ bool MeshDeviceImpl::initialize_impl(
     size_t /*l1_small_size*/,
     size_t /*trace_region_size*/,
     size_t /*worker_l1_size*/,
-    tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
+    ttsl::Span<const std::uint32_t> /*l1_bank_remap*/,
     bool /*minimal*/) {
     TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
 
@@ -1441,6 +1448,11 @@ bool MeshDeviceImpl::initialize_impl(
                 active_distributed_context_));
         }
     } else {
+        for (auto* device : this->get_devices()) {
+            if (auto* physical_device = dynamic_cast<Device*>(device)) {
+                physical_device->set_smc_dispatch_telemetry_slow_dispatch_enabled(true);
+            }
+        }
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
             mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(
                 pimpl_wrapper, cq_id, std::bind(&MeshDeviceImpl::lock_api, this), active_distributed_context_));
@@ -1596,7 +1608,7 @@ const std::vector<SubDeviceId>& MeshDeviceImpl::get_sub_device_stall_group() con
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_stall_group();
 }
-void MeshDeviceImpl::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void MeshDeviceImpl::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) {
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->get_active_sub_device_manager()->set_sub_device_stall_group(sub_device_ids);
 }
@@ -1653,7 +1665,7 @@ std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address() c
 }
 
 std::optional<DeviceAddr> MeshDeviceImpl::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    ttsl::Span<const SubDeviceId> sub_device_ids) const {
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
@@ -1772,7 +1784,7 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const
     return pimpl_->lowest_occupied_compute_l1_address();
 }
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    ttsl::Span<const SubDeviceId> sub_device_ids) const {
     return pimpl_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 const std::set<CoreCoord>& MeshDevice::ethernet_cores() const { return pimpl_->ethernet_cores(); }
@@ -1803,7 +1815,7 @@ bool MeshDevice::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     return pimpl_->initialize_impl(
         this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
@@ -1831,7 +1843,7 @@ SubDeviceManagerId MeshDevice::create_sub_device_manager(
     return pimpl_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 SubDeviceManagerId MeshDevice::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     return pimpl_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 void MeshDevice::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
@@ -1848,7 +1860,7 @@ const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const { return 
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_stall_group() const {
     return pimpl_->get_sub_device_stall_group();
 }
-void MeshDevice::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void MeshDevice::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) {
     pimpl_->set_sub_device_stall_group(sub_device_ids);
 }
 void MeshDevice::reset_sub_device_stall_group() { pimpl_->reset_sub_device_stall_group(); }

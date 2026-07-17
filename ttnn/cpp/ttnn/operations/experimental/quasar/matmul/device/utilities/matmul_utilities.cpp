@@ -142,7 +142,7 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle the vector matmul case: if a_rank == 1, remove the second-to-last dimension
     if (a_rank == 1 && output_shape.rank() > 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        ttsl::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
         // Copy all elements except the second-to-last dimension
         size_t dst_idx = 0;
         for (size_t src_idx = 0; src_idx < output_shape.rank(); ++src_idx) {
@@ -155,7 +155,7 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle the case where b_rank == 1, remove the last dimension
     if (b_rank == 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        ttsl::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
         for (auto index = 0; index < output_shape.rank() - 1; ++index) {
             new_shape[index] = output_shape[index];
         }

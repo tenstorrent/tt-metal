@@ -67,15 +67,12 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     gate_params = d * config.n_routed_experts
     moe_active_per_layer = moe_active + gate_params
 
-    # ── Embedding + Head ──
+    # ── Output head ──
     padded_vocab = ((config.vocab_size + 31) // 32) * 32
-    embed_params = padded_vocab * d
     head_params = d * padded_vocab
 
     # ── Total active parameters per token ──
-    active_params = (
-        embed_params + head_params + n_layers * mla_params + n_dense * dense_mlp_params + n_moe * moe_active_per_layer
-    )
+    active_params = head_params + n_layers * mla_params + n_dense * dense_mlp_params + n_moe * moe_active_per_layer
 
     # ── Attention QK^T and attn@V FLOPs (scale with seq_len) ──
     # Q@K^T: [S, qk_head] @ [qk_head, S] per head per layer

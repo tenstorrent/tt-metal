@@ -104,6 +104,9 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().validate_circular_buffer_region(mesh_device);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(mesh_device);
+    // Metal 2.0 scratchpads stack on the DFB allocations, so must allocate them AFTER the DFBs are placed.
+    // Their locations are passed as implicit CRTAs, so allocate them BEFORE generate_dispatch_commands snapshots.
+    program.impl().allocate_scratchpads(mesh_device);
     program.impl().validate_dataflow_buffer_region(mesh_device);
 }
 
@@ -414,7 +417,7 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     for (auto& [_, program] : programs_) {
         program_impls.push_back(&program.impl());
     }
-    tt::stl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
+    ttsl::Span<tt::tt_metal::detail::ProgramImpl*> programs(program_impls.data(), program_impls.size());
 
     this->max_program_kernels_sizeB_ = tt::tt_metal::detail::ProgramImpl::finalize_program_offsets(
         extract_context_id(mesh_device),

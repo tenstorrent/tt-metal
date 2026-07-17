@@ -17,6 +17,7 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::tt_metal::experimental::dfb {
 
@@ -420,6 +421,13 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     init.producer_txn_descriptor = this->producer_txn_descriptor;
     init.consumer_txn_descriptor = this->consumer_txn_descriptor;
     init.implicit_sync_configured = 0;
+    TT_FATAL(
+        this->config.num_entries <= std::numeric_limits<uint16_t>::max(),
+        "DFB {}: num_entries ({}) exceeds the maximum {} representable on device",
+        this->id,
+        this->config.num_entries,
+        std::numeric_limits<uint16_t>::max());
+    init.num_entries = static_cast<uint16_t>(this->config.num_entries);
 
     log_debug(
         tt::LogMetal,
@@ -1478,6 +1486,9 @@ void ProgramImpl::finalize_single_dfb_config(
 }
 
 void ProgramImpl::invalidate_dataflow_buffer_allocation() {
+    // Scratchpads stack on the DFB allocators, so a DFB re-layout invalidates their addresses too.
+    // Clear the guard unconditionally (even on the early-return path) so allocate_scratchpads re-runs.
+    this->scratchpads_allocated_ = false;
     if (this->local_dataflow_buffer_allocation_needed_) {
         return;
     }
@@ -1749,7 +1760,7 @@ std::vector<CoreRange> ProgramImpl::dataflow_buffers_unique_coreranges() const {
 }
 
 void ProgramImpl::set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
-    // ZoneScoped;
+    TTZoneScopedD(PROGRAM);
     // Match detail::ProgramImpl::set_cb_data_fmt_and_tile: DFB logical ids map to CBIndex slots for HLK unpack/pack.
     for (const auto& logical_cr : crs) {
         const auto& dfbs_on_core = this->dataflow_buffers_on_corerange(logical_cr);

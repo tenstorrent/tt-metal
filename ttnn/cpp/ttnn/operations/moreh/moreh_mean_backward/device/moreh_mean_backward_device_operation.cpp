@@ -53,7 +53,7 @@ MorehMeanBackwardOperation::tensor_return_value_t MorehMeanBackwardOperation::cr
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_mean_backward::MorehMeanBackwardOperation::tensor_return_value_t moreh_mean_backward(
     const Tensor& output_grad,
-    const ttnn::SmallVector<int64_t>& dims,
+    const ttsl::SmallVector<int64_t>& dims,
     bool keepdim,
     const std::optional<ttnn::Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,

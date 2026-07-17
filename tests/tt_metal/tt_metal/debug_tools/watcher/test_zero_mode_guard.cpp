@@ -48,9 +48,7 @@ constexpr uint32_t kScratchBytes = 8 * 1024;
 constexpr uint32_t kZeroBytes = 2 * 1024;
 
 experimental::DataMovementHardwareConfig make_hw_config() {
-    return experimental::DataMovementHardwareConfig{
-        .gen2_config =
-            experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {SCRATCH_DFB}}};
+    return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
 }
 
 Program make_program(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -106,7 +104,8 @@ void set_args(Program& program, uint32_t should_trip) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = {{.node = node, .args = {{"should_trip", should_trip}, {"zero_bytes", kZeroBytes}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node, {{"should_trip", should_trip}, {"zero_bytes", kZeroBytes}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);

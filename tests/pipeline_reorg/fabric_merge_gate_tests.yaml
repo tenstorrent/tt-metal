@@ -2,8 +2,9 @@
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, arch, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> merge_gate).
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
-- name: fabric unit tests
+- name: scaleout unit tests
   cmd: ./tests/scripts/run_cpp_fabric_tests.sh
   skus:
     wh_n300_civ2:

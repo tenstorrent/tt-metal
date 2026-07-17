@@ -10,6 +10,7 @@
 #include <cmath>
 #include <filesystem>
 #include <map>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -17,8 +18,9 @@ using namespace tt::tt_metal::experimental;
 namespace ttnn::prim::qsr {
 
 // Metal 2.0 port of the single-core HW reduce factory. reader (data + reduce-scaler DFB) -> compute
-// (reduce<in, scaler, out>; the negate/MIN path adds INTRA self-loop acc/ineg DFBs) -> writer. Reduce
-// defines (REDUCE_OP / REDUCE_DIM / optional REDUCE_POST_MUL) flow through compiler_options.defines.
+// (reduce<in, scaler, out>) -> writer. Reduce defines (REDUCE_OP / REDUCE_DIM / optional
+// REDUCE_POST_MUL) flow through compiler_options.defines. MIN (negate) is rejected in validate() on
+// Quasar (negative_tile is unported), so no fused-negate compute variant exists here.
 ttnn::device_operation::ProgramArtifacts
 ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
@@ -85,8 +87,6 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     const DFBSpecName IN{"in"};          // legacy c_0
     const DFBSpecName SCALER{"scaler"};  // legacy c_2
     const DFBSpecName OUT{"out"};        // legacy c_3
-    const DFBSpecName ACC{"acc"};        // legacy c_4 (negate path)
-    const DFBSpecName INEG{"ineg"};      // legacy c_5 (negate path)
     const TensorParamName INPUT{"input"};
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
@@ -110,18 +110,6 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .data_format_metadata = dst_cb_data_format};
 
     std::vector<DataflowBufferSpec> dfbs = {in_dfb, scaler_dfb, out_dfb};
-    if (operation_attributes.negate) {
-        dfbs.push_back(DataflowBufferSpec{
-            .unique_id = ACC,
-            .entry_size = dst_single_tile_size,
-            .num_entries = 1,
-            .data_format_metadata = dst_cb_data_format});
-        dfbs.push_back(DataflowBufferSpec{
-            .unique_id = INEG,
-            .entry_size = dst_single_tile_size,
-            .num_entries = 1,
-            .data_format_metadata = dst_cb_data_format});
-    }
 
     TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
@@ -151,7 +139,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args = {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device().arch()),
     };
 
     KernelSpec writer{
@@ -161,28 +149,15 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device().arch()),
     };
 
-    // ---- Compute (reduce, or negate/MIN variant with INTRA self-loop acc/ineg) ----
+    // ---- Compute (reduce<in, scaler, out>) ----
     std::vector<DFBBinding> compute_bindings = {
         DFBBinding{.dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = SCALER, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}};
-    const std::filesystem::path compute_source =
-        kdir / (operation_attributes.negate ? "compute/reduce_hw_neg_metal2.cpp" : "compute/reduce_metal2.cpp");
-    if (operation_attributes.negate) {
-        // acc / ineg: each produced AND consumed by this compute kernel (self-loop) -> bind both
-        // endpoints and declare INTRA connectivity (see pool_generic precedent).
-        compute_bindings.push_back(
-            DFBBinding{.dfb_spec_name = ACC, .accessor_name = "acc", .endpoint_type = DFBEndpointType::PRODUCER});
-        compute_bindings.push_back(
-            DFBBinding{.dfb_spec_name = ACC, .accessor_name = "acc", .endpoint_type = DFBEndpointType::CONSUMER});
-        compute_bindings.push_back(
-            DFBBinding{.dfb_spec_name = INEG, .accessor_name = "ineg", .endpoint_type = DFBEndpointType::PRODUCER});
-        compute_bindings.push_back(
-            DFBBinding{.dfb_spec_name = INEG, .accessor_name = "ineg", .endpoint_type = DFBEndpointType::CONSUMER});
-    }
+    const std::filesystem::path compute_source = kdir / "compute/reduce_metal2.cpp";
 
     KernelSpec compute{
         .unique_id = COMPUTE,
@@ -190,7 +165,13 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings = std::move(compute_bindings),
         .compile_time_args = {{"Ht", Ht}, {"Wt", Wt}, {"NC", NC}, {"post_mul_scaler_bits", post_mul_scaler_bits}},
-        .hw_config = ComputeHardwareConfig{.math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en},
+        .hw_config = ttnn::to_compute_hardware_config(
+            a.device().arch(),
+            ttnn::ComputeKernelConfig{
+                .math_fidelity = math_fidelity,
+                .math_approx_mode = false,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .dst_full_sync_en = false}),
     };
 
     Group<KernelSpec> kernels = {reader, writer, compute};
@@ -204,10 +185,10 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         num_tensor_tiles,
         out_dim_divider);
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args = {KernelRunArgs::NodeRuntimeArgs{
-        .node = selected_core_coord, .args = {{"num_tiles", num_tensor_tiles}, {"start_id", 0u}}}};
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args = {KernelRunArgs::NodeRuntimeArgs{
-        .node = selected_core_coord, .args = {{"num_pages", num_tensor_tiles / out_dim_divider}, {"start_id", 0u}}}};
+    KernelRunArgs::RuntimeArgValues reader_node_args =
+        MakeRuntimeArgsForSingleNode(selected_core_coord, {{"num_tiles", num_tensor_tiles}, {"start_id", 0u}});
+    KernelRunArgs::RuntimeArgValues writer_node_args = MakeRuntimeArgsForSingleNode(
+        selected_core_coord, {{"num_pages", num_tensor_tiles / out_dim_divider}, {"start_id", 0u}});
 
     ProgramSpec spec{
         .name = "reduce_single_core_hw",

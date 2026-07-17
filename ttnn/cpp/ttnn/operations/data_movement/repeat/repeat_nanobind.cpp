@@ -9,7 +9,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn-nanobind/small_vector_caster.hpp"  // for SmallVector<uint32_t>
+#include "ttnn-nanobind/small_vector_caster.hpp"  // for ttsl::SmallVector<uint32_t>
 
 #include "repeat.hpp"
 
@@ -34,7 +34,7 @@ void bind_repeat(nb::module_& mod) {
     ttnn::bind_function<"repeat">(
         mod,
         doc,
-        nb::overload_cast<const ttnn::Tensor&, const ttnn::SmallVector<uint32_t>&, const std::optional<MemoryConfig>&>(
+        nb::overload_cast<const ttnn::Tensor&, const ttsl::SmallVector<uint32_t>&, const std::optional<MemoryConfig>&>(
             &ttnn::repeat),
         nb::arg("input_tensor"),
         nb::arg("repeat_dims"),

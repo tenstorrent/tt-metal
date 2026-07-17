@@ -170,14 +170,20 @@
 - name: Qwen3.6 unit tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_attention_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 12
+      timeout: 35
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
@@ -224,6 +230,18 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+# Janus Pro unit tests: Blackhole only (P150).
+- name: Janus Pro-7B unit tests
+  cmd: |
+    pytest --timeout 600 models/experimental/janus_pro/tests/test_ci_dispatch.py
+  model: janus-pro-7b
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 3
+  owner_id: U0B25UFEEAX # Milos Micic
+  team: shield
+
 # Gemma-4 unit tests: one entry per model variant, multiple SKUs per entry.
 # parametrize_mesh_with_fabric() picks the largest mesh shape that fits on each
 # runner when CI=true is set, so the same `pytest` invocation runs 1x1 on N150,
@@ -233,7 +251,8 @@
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E2B-it
-    # test_lm_head and test_model::test_full_model load real weights via
+    # test_lm_head, test_packed_verify (spec-decode packed verify, #46755) and
+    # test_model::test_full_model load real weights via
     # AutoModelForCausalLM.from_pretrained — they run in the e2e job instead
     # so the unit suite can stay weight-free and self-contained on the
     # checked-in config.json.
@@ -261,6 +280,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -285,6 +305,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -313,6 +334,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -345,6 +367,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -375,6 +398,7 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
@@ -457,6 +481,19 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+- name: Qwen3-32B unit tests (Blackhole Galaxy)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
+    pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
+  model: qwen3-32b-galaxy
+  skus:
+    bh_galaxy:
+      timeout: 20
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
 # GPT-OSS unit tests: uses HF config only (no weights). parametrize_mesh_with_fabric()
 # picks the largest fitting mesh shape per SKU when CI=true, so one yaml entry
 # covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
@@ -499,7 +536,14 @@
       tier: 1
     # Blackhole
     bh_quietbox_2:
-      timeout: 10
+      # 10 min was too tight: the suite runs to ~12 min and got wall-clock
+      # killed mid-"Full MLP Pipeline" on the prefill_4096 test_decoder while
+      # all components were still passing (PCC 0.96-0.99). 15 also proved too
+      # tight on slower hosts (07-06: killed at the 15-min limit having done 52
+      # of ~64 tests on p03t05, vs 11.4 min for the full 64 on p02t07 — host
+      # variance, not a hang; firmware pre-compiled, all sub-tests pass). Bump to
+      # 22; suite is long (test_rope seq sweep to 131k) and may want sharding.
+      timeout: 22
       tier: 1
     bh_galaxy:
       timeout: 10
@@ -684,8 +728,6 @@
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
 
-
-
 - name: TT-DiT Flux.1-schnell unit tests
   cmd: |
     unset HF_HUB_OFFLINE
@@ -706,7 +748,6 @@
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
-
   model: flux.1-dev
   skus:
     bh_quietbox_2:
@@ -714,3 +755,57 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+
+- name: TT-DiT Wan2.2-T2V-A14B  unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
+    pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
+  model: wan-2.2-t2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 150
+    #   tier: 1
+    wh_galaxy:
+      timeout: 150
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Wan2.2-I2V-A14B  unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py
+  model: wan-2.2-i2v
+  skus:
+    # bh_galaxy:
+    #   timeout: 120
+    #   tier: 1
+    wh_galaxy:
+      timeout: 40
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: panoptic-deeplab unit tests
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
+  model: panoptic-deeplab
+  skus:
+    bh_p150b_civ2:
+      timeout: 8
+      tier: 3
+  owner_id: U09LK84G4TF # Nikola Milicevic
+  team: shield
+
+- name: bevformer unit tests
+  cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/bevformer/tests/pcc/ --timeout=660
+  model: bevformer
+  skus:
+    bh_p150b_civ2:
+      timeout: 12
+      tier: 3
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: shield

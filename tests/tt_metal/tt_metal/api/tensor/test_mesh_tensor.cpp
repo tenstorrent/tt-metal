@@ -261,7 +261,7 @@ using MeshTensorPinnedMemoryBudgetTest = MeshDevice1x1Fixture;
 constexpr int kPinnedMemoryTestAlignment = 64;
 constexpr size_t kPinnedWriteThresholdBytesForTest = 32 * 1024 * 1024;
 
-using AlignedUInt32Vector = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, kPinnedMemoryTestAlignment>>;
+using AlignedUInt32Vector = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, kPinnedMemoryTestAlignment>>;
 
 class ScopedPinnedMemoryCacheLimit {
 public:
@@ -281,7 +281,7 @@ private:
 
 HostBuffer make_aligned_host_buffer(size_t num_words, uint32_t fill) {
     auto data = std::make_shared<AlignedUInt32Vector>(num_words, fill);
-    return HostBuffer(tt::stl::Span<uint32_t>(data->data(), data->size()), tt::tt_metal::MemoryPin(data));
+    return HostBuffer(ttsl::Span<uint32_t>(data->data(), data->size()), tt::tt_metal::MemoryPin(data));
 }
 
 HostTensor make_full_coverage_aligned_host_tensor(
@@ -514,7 +514,7 @@ TEST_F(MeshTensorPinnedMemoryBudgetTest, LargeHostWriteOverHardwarePinBudgetFall
     const auto first_coord = *distributed::MeshCoordinateRange(mesh_device_->shape()).begin();
     large_dhb.emplace_shard(first_coord, [&]() {
         return HostBuffer(
-            tt::stl::Span<uint32_t>(reinterpret_cast<uint32_t*>(mapping_owner.get()), num_words),
+            ttsl::Span<uint32_t>(reinterpret_cast<uint32_t*>(mapping_owner.get()), num_words),
             tt::tt_metal::MemoryPin(std::static_pointer_cast<void>(mapping_owner)));
     });
     auto large_host_tensor = HostTensor::from_buffer(

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
@@ -47,17 +47,17 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src0_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
-    CircularBuffer cb_scratch(1);
+    DataflowBuffer dfb(dfb_id_in0);
+    DataflowBuffer dfb_scratch(1);
 
-    uint32_t intermed_l1_scratch = MISALIGNED ? cb_scratch.get_write_ptr() : 0;
+    uint32_t intermed_l1_scratch = MISALIGNED ? dfb_scratch.get_write_ptr() : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
     for (uint32_t t = 0; t < num_tiles; t++) {
         auto h32 = (h & 31);
 
-        cb.reserve_back(onetile);
+        dfb.reserve_back(onetile);
 
-        uint32_t dest_tr0_l1 = cb.get_write_ptr();
+        uint32_t dest_tr0_l1 = dfb.get_write_ptr();
         // uint32_t save_dest = dest_tr0_l1;
         uint32_t cSubtileOffs = 0;
         for (uint32_t sub = 0; sub < 4; sub++) {
@@ -159,7 +159,7 @@ void kernel_main() {
         noc.async_read_barrier();
 
         // notifies the unpacker that the buffer is populated
-        cb.push_back(onetile);
+        dfb.push_back(onetile);
         wt++;
         if (wt == WT) {  // End of row
             wt = 0;

@@ -10,7 +10,7 @@
 #include <tt_stl/span.hpp>
 
 #include <tt-metalium/tile.hpp>
-#include "tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 #include "mx_tile_pack.hpp"
 
@@ -41,17 +41,17 @@ constexpr tt::tt_metal::mx::FormatParams kMxFp4Params = {
 
 template <typename T>
 std::vector<uint32_t> pack_as_mxfp4_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
+    TTZoneScopedD(DATA_FORMAT);
     return tt::tt_metal::mx::pack_as_mx_tiles_impl(data, row_major_input, tile, kMxFp4Params);
 }
 
 // Explicit instantiations — keep in sync with the supported input element types.
 template std::vector<uint32_t> pack_as_mxfp4_tiles<float>(
-    tt::stl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
+    ttsl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
 
 std::vector<float> unpack_mxfp4_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxfp4_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    ttsl::Span<const uint32_t> mxfp4_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
+    TTZoneScopedD(DATA_FORMAT);
     return tt::tt_metal::mx::unpack_mx_tiles_into_float_vec_impl(mxfp4_tiles, row_major_output, tile, kMxFp4Params);
 }

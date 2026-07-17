@@ -94,16 +94,25 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
             volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
 
+            // The kernel-facing dfb::<name> accessor is the DFB's PROGRAM-WIDE (global) id, but this
+            // loop's `logical_dfb_id` counter is only the per-core sequential position (num_dfbs is the
+            // per-core count and the host writes configs compacted per core). Those differ whenever cores
+            // host heterogeneous DFB sets (e.g. a decoy DFB on one core only), which made a producer read a
+            // zeroed interface slot and issue a 0-byte NoC read. Index the global-id-keyed arrays by the
+            // true global id carried in the config (init_ptr->logical_id), not the loop counter. For a
+            // homogeneous layout global id == loop position, so this is a no-op there.
+            const uint32_t global_dfb_id = init_ptr->logical_id;
+
             // Populate LocalDFBInterface from combined dfb_initializer_t + dfb_initializer_per_risc_t
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
             ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_PACK);
             // Pack TRISC has smaller local memory so the LocalDFBInterface is tightly packed and a
             // second lookup table is needed to map the logical DFB ID to the tightly packed index.
             const uint8_t compact_dfb_id = compact_dfb_count++;
-            g_dfb_logical_to_compact[logical_dfb_id] = compact_dfb_id;
+            g_dfb_logical_to_compact[global_dfb_id] = compact_dfb_id;
             LocalDFBInterface& dfb_interface = g_dfb_interface[compact_dfb_id];
 #else
-            LocalDFBInterface& dfb_interface = g_dfb_interface[logical_dfb_id];
+            LocalDFBInterface& dfb_interface = g_dfb_interface[global_dfb_id];
 #endif
 
             // DPRINT("risc_index: {}\n", static_cast<uint32_t>(risc_index));
@@ -116,6 +125,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             dfb_interface.entry_size = static_cast<uint16_t>(init_ptr->entry_size >> cb_addr_shift);
             dfb_interface.stride_size = static_cast<uint16_t>(
                 static_cast<uint32_t>(dfb_interface.entry_size) * static_cast<uint32_t>(init_ptr->stride_in_entries));
+            dfb_interface.num_entries = init_ptr->num_entries;
             dfb_interface.stride_size_tiles = static_cast<uint8_t>(init_ptr->stride_in_entries);
 #if defined(UCK_CHLKC_PACK)
             dfb_interface.wr_entry_ptr = 0;
@@ -125,6 +135,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #else
             dfb_interface.entry_size = init_ptr->entry_size >> cb_addr_shift;
             dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
+            dfb_interface.num_entries = init_ptr->num_entries;
 #endif
 
             for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {

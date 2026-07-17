@@ -131,9 +131,9 @@ std::vector<Tensor> post_sort_transform_tensor(
 
     const int8_t normalized_dim = dim < 0 ? orig_rank + dim : dim;
     if (output_logical_shape[-1] != original_lshape[normalized_dim]) {
-        const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        const ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        const ttnn::SmallVector<uint32_t> end_index = {
+        const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        const ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        const ttsl::SmallVector<uint32_t> end_index = {
             output_logical_shape[-4],
             output_logical_shape[-3],
             output_logical_shape[-2],
@@ -152,9 +152,9 @@ std::vector<Tensor> post_sort_transform_tensor(
         if (result_combined_h != original_combined_h) {
             const uint32_t nc = cur_shape[0] * cur_shape[1];
             const uint32_t h_sliced = original_combined_h / nc;
-            const ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-            const ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-            const ttnn::SmallVector<uint32_t> end_index = {cur_shape[0], cur_shape[1], h_sliced, cur_shape[3]};
+            const ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
+            const ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+            const ttsl::SmallVector<uint32_t> end_index = {cur_shape[0], cur_shape[1], h_sliced, cur_shape[3]};
             result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
             result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
         }
@@ -165,7 +165,7 @@ std::vector<Tensor> post_sort_transform_tensor(
         result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
         result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
     } else if (orig_rank == 1) {
-        const ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
+        const ttsl::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
         result[0] = ttnn::reshape(result[0], ttnn::Shape{result_shape});
         result[1] = ttnn::reshape(result[1], ttnn::Shape{result_shape});
     } else if (orig_rank > 4) {
@@ -180,7 +180,7 @@ std::vector<Tensor> post_sort_transform_tensor(
         // ttnn::experimental::view) and entirely bypasses the device reshape
         // kernel.  This is essential for UINT16 indices, which the device
         // reshape kernel rejects, and avoids the cost of a dtype round-trip.
-        ttnn::SmallVector<uint32_t> reshape_target(input_shape.cbegin(), input_shape.cend());
+        ttsl::SmallVector<uint32_t> reshape_target(input_shape.cbegin(), input_shape.cend());
         if (!is_dim_last_idx) {
             const int normalized = dim < 0 ? orig_rank + dim : dim;
             std::swap(reshape_target[normalized], reshape_target[orig_rank - 1]);

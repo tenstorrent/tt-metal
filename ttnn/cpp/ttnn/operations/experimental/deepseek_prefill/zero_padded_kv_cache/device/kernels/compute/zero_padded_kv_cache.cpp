@@ -7,7 +7,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
-#include "../zero_padded_kv_cache_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/device/kernels/zero_padded_kv_cache_common.hpp"
 
 // Multiplies the boundary (partial) pad tile by the row-mask, zeroing the pad rows while preserving
 // the real rows. Only runs on the chip that owns the partial tile. The mask is a single tile reused

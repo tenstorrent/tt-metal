@@ -91,7 +91,7 @@ inline void _llk_unpack_topk_xl_copy_(
 
     if (is_32bit_input(unpack_src_format, unpack_dst_format))
     {
-        unpack_to_dest_tile_done(unp_cfg_context);
+        unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
     }
 
     switch_config_context(unp_cfg_context);

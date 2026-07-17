@@ -124,10 +124,7 @@ ProgramDescriptor MorehDotOperation::create_descriptor(
     reader_desc.core_ranges = core_set;
     reader_desc.compile_time_args = std::move(reader_ct_args);
     reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.runtime_args.emplace_back(
-        core,
-        KernelDescriptor::CoreRuntimeArgs{
-            src0_buffer->address(), src1_buffer->address(), num_tiles, 0u, mask_h, mask_w});
+    reader_desc.emplace_runtime_args(core, {src0_buffer, src1_buffer, num_tiles, 0u, mask_h, mask_w});
 
     // Writer kernel
     KernelDescriptor::CompileTimeArgs writer_ct_args = {static_cast<uint32_t>(tt::CBIndex::c_16)};
@@ -139,7 +136,7 @@ ProgramDescriptor MorehDotOperation::create_descriptor(
     writer_desc.core_ranges = core_set;
     writer_desc.compile_time_args = std::move(writer_ct_args);
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), 1u, 0u});
+    writer_desc.emplace_runtime_args(core, {dst_buffer, 1u, 0u});
 
     // Compute kernel
     KernelDescriptor compute_desc;

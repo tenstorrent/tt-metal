@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -13,7 +13,7 @@ inline uint64_t round_down_32(uint64_t a) { return (a >> 5) << 5; }
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t dfb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -43,18 +43,18 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
     Noc noc;
-    CircularBuffer cb_out0(cb_id_out0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_out0.wait_front(num_tiles_block_c);
-            cb_out0.pop_front(num_tiles_block_c);
+            dfb_out0.wait_front(num_tiles_block_c);
+            dfb_out0.pop_front(num_tiles_block_c);
         }
     };
 
     auto write_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
-        cb_out0.wait_front(num_tiles_block_c);
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
+        dfb_out0.wait_front(num_tiles_block_c);
+        uint32_t l1_read_addr = dfb_out0.get_read_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
             CoreLocalMem<uint32_t> src(l1_read_addr);
@@ -67,7 +67,7 @@ void kernel_main() {
             // Block write
             noc.async_write_barrier();
         }
-        cb_out0.pop_front(num_tiles_block_c);
+        dfb_out0.pop_front(num_tiles_block_c);
     };
 
     auto write_block_rows = [&](uint32_t num_rows_block, uint32_t base_stick_id) {

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/numeric/bfloat16.h"
 
@@ -143,7 +144,7 @@ ALWI void read_four_corner_inputs(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    experimental::CB input_cb) {
+    DataflowBuffer input_dfb) {
     // Boundary checks (recompute for performance)
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -157,7 +158,7 @@ ALWI void read_four_corner_inputs(
         const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
         noc.async_read(
             input_tensor_accessor,
-            input_cb,
+            input_dfb,
             read_bytes,
             {.page_id = north_west_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
@@ -168,7 +169,7 @@ ALWI void read_four_corner_inputs(
         const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
         noc.async_read(
             input_tensor_accessor,
-            input_cb,
+            input_dfb,
             read_bytes,
             {.page_id = north_east_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
@@ -179,7 +180,7 @@ ALWI void read_four_corner_inputs(
         const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
         noc.async_read(
             input_tensor_accessor,
-            input_cb,
+            input_dfb,
             read_bytes,
             {.page_id = south_west_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
@@ -190,7 +191,7 @@ ALWI void read_four_corner_inputs(
         const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
         noc.async_read(
             input_tensor_accessor,
-            input_cb,
+            input_dfb,
             read_bytes,
             {.page_id = south_east_stick_index, .offset_bytes = src_byte_offset},
             {.offset_bytes = write_offset});
@@ -209,7 +210,7 @@ ALWI void read_four_corner_inputs_with_fill(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    experimental::CB input_cb,
+    DataflowBuffer input_dfb,
     uint32_t fill_stick_addr) {
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -224,12 +225,12 @@ ALWI void read_four_corner_inputs_with_fill(
         const uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
         noc.async_read(
             input_tensor_accessor,
-            input_cb,
+            input_dfb,
             input_stick_nbytes,
             {.page_id = north_west_stick_index},
             {.offset_bytes = write_offset});
     } else {
-        noc.async_read(self_ep, input_cb, input_stick_nbytes, fill_src, {.offset_bytes = write_offset});
+        noc.async_read(self_ep, input_dfb, input_stick_nbytes, fill_src, {.offset_bytes = write_offset});
     }
     write_offset += input_stick_nbytes;
 
@@ -237,12 +238,12 @@ ALWI void read_four_corner_inputs_with_fill(
         const uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
         noc.async_read(
             input_tensor_accessor,
-            input_cb,
+            input_dfb,
             input_stick_nbytes,
             {.page_id = north_east_stick_index},
             {.offset_bytes = write_offset});
     } else {
-        noc.async_read(self_ep, input_cb, input_stick_nbytes, fill_src, {.offset_bytes = write_offset});
+        noc.async_read(self_ep, input_dfb, input_stick_nbytes, fill_src, {.offset_bytes = write_offset});
     }
     write_offset += input_stick_nbytes;
 
@@ -250,12 +251,12 @@ ALWI void read_four_corner_inputs_with_fill(
         const uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
         noc.async_read(
             input_tensor_accessor,
-            input_cb,
+            input_dfb,
             input_stick_nbytes,
             {.page_id = south_west_stick_index},
             {.offset_bytes = write_offset});
     } else {
-        noc.async_read(self_ep, input_cb, input_stick_nbytes, fill_src, {.offset_bytes = write_offset});
+        noc.async_read(self_ep, input_dfb, input_stick_nbytes, fill_src, {.offset_bytes = write_offset});
     }
     write_offset += input_stick_nbytes;
 
@@ -263,12 +264,12 @@ ALWI void read_four_corner_inputs_with_fill(
         const uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
         noc.async_read(
             input_tensor_accessor,
-            input_cb,
+            input_dfb,
             input_stick_nbytes,
             {.page_id = south_east_stick_index},
             {.offset_bytes = write_offset});
     } else {
-        noc.async_read(self_ep, input_cb, input_stick_nbytes, fill_src, {.offset_bytes = write_offset});
+        noc.async_read(self_ep, input_dfb, input_stick_nbytes, fill_src, {.offset_bytes = write_offset});
     }
 }
 
@@ -295,8 +296,8 @@ template <
     typename GridPtrType>
 ALWI void process_grid_point(
     Noc noc,
-    experimental::CB input_cb,
-    experimental::CB scalar_cb,
+    DataflowBuffer input_dfb,
+    DataflowBuffer scalar_dfb,
     GridPtrType grid_ptr,
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
@@ -366,10 +367,10 @@ ALWI void process_grid_point(
 
     // Store bilinear interpolation weights for this grid point. The same weights apply to every
     // channel chunk, so we push the scalar CB only once.
-    scalar_cb.reserve_back(1);
-    const uint32_t l1_write_scalar_addr = scalar_cb.get_write_ptr();
+    scalar_dfb.reserve_back(1);
+    const uint32_t l1_write_scalar_addr = scalar_dfb.get_write_ptr();
     fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
-    scalar_cb.push_back(1);
+    scalar_dfb.push_back(1);
 
     // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the
     // behavior matches the original non-chunked reader (chunk_bytes == input_stick_nbytes,
@@ -386,7 +387,7 @@ ALWI void process_grid_point(
         const uint32_t chunk_bytes = (c_i == last_chunk_idx) ? partial_chunk_nbytes : input_chunk_nbytes;
         const uint32_t write_stride = (last_chunk_partial && c_i == last_chunk_idx) ? chunk_bytes : base_write_stride;
 
-        input_cb.reserve_back(1);
+        input_dfb.reserve_back(1);
 
         read_four_corner_inputs(
             noc,
@@ -401,9 +402,9 @@ ALWI void process_grid_point(
             w0,
             w1,
             input_height,
-            input_cb);
+            input_dfb);
 
         noc.async_read_barrier();
-        input_cb.push_back(1);
+        input_dfb.push_back(1);
     }
 }

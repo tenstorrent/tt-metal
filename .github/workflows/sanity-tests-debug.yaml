@@ -119,7 +119,7 @@ jobs:
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
       run-ops-unit-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
-      run-ttsim-integration-tests: false
+      run-ttsim-tests: false
       dev-docker-image: ${{ needs.build-artifacts-ubuntu-22.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.wheel-artifact-name }}
@@ -156,7 +156,7 @@ jobs:
       enable-watcher: ${{ needs.determine-debug-flags.outputs.enable-watcher == 'true' }}
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
       run-ops-unit-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
-      run-ttsim-integration-tests: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04
+      run-ttsim-tests: false # ttsim requires gcc-12 which is not available on Ubuntu 24.04
       dev-docker-image: ${{ needs.build-artifacts-ubuntu-24.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-24.outputs.wheel-artifact-name }}

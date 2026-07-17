@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
@@ -23,16 +27,22 @@ inline uint32_t get_data_page_idx(const uint32_t e, const uint32_t token) {
 
 template <uint32_t DeviceIdx, uint32_t NumMappingPages, uint32_t MappingPageSizeBytes, typename AddrGen>
 void get_device_expert_indices(
+    const Noc& noc,
     const AddrGen& mapping_addrgen,
     const uint32_t mapping_l1_buffer_addr,
     const uint32_t mapping_page_size,
     volatile tt_l1_ptr uint16_t* output_ptr) {
     auto mapping_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(mapping_l1_buffer_addr);
+    CoreLocalMem<uint32_t> mapping_dst(mapping_l1_buffer_addr);
 
     for (uint32_t expert_idx = 0; expert_idx < NumMappingPages; ++expert_idx) {
-        const uint64_t map_page_noc_addr = mapping_addrgen.get_noc_addr(expert_idx);
-        noc_async_read(map_page_noc_addr, mapping_l1_buffer_addr,MappingPageSizeBytes);
-        noc_async_read_barrier();
+        noc.async_read(
+            mapping_addrgen,
+            mapping_dst,
+            MappingPageSizeBytes,
+            {.page_id = expert_idx, .offset_bytes = 0},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
 
         if (mapping_ptr[DeviceIdx] == 1u) {
             *(output_ptr++) = expert_idx;
@@ -72,24 +82,34 @@ void kernel_main() {
     const auto mapping_addrgen = TensorAccessor(mapping_args, mapping_tensor_addr);
     const auto data_addrgen = TensorAccessor(data_args, data_tensor_addr);
 
+    Noc noc;
+    CircularBuffer mapping_cb(mapping_cb_id);
+    CircularBuffer local_experts_cb(local_experts_cb_id);
+    CircularBuffer metadata_cb(metadata_cb_id);
+    CircularBuffer data_cb(data_cb_id);
+
     // this gets sent to writer
-    cb_reserve_back(local_experts_cb_id,1);
-    auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(local_experts_cb_id));
+    local_experts_cb.reserve_back(1);
+    auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(local_experts_cb.get_write_ptr());
 
     // temp buffer just used here
-    cb_reserve_back(mapping_cb_id,1);
-    uint32_t mapping_buffer_addr = get_write_ptr(mapping_cb_id);
-    cb_push_back(mapping_cb_id, 1);
+    mapping_cb.reserve_back(1);
+    uint32_t mapping_buffer_addr = mapping_cb.get_write_ptr();
+    mapping_cb.push_back(1);
 
     detail::get_device_expert_indices<linearized_mesh_coord, num_mapping_pages, mapping_page_size_bytes>(
-        mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
-    cb_push_back(local_experts_cb_id,1);
+        noc, mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
+    local_experts_cb.push_back(1);
     for (uint32_t token = token_start_idx; token < token_end_idx; ++token) {
-        cb_reserve_back(metadata_cb_id,1);
-        const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
-        const uint64_t metadata_noc_addr = metadata_addrgen.get_noc_addr(token);
-        noc_async_read(metadata_noc_addr, metadata_l1_addr, metadata_page_size_bytes);
-        noc_async_read_barrier();
+        metadata_cb.reserve_back(1);
+        const uint32_t metadata_l1_addr = metadata_cb.get_write_ptr();
+        noc.async_read(
+            metadata_addrgen,
+            metadata_cb,
+            metadata_page_size_bytes,
+            {.page_id = token, .offset_bytes = 0},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
 
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
 
@@ -98,20 +118,23 @@ void kernel_main() {
             if (find_if<uint16_t, selected_experts_k, false>(metadata_ptr, expert_idx)) {
                 const uint32_t data_page_idx =
                     detail::get_data_page_idx<batch_size, seq_size, locally_reduced>(e, token);
-                cb_reserve_back(data_cb_id, 1);
+                data_cb.reserve_back(1);
 
-                const uint32_t data_l1_addr=get_write_ptr(data_cb_id);
-                const uint64_t data_noc_addr = data_addrgen.get_noc_addr(data_page_idx);
-                noc_async_read(data_noc_addr,data_l1_addr,data_size_bytes);
-                noc_async_read_barrier();
+                noc.async_read(
+                    data_addrgen,
+                    data_cb,
+                    data_size_bytes,
+                    {.page_id = data_page_idx, .offset_bytes = 0},
+                    {.offset_bytes = 0});
+                noc.async_read_barrier();
 
-                cb_push_back(data_cb_id, 1);
+                data_cb.push_back(1);
 
                 if constexpr (locally_reduced){
                     break;
                 }
             }
         }
-        cb_push_back(metadata_cb_id, 1);
+        metadata_cb.push_back(1);
     }
 }

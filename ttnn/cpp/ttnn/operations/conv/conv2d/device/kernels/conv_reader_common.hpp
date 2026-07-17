@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // Multicast rectangle: defines the NOC coordinate range for multicast destinations.
@@ -20,10 +21,10 @@ using McastDst = noc_traits_t<MulticastEndpoint>::dst_args_mcast_type;
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>
-FORCE_INLINE void zero_out_tiles(Noc noc, experimental::CB cb) {
+FORCE_INLINE void zero_out_tiles(Noc noc, DataflowBuffer dfb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
-    noc.async_write_zeros(cb, tile_size * num_tiles);
+    noc.async_write_zeros(dfb, tile_size * num_tiles);
     noc.write_zeros_l1_barrier();
 }
 
@@ -78,7 +79,7 @@ FORCE_INLINE void read_kernel_w(Noc noc, uint32_t& l1_write_addr_act, uint32_t& 
 
 template <uint32_t cb_id_act, uint32_t act_cb_tiles, uint32_t window_reuse_offset>
 FORCE_INLINE void pass_to_the_next_image_width(
-    experimental::CB cb_act,
+    DataflowBuffer dfb_act,
     uint32_t& l1_write_addr_act,
     uint32_t cb_start_addr,
     uint32_t& pixel_row,
@@ -86,7 +87,7 @@ FORCE_INLINE void pass_to_the_next_image_width(
     uint32_t& new_batch_image_rows_to_fill) {
     pixel_column = 0;
     pixel_row++;
-    cb_act.reserve_back(act_cb_tiles);
+    dfb_act.reserve_back(act_cb_tiles);
     l1_write_addr_act = cb_start_addr + pixel_row * window_reuse_offset;
     get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
 
@@ -96,18 +97,18 @@ FORCE_INLINE void pass_to_the_next_image_width(
 }
 
 template <uint32_t cb_id_act, uint32_t act_cb_w_tiles>
-FORCE_INLINE void push_full_tile_height(Noc noc, experimental::CB cb_act) {
+FORCE_INLINE void push_full_tile_height(Noc noc, DataflowBuffer dfb_act) {
     noc.async_read_barrier();
-    cb_act.push_back(act_cb_w_tiles);
+    dfb_act.push_back(act_cb_w_tiles);
 }
 
 template <uint32_t cb_id_act, uint32_t act_cb_w_tiles, uint32_t image_width_tiles>
 FORCE_INLINE void push_remaining_tiles(
-    experimental::CB cb_act, uint32_t remaining_tiles_to_push, uint32_t cb_start_addr) {
+    DataflowBuffer dfb_act, uint32_t remaining_tiles_to_push, uint32_t cb_start_addr) {
     constexpr uint32_t tiles_to_push = image_width_tiles * act_cb_w_tiles;
     for (uint32_t i = 0; i < remaining_tiles_to_push; i += image_width_tiles) {
         get_local_cb_interface(cb_id_act).fifo_wr_ptr = cb_start_addr;
-        cb_act.push_back(tiles_to_push);
+        dfb_act.push_back(tiles_to_push);
     }
 }
 
@@ -122,7 +123,7 @@ template <
     uint32_t act_block_w_extra_align_bytes>
 FORCE_INLINE void read_first_image_row_window(
     Noc noc,
-    experimental::CB cb_act,
+    DataflowBuffer dfb_act,
     uint32_t& l1_write_addr_act,
     uint32_t reader_offset,
     uint16_t ind,
@@ -136,7 +137,7 @@ FORCE_INLINE void read_first_image_row_window(
     pixel_column++;
     // if full tile, push back
     if ((pixel_column & 31) == 0) {
-        push_full_tile_height<cb_id_act, act_cb_w_tiles>(noc, cb_act);
+        push_full_tile_height<cb_id_act, act_cb_w_tiles>(noc, dfb_act);
     }
 }
 
@@ -195,7 +196,7 @@ template <
     bool single_core_processes_multiple_batches>
 FORCE_INLINE void read_sticks_activation_reuse(
     Noc noc,
-    experimental::CB cb_act,
+    DataflowBuffer dfb_act,
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
     uint32_t reader_offset,
     uint32_t& l1_write_addr_act,
@@ -211,7 +212,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
     uint32_t pixel_row = 0, pixel_column = 0;
     uint32_t new_batch_image_rows_to_fill = 0;
 
-    cb_act.reserve_back(act_cb_tiles);
+    dfb_act.reserve_back(act_cb_tiles);
 
     if (num_segments == 0) {
         return;
@@ -230,7 +231,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
             cb_id_act,
             act_cb_w_tiles,
             conv_act_c_read_bytes,
-            act_block_w_extra_align_bytes>(noc, cb_act, l1_write_addr_act, reader_offset, ind, pixel_column);
+            act_block_w_extra_align_bytes>(noc, dfb_act, l1_write_addr_act, reader_offset, ind, pixel_column);
     }
 
     num_segments--;
@@ -261,7 +262,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
                     cb_id_act,
                     act_cb_w_tiles,
                     conv_act_c_read_bytes,
-                    act_block_w_extra_align_bytes>(noc, cb_act, l1_write_addr_act, reader_offset, ind, pixel_column);
+                    act_block_w_extra_align_bytes>(noc, dfb_act, l1_write_addr_act, reader_offset, ind, pixel_column);
             }
 
             start_ind = start_ind + second_row_width;
@@ -281,7 +282,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
                             act_cb_w_tiles,
                             conv_act_c_read_bytes,
                             act_block_w_extra_align_bytes>(
-                            noc, cb_act, l1_write_addr_act, reader_offset, ind, pixel_column);
+                            noc, dfb_act, l1_write_addr_act, reader_offset, ind, pixel_column);
                     }
 
                     start_ind = start_ind + third_row_width;
@@ -291,7 +292,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
     }
     // Move on to the next output image width
     pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
-        cb_act, l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
+        dfb_act, l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
 
     // ------ HANDLE REMAINING INPUT, WHERE WE READ JUST THE LAST KERNEL WIDTH OF THE WINDOW ------
     while (num_segments--) {
@@ -323,13 +324,13 @@ FORCE_INLINE void read_sticks_activation_reuse(
 
             pixel_column++;
             if ((pixel_column & 31) == 0) {
-                push_full_tile_height<cb_id_act, act_cb_w_tiles>(noc, cb_act);
+                push_full_tile_height<cb_id_act, act_cb_w_tiles>(noc, dfb_act);
 
                 // Move on to the next output image width
                 if constexpr (!readers_process_full_image_widths) {
                     if (pixel_column == image_width_padded_to_tile) {
                         pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
-                            cb_act,
+                            dfb_act,
                             l1_write_addr_act,
                             cb_start_addr,
                             pixel_row,
@@ -343,7 +344,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
         if constexpr (readers_process_full_image_widths) {
             // Move on to the next output image width
             pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
-                cb_act, l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
+                dfb_act, l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
         }
 
         load_next_segment<window_inner, single_core_processes_multiple_batches>(
@@ -352,7 +353,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
 }
 
 template <uint32_t dram_addr_index, uint32_t page_size_index, uint32_t tensor_args_index, uint32_t cb_reader_index>
-void load_config_tensor_if_in_dram(Noc noc, experimental::CB reader_cb, uint32_t core_index) {
+void load_config_tensor_if_in_dram(Noc noc, DataflowBuffer reader_dfb, uint32_t core_index) {
 #ifdef CONFIG_TENSOR_IN_DRAM
     // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
     // cores in the row.
@@ -361,9 +362,9 @@ void load_config_tensor_if_in_dram(Noc noc, experimental::CB reader_cb, uint32_t
     const auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
     const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
 
-    noc.async_read(config_accessor, reader_cb, config_page_size, {.page_id = core_index}, {});
+    noc.async_read(config_accessor, reader_dfb, config_page_size, {.page_id = core_index}, {});
     noc.async_read_barrier();
-    reader_cb.push_back(1);
+    reader_dfb.push_back(1);
 #endif
 }
 

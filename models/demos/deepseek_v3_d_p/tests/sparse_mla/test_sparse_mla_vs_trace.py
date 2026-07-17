@@ -294,6 +294,11 @@ def _skip_unsupported(model: str, mesh_device) -> None:
     """Shared device guards: too-few-tokens-per-SP-chip (both); and GLM's tp ≤ 2 (64 q-heads,
     sparse_sdpa needs per-chip H = 64/tp ≥ 32 → tp>2 meshes are skipped for GLM)."""
     skip_if_seq_too_small_for_sp(SEQ_LEN, mesh_device)
+    # TODO: this GLM tp>2 skip is now STALE — the head→sequence reshard in ttMLA._sparse_mla (#48727)
+    # and the head-replicated SP×TP seq-sharded indexer let GLM run at tp=4 (the perf + correctness
+    # suites already do). Lifting it here is out of scope for the perf change: these standalone
+    # indexer/kv/output trace tests exercise paths this skip has been masking, so removing it needs its
+    # own HW verification at tp=4 first. Remove once validated.
     if model == "glm_5_1" and mesh_device.shape[1] > 2:
         pytest.skip(f"GLM sparse_sdpa needs per-chip H=64/tp≥32 → tp≤2 (mesh tp={mesh_device.shape[1]})")
 

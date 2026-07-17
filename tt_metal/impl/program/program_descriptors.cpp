@@ -316,12 +316,12 @@ void KernelDescriptor::emplace_common_runtime_args(const RTArgList& args) {
 
 std::size_t std::hash<tt::tt_metal::TileDescriptor>::operator()(
     const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
+    return ttsl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
 }
 
 std::size_t std::hash<tt::tt_metal::FaceGeometry>::operator()(
     const tt::tt_metal::FaceGeometry& face_geometry) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(face_geometry.face_r_dim, face_geometry.num_faces);
+    return ttsl::hash::hash_objects_with_default_seed(face_geometry.face_r_dim, face_geometry.num_faces);
 }
 
 std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(

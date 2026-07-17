@@ -458,7 +458,7 @@ def main():
         "t3000-unit-tests.yaml",
         # Galaxy
         "galaxy-deepseek-tests.yaml",
-        "galaxy-deepseek-prefill-tests.yaml",
+        "blaze-models-prefill-tests.yaml",
         "galaxy-demo-tests.yaml",
         "galaxy-e2e-tests.yaml",
         "galaxy-health.yaml",

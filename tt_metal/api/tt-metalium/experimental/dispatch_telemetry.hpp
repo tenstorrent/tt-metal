@@ -9,7 +9,9 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/device.hpp>
+namespace tt::umd {
+class TTDevice;
+}  // namespace tt::umd
 
 namespace tt::tt_metal {
 
@@ -47,7 +49,7 @@ struct DispatchTelemetryDeviceInfo {
 
 class DispatchTelemetry {
 public:
-    DispatchTelemetry(const IDevice& device);
+    DispatchTelemetry(tt::umd::TTDevice& device);
     ~DispatchTelemetry();
 
     /**

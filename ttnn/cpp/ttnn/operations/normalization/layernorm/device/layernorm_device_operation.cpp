@@ -174,6 +174,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(b.value().memory_config() == a.memory_config(), "Both a and b should have the same memory config");
         }
         const auto shard_spec = a.shard_spec().value();
+        // The width-block count is derived from this grid and used as a divisor when reducing over the
+        // logical width, so the grid must own at least one core.
+        TT_FATAL(shard_spec.grid.num_cores() >= 1, "Sharded layernorm requires a non-empty shard grid");
         const auto bbox = shard_spec.grid.bounding_box();
         uint32_t bbox_num_cores =
             (bbox.end_coord.x - bbox.start_coord.x + 1) * (bbox.end_coord.y - bbox.start_coord.y + 1);
@@ -187,6 +190,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             bbox.end_coord.y - bbox.start_coord.y + 1);
 
         const auto& sharded_pc = std::get<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+        // block_w is the per-core width in tiles and is used as a modulo divisor when indexing the
+        // per-tile column mask, so it must be at least one tile.
+        TT_FATAL(sharded_pc.block_w >= 1, "Sharded layernorm requires block_w >= 1 (per-core width in tiles)");
         ttnn::operations::normalization::detail::validate_sharded_input(a, sharded_pc.compute_with_storage_grid_size);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||

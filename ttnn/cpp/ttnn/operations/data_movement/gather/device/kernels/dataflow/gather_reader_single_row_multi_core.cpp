@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include <cstdint>
 /*
@@ -84,9 +84,9 @@ void kernel_main() {
         get_tile_size(output_tensor_cb_index) / get_tile_hw(input_tensor_cb_index);
 
     Noc noc;
-    CircularBuffer input_index_cb(input_index_tensor_cb_index);
-    CircularBuffer input_cb(input_tensor_cb_index);
-    CircularBuffer output_cb(output_tensor_cb_index);
+    DataflowBuffer input_index_dfb(input_index_tensor_cb_index);
+    DataflowBuffer input_dfb(input_tensor_cb_index);
+    DataflowBuffer output_dfb(output_tensor_cb_index);
 
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
@@ -95,27 +95,27 @@ void kernel_main() {
                 break;
             }
             // Read index data
-            input_index_cb.reserve_back(one_tile);
+            input_index_dfb.reserve_back(one_tile);
 
             noc.async_read(
                 input_index_tensor_dram,
-                input_index_cb,
+                input_index_dfb,
                 input_index_tensor_tile_size_bytes,
                 {.page_id = h * Wt_index + current_index_tile_id},
                 {.offset_bytes = 0});
             noc.async_read_barrier();
 
-            input_index_cb.push_back(one_tile);
-            input_index_cb.wait_front(one_tile);
+            input_index_dfb.push_back(one_tile);
+            input_index_dfb.wait_front(one_tile);
 
-            output_cb.reserve_back(one_tile);
+            output_dfb.reserve_back(one_tile);
 
             for (uint32_t wi = 0; wi < Wt_input; wi++) {
-                input_cb.wait_front(one_tile);
+                input_dfb.wait_front(one_tile);
 
-                const uint32_t input_tensor_l1_read_addr = input_cb.get_read_ptr();
-                const uint32_t input_index_tensor_l1_read_addr = input_index_cb.get_read_ptr();
-                const uint32_t output_tensor_l1_write_addr = output_cb.get_write_ptr();
+                const uint32_t input_tensor_l1_read_addr = input_dfb.get_read_ptr();
+                const uint32_t input_index_tensor_l1_read_addr = input_index_dfb.get_read_ptr();
+                const uint32_t output_tensor_l1_write_addr = output_dfb.get_write_ptr();
 
                 uint32_t count = 0;
                 constexpr uint32_t tile_faces = 2;
@@ -159,10 +159,10 @@ void kernel_main() {
                         }  // k loop
                     }  // j loop
                 }  // i loop
-                input_cb.pop_front(one_tile);
+                input_dfb.pop_front(one_tile);
             }  // wi loop
-            output_cb.push_back(one_tile);
-            input_index_cb.pop_front(one_tile);
+            output_dfb.push_back(one_tile);
+            input_index_dfb.pop_front(one_tile);
         }  // core_loop_count loop
     }  // h loop
 }

@@ -15,8 +15,12 @@ on:
       sp-config:
         required: false
         type: string
-        default: "sp1"
-        description: "Single pod configuration (sp1, sp4, sp5)"
+        default: "sc4"
+        description: "Supercluster configuration (sc1, sc4, sc16, sp5)"
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   load-test-matrix:
@@ -94,7 +98,6 @@ jobs:
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
     strategy:
-      max-parallel: 1  # Run tests sequentially to avoid resource contention
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}

@@ -44,6 +44,8 @@ PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
     map_to_noc_(std::exchange(other.map_to_noc_, false)),
     use_64bit_address_space_(std::exchange(other.use_64bit_address_space_, false)),
     host_offset_(std::exchange(other.host_offset_, 0)),
+    is_mock_(std::exchange(other.is_mock_, false)),
+    mock_host_ptr_(std::exchange(other.mock_host_ptr_, nullptr)),
     device_buffers_(std::move(other.device_buffers_)),
     device_to_mmio_map_(std::move(other.device_to_mmio_map_)),
     barrier_events_(std::move(other.barrier_events_)) {}
@@ -57,6 +59,8 @@ PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept
         map_to_noc_ = std::exchange(other.map_to_noc_, false);
         use_64bit_address_space_ = std::exchange(other.use_64bit_address_space_, false);
         host_offset_ = std::exchange(other.host_offset_, 0);
+        is_mock_ = std::exchange(other.is_mock_, false);
+        mock_host_ptr_ = std::exchange(other.mock_host_ptr_, nullptr);
         device_buffers_ = std::move(other.device_buffers_);
         device_to_mmio_map_ = std::move(other.device_to_mmio_map_);
         barrier_events_ = std::move(other.barrier_events_);
@@ -90,6 +94,17 @@ void PinnedMemoryImpl::initialize_from_devices(
         ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
         device_to_mmio_map[device_id] = mmio_device_id;
         unique_mmio_devices.insert(mmio_device_id);
+    }
+
+    // Mock/emulated devices have no SysmemManager, so there is no host-memory
+    // mapping to perform. Record the device map and keep the host pointer only;
+    // device/NOC address queries return dummies (see get_device_addr / get_noc_addr).
+    if (cluster.is_mock_or_emulated()) {
+        is_mock_ = true;
+        mock_host_ptr_ = host_buffer;
+        host_offset_ = 0;
+        device_to_mmio_map_ = std::move(device_to_mmio_map);
+        return;
     }
 
     // Determine system page size and align the host buffer down to page boundary
@@ -158,6 +173,9 @@ const tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(ChipId device_id) cons
 }
 
 void* PinnedMemoryImpl::get_host_ptr() {
+    if (is_mock_) {
+        return mock_host_ptr_;
+    }
     if (device_buffers_.empty()) {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
@@ -167,6 +185,9 @@ void* PinnedMemoryImpl::get_host_ptr() {
 }
 
 const void* PinnedMemoryImpl::get_host_ptr() const {
+    if (is_mock_) {
+        return mock_host_ptr_;
+    }
     if (device_buffers_.empty()) {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
@@ -176,10 +197,19 @@ const void* PinnedMemoryImpl::get_host_ptr() const {
 }
 
 uint64_t PinnedMemoryImpl::get_device_addr(ChipId device_id) const {
+    if (is_mock_) {
+        return 0;
+    }
     return get_buffer(device_id).get_device_io_addr() + static_cast<uint64_t>(host_offset_);
 }
 
 std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId device_id) const {
+    if (is_mock_) {
+        // No sysmem mapping under mock; hand back a dummy NOC address. device_id is
+        // echoed back so the H2D/D2H socket's "mapped to the same device as the
+        // {receiver,sender} core" FATAL check passes.
+        return PinnedMemory::NocAddr{.pcie_xy_enc = 0, .addr = 0, .device_id = device_id};
+    }
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         return std::nullopt;

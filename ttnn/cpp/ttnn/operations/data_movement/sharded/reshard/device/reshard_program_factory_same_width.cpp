@@ -82,7 +82,10 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
     }
-    const uint32_t total_size = local_units_per_shard * unit_size;
+    // The local sharded buffer stores each row (page) at its L1-aligned stride, so the CB
+    // that views it must span the padded shard size. When aligned, local_unit_size_padded ==
+    // unit_size, so this matches the packed size and leaves the aligned path unchanged.
+    const uint32_t total_size = local_units_per_shard * local_unit_size_padded;
     const std::string kernel_name =
         local_is_output
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
@@ -96,17 +99,23 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     ProgramDescriptor desc;
 
     // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
+    // Page size is the L1-aligned per-row stride so that total_size (= num_rows * padded stride)
+    // stays divisible by the page size; when aligned, local_unit_size_padded == unit_size.
     push_reshard_same_width_cb_pair(
-        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
+        desc, cb_index, data_format, total_size, local_unit_size_padded, all_cores, /*bound_buffer=*/local_buffer);
 
-    if (unaligned) {
-        // Scratch CB used by kernels when local/remote alignments differ.
+    if (unaligned && local_is_output) {
+        // Scratch CB used only by the reader path (local_is_output): it bulk-reads remote rows at
+        // their aligned stride into scratch, then re-strides them into the local buffer. The writer
+        // path re-strides row-by-row directly (local source read via its L1 address), so it needs no
+        // scratch. Page size is the remote-aligned stride, matching total_size (= remote rows *
+        // remote padded stride).
         push_reshard_same_width_cb_pair(
             desc,
             cb_scratch_index,
             data_format,
             remote_units_per_shard * remote_unit_size_padded,
-            unit_size,
+            remote_unit_size_padded,
             all_cores,
             /*bound_buffer=*/nullptr);
     }
@@ -160,7 +169,10 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
             if (local_units_to_transfer != 0) {
                 uint32_t num_transfers = 0;
                 kernel_args[1] = local_start_offset;
-                local_start_offset += local_units_to_transfer * unit_size;
+                // Advance by the padded (L1-aligned) stride so the second split kernel writes
+                // to the correct row offset in the local buffer. Aligned path is unchanged
+                // because local_unit_size_padded == unit_size there.
+                local_start_offset += local_units_to_transfer * local_unit_size_padded;
                 while (local_units_to_transfer > 0) {
                     if (remote_core_units_rem == 0) {
                         remote_core_idx++;

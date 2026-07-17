@@ -156,11 +156,11 @@ tensor_return_value_t StridedReduceScatterAsyncDeviceOperation::create_output_te
     return {intermediate_buffer, output_buffer};
 }
 
-tt::stl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    return tt::stl::hash::hash_objects(
+    return ttsl::hash::hash_objects(
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.ring_size,

@@ -57,7 +57,7 @@
 #include "ckernel_sfpu_tanh.h"
 #include "ckernel_sfpu_square.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"

@@ -12,7 +12,7 @@
 #include <utility>
 #include <cstdint>
 
-namespace tt::stl {
+namespace ttsl {
 namespace {
 
 using ::testing::Eq;
@@ -24,11 +24,11 @@ TEST(SpanTest, AsBytes) {
 
     ASSERT_EQ(src.size(), dst.size());
 
-    auto src_span = tt::stl::make_const_span(src);
-    auto dst_span = tt::stl::make_span(dst);
+    auto src_span = ttsl::make_const_span(src);
+    auto dst_span = ttsl::make_span(dst);
 
-    auto src_bytes = tt::stl::as_bytes(src_span);
-    auto dst_writable_bytes = tt::stl::as_writable_bytes(dst_span);
+    auto src_bytes = ttsl::as_bytes(src_span);
+    auto dst_writable_bytes = ttsl::as_writable_bytes(dst_span);
 
     EXPECT_EQ(src_bytes.size(), src.size() * sizeof(uint32_t));
     EXPECT_EQ(dst_writable_bytes.size(), dst.size() * sizeof(uint32_t));
@@ -41,4 +41,4 @@ TEST(SpanTest, AsBytes) {
 }
 
 }  // namespace
-}  // namespace tt::stl
+}  // namespace ttsl

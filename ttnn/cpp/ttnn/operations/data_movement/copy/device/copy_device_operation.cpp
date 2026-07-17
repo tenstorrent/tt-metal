@@ -82,8 +82,9 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::BFLOAT8_B or
             input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::BFLOAT4_B or
             input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT16,
-        "ttnn.copy only supports float, bfloat, int32 and uint16 inputs but got {}",
+            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::UINT8 or
+            input_tensor_a.dtype() == DataType::FP8_E4M3,
+        "ttnn.copy only supports float, bfloat, fp8_e4m3, int32, uint32, uint16 and uint8 inputs but got {}",
         input_tensor_a.dtype());
     TT_FATAL(
         operation_attributes.output_dtype == DataType::BFLOAT16 or
@@ -92,8 +93,10 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.output_dtype == DataType::BFLOAT4_B or
             operation_attributes.output_dtype == DataType::UINT32 or
             operation_attributes.output_dtype == DataType::INT32 or
-            operation_attributes.output_dtype == DataType::UINT16,
-        "ttnn.copy only supports float, bfloat, int32 and uint16 output tensors but got {}",
+            operation_attributes.output_dtype == DataType::UINT16 or
+            operation_attributes.output_dtype == DataType::UINT8 or
+            operation_attributes.output_dtype == DataType::FP8_E4M3,
+        "ttnn.copy only supports float, bfloat, fp8_e4m3, int32, uint32, uint16 and uint8 output tensors but got {}",
         operation_attributes.output_dtype);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");

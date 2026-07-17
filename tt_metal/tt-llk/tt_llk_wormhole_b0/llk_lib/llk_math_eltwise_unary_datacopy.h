@@ -242,6 +242,10 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             {
                 cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
                 cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+                // The Zero_Flag_disabled_src bit was set/cleared above via raw RMW, bypassing the math
+                // state tracker; invalidate the tracked state so the next configurator re-applies the flag
+                // instead of taking its skip-if-set fast path (matches the Blackhole path).
+                math::_invalidate_src_zero_flag_state_();
             }
         }
 

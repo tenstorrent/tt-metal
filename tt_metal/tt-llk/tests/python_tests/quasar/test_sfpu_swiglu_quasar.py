@@ -42,6 +42,7 @@ from helpers.param_config import (
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -287,7 +288,7 @@ SFPU_SWIGLU_FORMATS = input_output_formats(
     formats_dest_acc_implied_math=_generate_sfpu_swiglu_combinations(
         SFPU_SWIGLU_FORMATS
     ),
-    distribution=list(_StimulusDistribution),
+    distribution=runtime(list(_StimulusDistribution)),
 )
 def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     """

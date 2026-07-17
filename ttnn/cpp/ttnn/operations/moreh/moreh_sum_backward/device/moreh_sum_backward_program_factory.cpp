@@ -14,7 +14,7 @@ namespace ttnn::operations::moreh::moreh_sum_backward {
 
 using namespace tt::tt_metal;
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape) {
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape) {
     const auto rank = padded_shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -34,7 +34,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_
 }
 
 std::pair<ttnn::Shape, ttnn::Shape> get_output_grad_shape(
-    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
+    const Tensor& output_grad, const Tensor& input_grad, const ttsl::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
         return {output_grad.logical_shape(), output_grad.padded_shape()};
     }
@@ -89,17 +89,17 @@ ProgramDescriptor MorehSumBackwardOperation::create_descriptor(
     const auto& input_grad_shape_wo_padding = input_grad.logical_shape();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
-    ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
+    ttsl::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "input_grad");
     get_tensor_dim(input_grad_dim, input_grad_shape);
     const auto [output_grad_shape_wo_padding, output_grad_shape] =
         get_output_grad_shape(output_grad, input_grad, dims, keepdim);
 
-    ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    ttsl::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "output_grad");
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
-    ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
+    ttsl::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);

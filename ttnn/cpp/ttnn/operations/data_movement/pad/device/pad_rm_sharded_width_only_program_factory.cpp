@@ -105,7 +105,8 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
         }}},
     });
 
-    uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
+    // W front-pad offset: input_tensor_start is [N, C, H, W];
+    uint32_t W_padding_front_bytes = input_tensor_start[3] * input_tensor.element_size();
 
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {

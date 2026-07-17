@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 
 #include "sanitizer/settings.h"
 #include "sanitizer/types.h"
@@ -178,7 +179,7 @@ static inline void pack_operand_check(
 // Goes in LLK_LIB in Init
 // Store operation type and save arguments
 template <Operation op, typename... Ts>
-static inline void operation_init(Ts... args)
+static inline void operation_init(Ts&&... args)
 {
     const bool fsm_success = fsm_init_impl(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], op);
 
@@ -187,7 +188,7 @@ static inline void operation_init(Ts... args)
         thread_silent_push();
     }
 
-    operation_init_impl(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC], op, args...);
+    operation_init_impl(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC], op, std::forward<Ts>(args)...);
 
     if (!fsm_success)
     {
@@ -198,7 +199,7 @@ static inline void operation_init(Ts... args)
 // Goes in LLK_LIB in Execute
 // Check operation type and arguments against stored ones
 template <Operation op, typename... Ts>
-static inline void operation_check(Ts... args)
+static inline void operation_check(Ts&&... args)
 {
     const bool fsm_success = fsm_execute_impl(thread_context_get(), sanitizer->fsm[COMPILE_FOR_TRISC], op);
 
@@ -207,7 +208,7 @@ static inline void operation_check(Ts... args)
         thread_silent_push();
     }
 
-    operation_execute_impl(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC], op, args...);
+    operation_execute_impl(thread_context_get(), sanitizer->operation[COMPILE_FOR_TRISC], op, std::forward<Ts>(args)...);
 
     if (!fsm_success)
     {
@@ -340,12 +341,12 @@ static inline void pack_operand_check(
 }
 
 template <Operation op, typename... Ts>
-static inline void operation_init([[maybe_unused]] Ts... args)
+static inline void operation_init([[maybe_unused]] Ts&&... args)
 {
 }
 
 template <Operation op, typename... Ts>
-static inline void operation_check([[maybe_unused]] Ts... args)
+static inline void operation_check([[maybe_unused]] Ts&&... args)
 {
 }
 

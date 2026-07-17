@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
 
@@ -11,8 +12,10 @@
  * LLK UNPACK AB SUB BCAST COL CUSTOM - SDPA specialized blocked sub path
  *************************************************************************/
 
-inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t /*operandA*/) {
-    _llk_unpack_AB_sub_bcast_col_init_custom_();
+inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t operandA) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
 }
 
 inline void llk_unpack_AB_sub_bcast_col_custom(

@@ -258,7 +258,7 @@ void directed_performance_test(
 /* ========== TEST CASES ========== */
 
 TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreAdjacentIncrementValueSweep) {
-    uint32_t test_id = 319;
+    uint32_t test_id = 340;
 
     unit_tests::dm::atomics::increment_value_sweep_test(
         get_mesh_device(),
@@ -269,7 +269,7 @@ TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreAdjacentIncrementValueSweep) {
 }
 
 TEST_F(GenericMeshDeviceFixture, AtomicSemaphoreNonAdjacentIncrementValueSweep) {
-    uint32_t test_id = 320;
+    uint32_t test_id = 341;
 
     auto logical_grid_size = get_mesh_device()->logical_grid_size();
 

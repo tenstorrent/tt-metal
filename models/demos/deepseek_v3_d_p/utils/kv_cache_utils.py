@@ -187,6 +187,51 @@ def create_kv_chunk_address_table_kimi(
         lookup_table: Populated KvChunkAddressTable
     """
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
+    return populate_kv_chunk_address_table_kimi(
+        lookup_table=lookup_table,
+        config=config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=chunk_size_bytes,
+        num_users=num_users,
+        config_id=0,
+    )
+
+
+def populate_kv_chunk_address_table_kimi(
+    lookup_table,
+    config,
+    mesh_device,
+    mesh_shape,
+    seq_len,
+    sp_axis,
+    tt_kvpe_cache,
+    chunk_size_bytes,
+    num_users=1,
+    config_id=0,
+):
+    """
+    Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
+
+    Factored out of create_kv_chunk_address_table_kimi so a single multi-config table can hold several
+    caches at once (the serving convention is config 0 = the MLA KVPE cache, config 1 = the block-cyclic
+    index-key cache); each config carries its own grid + chunk_size_bytes and is addressed by config_id.
+    The device-group
+    side table and fabric-node host map are SHARED across configs — re-registering them here per config is
+    safe (add_device_group dedups identical replica sets; set_fabric_node_host is idempotent).
+
+    Args:
+        lookup_table: an existing KvChunkAddressTable (single- or multi-config).
+        config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
+        config_id: which config of the table to populate (default 0, the single-config case).
+        (remaining args as in create_kv_chunk_address_table_kimi)
+
+    Returns:
+        lookup_table: the same table, with config_id populated.
+    """
     host_name = socket.gethostname()
 
     rank = ttnn.distributed_context_get_rank()
@@ -249,7 +294,7 @@ def create_kv_chunk_address_table_kimi(
                         location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                         location.size_bytes = chunk_size_bytes
                         location.device_group_index = group_idx
-                        lookup_table.set(layer, position, slot, location)
+                        lookup_table.set(layer, position, slot, location, config_id)
 
                         curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                         if curr_bank_id == 0:

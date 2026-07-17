@@ -100,7 +100,6 @@ void kernel_main() {
     uint32_t index_w_offset = 0;
     uint32_t index_b_offset = 0;
     uint32_t index_g_offset = 0;
-    uint32_t index_mask_offset = 0;
     // data offset
     uint32_t num_datum_per_row_offeset = 0;
     // inplace out cbs
@@ -201,7 +200,6 @@ void kernel_main() {
     index_b_offset = 0;
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
-        index_mask_offset = 0;
         for (uint32_t g = 0; g < group; ++g) {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;

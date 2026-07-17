@@ -243,6 +243,12 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
         .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
     };
 
+    // #48928: this reader uses compile-time args only; emit one placeholder rt-arg per core so
+    // get_dynamic_runtime_args has a slot to re-apply, opting this CB-bound factory into the fast-path.
+    for (const auto& core : corerange_to_cores(all_cores)) {
+        reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0u});
+    }
+
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));

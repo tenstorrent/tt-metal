@@ -47,10 +47,16 @@ def run_resnet_50(
     assert passed, message
 
 
+# craq-sim runs the functional simulator at ~2.7 KHz, so a full resnet50 sweep (JIT compile + many ops)
+# far exceeds pytest-timeout's 300s default; bump it so the run isn't killed mid-sweep. Set to 0 to disable.
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     (
+        # batch 1 fits the 2x3 emulator / craq-sim grid (2 cores): the stem-conv per-core output is
+        # 392 tiles = 0.77MB, under the per-DFB uint16 ring cap (1MB); batch 2 (784 tiles) overflows it.
+        (1, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi),
         (16, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
         (16, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi),
         (32, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi),

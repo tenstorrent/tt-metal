@@ -6,10 +6,6 @@ on:
       docker-image:
         required: true
         type: string
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
       build-artifact-name:
         required: true
         type: string
@@ -65,12 +61,16 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: >-
-        ${{
-          !contains(fromJSON('["wh_galaxy","bh_loudbox"]'), matrix.test-group.sku) &&
-            format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) ||
-          inputs.docker-image || 'docker-image-unresolved!'
-        }}
+      # Pull the canonical GHCR image directly rather than via the Harbor
+      # pull-through mirror. A job-level `container:` image is resolved and pulled by
+      # the runner harness *before any step runs*, so there is no opportunity to retry
+      # or fall back if an individual silicon runner transiently cannot resolve
+      # harbor.ci.tenstorrent.net. check-harbor probes from a different runner, so a
+      # globally-healthy Harbor can still yield an unresolvable image on the box that
+      # actually pulls (DNS split-brain). GHCR-direct is the path the multi-host SKUs
+      # and the Harbor-outage fallback already use, so harbor-prefix is intentionally
+      # not applied here.
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
@@ -100,7 +100,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
       - name: Ensure BH links online
-        if: ${{ contains(matrix.test-group.sku, 'bh_loudbox') }}
+        if: ${{ contains(matrix.test-group.sku, 'bh_loudbox') || contains(matrix.test-group.sku, 'bh_galaxy') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
       - name: Set up coverage profiling

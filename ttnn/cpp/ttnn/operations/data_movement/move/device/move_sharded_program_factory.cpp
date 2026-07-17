@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "move_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
@@ -107,12 +108,50 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
     for (const auto& core : cores) {
         reader_desc.emplace_runtime_args(
-            core, {total_size_bytes, num_chunks, move_chunk_size_bytes, remainder_chunk_size_bytes});
+            core,
+            {total_size_bytes,
+             num_chunks,
+             move_chunk_size_bytes,  // smuggled-rta-ok: re-applied on cache hit via get_dynamic_runtime_args (#48928)
+             remainder_chunk_size_bytes});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
 
     return desc;
+}
+
+// #48928: on a cache hit, recompute only the reader's address-derived scalar args (arg 0
+// total_size_bytes is shape-constant; args 1-3 ride on chunk = dst_addr - src_addr) instead of
+// re-running create_descriptor. Trips the descriptor fast path (which also re-patches the sharded
+// CB addresses). Returns empty for the non-sharded factories so they are unaffected.
+std::vector<tt::tt_metal::DynamicRuntimeArg> MoveDeviceOperation::get_dynamic_runtime_args(
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    if (operation_attributes.move_op_parallelization_strategy != MoveOpParallelizationStrategy::MULTI_CORE_SHARDED) {
+        return {};
+    }
+    Buffer* src_buffer = tensor_args.input_tensor.buffer();
+    Buffer* dst_buffer = tensor_return_value.buffer();
+    const uint32_t total_size_bytes = src_buffer->aligned_size_per_bank();
+    const uint32_t move_chunk_size_bytes = dst_buffer->address() - src_buffer->address();
+    if (move_chunk_size_bytes == 0) {
+        return {};  // degenerate dst==src (unreachable for a real move); avoids div-by-zero below.
+    }
+    const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
+    const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
+
+    const auto cores = corerange_to_cores(tensor_args.input_tensor.shard_spec().value().grid, std::nullopt, true);
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(cores.size() * 3);
+    for (const auto& core : cores) {
+        dynamic_args.push_back({0, core, 1, num_chunks});
+        dynamic_args.push_back(
+            {0, core, 2, move_chunk_size_bytes});  // smuggled-rta-ok: this IS the get_dynamic re-application (#48928)
+        dynamic_args.push_back({0, core, 3, remainder_chunk_size_bytes});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::prim

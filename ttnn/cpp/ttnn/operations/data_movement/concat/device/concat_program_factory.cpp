@@ -135,7 +135,7 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
 
     const uint32_t num_dims = output.padded_shape().rank();
 
-    std::vector<uint32_t> src_addr(num_input_tensors);
+    std::vector<Buffer*> src_buffers(num_input_tensors);
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
     std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
     std::vector<uint32_t> page_size_per_tensor(num_input_tensors);
@@ -172,7 +172,7 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     if (rm_layout) {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto* buffer = input_tensors[i].buffer();
-            src_addr[i] = buffer->address();
+            src_buffers[i] = buffer;
             page_size_per_tensor[i] = buffer->page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
@@ -188,18 +188,13 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     } else {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto* buffer = input_tensors[i].buffer();
-            src_addr[i] = buffer->address();
+            src_buffers[i] = buffer;
             page_size_per_tensor[i] = buffer->page_size();
             uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
         }
     }
-    std::vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.cbegin(), src_addr.cend());
-    common_reader_kernel_args.insert(
-        common_reader_kernel_args.end(), num_pages_per_block.cbegin(), num_pages_per_block.cend());
-
     // Reader compile-time args
     // Data is 32 byte aligned
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_cb_index, num_input_tensors};
@@ -272,22 +267,28 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
             }
         }
 
-        std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        reader_kernel_args[0] = num_pages_per_core;
-        reader_kernel_args[1] = curr_tensor;
-        reader_kernel_args[2] = curr_tensor_id;
-        reader_kernel_args.insert(reader_kernel_args.end(), page_id_per_tensor.begin(), page_id_per_tensor.end());
-
-        std::vector<uint32_t> writer_kernel_args;
-        if (rm_layout) {
-            writer_kernel_args = {
-                dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};
-        } else {
-            writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
+        KernelDescriptor::RTArgList reader_kernel_args;
+        reader_kernel_args.reserve(3 + 3 * num_input_tensors);
+        reader_kernel_args.push_back(num_pages_per_core);
+        reader_kernel_args.push_back(curr_tensor);
+        reader_kernel_args.push_back(curr_tensor_id);
+        for (uint32_t j = 0; j < num_input_tensors; ++j) {
+            reader_kernel_args.push_back(src_buffers[j]);
         }
+        reader_kernel_args.append(num_pages_per_block);
+        reader_kernel_args.append(page_id_per_tensor);
 
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_kernel_args));
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_kernel_args));
+        reader_desc.emplace_runtime_args(core, reader_kernel_args);
+        if (rm_layout) {
+            writer_desc.emplace_runtime_args(
+                core,
+                {dst_buffer,
+                 static_cast<uint32_t>(output.buffer()->page_size()),
+                 num_pages_per_core,
+                 num_pages_written});
+        } else {
+            writer_desc.emplace_runtime_args(core, {dst_buffer, num_pages_per_core, num_pages_written});
+        }
         num_pages_written += num_pages_per_core;
     }
 

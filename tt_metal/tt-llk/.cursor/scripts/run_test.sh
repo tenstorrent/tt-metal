@@ -6,7 +6,7 @@
 # have to manage any of that themselves.
 #
 # Usage:
-#   run_llk_tests.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [OPTIONS]
+#   run_llk_tests.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [FILE ...] [OPTIONS]
 #
 # Commands:
 #   count     Count test variants (collection-only; outputs integer to stdout)
@@ -19,7 +19,9 @@
 #   --worktree DIR    Absolute path to the LLK working directory
 #                     (contains tests/ and tt_llk_<arch>/ as direct children)
 #   --arch     ARCH   Target architecture (quasar, blackhole, ...)
-#   --test     FILE   Test file name, e.g. test_sfpu_square_quasar.py
+#   --test     FILE   Test file name, e.g. test_sfpu_square_quasar.py.
+#                     Additional trailing test file names are accepted for
+#                     count/compile/simulate/run.
 #
 # Optional:
 #   --maxfail  N      Stop after N failures (simulate/run; omit for verification)
@@ -84,7 +86,7 @@ shift 2>/dev/null || true
 
 WORKTREE=""
 ARCH=""
-TEST_FILE=""
+TEST_FILES=()
 MAXFAIL=""
 K_FILTER=""
 TEST_ID=""
@@ -102,7 +104,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --worktree)      WORKTREE="$2";      shift 2 ;;
     --arch)          ARCH="$2";          shift 2 ;;
-    --test)          TEST_FILE="$2";     shift 2 ;;
+    --test)          TEST_FILES+=("$2"); shift 2 ;;
     --maxfail)       MAXFAIL="$2";       shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
@@ -120,9 +122,13 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "ERROR: Unknown option: $1" >&2
-      echo "Run with --help for usage." >&2
-      exit 4
+      if [[ "$1" == -* ]]; then
+        echo "ERROR: Unknown option: $1" >&2
+        echo "Run with --help for usage." >&2
+        exit 4
+      fi
+      TEST_FILES+=("$1")
+      shift
       ;;
   esac
 done
@@ -135,13 +141,32 @@ _vlog() {
   fi
 }
 
+_quote_args() {
+  local out="" quoted arg
+  for arg in "$@"; do
+    printf -v quoted '%q' "$arg"
+    out+="${quoted} "
+  done
+  printf '%s' "${out% }"
+}
+
+_test_label() {
+  local joined
+  printf -v joined '%s, ' "${TEST_FILES[@]}"
+  printf '%s' "${joined%, }"
+}
+
 # Validate required args and derive VENV, TEST_DIR, SIM_PATH.
 # Sets these as script-global variables; exits on any problem.
 _validate() {
   local errors=0
   [[ -z "$WORKTREE"  ]] && { echo "ERROR: --worktree is required" >&2; ((errors++)); }
   [[ -z "$ARCH"      ]] && { echo "ERROR: --arch is required"     >&2; ((errors++)); }
-  [[ -z "$TEST_FILE" ]] && { echo "ERROR: --test is required"     >&2; ((errors++)); }
+  [[ ${#TEST_FILES[@]} -eq 0 ]] && { echo "ERROR: --test is required"     >&2; ((errors++)); }
+  [[ -n "$TEST_ID" && ${#TEST_FILES[@]} -gt 1 ]] && {
+    echo "ERROR: --test-id can only be used with one test file" >&2
+    ((errors++))
+  }
   [[ $errors -gt 0 ]] && exit 4
 
   VENV="${WORKTREE}/tests/.venv"
@@ -163,12 +188,15 @@ _validate() {
     echo "ERROR: test directory not found: ${TEST_DIR}" >&2
     exit 3
   fi
-  if [[ ! -f "${TEST_DIR}/${TEST_FILE}" ]]; then
-    echo "ERROR: test file not found: ${TEST_DIR}/${TEST_FILE}" >&2
-    echo "       Hint: blackhole/wormhole tests live at tests/python_tests/," >&2
-    echo "             quasar tests live at tests/python_tests/quasar/." >&2
-    exit 3
-  fi
+  local test_file
+  for test_file in "${TEST_FILES[@]}"; do
+    if [[ ! -f "${TEST_DIR}/${test_file}" ]]; then
+      echo "ERROR: test file not found: ${TEST_DIR}/${test_file}" >&2
+      echo "       Hint: blackhole/wormhole tests live at tests/python_tests/," >&2
+      echo "             quasar tests live at tests/python_tests/quasar/." >&2
+      exit 3
+    fi
+  done
 
   if [[ -z "$SIM_PATH" ]]; then
     SIM_PATH="/proj_sw/user_dev/${USER}/tt-umd-simulators/build/emu-${ARCH}-1x3"
@@ -196,7 +224,7 @@ _validate() {
 
 _do_count() {
   _validate
-  _vlog "count: ${TEST_FILE} (arch=${ARCH})"
+  _vlog "count: $(_test_label) (arch=${ARCH})"
 
   local output exit_code
   exit_code=0
@@ -204,7 +232,7 @@ _do_count() {
     # shellcheck disable=SC1091
     source "${VENV}/bin/activate"
     cd "${TEST_DIR}"
-    CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q "${TEST_FILE}" 2>&1
+    CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q "${TEST_FILES[@]}" 2>&1
   ) || exit_code=$?
 
   # Show collection log to the agent (stderr stays visible in Bash tool output)
@@ -228,14 +256,22 @@ _do_count() {
 
 _do_compile() {
   _validate
-  _vlog "compile: ${TEST_FILE} (arch=${ARCH}, -n ${JOBS}${K_FILTER:+, -k '${K_FILTER}'})"
 
   # The two-phase flow requires compile and simulate to filter to the same set:
   # simulate's --compile-consumer reads per-variant artifacts that producer
   # wrote, so an unfiltered producer + filtered consumer would either rebuild
   # variants the consumer skips or miss variants the consumer needs.
   local -a kflag=()
-  [[ -n "$K_FILTER" ]] && kflag=(-k "$K_FILTER")
+  local -a pytest_targets=("${TEST_FILES[@]}")
+  local target_label="$(_test_label)"
+  if [[ -n "$TEST_ID" ]]; then
+    pytest_targets=("$TEST_ID")
+    target_label="$TEST_ID"
+  elif [[ -n "$K_FILTER" ]]; then
+    kflag=(-k "$K_FILTER")
+  fi
+
+  _vlog "compile: ${target_label} (arch=${ARCH}, -n ${JOBS}${kflag[*]:+, -k '${K_FILTER}'})"
 
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
@@ -243,14 +279,14 @@ _do_compile() {
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${TEST_FILE}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${pytest_targets[@]}"
     ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2)
   else
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${TEST_FILE}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${pytest_targets[@]}"
     )
   fi
 }
@@ -265,9 +301,9 @@ _do_compile() {
 _do_simulate() {
   _validate
   if [[ "$MODE" == "simulator" ]]; then
-    _vlog "consume: ${TEST_FILE} (arch=${ARCH}, mode=simulator, port=${PORT})"
+    _vlog "consume: $(_test_label) (arch=${ARCH}, mode=simulator, port=${PORT})"
   else
-    _vlog "consume: ${TEST_FILE} (arch=${ARCH}, mode=hardware)"
+    _vlog "consume: $(_test_label) (arch=${ARCH}, mode=hardware)"
   fi
 
   # Remove temp scripts left by runs that died before their trap fired
@@ -300,9 +336,9 @@ _do_simulate() {
   elif [[ -n "$K_FILTER" ]]; then
     local quoted_k
     printf -v quoted_k '%q' "${K_FILTER}"
-    pytest_target="-k ${quoted_k} '${TEST_FILE}'"
+    pytest_target="-k ${quoted_k} $(_quote_args "${TEST_FILES[@]}")"
   else
-    pytest_target="'${TEST_FILE}'"
+    pytest_target="$(_quote_args "${TEST_FILES[@]}")"
   fi
 
   # Write the consumer script. Simulator mode prepends port-cleanup and the
@@ -378,7 +414,7 @@ _do_simulate() {
 
 _do_run() {
   _validate
-  _vlog "run ($([ "$NO_SPLIT" = true ] && echo combined || echo compile+simulate)): ${TEST_FILE} (arch=${ARCH})"
+  _vlog "run ($([ "$NO_SPLIT" = true ] && echo combined || echo compile+simulate)): $(_test_label) (arch=${ARCH})"
 
   if [[ "$NO_SPLIT" == "false" ]]; then
     _do_compile

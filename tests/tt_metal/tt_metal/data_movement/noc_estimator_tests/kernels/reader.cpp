@@ -58,13 +58,13 @@ void kernel_main() {
                 DeviceZoneScopedN("RISCV1");
                 for (uint32_t i = 0; i < num_of_transactions; i++) {
                     uint32_t vc = i % num_virtual_channels;
-                    noc.async_read(
+                    noc.async_read<NocOptions::CUSTOM_VC>(
                         unicast_ep,
                         unicast_ep,
                         bytes_per_transaction,
                         {.noc_x = src_x, .noc_y = src_y, .addr = local_addr},
                         {.addr = local_addr},
-                        vc);
+                        NocOptVals{.vc = vc});
                 }
                 noc.async_read_barrier();
             }
@@ -106,13 +106,13 @@ void kernel_main() {
                 } else {
                     for (uint32_t i = 0; i < num_of_transactions; i++) {
                         uint32_t vc = i % num_virtual_channels;
-                        noc.async_read(
+                        noc.async_read<NocOptions::CUSTOM_VC>(
                             unicast_ep,
                             unicast_ep,
                             bytes_per_transaction,
                             {.noc_x = src_x, .noc_y = src_y, .addr = local_addr},
                             {.addr = local_addr},
-                            vc);
+                            NocOptVals{.vc = vc});
                     }
                 }
             }

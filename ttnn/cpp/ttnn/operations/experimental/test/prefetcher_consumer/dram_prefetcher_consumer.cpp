@@ -43,7 +43,7 @@ DramPrefetcherConsumerDeviceOperation::create_output_tensors(const operation_att
     return std::vector<ttnn::Tensor>{};
 }
 
-tt::stl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
     // GlobalCircularBuffer isn't reflection-hashable; hash its identity via config_address
     // (unique per GCB instance on this device) along with the other attrs.

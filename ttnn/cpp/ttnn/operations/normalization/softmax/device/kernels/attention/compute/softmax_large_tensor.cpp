@@ -255,7 +255,7 @@ void reduce_cb(bool use_prev_reduce, uint32_t cb_length_t) {
             if (use_prev_reduce) {
                 // At this point, DST[0] contains the current reduce result
                 // Load previous result into DST[1] and accumulate
-                cb_wait_front(cb_prev_out_id, 1);
+                CircularBuffer(cb_prev_out_id).wait_front(1);
                 reconfig_data_format_srca(cb_prev_out_id);
                 copy_tile_init(cb_prev_out_id);
                 copy_tile(cb_prev_out_id, 0, 1);
@@ -270,7 +270,7 @@ void reduce_cb(bool use_prev_reduce, uint32_t cb_length_t) {
                     add_binary_tile(0, 1, 0);  // add(DST[0], DST[1]) -> DST[0]
                 }
 
-                cb_pop_front(cb_prev_out_id, 1);
+                CircularBuffer(cb_prev_out_id).pop_front(1);
             }
             // If !use_prev_reduce, lambda is no-op (compiles away)
         });

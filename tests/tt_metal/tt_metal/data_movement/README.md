@@ -34,29 +34,29 @@ Both API versions run the same test cases but use different underlying implement
 
 | Name                        | ID(s)                           | Description                                                                             |
 | ----------                  | -----                           | ----------------------------------------------------                                    |
-| DRAM Unary                  | 0-3, 40                         | Transactions between DRAM and a single Tensix core.                                     |
-| One to One                  | 4, 50, 150-151, 158             | Write transactions between two Tensix cores.                                            |
-| One From One                | 5, 51, 152-153, 159             | Read transactions between two Tensix cores.                                             |
+| DRAM Unary                  | 0-3, 40-43                         | Transactions between DRAM and a single Tensix core.                                     |
+| One to One                  | 4, 50, 150-151, 158, 160             | Write transactions between two Tensix cores.                                            |
+| One From One                | 5, 51, 152-153, 159, 161             | Read transactions between two Tensix cores.                                             |
 | One to all                  | 6-8, 52, 154-155, 170-172       | Writes transaction from one core to all cores.                                          |
 | One to all Multicast        | 9-14, 24-26, 53-54, 56, 100-102, 173-180 | Writes transaction from one core to all cores using multicast.                   |
-| One From All                | 15, 30, 156-157                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
-| Loopback                    | 16, 55                          | Does a loopback operation where one cores writes to itself.                             |
+| One From All                | 15, 30, 156-157, 162-165                 | Read transactions between one gatherer Tensix core and multiple sender Tensix cores.    |
+| Loopback                    | 16, 44-45, 55                          | Does a loopback operation where one cores writes to itself.                             |
 | Reshard Hardcoded           | 17-20                           | Uses existing reshard tests to analyse their bandwidth and latency. **(Slow Dispatch)** |
 | Conv Hardcoded              | 21-23                           | Uses existing conv tests to analyse their bandwidth and latency. **(Slow Dispatch)**    |
 | Interleaved Page Read/Write | 61-69, 71-75                    | Reads and writes pages between interleaved buffers and a Tensix core.                   |
-| One Packet Read/Write       | 80-83                           | Reads or writes packets between two Tensix cores.                                       |
-| DRAM Sharded Read           | 84-87                           | Reads from sharded DRAM into one core.                                                  |
-| Multi Interleaved           | 110-127                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
+| One Packet Read/Write       | 80-83, 90-93                           | Reads or writes packets between two Tensix cores.                                       |
+| DRAM Sharded Read           | 84-87, 94-97                           | Reads from sharded DRAM into one core.                                                  |
+| Multi Interleaved           | 110-130                         | Reads and writes pages between interleaved DRAM buffers and multiple Tensix cores.      |
 | Core Bidrectional           | 140-148                         | Tensix core reads from and writes to another Tensix core simultaneously.                |
 | Deinterleave                | 200-201                         | Tests deinterleaving. **(Slow Dispatch)**                                               |
-| All to all                  | 300-308                         | Write transactions from multiple cores to multiple cores.                               |
-| All from all                | 310-318                         | Read transactions from multiple cores to multiple cores.                                |
-| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.                          |
-| Multicast Atomic Semaphore  | 321-328                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
+| All to all                  | 300-316                         | Write transactions from multiple cores to multiple cores.                               |
+| All from all                | 320-336                         | Read transactions from multiple cores to multiple cores.                                |
+| Atomic Semaphore Increment  | 340-341                         | Atomic semaphore increment + atomic barrier performance tests.                          |
+| Multicast Atomic Semaphore  | 342-353                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
 | I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
 | Inline Direct Write         | 500-501, 507                    | Inline DW transactions between two (unicast) or multiple (multicast) Tensix cores.      |
 | DRAM Neighbour Tests        | 502-505, 508-509                | Each core reads from its closest DRAM.                                                  |
-| Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
+| Transaction ID              | 600-602, 610-611, 620-622, 630-631                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
 | PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 | PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
 | Matmul                      | 1000-1231                       | 1D v1, 1D v2, and 2D matmul DM tests across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. Per-variant offsets: 1D v1 +0 (1000-1031), 1D v2 +100 (1100-1131), 2D +200 (1200-1231). 1D: in0 row multicast + in1 column multicast (row 0 reads its DRAM slice once, then multicasts down the column). 2D: in0 row multicast + in1 column multicast (all L1, no DRAM). Perf-characterization sweeps: 1029 (4x4 K=1 sub_r {1..256}), 1030 (4x4 K=8 (sub_r, sub_c) 2D), 1031 (8x7 K=8 (sub_r, sub_c) 2D). |

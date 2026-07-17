@@ -85,8 +85,6 @@ void issue_trace_commands(
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     CoreCoord dispatch_core) {
-    TT_FATAL(mesh_device->arch() != tt::ARCH::QUASAR, "Trace commands are currently not supported on Quasar");
-
     void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, dispatch_md.cmd_sequence_sizeB);

@@ -250,7 +250,7 @@ void init_binary_sfpu_operation_quasar()
     {
         _init_binary_max_min_();
     }
-    // ADD / GT / LT / LE / GE are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE are stateless — no init.
 }
 
 /**
@@ -276,7 +276,21 @@ void call_binary_sfpu_operation_quasar(
 
     if constexpr (OP == BinaryOp::ADD)
     {
-        _llk_math_eltwise_binary_sfpu_params_(_add_int_<false, ITERATIONS, DataFormat::Int32, 0, false>, in0_off, in1_off, out_off);
+        if (math_format == DataFormat::Int32)
+        {
+            _llk_math_eltwise_binary_sfpu_params_(_add_int_<false, ITERATIONS, DataFormat::Int32, 0, false>, in0_off, in1_off, out_off);
+        }
+        else
+        {
+            _llk_math_eltwise_binary_sfpu_params_(
+                calculate_sfpu_binary<false /*APPROX*/, BinaryOp::ADD, is_fp32_dest_acc_en, ITERATIONS>, src0_tile, src1_tile, dst_tile);
+        }
+    }
+    else if constexpr (OP == BinaryOp::SUB)
+    {
+        // Int32 SUB is not ported to Quasar (sub_int_sfpu.h is WH-only); float path only.
+        _llk_math_eltwise_binary_sfpu_params_(
+            calculate_sfpu_binary<false /*APPROX*/, BinaryOp::SUB, is_fp32_dest_acc_en, ITERATIONS>, src0_tile, src1_tile, dst_tile);
     }
     else if constexpr (OP == BinaryOp::GT)
     {
@@ -338,7 +352,7 @@ void call_binary_sfpu_operation_quasar(
     }
     else
     {
-        // Catches BinaryOp values this dispatcher does not implement (e.g. SUB);
+        // Catches BinaryOp values this dispatcher does not implement;
         // a compile-time static_assert can't be used here because OP is a
         // non-type param, so sizeof(OP)==0 is non-dependent and fires for every
         // instantiation (matches the runtime guard in the unary dispatcher).

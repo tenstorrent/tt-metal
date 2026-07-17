@@ -10,13 +10,15 @@ from tt_lib.utils import pad_weight
 from pathlib import Path
 from torchvision import models
 
+from models.common.tensor_utils import align_shape_to_tile
+
 
 def format_tensor(x, target_layout, device, output_mem_config, pad_value=0.0):
     if x.get_layout() == target_layout:
         return x
 
     if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT and target_layout == ttnn.TILE_LAYOUT:
-        x_padded_shape = ttnn.pad_to_tile_shape(x.padded_shape)
+        x_padded_shape = align_shape_to_tile(x.padded_shape)
         if x.padded_shape != x_padded_shape:
             return ttnn.tilize_with_val_padding(x, x_padded_shape, pad_value, output_mem_config)
         else:

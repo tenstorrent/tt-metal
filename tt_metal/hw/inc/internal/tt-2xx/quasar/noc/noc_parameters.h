@@ -471,28 +471,26 @@
 //   3. Change this macro to identity: #define NOC_LOCAL_ADDR(addr) (addr)
 #define NOC_LOCAL_ADDR(addr) NOC_LOCAL_ADDR_OFFSET(addr)
 
-// TODO review these alignment restrictions
-// Alignment restrictions
-#define NOC_L1_READ_ALIGNMENT_BYTES 16
-#define NOC_L1_WRITE_ALIGNMENT_BYTES 16
+// NOC transfer alignment. The Quasar NOC shifts the data to make it so things don't need to be
+// aligned, hence no L1/DRAM restriction. Kept DECOUPLED from L1_ALIGNMENT/DRAM_ALIGNMENT below: the
+// NOC's relaxed alignment does not apply to other L1 consumers (e.g. the unpacker), which still
+// need the physical L1 width.
+#define NOC_L1_READ_ALIGNMENT_BYTES 1
+#define NOC_L1_WRITE_ALIGNMENT_BYTES 1
 #define NOC_PCIE_READ_ALIGNMENT_BYTES 64
 #define NOC_PCIE_WRITE_ALIGNMENT_BYTES 16
-#define NOC_DRAM_READ_ALIGNMENT_BYTES 64
-#define NOC_DRAM_WRITE_ALIGNMENT_BYTES 16
+#define NOC_DRAM_READ_ALIGNMENT_BYTES 1
+#define NOC_DRAM_WRITE_ALIGNMENT_BYTES 1
 // TODO(quasar): For Quasar, do a per-register lookup - 4 or 8 depending on target reg.
 #define NOC_REG_ALIGNMENT_BYTES 4
 
-#define L1_ALIGNMENT                                                                              \
-    (static_cast<uint32_t>(                                                                       \
-        NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES \
-                                                                    : NOC_L1_WRITE_ALIGNMENT_BYTES))
+// Allocation / layout alignment. Pinned to the physical floor (L1 = 16B, GDDR = 64B), NOT derived
+// from the NOC values above
+#define L1_ALIGNMENT (static_cast<uint32_t>(16))
 #define PCIE_ALIGNMENT                                                                                  \
     (static_cast<uint32_t>(                                                                             \
         NOC_PCIE_READ_ALIGNMENT_BYTES >= NOC_PCIE_WRITE_ALIGNMENT_BYTES ? NOC_PCIE_READ_ALIGNMENT_BYTES \
                                                                         : NOC_PCIE_WRITE_ALIGNMENT_BYTES))
-#define DRAM_ALIGNMENT                                                                                  \
-    (static_cast<uint32_t>(                                                                             \
-        NOC_DRAM_READ_ALIGNMENT_BYTES >= NOC_DRAM_WRITE_ALIGNMENT_BYTES ? NOC_DRAM_READ_ALIGNMENT_BYTES \
-                                                                        : NOC_DRAM_WRITE_ALIGNMENT_BYTES))
+#define DRAM_ALIGNMENT (static_cast<uint32_t>(64))
 
 #endif

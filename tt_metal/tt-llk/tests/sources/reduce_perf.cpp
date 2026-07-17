@@ -24,7 +24,9 @@ using namespace ckernel;
 
 static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 
-static constexpr bool IS_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW);
+static constexpr bool IS_REDUCE_ROW             = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW);
+static constexpr bool IS_FULL_TILE_REDUCE_ROW   = IS_REDUCE_ROW && (POOL_TYPE != ckernel::PoolType::MAX);
+static constexpr std::uint32_t DVALIDS_PER_TILE = IS_FULL_TILE_REDUCE_ROW ? 1 : TILE_NUM_FACES;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -63,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            _perf_unpack_loop_set_valid<true, true>(TILE_CNT * DVALIDS_PER_TILE);
             return;
         }
         else
@@ -115,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid<true, true>(TILE_CNT * TILE_NUM_FACES);
+            _perf_math_loop_clear_valid<true, true>(TILE_CNT * DVALIDS_PER_TILE);
             return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)

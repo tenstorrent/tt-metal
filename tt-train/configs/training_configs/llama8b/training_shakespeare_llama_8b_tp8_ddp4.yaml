@@ -16,7 +16,7 @@ training_config:
   clip_grad_norm_max_norm: 1.0
   tokenizer_type: bpe
   data_path: data/tokenized_shakespeare_llama8b.yaml
-  model_config: model_configs/llama8b.yaml
+  model_config: ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama8b.yaml
   scheduler_type: warmup_linear
   gradient_accumulation_steps: 1
 device_config:

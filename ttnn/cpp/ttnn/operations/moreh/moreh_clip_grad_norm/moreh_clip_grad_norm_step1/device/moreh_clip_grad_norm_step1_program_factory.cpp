@@ -212,7 +212,6 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_addr = tmp_pow_sum.buffer()->address();
     auto cores = grid_to_cores(num_cores_to_be_used, num_cores_x, num_cores_y, false);
 
     uint32_t tile_offset = tile_offset_of_tmp_pow_sum;
@@ -220,18 +219,15 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
         const CoreCoord& core = cores.at(i);
 
         const auto& input = inputs.at(i);
-        const auto input_addr = input.buffer()->address();
         const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
         const auto [origin_h, origin_w] = origin_hw_vec.at(i);
 
         // reader
-        reader_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                input_addr, num_tiles, std::bit_cast<uint32_t>(decimal), origin_h, origin_w});
+        reader_desc.emplace_runtime_args(
+            core, {input.buffer(), num_tiles, std::bit_cast<uint32_t>(decimal), origin_h, origin_w});
 
         // writer
-        writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{output_addr, tile_offset});
+        writer_desc.emplace_runtime_args(core, {tmp_pow_sum.buffer(), tile_offset});
 
         // compute
         compute_desc.runtime_args.emplace_back(

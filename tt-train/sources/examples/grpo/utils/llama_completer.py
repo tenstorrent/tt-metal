@@ -186,6 +186,11 @@ class LlamaGRPOCompleter(GRPOCompleter):
         self._dp_composer: Any = (
             ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0) if self._ddp_enabled else None
         )
+        # Mesh axis to seed UNIQUELY in the sample op: the DDP (data-parallel) axis, whose devices hold
+        # DISTINCT prompts and must draw independent Gumbel noise. TP is disabled on this path (see
+        # above), so the ddp axis is the only sharded axis; None => no per-device seeding (identical noise).
+        ddp_axis = autograd_ctx.get_parallelism_context().get_ddp_axis() if self._ddp_enabled else None
+        self._seed_axes: Any = [int(ddp_axis)] if ddp_axis is not None else None
 
         local_safetensors = os.path.isdir(model_source) and any(
             f == "model.safetensors" for f in os.listdir(model_source)
@@ -446,7 +451,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
             logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
 
             next_token_tensor = ttml.ops.sample.sample_op(
-                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor
+                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor, self._seed_axes
             )
 
             last_token_column = ttnn.slice(

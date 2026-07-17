@@ -13,6 +13,7 @@
 #include "llk_defs.h"
 #include "llk_math_common.h"
 #include "llk_operands.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -196,15 +197,16 @@ inline void _llk_math_mul_reduce_scalar_init_()
  *
  * @tparam MATH_FIDELITY_DESC Math fidelity descriptor (0 = default, higher = more precision)
  * @param dst_index Destination tile index to accumulate into (0-7)
- * @param narrow_tile If true, process only 2 row tiles instead of full tile
- * @param num_faces Number of faces (1, 2, or 4)
+ * @param tensor_shape Shape of the operand tile (4 faces for 32x32, 2 faces for a 16x32 tiny tile)
  */
 template <MathFidelity math_fidelity>
-inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, bool narrow_tile = false, const std::uint32_t num_faces = 4)
+inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
 
-    const std::uint32_t num_row_tiles = narrow_tile ? 2 : ((num_faces > 1) ? num_faces / 2 : 1);
+    // A 32x16 narrow tile has fewer face-columns than face-rows; mirror generic llk_math_reduce.h.
+    const bool is_narrow_tile         = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
+    const std::uint32_t num_row_tiles = tensor_shape.num_faces_r_dim;
 
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -213,7 +215,7 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, bool nar
     {
         execute_high_fidelity_gapool<math_fidelity>();
 
-        if ((!narrow_tile) && (num_faces > 1))
+        if ((!is_narrow_tile) && (tensor_shape.total_num_faces() > 1))
         {
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);
             TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_A, 0, 0, 8, p_setrwc::SET_A);

@@ -5,13 +5,13 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
+    triage [--noc-id=<id>] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
     --remote-server=<remote-server>  Specify the remote server to connect to. [default: localhost]
     --remote-port=<remote-port>      Specify the remote server port. [default: 5555]
-    --initialize-with-noc1           Initialize debugger context with NOC1 enabled. [default: False]
+    --noc-id=<id>                    NOC used for device communication (0/NOC0, 1/NOC1, 2/SYSTEM_NOC, case-insensitive). Defaults to the tt-exalens default.
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
     --skip-version-check             Do not enforce debugger version check. [default: False]
@@ -79,7 +79,7 @@ import importlib.metadata as importlib_metadata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
 import sys
-from ttexalens.context import Context
+from ttexalens.context import Context, to_noc_id
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
@@ -830,7 +830,10 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
     if args["--remote-exalens"]:
         context = init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
     else:
-        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
+        if args["--noc-id"]:
+            context = init_ttexalens(noc_id=to_noc_id(args["--noc-id"]))
+        else:
+            context = init_ttexalens()
 
     _patch_risc_debug()
     return context

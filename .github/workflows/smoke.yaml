@@ -21,7 +21,11 @@ on:
       per-test-timeout:
         required: false
         type: string
-        default: "4.0" # TODO: Drop back to 3.5 when https://github.com/tenstorrent/github-ci-infra/issues/876 is resolved.
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
       product:
         required: true
         type: string # tt-metalium or tt-nn
@@ -72,11 +76,16 @@ jobs:
 
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             "${{ env.TESTS_YAML_PATH }}" \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -84,7 +93,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             "${{ env.TESTS_YAML_PATH }}" \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
   smoke:
     needs: load-test-matrix
@@ -331,8 +341,3 @@ jobs:
             "$GITHUB_WORKSPACE/.github/scripts/ccache_log_filter.sh" /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
-
-      - name: Check for slow tests
-        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
-        with:
-          threshold: ${{ inputs.per-test-timeout }}

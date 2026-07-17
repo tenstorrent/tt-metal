@@ -261,6 +261,11 @@ test_suite_bh_6u_torus_xyz_health_check_tests() {
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
 }
 
+test_suite_bh_6u_deployment_tests() {
+    echo "[upstream-tests] running BH GLX upstream deployment tests"
+    ./build/test/tt_metal/unit_tests_deployment
+}
+
 # Define test suite mappings for different hardware topologies
 declare -A hw_topology_test_suites
 
@@ -304,6 +309,9 @@ test_suite_wh_6u_metal_unit_tests"
 
 hw_topology_test_suites["blackhole_ttnn_stress_tests"]="
 test_suite_bh_ttnn_stress_tests"
+
+hw_topology_test_suites["blackhole_glx_deployment_tests"]="
+test_suite_bh_6u_deployment_tests"
 
 hw_topology_test_suites["blackhole_glx"]="
 test_suite_bh_6u_metal_unit_tests

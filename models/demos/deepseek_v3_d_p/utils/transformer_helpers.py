@@ -496,12 +496,12 @@ def load_and_compute_layer_by_layer(
     """
     from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-    from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+    from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
 
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL
@@ -523,6 +523,8 @@ def load_and_compute_layer_by_layer(
 
     # Create LazyStateDict
     lazy_sd = LazyStateDict(Path(model_path))
+
+    prefix = detect_language_model_prefix(lazy_sd)
 
     # Initialize outputs
     ref_snapshots = [] if compute_reference else None
@@ -549,7 +551,7 @@ def load_and_compute_layer_by_layer(
 
     # --- Process Embeddings ---
     logger.info("Processing embeddings...")
-    embed_sd = sub_state_dict(lazy_sd, "model.embed_tokens.")
+    embed_sd = sub_state_dict(lazy_sd, f"{prefix}model.embed_tokens.")
     embed_dequant = dequantize_state_dict(embed_sd, config)
 
     if compute_reference:
@@ -590,7 +592,7 @@ def load_and_compute_layer_by_layer(
     for i in range(num_layers):
         logger.info(f"Processing layer {i}/{num_layers}...")
 
-        layer_sd = sub_state_dict(lazy_sd, f"model.layers.{i}.")
+        layer_sd = sub_state_dict(lazy_sd, f"{prefix}model.layers.{i}.")
         layer_dequant = dequantize_state_dict(layer_sd, config)
 
         if compute_reference:
@@ -631,6 +633,22 @@ def load_and_compute_layer_by_layer(
                 },
                 "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
             }
+
+            # DSA-sparse variants (GLM-5.1, DeepSeek-V3.2) carry lightning-indexer weights; include them
+            # so ttMLA.build_ttnn_cache writes a complete sparse cache — it resolves has_indexer from the
+            # config and errors if the indexer host weights are missing. Auto-engages only when present
+            # (dense DeepSeek-R1 / Kimi checkpoints have no self_attn.indexer.*). The checkpoint's
+            # k_norm.bias maps to the indexer's k_norm_bias.weight slot (see TtIndexer.WEIGHT_NAMES).
+            if "self_attn.indexer.wq_b.weight" in layer_dequant:
+                layer_dict["mla_weights"].update(
+                    {
+                        "indexer.wq_b.weight": layer_dequant["self_attn.indexer.wq_b.weight"],
+                        "indexer.wk.weight": layer_dequant["self_attn.indexer.wk.weight"],
+                        "indexer.k_norm.weight": layer_dequant["self_attn.indexer.k_norm.weight"],
+                        "indexer.k_norm_bias.weight": layer_dequant["self_attn.indexer.k_norm.bias"],
+                        "indexer.weights_proj.weight": layer_dequant["self_attn.indexer.weights_proj.weight"],
+                    }
+                )
 
             if is_dense:
                 layer_dict["ffn_weights"] = {
@@ -693,7 +711,7 @@ def load_and_compute_layer_by_layer(
 
     # --- Process Norm ---
     logger.info("Processing norm...")
-    norm_sd = sub_state_dict(lazy_sd, "model.norm.")
+    norm_sd = sub_state_dict(lazy_sd, f"{prefix}model.norm.")
     norm_dequant = dequantize_state_dict(norm_sd, config)
 
     if compute_reference:
@@ -722,7 +740,7 @@ def load_and_compute_layer_by_layer(
 
     # --- Process LM Head ---
     logger.info("Processing lm_head...")
-    lm_head_sd = sub_state_dict(lazy_sd, "lm_head.")
+    lm_head_sd = sub_state_dict(lazy_sd, f"{prefix}lm_head.")
     lm_head_dequant = dequantize_state_dict(lm_head_sd, config)
 
     if compute_reference:
@@ -971,7 +989,26 @@ class DebugTraceData:
     metadata: dict  # raw metadata.json contents
 
 
-def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTraceData:
+def _read_trace_rows(tensor_dir: Path, key: str, end: int | None):
+    """Read `key` from a chunked_group_a_v1 tensor dir (rows_<s>_<e>.safetensors shards), concatenating
+    up to `end` rows (or all). Used to slice a long trace (e.g. the 55k GLM golden) down to a test's isl."""
+    import glob as _glob
+
+    from safetensors import safe_open
+
+    parts, got = [], 0
+    for shard in sorted(_glob.glob(str(tensor_dir / "rows_*.safetensors"))):
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        parts.append(t)
+        got += t.shape[0]
+        if end is not None and got >= end:
+            break
+    out = torch.cat(parts, 0) if len(parts) > 1 else parts[0]
+    return out[:end] if end is not None else out
+
+
+def load_debug_trace(trace_dir: Path, num_layers: int | None = None, isl: int | None = None) -> DebugTraceData:
     """
     Load reference tensors from a bit_sculpt debug trace directory.
 
@@ -998,6 +1035,12 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
         num_layers = metadata["n_layers"]
 
     token_ids = torch.tensor([metadata["token_ids"]], dtype=torch.int64)
+    if isl is not None:
+        token_ids = token_ids[:, :isl]  # chop a long trace (e.g. the 55k GLM golden) to this test's isl
+    # chunked_group_a_v1 layout (row-sharded decoder_io/ + kv_cache/layer_i/) — used by the GLM 55k golden;
+    # read + slice to isl instead of requiring a dedicated isl-sized standard-layout trace.
+    chunked_dir = trace_dir / "decoder_io"
+    is_chunked_layout = chunked_dir.is_dir()
     logger.info(f"Loaded {token_ids.shape[1]} tokens from {trace_dir.name}")
 
     ref_snapshots = {}
@@ -1005,25 +1048,39 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
     hs_flat = trace_dir / "hidden_states.safetensors"
     per_layer_format = hs_dir.is_dir()
 
-    if per_layer_format:
+    if is_chunked_layout:
+        for i in range(num_layers):
+            key = f"decoder_output_layer_{i}"
+            t = _read_trace_rows(chunked_dir / key, key, isl)
+            ref_snapshots[f"layer_{i}"] = t.unsqueeze(0)
+        logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from decoder_io/ (chunked_group_a_v1, isl={isl})")
+    elif per_layer_format:
         for i in range(num_layers):
             layer_path = hs_dir / f"layer_{i}.safetensors"
             with safe_open(layer_path, framework="pt") as f:
                 key = f"decoder_output_layer_{i}"
-                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+                t = f.get_tensor(key)
+                ref_snapshots[f"layer_{i}"] = (t[:isl] if isl is not None else t).unsqueeze(0)
         logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states/ (per-layer files)")
     else:
         with safe_open(hs_flat, framework="pt") as f:
             for i in range(num_layers):
                 key = f"decoder_output_layer_{i}"
-                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+                t = f.get_tensor(key)
+                ref_snapshots[f"layer_{i}"] = (t[:isl] if isl is not None else t).unsqueeze(0)
         logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states.safetensors")
 
     ref_kvpe_list = []
     kv_dir = trace_dir / "kv_cache"
     kv_flat = trace_dir / "kv_cache.safetensors"
 
-    if per_layer_format and kv_dir.is_dir():
+    if is_chunked_layout:
+        for i in range(num_layers):
+            key = f"kv_post_transform_layer_{i}"
+            kv = _read_trace_rows(kv_dir / f"layer_{i}", key, isl)
+            ref_kvpe_list.append(kv.unsqueeze(0).unsqueeze(0))
+        logger.info(f"Loaded {len(ref_kvpe_list)} KVPE layers from kv_cache/ (chunked_group_a_v1, isl={isl})")
+    elif per_layer_format and kv_dir.is_dir():
         # Detect key prefix from the first layer file
         with safe_open(kv_dir / "layer_0.safetensors", framework="pt") as f:
             available_keys = set(f.keys())

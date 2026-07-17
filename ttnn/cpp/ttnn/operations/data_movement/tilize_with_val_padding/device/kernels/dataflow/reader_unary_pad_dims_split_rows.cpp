@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     // Constexpr
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -44,27 +44,27 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     uint32_t stick_id = 0;
 
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_in0.reserve_back(num_tiles_block_c);
-            uint32_t l1_write_addr = cb_in0.get_write_ptr();
+            dfb_in0.reserve_back(num_tiles_block_c);
+            uint32_t l1_write_addr = dfb_in0.get_write_ptr();
             // pad the tile by reading values from zero buffer in L1
             volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
             // 8 = tile_height / 4
             for (uint32_t z = 0; z < block_row_size * 8; z++) {
                 dst[z] = pad_value;
             }
-            cb_in0.push_back(num_tiles_block_c);
+            dfb_in0.push_back(num_tiles_block_c);
         }
     };
 
     auto read_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
-        cb_in0.reserve_back(num_tiles_block_c);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        dfb_in0.reserve_back(num_tiles_block_c);
+        uint32_t l1_write_addr = dfb_in0.get_write_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
             CoreLocalMem<uint32_t> dst_mem(l1_write_addr);
@@ -89,7 +89,7 @@ void kernel_main() {
                 dst[z] = pad_value;
             }
         }
-        cb_in0.push_back(num_tiles_block_c);
+        dfb_in0.push_back(num_tiles_block_c);
     };
 
     auto read_block_rows = [&](uint32_t base_stick_id, uint32_t num_rows_block) {

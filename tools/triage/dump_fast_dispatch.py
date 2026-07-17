@@ -274,7 +274,7 @@ def read_wait_globals(
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
     # Use unique_id instead of device.id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
-    chip_id = location._device.unique_id
+    chip_id = location.device.unique_id
     x, y = virtual_coord
 
     # Lookup core info for the given kernel name based on virtual coordinates
@@ -344,7 +344,7 @@ def run(args, context: Context):
         # Check RISC core with risc_name at this location for dispatcher kernels
         if location not in locations_to_check:
             return None
-        noc_block = location._device.get_block(location)
+        noc_block = location.device.get_block(location)
         dispatch_core_pairs = []
         for risc_name in noc_block.risc_names:
             dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)

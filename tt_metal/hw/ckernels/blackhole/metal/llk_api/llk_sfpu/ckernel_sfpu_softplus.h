@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -20,13 +21,15 @@ namespace ckernel::sfpu {
 //   softplus(t) = t + f(t)   for t >= 0
 //   softplus(t) = f(-t)      for t < 0
 //
-// BF16: degree-8 polynomial for f(a) on [0, 5] + inline exp tail
-// FP32: same polynomial + inline exp + 3-term Taylor correction
+// FP32: degree-8 polynomial for f(a) on [0, 5] + inline exp + 3-term Taylor tail
+// BF16: degree-6 polynomial (bf16-accurate, <0.28 ULP) + tail clamped to 0
+//       (residual < exp(-5) = 0.0067 for a > 5, below bf16 rounding vs the t>0 term,
+//        so the expensive exp tail is unnecessary at bf16 precision)
 // ======================================================================
 
 constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
 
-// Residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 8
+// FP32 residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 8
 constexpr float SOFTPLUS_POLY_C0 = 6.9310557842e-01f;
 constexpr float SOFTPLUS_POLY_C1 = -4.9926245213e-01f;
 constexpr float SOFTPLUS_POLY_C2 = 1.2186349183e-01f;
@@ -36,6 +39,16 @@ constexpr float SOFTPLUS_POLY_C5 = 2.7290175203e-03f;
 constexpr float SOFTPLUS_POLY_C6 = -3.4358495031e-04f;
 constexpr float SOFTPLUS_POLY_C7 = 2.1285692128e-05f;
 constexpr float SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
+
+// BF16 residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 6
+// (ULP-weighted minimax fit; max error < 0.28 bf16 ULP over the domain)
+constexpr float SOFTPLUS_BF16_POLY_C0 = 6.9423984729e-01f;
+constexpr float SOFTPLUS_BF16_POLY_C1 = -5.0932420424e-01f;
+constexpr float SOFTPLUS_BF16_POLY_C2 = 1.4279095486e-01f;
+constexpr float SOFTPLUS_BF16_POLY_C3 = -1.3000584069e-02f;
+constexpr float SOFTPLUS_BF16_POLY_C4 = -1.8627923291e-03f;
+constexpr float SOFTPLUS_BF16_POLY_C5 = 5.0152968088e-04f;
+constexpr float SOFTPLUS_BF16_POLY_C6 = -3.1273466851e-05f;
 
 // ======================================================================
 // Lightweight inline exp(x) for negative x (tail region).
@@ -88,7 +101,8 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         // a = |t| via setsgn (clear sign bit, no branch)
         sfpi::vFloat a = sfpi::setsgn(t, 0);
 
-        // f(a) via degree-8 Horner on [0, 5]
+#ifdef INP_FLOAT32
+        // FP32: f(a) via degree-8 Horner on [0, 5]
         sfpi::vFloat residual = PolynomialEvaluator::eval(
             a,
             SOFTPLUS_POLY_C0,
@@ -101,19 +115,32 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_POLY_C7,
             SOFTPLUS_POLY_C8);
 
-        // Tail: f(a) ≈ exp(-a) for a > 5
+        // Tail: f(a) ≈ exp(-a) for a > 5, via inline Cody-Waite exp +
+        // 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3))
         sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
         v_if(a > SOFTPLUS_POLY_BOUNDARY) {
-#ifdef INP_FLOAT32
-            // FP32: inline Cody-Waite exp + 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3))
             sfpi::vFloat e = softplus_exp_negative(neg_a);
             residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
-#else
-            // BF16: exp_21f is faster than inline Cody-Waite (~8 vs ~15 ops)
-            residual = _sfpu_exp_21f_bf16_<false>(neg_a);
-#endif
         }
         v_endif;
+#else
+        // BF16: f(a) via degree-6 Horner on [0, 5]
+        sfpi::vFloat residual = PolynomialEvaluator::eval(
+            a,
+            SOFTPLUS_BF16_POLY_C0,
+            SOFTPLUS_BF16_POLY_C1,
+            SOFTPLUS_BF16_POLY_C2,
+            SOFTPLUS_BF16_POLY_C3,
+            SOFTPLUS_BF16_POLY_C4,
+            SOFTPLUS_BF16_POLY_C5,
+            SOFTPLUS_BF16_POLY_C6);
+
+        // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
+        // residual < exp(-5) = 0.0067 there. Clamping to 0 keeps softplus(t>0) = t within
+        // bf16 rounding and avoids the ~8-op exp tail on every element.
+        v_if(a > SOFTPLUS_POLY_BOUNDARY) { residual = 0.0f; }
+        v_endif;
+#endif
 
         // Reconstruct softplus(t):
         //   t >= 0: softplus(t) = t + f(t) = max(0,t) + residual
@@ -132,7 +159,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
-inline void calculate_softplus(uint param0, uint param1, uint param2) {
+inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);

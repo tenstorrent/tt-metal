@@ -15,15 +15,17 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    batch_norm/device/kernels/*
-    groupnorm/device/kernels/*
-    layernorm/device/kernels/*
-    layernorm_distributed/device/kernels/*
-    rmsnorm_distributed/device/kernels/*
-    softmax/device/kernels/*
-    kernel_util/compute/*
-    kernel_util/dataflow/*
-    kernel_util/generic/*
+    batch_norm/device/kernels/*.cpp
+    groupnorm/device/kernels/*.hpp
+    layernorm/device/kernels/*.cpp
+    layernorm/device/kernels/*.hpp
+    layernorm/device/kernels/*.h
+    layernorm_distributed/device/kernels/*.cpp
+    layernorm_distributed/device/kernels/*.hpp
+    rmsnorm_distributed/device/kernels/*.cpp
+    softmax/device/kernels/*.cpp
+    kernel_util/compute/*.h
+    kernel_util/generic/*.h
 )
 target_sources(
     ttnn_op_normalization
@@ -56,3 +58,19 @@ install(
 )
 
 install(TARGETS ttnn_op_normalization LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, rather than in the centrally-owned
+# ttnn/sources.cmake — the target itself is necessarily shared (nanobind
+# builds one Python extension module), but which file lists a given op's
+# own registration source doesn't need to be. `ttnn` only exists when
+# WITH_PYTHON_BINDINGS is on, hence the guard.
+#
+# The actual file list (TTNN_OP_NORMALIZATION_NANOBIND_SRCS) lives in sources.cmake, not here: this
+# file carries metalium-developers-infra as a required co-owner (so infra
+# can land sweeping build-system changes), and routine add/remove/rename of
+# a nanobind source shouldn't need to go through infra. This wiring line
+# itself is build logic and is expected to change rarely.
+if(TARGET ttnn)
+    target_sources(ttnn PRIVATE ${TTNN_OP_NORMALIZATION_NANOBIND_SRCS})
+endif()

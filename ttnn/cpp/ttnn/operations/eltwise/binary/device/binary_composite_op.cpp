@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <cstdint>
 #include <type_traits>
 #include <utility>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -15,10 +17,12 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/device.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
 
@@ -430,7 +434,7 @@ Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         s_a[1]);
     Tensor b = input_b;
     if (s_a.rank() > 2) {
-        SmallVector<uint32_t> reshape(s_a.rank(), 1);
+        ttsl::SmallVector<uint32_t> reshape(s_a.rank(), 1);
         reshape[1] = s_a[1];
         b = ttnn::reshape(input_b, ttnn::Shape(reshape));
     }
@@ -542,55 +546,96 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
         result);
 }
 
-/**
- * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]
- * and result is of size [1,1,N,M].
- * - implementation supports any 1D "squeezable tensor" at input operands
- *   by running reshape.
- */
-Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    const ttnn::Shape& s_a = input_a.logical_shape();
-    const ttnn::Shape& s_b = input_b.logical_shape();
-    auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
-        uint32_t num1s = 0;
-        for (uint32_t idx = 0; idx < 4; idx++) {
-            num1s += (uint32_t)(s[idx] == 1);
-        }
-        return num1s;
+// outer(a, b) treats each input's last dim as a vector and broadcasts the
+// leading dims: a:[..., N], b:[..., M] -> [..., N, M], equivalent to
+// a.unsqueeze(-1) * b.unsqueeze(-2).
+//
+// Dispatch:
+//  - INT32/UINT32: broadcast-multiply (matmul does not support integer accum).
+//  - FLOAT32: broadcast-multiply for precision, not speed. matmul is actually
+//    faster in device time here, but its FPU truncates the FP32 inputs before
+//    multiplying, whereas the eltwise multiply is FP32-native.
+//  - BFLOAT16/BFLOAT8_B: matmul when the effective batch is 1 (both inputs
+//    have no leading dims beyond the vector), otherwise broadcast-multiply.
+//    Rationale: the [N,1]x[1,M] tile-outer-product path is the fastest kernel
+//    at batch=1, but the K=1 padding tax dominates once the workload scales
+//    across cores, at which point broadcast-multiply wins (~2x by batch=128).
+//
+// Height-sharded inputs flow through unchanged: the shard is along the
+// preserved dim, so unsqueeze's reshape and the downstream op both accept
+// the layout. Width-, block-, and ND-sharded inputs are materialized as
+// interleaved first (preserving the source buffer_type so L1-resident
+// sharded inputs stay in L1). Output sharding remains caller-controlled via
+// output_mem_config.
+Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+    TT_FATAL(
+        input_a.logical_shape().rank() >= 1 && input_b.logical_shape().rank() >= 1,
+        "ttnn.outer: inputs must be at least 1D, but got shapes {} and {}",
+        input_a.logical_shape(),
+        input_b.logical_shape());
+    // Keep this whitelist in sync with the dtype list advertised by the
+    // nanobind docstring for ttnn.outer. Anything outside it would otherwise
+    // fail deeper in ttnn::reshape or ttnn::multiply with a less attributable
+    // error.
+    auto is_supported = [](DataType dt) {
+        return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::FLOAT32 ||
+               dt == DataType::INT32 || dt == DataType::UINT32;
     };
-
-    // check if 3 dimensions are 1
-    TT_FATAL((num_ones(s_a) >= 3), "3 dimensions are required to be 1 for use with outer product");
-    TT_FATAL((num_ones(s_b) >= 3), "3 dimensions are required to be 1 for use with outer product");
-
-    const bool skip_reshape_a = (s_a[0] == 1 && s_a[1] == 1 && s_a[2] >= 1 && s_a[3] == 1);
-    const bool skip_reshape_b = (s_b[0] == 1 && s_b[1] == 1 && s_b[2] == 1 && s_b[3] >= 1);
-
-    Tensor a_slim = input_a;
-    Tensor b_slim = input_b;
-
-    if (!skip_reshape_a) {
-        uint32_t a_volume = s_a[0] * s_a[1] * s_a[2] * s_a[3];
-        a_slim = ttnn::reshape(input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, a_volume, 1}});
-    }
-    if (!skip_reshape_b) {
-        uint32_t b_volume = s_b[0] * s_b[1] * s_b[2] * s_b[3];
-        b_slim = ttnn::reshape(input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, b_volume}});
-    }
-    a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT);
-    b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT);
-
-    auto* device = ttnn::GetDefaultDevice();
-    if (device != nullptr) {
-        if (a_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            a_slim = a_slim.to_device(device);
+    TT_FATAL(
+        is_supported(input_a.dtype()) && is_supported(input_b.dtype()),
+        "ttnn.outer: unsupported dtype (got {} and {}); supported dtypes are BFLOAT16, BFLOAT8_B, FLOAT32, INT32, "
+        "UINT32",
+        input_a.dtype(),
+        input_b.dtype());
+    TT_FATAL(
+        input_a.dtype() == input_b.dtype(),
+        "ttnn.outer: inputs must have the same dtype, but got {} and {}",
+        input_a.dtype(),
+        input_b.dtype());
+    auto deshard_unless_height = [](const Tensor& t) {
+        const auto layout = t.memory_config().memory_layout();
+        const bool keep_sharded =
+            layout == TensorMemoryLayout::INTERLEAVED || layout == TensorMemoryLayout::HEIGHT_SHARDED;
+        if (keep_sharded) {
+            return t;
         }
-        if (b_slim.storage_type() != tt::tt_metal::StorageType::DEVICE) {
-            b_slim = b_slim.to_device(device);
-        }
-    }
+        // to_memory_config (not sharded_to_interleaved): the latter early-returns
+        // when the legacy shard_spec is empty, silently leaving ND_SHARDED tensors
+        // un-desharded. Preserve the source buffer_type so L1-resident sharded
+        // inputs stay in L1.
+        return ttnn::to_memory_config(
+            t, MemoryConfig{TensorMemoryLayout::INTERLEAVED, t.memory_config().buffer_type()});
+    };
+    const auto a_unsq = ttnn::unsqueeze(deshard_unless_height(input_a), -1);
+    const auto b_unsq = ttnn::unsqueeze(deshard_unless_height(input_b), -2);
 
-    return ttnn::matmul(a_slim, b_slim);
+    const DataType dt = input_a.dtype();
+    const bool is_integer = (dt == DataType::INT32 || dt == DataType::UINT32);
+    const bool is_fp32 = (dt == DataType::FLOAT32);
+    // Effective batch is the product of leading dims (everything except the
+    // vector dim); a scalar leading shape means batch=1. Uses logical shape so
+    // padded tile geometry doesn't leak into the dispatch decision.
+    auto leading_volume = [](const Tensor& t) -> uint64_t {
+        const auto& shape = t.logical_shape();
+        uint64_t v = 1;
+        for (int i = 0; i + 1 < static_cast<int>(shape.rank()); ++i) {
+            v *= static_cast<uint64_t>(shape[i]);
+        }
+        return v;
+    };
+    const uint64_t batch = std::max<uint64_t>(leading_volume(input_a), leading_volume(input_b));
+    const bool use_matmul = !is_integer && !is_fp32 && batch == 1;
+    if (use_matmul) {
+        // matmul requires TILE inputs and, unlike the binary_ng multiply path,
+        // does not tilize row-major inputs on the way in. Tilize here so the
+        // documented "any layout" contract holds for the matmul dispatch.
+        const auto to_tile = [](const Tensor& t) {
+            return t.layout() == Layout::TILE ? t : ttnn::to_layout(t, Layout::TILE);
+        };
+        return ttnn::matmul(
+            to_tile(a_unsq), to_tile(b_unsq), /*transpose_a=*/false, /*transpose_b=*/false, output_mem_config);
+    }
+    return ttnn::multiply(a_unsq, b_unsq, std::nullopt, output_mem_config);
 }
 
 Tensor polyval(

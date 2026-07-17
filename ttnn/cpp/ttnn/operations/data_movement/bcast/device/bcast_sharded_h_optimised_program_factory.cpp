@@ -190,16 +190,16 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
             }
         }
         const uint32_t tile_offset = Wt * ncores;  // used in multi batch weight for block sharded
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
             core,
-            KernelDescriptor::CoreRuntimeArgs{
-                b.buffer()->address(),  // (0) src1_addr
-                Ht,                     // (1) Ht
-                Wt,                     // (2) Wt
-                offset,                 // (3) read offset in1
-                tile_offset,            // (4) in1 offset between batches
-                w_blk,                  // (5) block size in w
-                batch_b,                // (6) in1 batch size
+            {
+                b.buffer(),   // (0) src1_addr
+                Ht,           // (1) Ht
+                Wt,           // (2) Wt
+                offset,       // (3) read offset in1
+                tile_offset,  // (4) in1 offset between batches
+                w_blk,        // (5) block size in w
+                batch_b,      // (6) in1 batch size
             });
 
         compute_desc.runtime_args.emplace_back(

@@ -87,6 +87,9 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
     compile_time_args.push_back(source_width);
     compile_time_args.push_back(destination_width);
     compile_time_args.push_back(base_page_size);
+    // TILE reshards are a pure page permutation (equal src/dst page size); the kernel copies
+    // page N -> page N and skips the row-major row/col re-strider.
+    compile_time_args.push_back(static_cast<uint32_t>(input.layout() == Layout::TILE));
 
     ProgramDescriptor desc;
 

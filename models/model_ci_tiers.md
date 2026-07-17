@@ -85,6 +85,8 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
 | Mamba-2.8B | WH N150 |
 | Phi-3-mini | WH N150 |
+| Panoptic-DeepLab | BH P150 |
+| BEVFormer | BH P150 |
 
 
 # Pipelines
@@ -147,4 +149,3 @@ Captures device timing for a single layer of each target model, used to track pe
 | vLLM nightly tests | [`vLLM nightly tests`](../.github/workflows/vllm-nightly-tests.yaml) |
 | vLLM nightly impl | [`[internal] vLLM nightly tests impl`](../.github/workflows/vllm-nightly-tests-impl.yaml) |
 | Galaxy stress tests | [`(Galaxy) Stress`](../.github/workflows/galaxy-stress-tests.yaml) |
-| TTNN stress tests | [`ttnn stress tests`](../.github/workflows/ttnn-stress-tests.yaml) |

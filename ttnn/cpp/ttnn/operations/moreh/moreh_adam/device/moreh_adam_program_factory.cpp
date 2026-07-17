@@ -235,17 +235,12 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto param_in_addr = param_in.buffer()->address();
-    const auto grad_addr = grad.buffer()->address();
-    const auto exp_avg_in_addr = exp_avg_in.buffer()->address();
-    const auto exp_avg_sq_in_addr = exp_avg_sq_in.buffer()->address();
-    const auto max_exp_avg_sq_in_addr =
-        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer()->address() : 0;
-
-    const auto param_out_addr = param_out.buffer()->address();
-    const auto exp_avg_out_addr = exp_avg_out.buffer()->address();
-    const auto exp_avg_sq_out_addr = exp_avg_sq_out.buffer()->address();
-    const auto max_exp_avg_sq_out_addr = max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->buffer()->address() : 0;
+    // Buffer base addresses are declared as Buffer* bindings via emplace_runtime_args() (below)
+    // instead of being smuggled as raw uint32_t, so the framework patches them on cache hits.
+    // Optional tensors are passed as a possibly-null Buffer*: a null Buffer* is emitted as 0u
+    // with no binding, mirroring the previous "address or 0" value without breaking the fast path.
+    Buffer* max_exp_avg_sq_in_buffer = max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer() : nullptr;
+    Buffer* max_exp_avg_sq_out_buffer = max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out->buffer() : nullptr;
 
     const uint32_t f2u_lr = std::bit_cast<uint32_t>(lr);
     const uint32_t f2u_beta1 = std::bit_cast<uint32_t>(beta1);
@@ -265,35 +260,39 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                param_in_addr,
-                grad_addr,
-                exp_avg_in_addr,
-                exp_avg_sq_in_addr,
-                max_exp_avg_sq_in_addr,
-                f2u_lr,
-                f2u_beta1,
-                f2u_beta2,
-                f2u_eps,
-                f2u_weight_decay,
-                step,
-                static_cast<uint32_t>(amsgrad),
-                num_tiles_per_core,
-                tile_offset});
+        // f2u_lr (arg 5) and step (arg 10) are excluded from compute_program_hash and are
+        // re-applied on every cache hit via get_dynamic_runtime_args(); the values baked here
+        // are correct for the cache-miss dispatch.
+        KernelDescriptor::RTArgList reader_rt;
+        reader_rt.reserve(14);
+        reader_rt.push_back(param_in.buffer());
+        reader_rt.push_back(grad.buffer());
+        reader_rt.push_back(exp_avg_in.buffer());
+        reader_rt.push_back(exp_avg_sq_in.buffer());
+        reader_rt.push_back(max_exp_avg_sq_in_buffer);
+        reader_rt.push_back(f2u_lr);
+        reader_rt.push_back(f2u_beta1);
+        reader_rt.push_back(f2u_beta2);
+        reader_rt.push_back(f2u_eps);
+        reader_rt.push_back(f2u_weight_decay);
+        reader_rt.push_back(step);
+        reader_rt.push_back(static_cast<uint32_t>(amsgrad));
+        reader_rt.push_back(num_tiles_per_core);
+        reader_rt.push_back(tile_offset);
+        reader_desc.emplace_runtime_args(core, reader_rt);
 
-        writer_desc.runtime_args.emplace_back(
-            core,
-            KernelDescriptor::CoreRuntimeArgs{
-                param_out_addr,
-                exp_avg_out_addr,
-                exp_avg_sq_out_addr,
-                max_exp_avg_sq_out_addr,
-                num_tiles_per_core,
-                tile_offset});
+        KernelDescriptor::RTArgList writer_rt;
+        writer_rt.reserve(6);
+        writer_rt.push_back(param_out.buffer());
+        writer_rt.push_back(exp_avg_out.buffer());
+        writer_rt.push_back(exp_avg_sq_out.buffer());
+        writer_rt.push_back(max_exp_avg_sq_out_buffer);
+        writer_rt.push_back(num_tiles_per_core);
+        writer_rt.push_back(tile_offset);
+        writer_desc.emplace_runtime_args(core, writer_rt);
 
-        // compute — runtime args go to the correct kernel descriptor
+        // compute — runtime args go to the correct kernel descriptor.  step is excluded from
+        // the hash and re-applied on cache hits via get_dynamic_runtime_args().
         KernelDescriptor::CoreRuntimeArgs compute_rt{step};
         if (core_group_1.contains(core)) {
             compute_desc_1.runtime_args.emplace_back(core, std::move(compute_rt));
@@ -312,6 +311,59 @@ ProgramDescriptor MorehAdamOperation::create_descriptor(
     }
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> MorehAdamOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*output_tensor*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // lr and step are EXCLUDED from compute_program_hash, so a cache hit never rebuilds the
+    // descriptor and their baked values would otherwise stay frozen.  Re-apply them here.
+    //
+    // MUST mirror create_descriptor() exactly:
+    //   - kernels are pushed reader(0), writer(1), compute_group_1(2), compute_group_2(3).
+    //     compute_group_2 is only pushed (and only reached below) when core_group_2 is non-empty.
+    //   - reader per-core runtime args: [5] = f2u_lr, [10] = step.
+    //   - compute per-core runtime args: [0] = step.
+    //   - writer has no hash-excluded args.
+    // The work-split and the per-core iteration reproduce create_descriptor() by construction.
+    const auto& param_in = tensor_args.param_in;
+    uint32_t num_tiles = param_in.physical_volume() / tt::constants::TILE_HW;
+
+    IDevice* device = param_in.device();
+    auto grid = device->compute_with_storage_grid_size();
+    const auto num_cores_y = grid.y;
+
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        split_work_to_cores(grid, num_tiles);
+    (void)all_cores;
+    (void)num_tiles_per_core_group_1;
+    (void)num_tiles_per_core_group_2;
+
+    const uint32_t f2u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
+    const uint32_t step = operation_attributes.step;
+
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kComputeGroup1KernelIdx = 2;
+    constexpr uint32_t kComputeGroup2KernelIdx = 3;
+    constexpr uint32_t kReaderLrArgIdx = 5;
+    constexpr uint32_t kReaderStepArgIdx = 10;
+    constexpr uint32_t kComputeStepArgIdx = 0;
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(static_cast<size_t>(num_cores) * 3);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        dynamic_args.push_back({kReaderKernelIdx, core, kReaderLrArgIdx, f2u_lr});
+        dynamic_args.push_back({kReaderKernelIdx, core, kReaderStepArgIdx, step});
+        if (core_group_1.contains(core)) {
+            dynamic_args.push_back({kComputeGroup1KernelIdx, core, kComputeStepArgIdx, step});
+        } else {
+            dynamic_args.push_back({kComputeGroup2KernelIdx, core, kComputeStepArgIdx, step});
+        }
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::moreh::moreh_adam

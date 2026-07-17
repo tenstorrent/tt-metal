@@ -44,11 +44,11 @@ RandnDeviceOperation::tensor_return_value_t RandnDeviceOperation::create_output_
         operation_attributes.device);
 }
 
-tt::stl::hash::hash_t RandnDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RandnDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto cached_operation_attributes = operation_attributes;
     cached_operation_attributes.seed = std::nullopt;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::operations::randn

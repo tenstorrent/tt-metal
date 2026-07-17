@@ -24,6 +24,7 @@ void kernel_main() {
 
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
     constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
+    constexpr auto fp32_mode = get_compile_time_arg_val(5) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
@@ -32,7 +33,7 @@ void kernel_main() {
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
     // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
     constexpr DataFormat reduce_format = get_dataformat(cb_id_in0);
-    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format>();
+    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
     constexpr uint32_t row_chunk = use_welford ? 1
                                                : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
                                                                        : compute_kernel_lib::DEST_AUTO_LIMIT);
@@ -44,7 +45,7 @@ void kernel_main() {
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
-    constexpr auto tensor_args = TensorAccessorArgs<5>();
+    constexpr auto tensor_args = TensorAccessorArgs<6>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     Noc noc;

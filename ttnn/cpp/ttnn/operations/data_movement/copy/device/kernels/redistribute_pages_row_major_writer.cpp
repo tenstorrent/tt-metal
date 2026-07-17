@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 FORCE_INLINE uint32_t u32_min(uint32_t a, uint32_t b) { return (a < b) ? a : b; }
@@ -17,7 +17,7 @@ void kernel_main() {
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(2);
 
     // compile-time args
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_in1 = get_compile_time_arg_val(0);
     constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(1);
     constexpr uint32_t elements_per_output_page = get_compile_time_arg_val(2);
     constexpr uint32_t bytes_per_element = get_compile_time_arg_val(3);
@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t bytes_per_output_subblock = get_compile_time_arg_val(5);
 
     Noc noc;
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in1(dfb_id_in1);
 
     constexpr auto dst_args = TensorAccessorArgs<6>();
     const auto accessor_dst = TensorAccessor(dst_args, dst_addr);
@@ -48,15 +48,15 @@ void kernel_main() {
             uint32_t output_addr_subblock_offset =
                 ((output_column % elements_per_output_page) / elements_per_output_subblock) * bytes_per_output_subblock;
             uint32_t num_bytes_to_write = (output_end_column - output_column + 1) * bytes_per_element;
-            cb_in1.wait_front(1);
+            dfb_in1.wait_front(1);
             noc.async_write(
-                cb_in1,
+                dfb_in1,
                 accessor_dst,
                 num_bytes_to_write,
                 {.offset_bytes = 0},
                 {.page_id = output_page_id, .offset_bytes = output_addr_subblock_offset});
             noc.async_write_barrier();
-            cb_in1.pop_front(1);
+            dfb_in1.pop_front(1);
             output_column = output_end_column + 1;
         }
     }

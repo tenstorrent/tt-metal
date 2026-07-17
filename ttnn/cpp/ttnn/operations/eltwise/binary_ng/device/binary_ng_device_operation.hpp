@@ -10,6 +10,8 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/distributed/types.hpp"
 namespace ttnn::operations::binary_ng {
 
 enum class SubtileBroadcastType {
@@ -32,9 +34,9 @@ struct BinaryNgDeviceOperation {
 
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
         std::optional<unary::ScalarVariant> scalar;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
@@ -78,6 +80,15 @@ struct BinaryNgDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
+
+    // compute_program_hash EXCLUDES the tensor volume, so one cached program is reused across
+    // differently-shaped calls.  All shape-/work-split-dependent per-core runtime args are therefore
+    // re-applied on every cache hit here.  Mirrors create_descriptor()'s shared builder.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& c,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng

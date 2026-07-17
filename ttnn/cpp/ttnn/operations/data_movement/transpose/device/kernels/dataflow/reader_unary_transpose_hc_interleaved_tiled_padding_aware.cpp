@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -33,16 +33,16 @@ void kernel_main() {
 
     constexpr uint32_t HtWt = Ht * Wt;
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
-    CircularBuffer cb_padding(tt::CBIndex::c_1);
-    const uint32_t tile_bytes = cb.get_tile_size();
+    DataflowBuffer dfb(dfb_id_in0);
+    DataflowBuffer dfb_padding(tt::CBIndex::c_1);
+    const uint32_t tile_bytes = dfb.get_entry_size();
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
@@ -64,18 +64,18 @@ void kernel_main() {
         } else {
             linear_tile_index = i;
         }
-        cb.reserve_back(onetile);
-        noc.async_read(s, cb, tile_bytes, {.page_id = linear_tile_index}, {.offset_bytes = 0});
+        dfb.reserve_back(onetile);
+        noc.async_read(s, dfb, tile_bytes, {.page_id = linear_tile_index}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb.push_back(onetile);
+        dfb.push_back(onetile);
     }
     if constexpr (needs_padding) {
         // Add padding
-        cb_padding.reserve_back(1);
-        uint32_t l1_write_addr = cb_padding.get_write_ptr();
+        dfb_padding.reserve_back(1);
+        uint32_t l1_write_addr = dfb_padding.get_write_ptr();
         // Fill with padding value
         // if bfloat16 num_writes = FACE_WIDTH / (sizeof(uint32_t))/(element_size)
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
-        cb_padding.push_back(1);
+        dfb_padding.push_back(1);
     }
 }

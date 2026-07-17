@@ -5,7 +5,7 @@
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -39,14 +39,14 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_mask_h = tt::CBIndex::c_3;
 #ifdef DO_MASK_H
-    CircularBuffer cb_mask_h(cb_id_mask_h);
-    generate_mask_h(cb_mask_h, mask_h);
+    DataflowBuffer dfb_mask_h(cb_id_mask_h);
+    generate_mask_h(dfb_mask_h, mask_h);
 #endif
 
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(cb_id_in0);
     const auto in0_tile_bytes = get_tile_size(cb_id_in0);
 
     uint32_t w = curr_col_in_batch;
@@ -54,10 +54,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_cols; i++) {
         uint32_t curr_id = col_start_tile_id;
         for (uint32_t j = 0; j < Ht; j++) {
-            cb_in0.reserve_back(onetile);
-            noc.async_read(s, cb_in0, in0_tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+            dfb_in0.reserve_back(onetile);
+            noc.async_read(s, dfb_in0, in0_tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_in0.push_back(onetile);
+            dfb_in0.push_back(onetile);
             curr_id += Wt;  // stride in H
         }
         w++;

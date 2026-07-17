@@ -123,6 +123,8 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
 template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp32_dest_acc_en = false>
 inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
+    cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
+    cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, unpack_to_dest, is_fp32_dest_acc_en>(buf_desc_id, num_tiles);
 }
 

@@ -22,6 +22,7 @@ from helpers.llk_params import (
 from helpers.param_config import (
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -78,7 +79,7 @@ def generate_sfpu_square_combinations(formats_list):
                                 dest_acc,
                                 dest_sync,
                                 implied_math_format,
-                                input_dimensions,
+                                runtime(input_dimensions),
                             )
                         )
     return combinations

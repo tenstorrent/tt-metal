@@ -86,7 +86,7 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
 bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { return not(config_a == config_b); }
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
-    tt::stl::reflection::operator<<(os, config);
+    ttsl::reflection::operator<<(os, config);
     return os;
 }
 

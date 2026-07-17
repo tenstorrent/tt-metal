@@ -195,9 +195,8 @@ def test_mean_ulp_bf16(device, shape, dim, desc, distribution, keepdim, fp32_des
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# fp32_dest_acc_en=True is required for FP32 inputs.
-# Higher threshold requirement on WH compared to BH (800K, .001)
-_FP32_ULP_THRESHOLD = 1_800_000
+# ttnn.mean defaults to the accurate SFPU path, so this measures SFPU vs torch fp32 golden; the two fp32 orderings differ by at most a few hundred ULP here
+_FP32_ULP_THRESHOLD = 512
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.00125
 
 
@@ -232,3 +231,167 @@ def test_mean_ulp_fp32(device, shape, dim, desc, distribution, keepdim):
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[FP32 {desc} {distribution} keepdim={keepdim}] {msg}"
+
+
+# ---------------------------------------------------------------------------
+# FP32 accurate (SFPU) vs fast (FPU) mode
+# ---------------------------------------------------------------------------
+
+# fast_and_approximate_mode: False (default) = accurate SFPU (full fp32); True = fast FPU (tf32). Accuracy = max fp32 ULP vs an fp64 golden.
+_SFPU_ULP_MAX = 8  # accurate-path cap; observed peak is 2 ULP on this grid (4x headroom)
+
+
+def _fp32_input(distribution: str, shape, seed: int) -> torch.Tensor:
+    """FP32 test input. Distributions stress different accumulation regimes."""
+    torch.manual_seed(seed)
+    if distribution == "unit":
+        return torch.empty(shape, dtype=torch.float32).uniform_(1.0, 2.0)
+    if distribution == "large_offset":  # large shared exponent → catastrophic tf32 cancellation
+        return 1.0e4 + torch.empty(shape, dtype=torch.float32).uniform_(0.0, 1.0)
+    if distribution == "wide_range":  # many exponents in one reduction
+        return (
+            torch.empty(shape, dtype=torch.float32).uniform_(-1.0, 1.0)
+            * torch.pow(10.0, torch.empty(shape, dtype=torch.float32).uniform_(0.0, 5.0))
+            + 5.0e3
+        )
+    if distribution == "uniform_01":  # uniform [0, 1)
+        return torch.rand(shape, dtype=torch.float32)
+    raise ValueError(f"unknown distribution {distribution}")
+
+
+def _fp32_ulp_max(actual: torch.Tensor, reference: torch.Tensor) -> float:
+    """Max signed-magnitude fp32 ULP distance between two same-shape fp32 tensors."""
+    a = actual.reshape(reference.shape).to(torch.float32).contiguous().view(torch.int32).to(torch.int64)
+    r = reference.to(torch.float32).contiguous().view(torch.int32).to(torch.int64)
+    same = (a & 0x80000000) == (r & 0x80000000)
+    av, rv = a & 0x7FFFFFFF, r & 0x7FFFFFFF
+    ulp = torch.where(same, (av - rv).abs(), av.abs() + rv.abs())
+    return ulp.max().item()
+
+
+def _mean_pair(device, x, dim, keepdim, fp32_dest_acc_en=True, input_memory_config=None, output_memory_config=None):
+    """Run ttnn.mean twice (fast FPU, accurate SFPU) on the same input; return (fpu, sfpu) as torch."""
+    ckc = _make_mean_compute_kernel_config(device, fp32_dest_acc_en)
+    tt_in = ttnn.from_torch(
+        x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_memory_config
+    )
+    kw = dict(dim=dim, keepdim=keepdim, compute_kernel_config=ckc, memory_config=output_memory_config)
+    fpu = ttnn.to_torch(ttnn.mean(tt_in, fast_and_approximate_mode=True, **kw))
+    sfpu = ttnn.to_torch(ttnn.mean(tt_in, fast_and_approximate_mode=False, **kw))
+    return fpu, sfpu
+
+
+_ACCURATE_SHAPES = [
+    ((1, 22, 1536), -1, "W1536"),  # long W reduce
+    ((1, 1, 32, 2048), -1, "W2048"),
+    ((2, 4, 512, 64), -2, "H512"),  # H reduce
+    ((2, 3, 256, 256), [-2, -1], "HW256"),  # HW reduce
+    ((1, 1, 30, 1000), -1, "pad30x1000"),  # non-tile-aligned H and W (padding)
+]
+
+
+# Broad sweep — this test carries the distribution/keepdim/seed variation
+@pytest.mark.parametrize("distribution", ["unit", "large_offset", "wide_range"])
+@pytest.mark.parametrize("shape, dim, desc", _ACCURATE_SHAPES, ids=[c[2] for c in _ACCURATE_SHAPES])
+@pytest.mark.parametrize("keepdim", [False, True], ids=["keepdim_false", "keepdim_true"])
+@pytest.mark.parametrize("seed", [0, 1234])
+def test_mean_fp32_accurate_vs_fast(device, distribution, shape, dim, desc, keepdim, seed):
+    """Accurate SFPU fp32 mean must be within the tight ULP cap of an fp64 golden; the FPU gap is logged."""
+    x = _fp32_input(distribution, shape, seed)
+    ref = torch.mean(x.to(torch.float64), dim=dim, keepdim=keepdim).to(torch.float32)
+    fpu, sfpu = _mean_pair(device, x, dim, keepdim)
+    fpu_ulp = _fp32_ulp_max(fpu, ref)
+    sfpu_ulp = _fp32_ulp_max(sfpu, ref)
+    logger.info(
+        f"ttnn.mean fp32 accurate-vs-fast | {desc} {distribution} seed={seed} keepdim={keepdim} | "
+        f"FPU ulp={fpu_ulp:.0f} | SFPU ulp={sfpu_ulp:.0f}/{_SFPU_ULP_MAX}"
+    )
+    assert sfpu_ulp <= _SFPU_ULP_MAX, f"SFPU ulp {sfpu_ulp:.0f} exceeds tight cap {_SFPU_ULP_MAX} (FPU={fpu_ulp:.0f})"
+
+
+def _mean_input_memory_config(mem_layout: str, shape):
+    """Input memory config for a 4D (1,1,H,W) shape whose H and W are divisible by 8 tiles."""
+    _, _, h, w = shape
+    if mem_layout == "dram_interleaved":
+        return ttnn.DRAM_MEMORY_CONFIG
+    if mem_layout == "l1_interleaved":
+        return ttnn.L1_MEMORY_CONFIG
+    if mem_layout == "l1_height_sharded":
+        return ttnn.create_sharded_memory_config(
+            shape=(h // 8, w),
+            core_grid=ttnn.CoreGrid(x=1, y=8),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+    if mem_layout == "l1_width_sharded":
+        return ttnn.create_sharded_memory_config(
+            shape=(h, w // 8),
+            core_grid=ttnn.CoreGrid(x=8, y=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            use_height_and_width_as_shard_shape=True,
+        )
+    raise ValueError(f"unknown mem_layout {mem_layout}")
+
+
+@pytest.mark.parametrize("mem_layout", ["dram_interleaved", "l1_interleaved", "l1_width_sharded", "l1_height_sharded"])
+@pytest.mark.parametrize("distribution", ["unit", "wide_range"])
+def test_mean_fp32_accurate_memory_layouts(device, mem_layout, distribution):
+    """Accurate SFPU path must hold the tight ULP cap across DRAM/L1 interleaved and L1 width/height sharded inputs."""
+    shape, dim = (1, 1, 256, 1024), -1
+    x = _fp32_input(distribution, shape, seed=0)
+    ref = torch.mean(x.to(torch.float64), dim=dim, keepdim=True).to(torch.float32)
+    _, sfpu = _mean_pair(
+        device,
+        x,
+        dim,
+        keepdim=True,
+        input_memory_config=_mean_input_memory_config(mem_layout, shape),
+        output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sfpu_ulp = _fp32_ulp_max(sfpu, ref)
+    logger.info(
+        f"ttnn.mean fp32 accurate | mem_layout={mem_layout} {distribution} | SFPU ulp={sfpu_ulp:.0f}/{_SFPU_ULP_MAX}"
+    )
+    assert sfpu_ulp <= _SFPU_ULP_MAX, f"SFPU ulp {sfpu_ulp:.0f} exceeds tight cap {_SFPU_ULP_MAX} for {mem_layout}"
+
+
+@pytest.mark.parametrize("keepdim", [False, True], ids=["keepdim_false", "keepdim_true"])
+def test_mean_fp32_long_reduction_regression(device, keepdim):
+    """Regression: fp32 mean over a long W (uniform [0,1)) is thousands of ULP off on the FPU/tf32 path; accurate SFPU must be within a few ULP."""
+    shape, dim = (1, 22, 1536), -1
+    x = _fp32_input("uniform_01", shape, seed=404)
+    ref = torch.mean(x.to(torch.float64), dim=dim, keepdim=keepdim).to(torch.float32)
+    fpu, sfpu = _mean_pair(device, x, dim, keepdim)
+    fpu_ulp = _fp32_ulp_max(fpu, ref)
+    sfpu_ulp = _fp32_ulp_max(sfpu, ref)
+    logger.info(
+        f"fp32 mean long-W uniform keepdim={keepdim} | FPU ulp={fpu_ulp:.0f} | SFPU ulp={sfpu_ulp:.0f}/{_SFPU_ULP_MAX}"
+    )
+    assert sfpu_ulp <= _SFPU_ULP_MAX, f"SFPU ulp {sfpu_ulp:.0f} exceeds tight cap {_SFPU_ULP_MAX}"
+
+
+@pytest.mark.parametrize(
+    "shape, dim, desc",
+    [((1, 1, 4096, 8192), -1, "W8192_deep"), ((1, 1, 8192, 64), -2, "H8192_deep")],
+    ids=["W8192_deep", "H8192_deep"],
+)
+def test_mean_fp32_accurate_large_depth(device, shape, dim, desc):
+    """High accumulation depth (thousands of elements) is where the fast/tf32 path loses the most precision; accurate SFPU must still hold the tight cap."""
+    x = _fp32_input("large_offset", shape, seed=0)
+    ref = torch.mean(x.to(torch.float64), dim=dim, keepdim=True).to(torch.float32)
+    fpu, sfpu = _mean_pair(device, x, dim, keepdim=True)
+    fpu_ulp = _fp32_ulp_max(fpu, ref)
+    sfpu_ulp = _fp32_ulp_max(sfpu, ref)
+    logger.info(
+        f"ttnn.mean fp32 accurate large-depth | {desc} | FPU ulp={fpu_ulp:.0f} | SFPU ulp={sfpu_ulp:.0f}/{_SFPU_ULP_MAX}"
+    )
+    assert sfpu_ulp <= _SFPU_ULP_MAX, f"SFPU ulp {sfpu_ulp:.0f} exceeds tight cap {_SFPU_ULP_MAX}"
+
+
+@pytest.mark.parametrize("shape, dim", [((1, 1, 32, 2048), -1)])
+def test_mean_fp32_accurate_falls_back_without_fp32_dest_acc(device, shape, dim):
+    """Without fp32_dest_acc_en, accurate mode must fall back to the FPU (SFPU can't preserve fp32), giving results bit-identical to fast mode."""
+    torch.manual_seed(0)
+    x = 1.0e4 + torch.empty(shape, dtype=torch.float32).uniform_(0.0, 1.0)
+    fpu, sfpu = _mean_pair(device, x, dim, keepdim=True, fp32_dest_acc_en=False)
+    assert torch.equal(fpu, sfpu), "accurate path did not fall back to FPU when fp32_dest_acc_en=False"

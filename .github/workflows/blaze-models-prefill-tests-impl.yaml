@@ -1,0 +1,367 @@
+name: "[internal] Blaze Models Prefill tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+      sp-config:
+        required: false
+        type: string
+        default: "sc1"
+        description: "Supercluster configuration (sc1)"
+      test-type:
+        required: false
+        type: string
+        default: "all"
+      exclude-test-group:
+        required: false
+        type: string
+        default: ""
+      resource-prefix:
+        required: true
+        type: string
+        description: "Unique prefix for allocation/environment names when multiple impl jobs share a run (e.g. module, sdpa-perf)"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  load-test-matrix:
+    name: Load Test Matrix for ${{ inputs.sp-config }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.filter-tests.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/blaze_models_prefill_tests.yaml
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Validate SKU exists
+        run: |
+          if ! grep -q "bh_${{ inputs.sp-config }}:" .github/sku_config.yaml; then
+            echo "::error::SKU 'bh_${{ inputs.sp-config }}' not found in .github/sku_config.yaml"
+            exit 1
+          fi
+          echo "✓ SKU 'bh_${{ inputs.sp-config }}' exists in sku_config.yaml"
+
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "demo"
+
+      - name: Build test matrix
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+
+      - name: Apply test-type filter
+        id: apply-test-type-filter
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+        run: |
+          MATRIX="$MATRIX"
+          TEST_TYPE="${{ inputs.test-type }}"
+          EXCLUDE_GROUP="${{ inputs.exclude-test-group }}"
+          if [ -z "$TEST_TYPE" ] || \
+            echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
+            if [ -n "$EXCLUDE_GROUP" ]; then
+              MATRIX=$(echo "$MATRIX" | jq -c --arg g "$EXCLUDE_GROUP" '[.[] | select(.test_group != $g)]')
+            fi
+          else
+            MATRIX=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
+              ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
+              | [ .[] | . as $e | select(($tokens | index($e.test_type)) or ($tokens | index($e.test_group))) ]
+            ')
+            if [ "$MATRIX" = "[]" ]; then
+              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${{ env.TESTS_YAML_PATH }})."
+              exit 1
+            fi
+          fi
+          echo "filtered_matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$MATRIX" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Filter tests by sp_config
+        id: filter-tests
+        env:
+          MATRIX: ${{ steps.apply-test-type-filter.outputs.filtered_matrix }}
+        run: |
+          FILTERED=$(echo "$MATRIX" | jq -c --arg sp "${{ inputs.sp-config }}" '[.[] | select(.sp_config == $sp)]')
+          if [ "$FILTERED" = "[]" ]; then
+            echo "::error::No tests found for sp_config '${{ inputs.sp-config }}' in ${TESTS_YAML_PATH}"
+            exit 1
+          fi
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILTERED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Filtered tests for ${{ inputs.sp-config }}:"
+          echo "$FILTERED" | jq .
+
+  multihost-tests:
+    name: ${{ matrix.test-group.name }}
+    needs: load-test-matrix
+    env:
+      OMPI_MCA_btl_tcp_if_include: ens5f0np0
+      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+      PRTE_MCA_prte_default_hostfile: /etc/ttop/hostfile
+      PRTE_MCA_prte_fwd_environment: "true"
+      PATH: "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      VIRTUAL_ENV: /opt/venv
+      HOME: /home/user
+      PIP_CACHE_DIR: /home/user/.cache/pip
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      TT_METAL_HOME: /home/user/tt-metal
+      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
+      TT_METAL_CACHE: /home/user/.cache
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    outputs:
+      test-result: ${{ steps.run-test.outcome }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+
+      - name: Parse docker image
+        id: parse-image
+        run: |
+          IMAGE="${{ inputs.docker-image }}"
+          REPOSITORY="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          echo "repository=$REPOSITORY" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Extract allocation spec from SKU
+        id: extract-spec
+        run: |
+          pip3 install PyYAML
+          {
+            echo "allocation_spec<<EOF"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Create allocation for ${{ matrix.test-group.name }}
+        id: allocation
+        uses: ./.github/actions/ttop-create-allocation
+        timeout-minutes: 120
+        with:
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
+          namespace: ttop-ci
+          spec: ${{ steps.extract-spec.outputs.allocation_spec }}
+
+      - name: Get allocation configs
+        uses: ./.github/actions/ttop-get-allocation-data
+        with:
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
+          allocationNamespace: ttop-ci
+
+      - name: Create test environment
+        uses: ./.github/actions/ttop-create-environment
+        timeout-minutes: 30
+        with:
+          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
+          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
+          allocationNamespace: ttop-ci
+          workerRepository: ${{ steps.parse-image.outputs.repository }}
+          workerTag: ${{ steps.parse-image.outputs.tag }}
+          useDevHostMount: 'true'
+          sharedVolumeEnabled: 'true'
+          path: /etc/ttop
+
+      - name: 📦 Download Build Artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.build-artifact-name }}
+          path: /ci/artifacts
+
+      - name: 🧪 Download Python Wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: /ci/artifacts
+
+      - name: Unpack artifacts & install
+        run: |
+          rm -rf /ci/tt-metal
+          cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+          if ! command -v zstd >/dev/null 2>&1; then
+            echo "zstd not found in runner context, installing fallback..."
+            sudo apt-get update
+            sudo apt-get install -y zstd
+          fi
+          shopt -s globstar nullglob
+          build_archives=(/ci/artifacts/**/*.tar.zst)
+          echo "Found ${#build_archives[@]} .tar.zst candidate(s) under /ci/artifacts"
+          printf ' - %s\n' "${build_archives[@]}"
+          if [ ${#build_archives[@]} -eq 0 ]; then
+            echo "ERROR: Could not find any .tar.zst under /ci/artifacts"
+            echo "Artifact directory layout:"
+            ls -R /ci/artifacts
+            exit 1
+          fi
+          BUILD_ARCHIVE="${build_archives[0]}"
+          echo "Using build archive: ${BUILD_ARCHIVE}"
+
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
+          sudo rm -rf /home/user/tt-metal
+          sudo mkdir -p /home/user
+          sudo chown "$(id -u):$(id -g)" /home/user
+          cp -r /ci/tt-metal /home/user/
+          mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
+          mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
+
+          mpirun --pernode tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
+          ttnn_wheels=(/ci/artifacts/**/ttnn-*.whl)
+          echo "Found ${#ttnn_wheels[@]} ttnn wheel candidate(s) under /ci/artifacts"
+          printf ' - %s\n' "${ttnn_wheels[@]}"
+          if [ ${#ttnn_wheels[@]} -eq 0 ]; then
+            echo "ERROR: Could not find ttnn-*.whl under /ci/artifacts"
+            echo "Artifact directory layout:"
+            ls -R /ci/artifacts
+            exit 1
+          fi
+          mpirun --pernode uv pip install "${ttnn_wheels[@]}"
+
+      - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
+        working-directory: /tmp
+        timeout-minutes: 45
+        run: |
+          MAX_RECOVERY_ATTEMPTS=10
+
+          echo "--- Pre-check: tt-smi visibility on all hosts ---"
+          mpirun --pernode --tag-output \
+            bash -lc '
+              snapshot=$(tt-smi --snapshot_no_tty --snapshot)
+              driver=$(jq -r ".host_info.Driver // \"unknown\"" <<< "$snapshot")
+              tt_smi=$(jq -r ".host_sw_vers.tt_smi // \"unknown\"" <<< "$snapshot")
+              echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
+            ' || true
+
+          run_cluster_validation() {
+            mpirun --pernode --tag-output \
+              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+              --send-traffic \
+              --hard-fail \
+              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+              --num-iterations 5
+          }
+
+          for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
+            echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
+            reset_success=false
+            validation_success=false
+
+            echo "--- Resetting cards with tt-smi ---"
+            if mpirun --pernode tt-smi -glx_reset; then
+              reset_success=true
+            else
+              echo "WARNING: Reset failed on attempt $attempt"
+            fi
+
+            if [ "$reset_success" = true ]; then
+              echo "--- Sleeping 5s after reset to allow links/services to settle ---"
+              sleep 5
+
+              echo "--- Running cluster validation ---"
+              if run_cluster_validation; then
+                validation_success=true
+              else
+                echo "WARNING: Validation failed on attempt $attempt"
+              fi
+            else
+              echo "WARNING: Skipping validation because reset failed on attempt $attempt"
+            fi
+
+            if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
+              echo "SUCCESS: Reset and cluster validation passed on attempt $attempt"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
+              echo "Sleeping 30s before retry..."
+              sleep 30
+            fi
+          done
+
+          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
+          exit 1
+
+      - name: Verify ttnn imports on workers
+        working-directory: /tmp
+        run: |
+          mpirun --pernode --tag-output bash -lc '
+            python3 -c "import ttnn; print(\"ttnn import: OK\")"
+            python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
+          '
+
+      - name: Check /mnt/models access on workers
+        working-directory: /tmp
+        run: |
+          mpirun --pernode --tag-output bash -lc '
+            test -r /mnt/models
+          '
+
+      - name: ${{ matrix.test-group.name }}
+        id: run-test
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        working-directory: /home/user/tt-metal
+        run: |
+          CMD=$(cat << 'EOF'
+          ${{ matrix.test-group.cmd }}
+          EOF
+          )
+
+          echo "Running: ${{ matrix.test-group.name }}"
+          echo "$CMD"
+          eval "$CMD"
+
+      - name: Delete test environment
+        if: always()
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
+          namespace: ttop-ci
+
+      - name: Delete allocation
+        if: always()
+        uses: ./.github/actions/ttop-delete-allocation
+        with:
+          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
+          namespace: ttop-ci
+
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: ${{ matrix.test-group.owner_id }}

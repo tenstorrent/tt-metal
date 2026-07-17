@@ -13,7 +13,7 @@
 #include "api/debug/dprint_pages.h"
 #endif
 
-// Multicasts activation data from src_cb to dst_cb across cores in the multicast rectangle.
+// Multicasts activation data from src_dfb to dst_dfb across cores in the multicast rectangle.
 // Three cases depending on the sender's role and number of multicast destinations:
 //   is_receiver_core && act_mcast_num_cores > 0:  mcast with INCLUDE_SRC loopback
 //   is_receiver_core && act_mcast_num_cores == 0: local self-write (mcast loopback hangs with 0 destinations)
@@ -24,11 +24,12 @@ void multicast_data(
     Noc noc,
     MulticastEndpoint mcast_ep,
     bool is_receiver_core,
-    experimental::CB src_cb,
+    DataflowBuffer src_dfb,
     uint32_t src_offset,
     McastDst& dst,
     uint32_t total_bytes) {
-    auto src = use<CircularBuffer::AddrSelector::READ_PTR>(src_cb);
+    // A bare DataflowBuffer NOC source already resolves to get_read_ptr() (see noc_traits_t<DataflowBuffer>).
+    auto src = src_dfb;
     if (is_receiver_core) {
         if constexpr (act_mcast_num_cores > 0) {
             noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
@@ -48,7 +49,7 @@ void multicast_data(
     }
 }
 
-// Multicast activation data from the local circular buffer to multiple destinations (dst_cb in receiver cores).
+// Multicast activation data from the local circular buffer to multiple destinations (dst_dfb in receiver cores).
 // This function sends a block of data (the activation block) using NOC multicast commands, it avoids waiting for the
 // whole block to be available in the source CB before starting the multicast, instead waits for enough tiles to do one
 // multicast of NOC_MAX_BURST_SIZE size. This is because under the hood, the multicast splits the data into chunks of
@@ -66,9 +67,9 @@ template <
 void mcast_block_chunked(
     Noc noc,
     MulticastEndpoint mcast_ep,
-    experimental::CB src_cb_obj,
+    DataflowBuffer src_dfb_obj,
     bool is_receiver_core,
-    experimental::CB dst_cb_obj,
+    DataflowBuffer dst_dfb_obj,
     const McastRect& rect) {
     // Build mcast dst once; only .addr is updated per burst
     // number of full bursts
@@ -95,14 +96,14 @@ void mcast_block_chunked(
         .noc_y_start = rect.noc_y_start,
         .noc_x_end = rect.noc_x_end,
         .noc_y_end = rect.noc_y_end,
-        .addr = dst_cb_obj.get_write_ptr()};
+        .addr = dst_dfb_obj.get_write_ptr()};
 
     constexpr uint32_t wait_tile_start_cnt = std::min(block_tile_count, wait_tile_full_cnt);
     uint32_t wait_tile_curr = wait_tile_start_cnt;
     for (uint32_t i = 0; i < mcast_full_burst_cnt; i++) {
-        src_cb_obj.wait_front(wait_tile_curr);
+        src_dfb_obj.wait_front(wait_tile_curr);
         multicast_data<act_mcast_num_dest_cores>(
-            noc, mcast_ep, is_receiver_core, src_cb_obj, src_offset, dst, mcast_noc_burst_size);
+            noc, mcast_ep, is_receiver_core, src_dfb_obj, src_offset, dst, mcast_noc_burst_size);
         src_offset += mcast_noc_burst_size;
         dst.addr += mcast_noc_burst_size;
 
@@ -118,9 +119,9 @@ void mcast_block_chunked(
         }
     }
     if constexpr (mcast_leftover_burst_size > 0) {
-        src_cb_obj.wait_front(block_tile_count);
+        src_dfb_obj.wait_front(block_tile_count);
         multicast_data<act_mcast_num_dest_cores>(
-            noc, mcast_ep, is_receiver_core, src_cb_obj, src_offset, dst, mcast_leftover_burst_size);
+            noc, mcast_ep, is_receiver_core, src_dfb_obj, src_offset, dst, mcast_leftover_burst_size);
     }
 
     // In case we only do local l1 writes, we need to wait for the barrier to complete
@@ -165,11 +166,11 @@ void kernel_main() {
     Semaphore<> act_mcast_sender_sem(get_compile_time_arg_val(16));
     Semaphore<> act_mcast_receiver_sem(get_compile_time_arg_val(17));
     MulticastEndpoint mcast_ep;
-    experimental::CB cb_act_obj(cb_id_act);
-    experimental::CB cb_act_rm_obj(cb_id_act_row_major_bfloat16);
-    experimental::CB cb_tilized_in0_obj(tilized_in0_cb_id);
-    experimental::CB cb_reader_indices_obj(cb_reader_indices);
-    experimental::CB cb_sharded_act_obj(cb_id_sharded_act);
+    DataflowBuffer dfb_act_obj(cb_id_act);
+    DataflowBuffer dfb_act_rm_obj(cb_id_act_row_major_bfloat16);
+    DataflowBuffer dfb_tilized_in0_obj(tilized_in0_cb_id);
+    DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
+    DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
 
     Semaphore<> reserve_done_sem(0);
     Semaphore<> write_done_sem(0);
@@ -182,7 +183,7 @@ void kernel_main() {
     }
 
     if constexpr (needs_act_block_zero_out) {
-        zero_out_tiles<cb_id_act_row_major_bfloat16>(noc, cb_act_rm_obj);
+        zero_out_tiles<cb_id_act_row_major_bfloat16>(noc, dfb_act_rm_obj);
     }
 
     uint32_t i = 0;
@@ -196,10 +197,10 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-    load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(noc, cb_reader_indices_obj, dram_config_reader_index);
+    load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(noc, dfb_reader_indices_obj, dram_config_reader_index);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices_obj.get_write_ptr());
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_indices_obj.get_write_ptr());
 
     // Set up receiver semaphore VALID value, to be mcasted to destinations after the data has been mcasted
     act_mcast_receiver_sem.set(VALID);
@@ -213,7 +214,7 @@ void kernel_main() {
         ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
 
     // Fully create act matrix and tilize it before mcast
-    uint32_t act_l1_read_addr = cb_sharded_act_obj.get_read_ptr();
+    uint32_t act_l1_read_addr = dfb_sharded_act_obj.get_read_ptr();
 
     if constexpr (!split_reader_cb_shared) {
         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
@@ -231,9 +232,9 @@ void kernel_main() {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
-            cb_act_rm_obj.reserve_back(act_block_num_tiles_read);
+            dfb_act_rm_obj.reserve_back(act_block_num_tiles_read);
             if (is_sender_core) {
-                uint32_t l1_write_addr_act = cb_act_rm_obj.get_write_ptr();
+                uint32_t l1_write_addr_act = dfb_act_rm_obj.get_write_ptr();
                 if constexpr (split_reader_cb_shared) {
                     reserve_done_sem.set(VALID);
                     experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
@@ -261,13 +262,13 @@ void kernel_main() {
                     write_done_sem.set(INVALID);
                 }
             }
-            cb_act_rm_obj.push_back(act_block_num_tiles_read);
+            dfb_act_rm_obj.push_back(act_block_num_tiles_read);
 
 #ifndef SKIP_MCAST
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
             // Compute should function like regular mm
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < act_w_num_outer; act_w_outer_i++) {
-                cb_act_obj.reserve_back(act_block_num_tiles);
+                dfb_act_obj.reserve_back(act_block_num_tiles);
                 if (act_w_outer_i == act_mcast_sender_id) {
                     // MCAST SENDER: send entire tilized input to other cores in column
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr
@@ -283,7 +284,7 @@ void kernel_main() {
                         NOC_MAX_BURST_SIZE,
                         act_block_num_tiles,
                         act_mcast_tile_size_bytes>(
-                        noc, mcast_ep, cb_tilized_in0_obj, is_receiver_core, cb_act_obj, act_mcast_rect);
+                        noc, mcast_ep, dfb_tilized_in0_obj, is_receiver_core, dfb_act_obj, act_mcast_rect);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
@@ -327,10 +328,10 @@ void kernel_main() {
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     act_mcast_receiver_sem.wait(VALID);
                 }
-                cb_act_obj.push_back(act_block_num_tiles);
+                dfb_act_obj.push_back(act_block_num_tiles);
             }  // act_w_num_outer
 
-            cb_tilized_in0_obj.pop_front(act_block_num_tiles);
+            dfb_tilized_in0_obj.pop_front(act_block_num_tiles);
 #endif
         }
         start_reader_idx = reader_idx;

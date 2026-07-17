@@ -54,7 +54,7 @@ DramPrefetcherValidatorDeviceOperation::create_output_tensors(const operation_at
     return std::vector<ttnn::Tensor>{};
 }
 
-tt::stl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // GlobalCircularBuffer / Tensor aren't reflection-hashable here; pick the bits that
     // determine Program shape: scalar attrs, GCB identity, the source tensor's DRAM
@@ -65,6 +65,8 @@ tt::stl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_ha
         ttsl::hash::type_hash<DramPrefetcherValidatorDeviceOperation>,
         attrs.num_layers,
         attrs.print_stride,
+        attrs.streaming,
+        attrs.rotation,
         static_cast<uint64_t>(attrs.global_cb->config_address()),
         static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
         static_cast<uint32_t>(dataformat));
@@ -176,6 +178,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
         num_blocks,
         num_senders,
         operation_attributes.print_stride,
+        operation_attributes.streaming ? 1u : 0u,
     };
     TensorAccessorArgs(*tensor_buffer).append_to(compile_args);
 
@@ -215,6 +218,18 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
             const uint32_t ring_pos = strided_pairing ? (bank_id + bank_local_recv * num_dram_banks)
                                                       : (bank_id * receivers_per_bank + bank_local_recv);
             const uint32_t n_col_start = ring_pos * n_per_recv_tiles;
+            // Lead physical block this receiver expects at FIFO position 0 under streaming:
+            // rotation[ring_pos] when a rotation was supplied (must match the prefetcher), else
+            // ring_pos for the identity (natural topology) order.
+            uint32_t lead_block = ring_pos;
+            if (!operation_attributes.rotation.empty()) {
+                TT_FATAL(
+                    ring_pos < operation_attributes.rotation.size(),
+                    "Validator rotation has {} entries but ring_pos {} indexes past it",
+                    operation_attributes.rotation.size(),
+                    ring_pos);
+                lead_block = operation_attributes.rotation[ring_pos];
+            }
             std::vector<uint32_t> rt_args = {
                 bank_id,
                 bank_local_recv,
@@ -223,6 +238,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
                 total_n_tiles,
                 n_per_recv_tiles,
                 n_col_start,
+                lead_block,
             };
             SetRuntimeArgs(program, kernel_id, recv_cores[r], rt_args);
         }
@@ -244,12 +260,16 @@ void test_dram_prefetcher_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb) {
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    bool streaming,
+    const std::vector<uint32_t>& rotation) {
     using OperationType = DramPrefetcherValidatorDeviceOperation;
     OperationType::operation_attributes_t attrs{
         .num_layers = num_layers,
         .print_stride = print_stride,
         .global_cb = global_cb,
+        .streaming = streaming,
+        .rotation = rotation,
     };
     OperationType::tensor_args_t tensor_args{.source_tensor = source_tensor};
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);

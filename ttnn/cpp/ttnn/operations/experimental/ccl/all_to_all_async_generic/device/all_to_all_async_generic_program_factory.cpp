@@ -17,7 +17,7 @@ namespace {
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& shape = input_tensor.padded_shape();
-    ttnn::SmallVector<uint32_t> tiled_shape;
+    ttsl::SmallVector<uint32_t> tiled_shape;
     tiled_shape.reserve(shape.rank());
     for (int i = 0; i < shape.rank(); i++) {
         uint32_t dim = 0;

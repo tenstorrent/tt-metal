@@ -74,7 +74,6 @@ struct DispatchParams {
 
 struct DispatchInputs {
     Tensor input_tensor;
-    Tensor weights_tensor;
     Tensor indices_tensor;
     Tensor expert_offsets_tensor;
     Tensor expert_dispatch_table_tensor;

@@ -289,20 +289,27 @@ def get_output_tensor(input_tokens, expert_indices, expert_mapping, seq_len, mes
     # initialize the output tensor with random values so we can test the non-populated rows too
     output_tensor = torch.rand(devices, batch, seq_len, hidden_size, dtype=dtype)
 
-    for b in range(batch):
-        for s in range(seq_len):
-            for k in range(selected_experts_k):
-                expert_id = expert_indices[b, 0, s, k]
-                device_assignment = expert_mapping[0, 0, expert_id, :]
-                device_indices = torch.where(device_assignment == 1)[0]
-                for device_idx in device_indices:
-                    output_tensor[device_idx, b, s, :] = input_tokens[b, 0, s, :]
+    idx = expert_indices[:, 0, :, :].long()  # [batch, seq_len, k]
+    mapping = expert_mapping[0, 0] == 1  # [experts, devices] bool
+    present = mapping[idx].any(dim=2)  # [batch, seq_len, devices] bool
+    mask = present.permute(2, 0, 1)  # [devices, batch, seq_len] bool
+    tokens = input_tokens[:, 0, :, :].unsqueeze(0).expand(devices, -1, -1, -1)  # [devices, batch, seq_len, hidden]
+    output_tensor[mask] = tokens[mask]
 
     return output_tensor
 
 
 def gen_tensors(
-    batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16
+    batch,
+    experts,
+    selected_experts_k,
+    hidden_size,
+    seq_len,
+    mesh_shape,
+    devices,
+    scheme="random",
+    dtype=torch.bfloat16,
+    compute_golden=True,
 ):
     # create input tokens
     assert experts % devices == 0
@@ -312,7 +319,12 @@ def gen_tensors(
     expert_mapping = gen_expert_mapping(experts, devices, scheme)
     expert_indices = get_expert_indices(batch, experts, selected_experts_k, seq_len, mesh_shape, scheme)
 
-    output_tensor = get_output_tensor(input_tokens, expert_indices, expert_mapping, seq_len, mesh_shape, dtype)
+    output_tensor = (
+        get_output_tensor(input_tokens, expert_indices, expert_mapping, seq_len, mesh_shape, dtype)
+        if compute_golden
+        else None
+    )
+
     metadata_tensor = get_metadata_tensor(expert_indices, expert_mapping, mesh_shape)
 
     # create expert indices
@@ -333,6 +345,7 @@ def get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim):
 
 # we import and use this function in tests.sweeps_framework.sweeps.ccl.generality.all_to_all_dispatch.py
 # so be sure to carry over interface changes!
+@torch.no_grad()
 def run_all_to_all_dispatch_test(
     mesh_device,
     mesh_shape,
@@ -392,7 +405,8 @@ def run_all_to_all_dispatch_test(
     mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim)
 
     for iter in range(num_iters):
-        input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
+        # skip computing the sparse golden here, too much memory for prefill. Keep API bw compatible
+        input_tokens, expert_indices, expert_mapping, _, metadata_tensor = gen_tensors(
             batch,
             experts,
             select_experts_k,
@@ -402,6 +416,7 @@ def run_all_to_all_dispatch_test(
             devices,
             scheme=scheme,
             dtype=tt_to_torch_dtype(dtype),
+            compute_golden=False,
         )
         preallocated_output_tensor = torch.zeros((devices, batch, seq_len, hidden_size), dtype=tt_to_torch_dtype(dtype))
         preallocated_metadata_tensor = torch.zeros((devices, batch, seq_len, select_experts_k), dtype=torch.int32)
@@ -410,10 +425,9 @@ def run_all_to_all_dispatch_test(
             logger.info(f"input_tokens shape: {input_tokens.shape}")
             logger.info(f"expert_indices shape: {expert_indices.shape}")
             logger.info(f"expert_mapping shape: {expert_mapping.shape}")
-            logger.info(f"sparse_output_token_tensor shape: {sparse_output_token_tensor.shape}")
             logger.info(f"metadata_tensor shape: {metadata_tensor.shape}")
 
-        output_tensor_goldens_list.append(sparse_output_token_tensor)
+        output_tensor_goldens_list.append(input_tokens)
         output_metadata_goldens_list.append(metadata_tensor)
         torch_expert_mappings.append(expert_mapping)
 
@@ -624,43 +638,30 @@ def run_all_to_all_dispatch_test(
             )
             break
 
-        for b in range(batch):
-            for s in range(seq_len):
-                for k in range(selected_experts_k):
-                    expert_id = tt_metadata_tensor[0, b, s, k]
-                    for d in range(devices):
-                        if torch_expert_mappings[tensor_index][0, 0, expert_id, d] == 1:
-                            is_all_equal = torch.equal(
-                                tt_torch_tensor[d, b, s, :], output_tensor_goldens_list[tensor_index][d, b, s, :]
-                            )
-                            if not is_all_equal:
-                                logger.info(
-                                    f"Output tensor {tensor_index} mismatch at batch {b}, sequence {s}, expert {expert_id}, device {d}"
-                                )
+        idx = tt_metadata_tensor[0].long()  # [batch, seq_len, k]  (device-0 metadata copy)
+        mapping = torch_expert_mappings[tensor_index][0, 0] == 1  # [experts, devices] bool
+        present = mapping[idx].any(dim=2)  # [batch, seq_len, devices]
+        mask = present.permute(2, 0, 1)  # [devices, batch, seq_len]
 
-                            if not is_all_equal:
-                                passed = False
-                                first_failed_tensor_index = tensor_index
-                                first_failed_batch_index = b
-                                failed_indices = torch.where(
-                                    tt_torch_tensor[d, b, s, :] != output_tensor_goldens_list[tensor_index][d, b, s, :]
-                                )
-                                first_10_fail_idx = failed_indices[0][:10]
-                                logger.info(f"First 10 failing indices: {first_10_fail_idx}")
-                                logger.info(
-                                    f"Failing tt_torch_tensor tensor (first 10) {tt_torch_tensor[d, b, s, first_10_fail_idx]}"
-                                )
-                                logger.info(
-                                    f"Relevant output_tensor_goldens_list tensor (first 10) {output_tensor_goldens_list[tensor_index][d, b, s, first_10_fail_idx]}"
-                                )
-                                first_failed_expert_index = expert_id
-                                first_failed_device_index = d
-                                first_failed_sequence_index = s
-                                break
-                if not passed:
-                    break
-            if not passed:
-                break
+        tokens = output_tensor_goldens_list[tensor_index][:, 0, :, :]  # [batch, seq_len, hidden] (input tokens)
+        # golden = output_tensor_goldens_list[tensor_index]
+        row_equal = torch.empty_like(mask)
+        for d in range(devices):  # chunk over devices to bound the compare temporary
+            row_equal[d] = (tt_torch_tensor[d] == tokens).all(dim=-1)
+        mismatch = mask & ~row_equal
+
+        if mismatch.any():
+            passed = False
+            first_failed_tensor_index = tensor_index
+            d0, b0, s0 = (int(x) for x in mismatch.nonzero()[0])
+            first_failed_device_index = d0
+            first_failed_batch_index = b0
+            first_failed_sequence_index = s0
+            first_failed_expert_index = int(next(e for e in idx[b0, s0].tolist() if mapping[e, d0]))
+            failed_indices = torch.where(tt_torch_tensor[d0, b0, s0, :] != tokens[b0, s0, :])
+            logger.info(f"First 10 failing indices: {failed_indices[0][:10]}")
+            break
+
     num_program_cache_entries = 1
     if test_skew:
         num_program_cache_entries = 2

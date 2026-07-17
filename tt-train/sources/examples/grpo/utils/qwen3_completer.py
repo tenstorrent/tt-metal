@@ -117,6 +117,16 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         if not batch_sharded:
             self._num_devices = 1
 
+        # Mesh axes to seed UNIQUELY in the sample op: only the batch-sharded data-parallel axes
+        # (dp / fsdp) that are actually active, whose devices hold DISTINCT prompts and must draw
+        # independent Gumbel noise. Gated on the same enable flags as the batch mapper so seeding
+        # always mirrors the batch sharding; a tp axis (replicated logits) is never included.
+        self._seed_axes = []
+        if self._ddp_enabled:
+            self._seed_axes.append(self._mesh.axis_index("dp"))
+        if self._fsdp_enabled:
+            self._seed_axes.append(self._mesh.axis_index("fsdp"))
+
         tokenizer = AutoTokenizer.from_pretrained(model_source, trust_remote_code=True)
 
         max_seq_len = int(getattr(transformer_config, "max_sequence_length", 2048) or 2048)
@@ -346,7 +356,9 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                 logits = self._model(input_tensor, prefill_mask, past_key_values=kv)
 
                 seed = int(np.random.randint(low=1, high=int(1e7)))
-                sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None)
+                # Seed uniquely only over the batch-sharded axes (dp/fsdp) so each device's rollout
+                # draws independent noise; a replicated (tp) axis, if any, is excluded via _seed_axes.
+                sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
                 # Per-row prediction position: read the whole sampled column once
                 # on host and pick row b's token at pred_pos[b].
                 sampled_host = ttnn.to_torch(sampled.get_value(), mesh_composer=composer)
@@ -373,7 +385,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                     logits = self._model(last_input, decode_mask, past_key_values=kv)
 
                     seed = int(np.random.randint(low=1, high=int(1e7)))
-                    sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None)
+                    sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
                     # Clone so the column is independent of the deallocated sampled.
                     last_token_column = ttnn.clone(ttnn.slice(sampled.get_value(), [0, 0, 0, 0], [B_local, 1, 1, 1]))
                     generated_columns.append(last_token_column)

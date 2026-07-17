@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - all
+          - tt-training-models
           #          - cnn
           - sd35
           - flux1-dev
@@ -19,6 +20,10 @@ on:
           - mochi
           - qwenimage
           - deepseek_v3
+          - tinyllama_1_1b_ddp32_shakespeare
+          - llama_8b_tp8_ddp4_shakespeare
+          - llama_8b_tp4_ddp8_shakespeare
+
       build-type:
         required: false
         type: choice
@@ -62,9 +67,9 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
       build-wheel: true
+      skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-perf-tests:
     needs: [check-harbor, build-artifact-profiler]
     secrets: inherit

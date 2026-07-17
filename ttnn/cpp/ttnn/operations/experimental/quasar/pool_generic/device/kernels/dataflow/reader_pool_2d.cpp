@@ -250,8 +250,15 @@ void kernel_main() {
     DataflowBuffer config_cb(config_cb_id);
 #endif
 
+    // QSR max_pool fix: for a partial-face window (face_r_dim < 16, e.g. 3x3 -> 9), need_to_initialize_in_cb
+    // is false, but the quasar reduce reads the FULL 16-row face while the reader fills only the populated
+    // rows -> the unwritten face rows leak stale L1 into the max (value inflation; masked only when the L1
+    // residue happens to be <= the data). Force the -inf pre-clear for MAX pool. -inf is the max identity,
+    // so pre-clearing can never change a correct max; the once-at-init clear persists across the in_cb ring
+    // because the reader never overwrites those rows. (Real fix: make the quasar reduce respect face_r_dim.)
+    constexpr bool force_max_clear = !is_avg_pool;
     // fill the clear cb
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
+    if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         if constexpr (reader_id == 0) {
             fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             clear_value_cb.push_back(1);

@@ -117,7 +117,7 @@ def test_d2h_stream_service_replicated_sweep(
         mesh_device=mesh_device,
         global_spec=global_spec,
         fifo_size_bytes=fifo_pages * per_row_bytes,
-        scratch_cb_size_bytes=scratch_cb_pages * per_row_bytes,
+        max_socket_page_size_bytes=scratch_cb_pages * per_row_bytes,
     )
 
     _run_io_loop(service, iter_mapper, global_spec, shape_list, input_path, mesh_device)
@@ -197,7 +197,7 @@ def test_d2h_stream_service_sharded_sweep(mesh_device, pattern, N, scratch_cb_pa
         mesh_device=mesh_device,
         global_spec=global_spec,
         fifo_size_bytes=fifo_pages * per_row_bytes,
-        scratch_cb_size_bytes=scratch_cb_pages * per_row_bytes,
+        max_socket_page_size_bytes=scratch_cb_pages * per_row_bytes,
         mapper=service_mapper,
     )
 

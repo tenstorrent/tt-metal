@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/debug/dprint.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 
@@ -25,14 +25,14 @@ void kernel_main() {
     Noc noc;
 
     for (uint32_t tensor_id = 0; tensor_id < num_tensors; tensor_id++) {
-        const uint32_t input_shard_cb_id = get_arg_val<uint32_t>(arg_index++);
-        CircularBuffer input_shard_cb(input_shard_cb_id);
-        input_shard_cb.wait_front(num_pages_per_tensor);
+        const uint32_t input_shard_dfb_id = get_arg_val<uint32_t>(arg_index++);
+        DataflowBuffer input_shard_dfb(input_shard_dfb_id);
+        input_shard_dfb.wait_front(num_pages_per_tensor);
         uint32_t page_id = 0;
         for (uint32_t page_id_input = 0; page_id_input < num_pages_per_tensor; page_id_input++) {
             uint32_t input_page_id = page_id + num_pages_per_core * core_id * num_tensors + tensor_id;
             noc.async_write(
-                input_shard_cb,
+                input_shard_dfb,
                 s,
                 stick_size,
                 {.offset_bytes = page_id_input * stick_size},
@@ -40,6 +40,6 @@ void kernel_main() {
             noc.async_write_barrier();
             page_id += num_tensors;
         }
-        input_shard_cb.pop_front(num_pages_per_tensor);
+        input_shard_dfb.pop_front(num_pages_per_tensor);
     }
 }

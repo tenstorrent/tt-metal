@@ -29,6 +29,7 @@ from helpers.llk_params import (
 from helpers.param_config import (
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -121,7 +122,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                         if pool_type == ReducePool.Average and in_fmt.is_integer():
                             continue
                         combinations.append(
-                            (fmt, acc, dest_sync, dimensions, pool_type)
+                            (fmt, acc, dest_sync, runtime(dimensions), pool_type)
                         )
 
     return combinations
@@ -205,16 +206,17 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
         "sources/quasar/unpack_reduce_col_tilizeA_strided_quasar_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             MATH_OP(mathop=mathop, pool_type=pool_type),
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(dest_sync_mode),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             TEST_FACE_DIMS(),
             NUM_FACES(),
         ],
-        runtimes=[],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

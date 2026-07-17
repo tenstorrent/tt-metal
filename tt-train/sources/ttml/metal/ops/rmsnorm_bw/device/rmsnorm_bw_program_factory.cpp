@@ -142,9 +142,10 @@ bool fits_in_l1_check(
     const uint64_t dL_dout_memory = Wt * bfloat16_single_tile_size_bytes;
     const uint64_t matmul_reduce_memory = kNumMatMulReduceTiles * bfloat16_single_tile_size_bytes;
     const uint64_t zero_memory = kNumZeroTiles * bfloat16_single_tile_size_bytes;
-    // Memory for output tensors
+    // Memory for output tensors. Both output CBs are drained block-by-block by the writer, so they are
+    // double-buffered (twice_block_size), independent of Wt.
     const uint64_t dL_da_memory = twice_block_size * bfloat16_single_tile_size_bytes;
-    const uint64_t dL_dgamma_components_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t dL_dgamma_components_memory = twice_block_size * bfloat16_single_tile_size_bytes;
     // Memory for intermediate computations
     const uint64_t recip_rms_a_bcasted_memory = kNumRecipRmsATiles * bfloat16_single_tile_size_bytes;
     const uint64_t scale_memory = kNumScaleTiles * float32_single_tile_size_bytes;
@@ -254,10 +255,13 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles);
     [[maybe_unused]] auto cb_zero = create_circular_buffer(
         program, all_cores, kZeroCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumZeroTiles);
+    // Output CBs are produced and drained one block at a time (see writer: "interleave the writes to avoid waiting
+    // for the entire Wt tiles at once"), so they only need double-buffering, not a full row. Sizing them to
+    // num_input_tiles (= Wt on the fits-in-L1 path) overflows L1 for large hidden dims (e.g. 32B, Wt=160).
     [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
-        program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_dL_dgamma_components = create_circular_buffer(
-        program, all_cores, kDLdgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
+        program, all_cores, kDLdgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_recip_rms_a_bcasted = create_circular_buffer(
         program, all_cores, kRecipRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRecipRmsATiles);
     [[maybe_unused]] auto cb_scale = create_circular_buffer(

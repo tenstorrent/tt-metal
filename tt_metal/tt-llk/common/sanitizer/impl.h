@@ -352,7 +352,7 @@ constexpr size_t _operation_entry_size(
 // Goes in LLK_LIB in Init
 // Store operation type and push arguments to state stack
 template <typename... Ts>
-static inline void operation_init_impl(ThreadOutputContext& context, OperationState& state, const Operation op, const Ts... args)
+static inline void operation_init_impl(ThreadOutputContext& context, OperationState& state, const Operation op, Ts&&... args)
 {
     state.status      = OperationStatus::Initialized;
     state.operation   = op;
@@ -395,7 +395,7 @@ static inline void operation_init_impl(ThreadOutputContext& context, OperationSt
 // Goes in LLK_LIB in Execute
 // Check the operation (and its arguments) against the stored one, then mark it executed
 template <typename... Ts>
-static inline void operation_execute_impl(const ThreadOutputContext& context, OperationState& state, const Operation op, const Ts... args)
+static inline void operation_execute_impl(const ThreadOutputContext& context, OperationState& state, const Operation op, Ts&&... args)
 {
     // The check is skipped when silenced (e.g. the connected FSM transition already failed),
     // but the operation state is always advanced to stay in sync with the FSM.

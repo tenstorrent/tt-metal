@@ -922,7 +922,7 @@ TEST_F(CrossProcessD2DFixture, ForwardChain) {
             .global_spec = spec,
             .mapper = create_mesh_mapper(*mesh_device_, MeshMapperConfig{.placements = replicate_all(*mesh_device_)}),
             .fifo_size_bytes = fifo_bytes_for(spec),
-            .scratch_cb_size_bytes = fifo_bytes_for(spec),
+            .max_socket_page_size_bytes = fifo_bytes_for(spec),
             .worker_cores = kWorkerCores,
             .metadata_size_bytes = 0,
         };
@@ -1127,7 +1127,7 @@ void run_forward_chain_stress(
             .global_spec = spec,
             .mapper = create_mesh_mapper(*mesh_device_, MeshMapperConfig{.placements = replicate_all(*mesh_device_)}),
             .fifo_size_bytes = fifo_bytes_for(spec),
-            .scratch_cb_size_bytes = fifo_bytes_for(spec),
+            .max_socket_page_size_bytes = fifo_bytes_for(spec),
             .worker_cores = worker_cores,
             .metadata_master_core = worker_cores.end_coord,
             .metadata_size_bytes = kStressMetadataBytes,
