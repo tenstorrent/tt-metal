@@ -28,7 +28,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
+// TODO(nuked-op permute): permute nuked for agent eval; permute_to degraded to a passthrough (see below).
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 // TODO(nuked-op slice): slice removed; slice_basic degraded to a passthrough (see below).
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
@@ -53,8 +53,11 @@ ttnn::Tensor reshape_to(const ttnn::Tensor& t, std::vector<int32_t> shape) {
     return ttnn::reshape(t, ttsl::Span<const int32_t>(shape.data(), shape.size()));
 }
 
-ttnn::Tensor permute_to(const ttnn::Tensor& t, std::initializer_list<int64_t> dims) {
-    return ttnn::permute(t, ttsl::SmallVector<int64_t>(dims));
+ttnn::Tensor permute_to(const ttnn::Tensor& t, [[maybe_unused]] std::initializer_list<int64_t> dims) {
+    // TODO(nuked-op permute): restore real call — was ttnn::permute(t, SmallVector<int64_t>(dims)).
+    // permute was nuked for agent eval; identity passthrough keeps moe_compute compiling
+    // (moe_compute layout transforms will be wrong until permute is restored).
+    return t;
 }
 
 ttnn::Tensor slice_basic(

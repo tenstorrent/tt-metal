@@ -126,10 +126,6 @@ set(TTNN_OP_MOREH_NANOBIND_SRCS
     moreh_dot_backward/moreh_dot_backward_nanobind.cpp
     moreh_fold/fold_nanobind.cpp
     moreh_getitem/moreh_getitem_nanobind.cpp
-    moreh_group_norm/moreh_group_norm_nanobind.cpp
-    moreh_group_norm_backward/moreh_group_norm_backward_nanobind.cpp
-    moreh_layer_norm/moreh_layer_norm_nanobind.cpp
-    moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.cpp
     moreh_linear/moreh_linear_nanobind.cpp
     moreh_linear_backward/moreh_linear_backward_nanobind.cpp
     moreh_matmul/moreh_matmul_nanobind.cpp
@@ -142,9 +138,6 @@ set(TTNN_OP_MOREH_NANOBIND_SRCS
     moreh_norm/moreh_norm_nanobind.cpp
     moreh_norm_backward/moreh_norm_backward_nanobind.cpp
     moreh_sgd/moreh_sgd_nanobind.cpp
-    moreh_softmax/moreh_softmax_nanobind.cpp
-    moreh_softmax/moreh_softmax_nanobind.cpp
-    moreh_softmax_backward/moreh_softmax_backward_nanobind.cpp
     moreh_sum/moreh_sum_nanobind.cpp
     moreh_sum_backward/moreh_sum_backward_nanobind.cpp
 )

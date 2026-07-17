@@ -8,6 +8,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation/creation.hpp"  // ttnn::zeros (nuked-op sharded_to_interleaved fallback)
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"

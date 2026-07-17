@@ -20,7 +20,6 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/matmul/device/config/matmul_auto_tuner.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -398,25 +397,34 @@ Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_m
 
 static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     uint32_t block_height, uint32_t block_width, bool fp32_accum) {
-    // Conv kernels emit OutputCBLayout::SubblockMajor at every matmul_block /
-    // add_bias_bcast_rows call site (conv_bmm_tilize.cpp), which requires
-    // out_subblock_w == per_core_N OR out_subblock_h == 1. Synthesize a kernel
-    // config from fp32_accum so the tuner derives DST capacity via
-    // ttnn::get_dest_reg_count — preserves the legacy fp32 ? 4 : 8 cap when
-    // dst_full_sync_en=false (the default for conv2d compute kernels).
-    ttnn::DeviceComputeKernelConfig synth_config{};
-    synth_config.fp32_dest_acc_en = fp32_accum;
-    synth_config.dst_full_sync_en = false;
+    constexpr std::array<std::pair<uint32_t, uint32_t>, 20> subblocks = {{
+        {2, 4}, {4, 2}, {1, 8}, {8, 1}, {1, 7}, {7, 1}, {2, 3}, {3, 2}, {1, 6}, {6, 1},
+        {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
+    }};
 
-    namespace auto_tune = ttnn::operations::matmul::auto_tune;
-    const auto choice = auto_tune::determine_largest_subblock({
-        .per_core_M = block_height,
-        .per_core_N = block_width,
-        .compute_kernel_config = synth_config,
-        .subblock_w_eq_per_core_n_required = true,
-        .prefer_fast_path = true,
-    });
-    return {choice.out_subblock_h, choice.out_subblock_w};
+    uint32_t subblock_h = 0;
+    uint32_t subblock_w = 0;
+    for (auto [subblock_height, subblock_width] : subblocks) {
+        if (fp32_accum && (subblock_height * subblock_width > 4)) {
+            continue;
+        }
+
+        if ((block_height % subblock_height == 0) && (block_width % subblock_width == 0)) {
+            if (subblock_width != block_width && subblock_height != 1) {
+                continue;
+            }
+            subblock_h = subblock_height;
+            subblock_w = subblock_width;
+            break;
+        }
+    }
+    TT_FATAL(
+        subblock_h > 0 && subblock_w > 0,
+        "Could not find valid subblock size for block size {}x{}, fp32_accum: {}",
+        block_height,
+        block_width,
+        fp32_accum);
+    return {subblock_h, subblock_w};
 }
 
 Conv2dBlockConfig determine_per_core_conv_block_config(

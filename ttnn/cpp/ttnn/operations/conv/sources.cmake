@@ -32,8 +32,6 @@ set(TTNN_OP_CONV_API_HEADERS
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
 set(TTNN_OP_CONV_NANOBIND_SRCS
-    conv1d/conv1d_nanobind.cpp
     conv2d/conv2d_nanobind.cpp
     conv_nanobind.cpp
-    conv_transpose2d/conv_transpose2d_nanobind.cpp
 )

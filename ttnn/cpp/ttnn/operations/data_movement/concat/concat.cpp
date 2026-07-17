@@ -419,7 +419,9 @@ ttnn::Tensor concat(
                     starts[rank - 2] = row_start;
                     ends[rank - 2] = row_end;
                     ttsl::SmallVector<uint32_t> step(rank, 1);
-                    chunk_inputs.push_back(ttnn::slice(t, starts, ends, step, mem_config));
+                    // TODO(nuked-op slice): slice was nuked for agent eval — row-chunk slicing degraded
+                    // to a passthrough (the L1-fit chunking is wrong until slice is restored).
+                    chunk_inputs.push_back(t);
                 }
 
                 chunk_outputs.push_back(

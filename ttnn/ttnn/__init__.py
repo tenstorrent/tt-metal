@@ -488,7 +488,6 @@ from ttnn.operations.matmul import (
     create_matmul_attributes,
     matmul_select_program_factory,
 )
-from ttnn.operations import matmul_auto_tune  # noqa: F401
 
 from ttnn.operations.normalization import (
     # NOTE: Softmax*/LayerNorm* program configs/types/factories and the

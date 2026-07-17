@@ -24,15 +24,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            sdpa_config.hpp
-            attention_softmax/attention_softmax.hpp
-            concatenate_heads/concatenate_heads.hpp
-            sdpa/sdpa.hpp
-            sdpa/sparse_sdpa.hpp
-            sdpa/sparse_sdpa_msa.hpp
-            sdpa_decode/sdpa_decode.hpp
-            split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
+        FILES sdpa_config.hpp concatenate_heads/concatenate_heads.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

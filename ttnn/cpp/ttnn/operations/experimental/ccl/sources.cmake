@@ -123,7 +123,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     all_gather_concat_heads_fused/all_gather_concat_nanobind.cpp
     llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp
     all_reduce_async/all_reduce_async_nanobind.cpp
-    rms_allgather/rms_allgather_nanobind.cpp
     dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm_nanobind.cpp
     llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
     llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp
@@ -142,7 +141,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.cpp
     send_recv_async/send_async_d2h/send_async_d2h_nanobind.cpp
     neighbor_pad_async/neighbor_pad_async_nanobind.cpp
-    slice_reshard_async/slice_reshard_async_nanobind.cpp
     deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
     all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
     moe_compute/moe_compute_nanobind.cpp

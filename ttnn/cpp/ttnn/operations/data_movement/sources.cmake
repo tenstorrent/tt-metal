@@ -176,17 +176,14 @@ set(TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS
     data_movement_nanobind.cpp
     concat/concat_nanobind.cpp
     bcast/bcast_nanobind.cpp
-    chunk/chunk_nanobind.cpp
     clone/clone_nanobind.cpp
     concat/concat_nanobind.cpp
     copy/copy_nanobind.cpp
-    chunk/chunk_nanobind.cpp
     expand/expand_nanobind.cpp
     fill_pad/fill_pad_nanobind.cpp
     fill_rm/fill_rm_nanobind.cpp
     fold/fold_nanobind.cpp
     indexed_fill/indexed_fill_nanobind.cpp
-    narrow/narrow_nanobind.cpp
     moe_expert_token_remap/moe_expert_token_remap_nanobind.cpp
     moe_routing_remap/moe_routing_remap_nanobind.cpp
     move/move_nanobind.cpp
@@ -202,13 +199,6 @@ set(TTNN_OP_DATA_MOVEMENT_NANOBIND_SRCS
     stack/stack_nanobind.cpp
     scatter/scatter_nanobind.cpp
     scatter/tosa_scatter_nanobind.cpp
-    sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
-    sharded/reshard/reshard_nanobind.cpp
-    sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
-    sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_nanobind.cpp
-    sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_nanobind.cpp
-    slice/slice_nanobind.cpp
-    split/split_nanobind.cpp
     squeeze/squeeze_nanobind.cpp
     stack/stack_nanobind.cpp
     tilize/tilize_nanobind.cpp

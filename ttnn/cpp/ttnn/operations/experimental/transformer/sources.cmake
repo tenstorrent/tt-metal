@@ -112,12 +112,10 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.cpp
     dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.cpp
     dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.cpp
-    dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.cpp
     rotary_embedding/rotary_embedding_nanobind.cpp
     rotary_embedding_llama/rotary_embedding_llama_nanobind.cpp
     rotary_embedding_hf/rotary_embedding_hf_nanobind.cpp
     rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp
     rotate_half/rotate_half_nanobind.cpp
-    split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
 )

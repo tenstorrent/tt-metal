@@ -119,23 +119,9 @@ target_sources(
             moreh_getitem/moreh_getitem_nanobind.hpp
             moreh_getitem/device/moreh_getitem_device_operation.hpp
             # moreh_group_norm/
-            moreh_group_norm/moreh_group_norm.hpp
-            moreh_group_norm/moreh_group_norm_nanobind.hpp
-            moreh_group_norm/device/moreh_group_norm_device_operation.hpp
             # moreh_group_norm_backward/
-            moreh_group_norm_backward/moreh_group_norm_backward.hpp
-            moreh_group_norm_backward/moreh_group_norm_backward_nanobind.hpp
-            moreh_group_norm_backward/device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp
-            moreh_group_norm_backward/device/input_grad/moreh_group_norm_backward_input_grad_device_operation.hpp
             # moreh_layer_norm/
-            moreh_layer_norm/moreh_layer_norm.hpp
-            moreh_layer_norm/moreh_layer_norm_nanobind.hpp
-            moreh_layer_norm/device/moreh_layer_norm_device_operation.hpp
             # moreh_layer_norm_backward/
-            moreh_layer_norm_backward/moreh_layer_norm_backward.hpp
-            moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.hpp
-            moreh_layer_norm_backward/device/moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp
-            moreh_layer_norm_backward/device/moreh_layer_norm_backward_input_grad_device_operation.hpp
             # moreh_linear/
             moreh_linear/moreh_linear.hpp
             moreh_linear/moreh_linear_nanobind.hpp
@@ -185,13 +171,7 @@ target_sources(
             moreh_sgd/moreh_sgd_nanobind.hpp
             moreh_sgd/device/moreh_sgd_device_operation.hpp
             # moreh_softmax/
-            moreh_softmax/moreh_softmax.hpp
-            moreh_softmax/moreh_softmax_nanobind.hpp
-            moreh_softmax/device/moreh_softmax_device_operation.hpp
             # moreh_softmax_backward/
-            moreh_softmax_backward/moreh_softmax_backward.hpp
-            moreh_softmax_backward/moreh_softmax_backward_nanobind.hpp
-            moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp
             # moreh_sum/
             moreh_sum/moreh_sum.hpp
             moreh_sum/moreh_sum_nanobind.hpp
