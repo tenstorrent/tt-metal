@@ -28,7 +28,7 @@ The audit produces useful findings for ops in two states:
 - **Already on the `ProgramDescriptor` API.** The audit decides whether the Metal 2.0 port can proceed. GREEN → port can begin (after explicit user go-ahead).
 - **Still on legacy `host_api.hpp` (imperative builder).** The audit RED's the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite) — an imperative-builder op isn't on the `ProgramDescriptor` API, so its concept isn't `descriptor` and the gate fails — and continues: the remaining subjects still surface findings that inform what the eventual Metal 2.0 port will need, once the `ProgramDescriptor` migration (a substantial, separate workstream) lands. This is data-gathering for downstream planning, not a port attempt.
 
-In either case, the audit's deliverable is the report. Porting itself happens via the [port recipe](port_op_to_metal2_recipe.md), which is loaded only after the audit clears (GREEN) with explicit user go-ahead.
+In either case, the audit's deliverable is the report.
 
 This guide is **not** for the following adjacent tasks. If your task is one of these, stop and surface the mismatch to the user — do not use this guide:
 
@@ -39,7 +39,7 @@ If you are unsure whether your task fits the in-scope description, ask the user 
 
 **Operating principle**: Your job is to identify gaps, not to invent solutions for unimplemented features.
 
-Some features the legacy API supports are not yet available in Metal 2.0. When you encounter such a feature, the correct response is to **refuse the port and report the gap to the user.** Refusing is not a failure mode — it is the correct outcome when a gate fails.
+Some features the legacy API supports are not yet available in Metal 2.0. When you encounter such a feature, the correct response is to **refuse the port and report the gap to the user.**
 Which features are unsupported is settled by Appendix A — treat that list as **authoritative**. A construct not listed there is supported (the recipe translates it mechanically); don't gate on it, and don't reverse-engineer support from the API surface.
 
 **Why the auditor carries the judgment.** You run *once*, unhurried, with the whole op in view; the porter runs later, under tighter constraints, one file at a time. So this recipe deliberately pushes judgment onto you to lighten the porter: where a call *can* be made now — classifying a `TensorAccessor` 3rd-argument site, hunting the hidden second CB writer, deciding whether an RTA-vararg count is runtime-varying or fixed — you make it and hand the porter the conclusion, not the raw signal to re-derive. That is the principle behind what this audit keeps versus cuts: a subject earns its place when the auditor can resolve something the porter would otherwise have to.
@@ -60,8 +60,6 @@ Porting an op is a workflow split across two documents:
 
 1. **Feasibility audit.** *(This document.)* Assess this op's Metal 2.0 portability and capture findings — including what work will be required if the port can't proceed yet. Output: write `METAL2_PREPORT_AUDIT.md` (team-facing, always) — and, when the audit clears every gate, `METAL2_PORT_BRIEF.md` (porter-facing) — to the op directory, then STOP.
 2. **Port recipe** — legacy inventory, spec planning, construction, and verification. Lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md). Loaded only after the audit clears with explicit user go-ahead.
-
-This audit document covers the feasibility audit only. **Your job in this document is to decide whether the port is feasible — not to perform it.** Producing the audit report and stopping is the complete deliverable. The recipe document is loaded as a separate step, after the user has reviewed your audit and explicitly asked you to proceed.
 
 You do not skip the audit. You do not pre-load the recipe document. The audit is its own unit of work.
 
@@ -214,15 +212,15 @@ The sheet's `TensorParameter relaxation` column proposes, per factory, a relaxat
 
 ### TensorParameter analysis
 
-Every tensor a kernel reads must reach Metal 2.0 through the typed binding channel (`TensorParameter` / `TensorBinding`). This subject inventories, **per binding**, how the legacy op accesses each tensor and classifies the port work into one of two cases. Both cases are **PORT WORK** — the porter acts on them during the port; neither gates. (This subject merges what earlier versions of the audit split across a "TensorAccessor usage" check and a separate "TensorAccessor bypass" check: they detect the same population — tensors not cleanly on `TensorAccessor` — so they are one subject now.)
+Every tensor a kernel reads must reach Metal 2.0 through the typed binding channel (`TensorParameter` / `TensorBinding`). This subject inventories, **per binding**, how the legacy op accesses each tensor and classifies the port work into one of two cases. Both cases are **PORT WORK** — the porter acts on them during the port; neither gates.
 
 **Why this matters.** The legacy hazard is a tensor base address that reaches the kernel through an RTA/CRTA. Under TTNN's fast-path-cache binding-injection model, the framework patches the typed-binding channel on cache hit but leaves RTAs untouched — so a buffer address routed through an RTA stays at whatever value the cache-populating call wrote, and on later cache hits with new tensor storage of the same shape the kernel reads the *original* buffer. No assertion fires; just wrong numerics, only on cache hits with non-identical storage. Pre–Metal 2.0 this was a style concern (*"yuck, raw pointers"*); the fast-path change made it silently wrong. The port replaces that RTA-smuggled address with a typed `TensorParameter` binding (which *does* refresh) — regardless of what the kernel then does with the base pointer (the two cases below), and including kernels that use no `TensorAccessor` at all (older addr-gen idioms, hand-rolled NoC walks).
 
-This resolves **at port time** — it waits for no framework feature. (A raw-pointer Case-2 binding in a **compute** kernel used to be blocked; it no longer is — a compute kernel can bind a `TensorAccessor` / `LocalTensorAccessor` today, so compute Case 2 is ordinary port work.)
+This resolves **at port time** — it waits for no framework feature.
 
 **Scope.** Audit only kernels that actually touch tensor memory. **Compute kernels that only consume from / produce to circular buffers are out of scope** — they read CB pointers, not tensor memory; the tensor read happens upstream in a dataflow kernel.
 
-**Causal-link gate (run this first, per binding).** Before classifying any binding, check whether the kernel's access is a **borrowed-memory DFB read**: it reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory CB (a CB backed by a device buffer — host-side `set_globally_allocated_address(buffer)`; the borrowed-memory translation is a mechanical porting-recipe step via `DataflowBufferSpec::borrowed_from`, not an Appendix A gate). There the lack of `TensorAccessor` is *intended* — the borrowed-memory DFB **is** the tensor access — and the port handles it via `DataflowBufferSpec::borrowed_from`. Mark such a binding **clean**; do not force it into Case 1 or Case 2. Mis-classifying it as "convert to TensorAccessor" would be a regression.
+**Causal-link gate (run this first, per binding).** Before classifying any binding, check whether the kernel's access is a **borrowed-memory DFB read**: it reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory CB (a CB backed by a device buffer — host-side `set_globally_allocated_address(buffer)`; the borrowed-memory translation is a mechanical porting-recipe step via `DataflowBufferSpec::borrowed_from`, not an Appendix A gate). There the lack of `TensorAccessor` is *intended* — the borrowed-memory DFB **is** the tensor access — and the port handles it via `DataflowBufferSpec::borrowed_from`. Mark such a binding **clean**; do not force it into Case 1 or Case 2.
 
 Marking a binding **clean** here defers the *legality* of that borrowed-memory CB — is it a valid DFB, a sync-free CB (resolved by a self-loop), or a multi-endpoint CB? — to [CB endpoints](#cb-endpoints), which assesses every CB per node. Do not resolve it here: mark the borrowed-memory DFB read clean and move on.
 
@@ -343,7 +341,7 @@ Metal 2.0 enforces single-producer / single-consumer per node (SPSC) as a spec-v
 
 ### Out-of-directory coupling
 
-Run this subject regardless of the other subjects' outcomes. **The findings here are informational (FYI).** The one place donor coupling *gates* the port — a donor kernel still on pre-Device-2.0 idioms — is judged in [the Device 2.0 prerequisite](#device-20-prerequisite); this subject inventories the coupling in full so that gate is well-scoped and any future multi-op coordination is visible. This is the most substantial subject in the audit; budget time accordingly. It covers **two distinct escape types**: *function-call escape* (the kernel `#include`s and calls another op's helper function) and *file-path kernel instantiation* (the program factory `CreateKernel`s a kernel `.cpp` owned by another op). The bulk of the machinery addresses function-call escape; file-path escape is surfaced separately at the end as a coupling signal.
+Run this subject regardless of the other subjects' outcomes. **The findings here are informational (FYI).** The one place donor coupling *gates* the port — a donor kernel still on pre-Device-2.0 idioms — is judged in [the Device 2.0 prerequisite](#device-20-prerequisite); this subject inventories the coupling in full so that gate is well-scoped and any future multi-op coordination is visible. This is a substantial subject; budget time accordingly. It covers **two distinct escape types**: *function-call escape* (the kernel `#include`s and calls another op's helper function) and *file-path kernel instantiation* (the program factory `CreateKernel`s a kernel `.cpp` owned by another op). The bulk of the machinery addresses function-call escape; file-path escape is surfaced separately at the end as a coupling signal.
 
 **Why this check exists.** Op kernels frequently `#include` headers outside their own directory. When a Metal 2.0 port crosses one of these boundaries, the kernel's named tokens (`dfb::name`, `sem::name`, `ta::name`) need to translate into whatever shape the donor's signature expects. Some shapes cross cleanly; others require donor-side conversion work, most commonly because **the donor itself isn't on Device 2.0 yet**.
 
