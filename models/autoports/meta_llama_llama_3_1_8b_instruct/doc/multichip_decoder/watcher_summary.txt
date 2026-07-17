@@ -1,0 +1,17 @@
+Command:
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 RUN_MULTICHIP_DECODER_WATCHER=1 pytest -q -s --tb=short models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py -k multichip_watcher_stress
+
+Result:
+- PASS: one target-only 1x2 P300 fabric item, batch 32, logical sequence 7.
+- Paged BFP8 KV cache, nontrivial page table, eager decode, trace capture, and 10 trace replays.
+- All replay PCC values were 1.0 and all replay tensors were bitwise identical.
+- Watcher attached both devices with disabled features: ETH.
+- Worker assert, pause, ring buffer, stack, NoC sanitize, read/write L1 sanitize, waypoint, dispatch, and CB sanitize remained enabled.
+- generated/watcher/watcher.log had 1,694 lines; grep for error/assert/hang/timeout returned only the help/header occurrence of "assert" and no runtime finding.
+- Process and device teardown completed with exit code 0.
+- The same command was rerun after the decoder switched to the shared per-mesh
+  CCL manager. It again passed all ten PCC/bitwise replay checks and detached
+  both devices cleanly with exit code 0 on 2026-07-17 02:10 UTC.
+
+Why ETH instrumentation is disabled:
+With every watcher feature enabled, the test and all ten trace checks passed, but MetalContext teardown timed out while restoring active Ethernet core 29-25 after watcher detached. The same target-only test closes cleanly with TT_METAL_WATCHER_DISABLE_ETH=1. This is a Blackhole firmware/watcher teardown limitation, not a decoder kernel finding. Fabric/CCL behavior is covered separately by correctness, trace, stress, and Tracy CCL records.

@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/opt/ttmlir-toolchain/venv/bin/ttnn-advise", line 3, in <module>
+    from ttnn_jit._src.cli import main
+  File "/opt/ttmlir-toolchain/venv/lib/python3.12/site-packages/ttnn_jit/__init__.py", line 45, in <module>
+    import ttnn
+  File "/home/mvasiljevic/tt-mlir/third_party/tt-metal/src/tt-metal/ttnn/ttnn/__init__.py", line 17, in <module>
+    import ttnn._ttnn
+ImportError: /home/mvasiljevic/tt-mlir/third_party/tt-metal/src/tt-metal/ttnn/ttnn/_ttnn.so: undefined symbol: _ZN4ttnn12experimental11moe_computeERKN2tt8tt_metal6TensorES5_S5_S5_S5_S5_jjjbRKSt8optionalIjERKS6_INS1_9tt_fabric8TopologyEES9_RKS6_INS2_12CoreRangeSetEERKS6_INS2_12MemoryConfigEERKS6_IS3_ERKS6_INS2_15GlobalSemaphoreEERKS6_INS0_4prim6detail21MoEActivationFunctionEEbS9_S9_

@@ -1,0 +1,44 @@
+Post-review final gate results (2026-07-17 UTC)
+
+Correctness/stack command:
+pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py -k 'runtime_path_is_real_multichip or context_capacity_contract or stack_shares_one_ccl_owner or multichip_correctness'
+
+Result: 5 passed, 4 deselected, 10.60 s.
+- non-aligned sequence-7 prefill PCC: 0.9999991739475431
+- follow-on decode PCC: 0.9999873560305566
+- contiguous key/value PCC: 0.9999870479180762 / 0.9999880709475342
+- deterministic paged decode PCC, runs 0/1/2: 0.9999862439559114
+- first-page physical key/value PCC: 0.9999868605872560 / 0.9999832360105446
+- non-aligned sequence-31 boundary prefill PCC: 0.9999995471069436
+- boundary decode PCC, positions 63/64/65: 0.9999669458985457 / 0.9999675338304772 / 0.9999658210513528
+- rank 0 physical key page 0/page 1: 0.9999342237578629 / 0.9998869378452874
+- rank 1 physical key page 0/page 1: 0.9999346383858784 / 0.9998882672993427
+- rank 0 physical value page 0/page 1: 0.9999538221727972 / 0.9999196748773006
+- rank 1 physical value page 0/page 1: 0.9999539933632445 / 0.9999199905945560
+- page-1 unwritten offsets 2:64: exactly zero on both ranks for K and V
+- page-1 trace replays 0..4: PCC 1.0 versus eager and bitwise identical
+- 32-layer construction: one TT_CCL owner, 36 total semaphore creations
+
+Watcher command:
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 RUN_MULTICHIP_DECODER_WATCHER=1 pytest -q -s --tb=short models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py -k multichip_watcher_stress
+
+Result: 1 passed, 8 deselected, 4.48 s; ten trace PCCs 1.0, bitwise identical, watcher detached both devices, exit 0.
+
+Performance command:
+RUN_MULTICHIP_DECODER_PERF=1 MULTICHIP_DECODER_BATCH=1 MULTICHIP_DECODER_SEQ_LEN=18 MULTICHIP_DECODER_PREFILL_REPEATS=50 MULTICHIP_DECODER_TRACE_REPLAYS=1000 pytest -q -s --tb=short models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_multichip_decoder.py -k warmed_perf
+
+Result: 2 passed, 7 deselected, 8.12 s.
+- single prefill: 1.243528 ms
+- TP2 prefill: 0.638309 ms
+- prefill speedup/efficiency: 1.948161x / 97.4081%
+- single traced decode: 0.582049 ms
+- TP2 traced decode: 0.401595 ms
+- decode speedup/efficiency: 1.449345x / 72.4672%
+- TP2 output PCC: 0.9999997445901966
+- repetitions: 50 prefill / 1000 trace
+
+Anomaly/control:
+- A 63-token baseline prefill was attempted after all earlier tensors were deallocated. Its padded-64 single-chip MLP program requires 1,659,648 static CB bytes and exceeds the 1,572,864-byte Blackhole L1 limit. The final boundary test uses a non-aligned 31-token prefill plus ordered decode writes through position 65, preserving the multichip logical API while testing both page-table columns.
+
+Post-gate source-only changes:
+- Corrected one PCC display label from "second-page TP2 prefill" to "boundary-walk seed TP2 prefill"; added the repository-required pytest.raises rationale comment; and applied isort import ordering. Calls, tensor data, assertions, and hardware paths did not change.

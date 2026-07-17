@@ -1,42 +1,47 @@
 {
   "hf_model": "meta-llama/Llama-3.1-8B-Instruct",
   "hf_advertised_context": 131072,
-  "current_supported_context": 18,
-  "limiting_reason": "device_dram",
+  "current_supported_context": 131072,
+  "limiting_reason": null,
   "capacity_evidence": {
-    "captured_batch": 32,
-    "captured_cache_length": 128,
+    "target_mesh": "1x2 Blackhole P300c, TP=2",
     "device_allocator_dram_bytes": 34178731008,
     "device_allocator_probe": "TT_VISIBLE_DEVICES=2,3; ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM): 8 banks * 4272341376 bytes per bank",
-    "advertised_context_bf16_kv_cache_bytes": 17179869184,
-    "advertised_context_bf16_input_bytes": 34359738368,
-    "minimum_combined_bytes": 51539607552,
-    "formula": "KV: 32 batch * 8 KV heads * 131072 positions * 128 head_dim * 2 (K,V) * 2 bf16 bytes. Input: 1 * 32 batch * 131072 positions * 4096 hidden * 2 bf16 bytes.",
-    "stage_scope": "The 48 GiB minimum for just the BF16 input and KV cache exceeds the allocator-reported 34178731008 DRAM bytes before full layer weights, RoPE tables, output/residual tensors, and operation temporaries. This stage therefore validates the compiler-captured functional starting point, not advertised-context prefill."
+    "page_block_size": 64,
+    "page_pool_blocks": 2048,
+    "aggregate_cache_tokens": 131072,
+    "per_device_kv_heads": 4,
+    "decoder_layers": 32,
+    "per_device_bf16_kv_cache_bytes": 8589934592,
+    "per_device_bfp8_kv_cache_bytes": 4563402752,
+    "per_device_bfp4_projection_weight_bytes": 1962934272,
+    "conservative_non_decoder_weight_allowance_bytes": 4294967296,
+    "conservative_runtime_headroom_bytes": 4294967296,
+    "bf16_plan_total_bytes": 19142803456,
+    "formula": "KV/device: 32 layers * 4 local KV heads * 131072 aggregate positions * 128 head_dim * 2 (K,V) * dtype bytes. BFP8 uses 1088 bytes per 1024-element tile. Projection weights/device: 32 * 109051904 local elements * 576 BFP4 bytes per 1024-element tile.",
+    "allocator_policy": "A 2048-block pool can be assigned entirely to one 131072-token request or shared across a batch. Inputs are chunked/logical tensors and are not required to materialize batch*max_context as one persistent allocation.",
+    "stage_scope": "The multichip decoder preserves the advertised logical context and its paged-cache layout. Hardware correctness covers non-aligned prefill/decode plus adversarial physical page placement across positions 63, 64, and 65; full-model long-context execution remains a downstream full-model responsibility."
   },
-  "notes": "The current context is the largest prefill sequence validated by this stage. It is a functional starting point derived from a sequence-18 capture; downstream stages must establish a feasible long-context policy. The captured and decode-tested cache length is 128. Hardware PCC ran on the free P300 endpoint pair selected with TT_VISIBLE_DEVICES=2,3; the other pair remains owned by external host/driver state as recorded in doc/functional_decoder/work_log.md.",
+  "notes": "TP=2 halves KV-head ownership and projection-weight storage per device relative to a dense single-device layer. Logical sequence lengths remain unaligned at the API boundary; tile and final-page padding are internal. The model has no MoE experts.",
   "paths": {
     "prefill": {
-      "status": "translated",
+      "status": "translated_and_multichip",
       "compiler_graph": "ttnn_llama_3_1_8b_instruct_tp_qb2_bs32_isl128_run8032_g0_1784013027476.mlir",
       "classification": {
-        "fill_cache": 2048,
-        "paged_update_cache": 0,
-        "decode_sdpa": 0,
-        "emitted_batch": 32,
-        "emitted_sequence": 18
+        "captured_batch": 32,
+        "original_emitted_sequence": 18,
+        "multichip_contract": "arbitrary logical sequence length in [1, max_cache_len]",
+        "cache_layout": "KV-head sharded; replicated page table"
       }
     },
     "decode": {
-      "status": "translated",
+      "status": "translated_and_multichip",
       "compiler_graph": "ttnn_llama_3_1_8b_instruct_tp_qb2_bs32_isl128_run8032_g1_1784013181786.mlir",
       "classification": {
-        "fill_cache": 0,
-        "paged_update_cache": 64,
-        "decode_sdpa": 32,
-        "emitted_batch": 32,
+        "captured_batch": 32,
         "emitted_sequence": 1,
-        "cache_length": 128
+        "multichip_contract": "current_pos in [0, max_cache_len)",
+        "cache_layout": "contiguous or 64-token paged, four local KV heads per device"
       }
     }
   },
@@ -44,14 +49,15 @@
     "source_root": "/home/mvasiljevic/qb2-irs/ttnn-mlir-ttnn_llama_3_1_8b_instruct_tp_qb2_bs32_isl128_1784013027476",
     "representative_layer": 16,
     "captured_mesh": "1x4",
-    "tensor_parallel_degree": 4,
-    "translation_mesh": "1x1",
-    "collective_collapse": "The emitted TP shards and post-projection all-reduces are replaced by dense matmuls over canonical full Hugging Face weights."
+    "captured_tensor_parallel_degree": 4,
+    "runtime_mesh": "1x2",
+    "runtime_tensor_parallel_degree": 2,
+    "translation": "The optimized single-chip dense graph is the numeric baseline. The multichip path restores TP ownership as Q16/KV4 per rank, column-sharded QKV/gate/up, row-sharded O/down, and two BF16 asynchronous sums per layer."
   },
   "dtype_policy": {
-    "functional_baseline": "bf16 weights and activations; TILE layout; DRAM memory by default",
-    "emitted_weights": "BF8 for most projection weights and BF4 for gate/up projection weights",
-    "optimized_decoder": "BFP4 projection weights with LoFi projection math; BF16 activations and norms; caller-owned BF16 and BFP8 KV caches both validated. The optional cache dtype does not change cache shape or the advertised sequence-18/cache-128 capability.",
+    "functional_baseline": "BF16 weights and activations; TILE layout; DRAM memory by default",
+    "optimized_decoder": "BFP4 projection weights with LoFi projection math; BF16 activations and norms; BF16 and BFP8 caller-owned KV caches",
+    "multichip_decoder": "Same optimized projection policy per rank; BF16 replicated residual and selected CCL payload; KV cache is sharded by head with four local heads per device",
     "deferred": "Full-model top-k datatype-frontier selection remains downstream work."
   }
 }

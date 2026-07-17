@@ -1,0 +1,4 @@
+probe,current_ms,fractured_ms,candidate_over_current,rank0_pcc,rank1_pcc,trace_replays,disposition
+projection_only_ar_matmul_vs_rs_ag_matmul,0.076504,0.067989,0.888701,1.0,1.0,1000,insufficient_boundary_candidate_faster
+faithful_ar_add_norm_matmul_vs_rs_add_distributed_norm_ag_matmul,0.083456,0.099587,1.193279,0.999976331241162,0.999976329801196,1000,rejected_19.3_percent_slower
+fused_agmm_exact_bfp4_tp2,,,,,,,rejected_physical_topology_resolves_linear_and_fusion_requires_ring
