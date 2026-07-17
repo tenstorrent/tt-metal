@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="410" viewBox="0 0 960 410" role="img" aria-labelledby="title desc">
+  <title id="title">Split-reader gather-copy</title>
+  <desc id="desc">One consumer core gathers a tensor from row-sharded L1. Its NCRISC reads the first half of each block, its BRISC reads the second half, and BRISC writes the original tensor to DRAM.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#475569"/>
+    </marker>
+    <style>
+      .title { font: 700 18px sans-serif; fill: #0f172a; }
+      .label { font: 600 13px sans-serif; fill: #0f172a; }
+      .small { font: 12px sans-serif; fill: #334155; }
+      .tiny { font: 11px sans-serif; fill: #475569; }
+      .box { stroke-width: 1.5; rx: 8; }
+      .arrow { stroke: #475569; stroke-width: 1.8; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="960" height="410" rx="12" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="480" y="28" text-anchor="middle" class="title">One consumer core gathers row-sharded L1 to DRAM</text>
+
+  <text x="34" y="60" class="label">Row L1 shards</text>
+  <g fill="#e2e8f0" stroke="#94a3b8" class="box">
+    <rect x="150" y="42" width="72" height="34"/><rect x="230" y="42" width="72" height="34"/>
+    <rect x="310" y="42" width="72" height="34"/><rect x="390" y="42" width="72" height="34"/>
+    <rect x="470" y="42" width="72" height="34"/><rect x="550" y="42" width="72" height="34"/>
+    <rect x="630" y="42" width="72" height="34"/><rect x="710" y="42" width="72" height="34"/>
+  </g>
+  <g text-anchor="middle" class="small">
+    <text x="186" y="64">core 0</text><text x="266" y="64">core 1</text>
+    <text x="346" y="64">core 2</text><text x="426" y="64">core 3</text>
+    <text x="506" y="64">core 4</text><text x="586" y="64">core 5</text>
+    <text x="666" y="64">core 6</text><text x="746" y="64">core 7</text>
+  </g>
+  <text x="806" y="63" class="tiny">one consumer gathers all</text>
+
+  <path d="M470 78 V104" class="arrow"/>
+  <text x="34" y="126" class="label">Input block</text>
+  <rect x="150" y="104" width="316" height="42" rx="7" fill="#dbeafe" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect x="466" y="104" width="316" height="42" rx="7" fill="#ffedd5" stroke="#f97316" stroke-width="1.5"/>
+  <text x="308" y="130" text-anchor="middle" class="label">first half: t0  t1  t2  t3</text>
+  <text x="624" y="130" text-anchor="middle" class="label">second half: t4  t5  t6  t7</text>
+
+  <path d="M308 148 V177" class="arrow"/>
+  <path d="M624 148 V177" class="arrow"/>
+  <rect x="198" y="178" width="220" height="50" class="box" fill="#bfdbfe" stroke="#2563eb"/>
+  <rect x="514" y="178" width="220" height="50" class="box" fill="#fed7aa" stroke="#ea580c"/>
+  <text x="308" y="199" text-anchor="middle" class="label">NCRISC / NoC0</text>
+  <text x="308" y="216" text-anchor="middle" class="small">2 KiB / transaction_bytes reads</text>
+  <text x="624" y="199" text-anchor="middle" class="label">BRISC / NoC1</text>
+  <text x="624" y="216" text-anchor="middle" class="small">second-half reads + writer</text>
+
+  <path d="M308 228 V252" class="arrow"/>
+  <path d="M624 228 V252" class="arrow"/>
+  <rect x="238" y="253" width="140" height="40" class="box" fill="#dbeafe" stroke="#2563eb"/>
+  <rect x="554" y="253" width="140" height="40" class="box" fill="#ffedd5" stroke="#ea580c"/>
+  <text x="308" y="278" text-anchor="middle" class="label">CB0: t0..t3</text>
+  <text x="624" y="278" text-anchor="middle" class="label">CB1: t4..t7</text>
+
+  <path d="M308 293 L410 316" class="arrow"/>
+  <path d="M624 293 L522 316" class="arrow"/>
+  <rect x="410" y="298" width="252" height="58" class="box" fill="#fef3c7" stroke="#d97706"/>
+  <text x="536" y="320" text-anchor="middle" class="label">BRISC DRAM writer</text>
+  <text x="536" y="338" text-anchor="middle" class="small">preserve order: t0, t1, t2, t3, t4, t5, t6, t7</text>
+
+  <path d="M662 327 H812" class="arrow"/>
+  <rect x="812" y="298" width="126" height="58" class="box" fill="#ede9fe" stroke="#7c3aed"/>
+  <text x="875" y="321" text-anchor="middle" class="label">DRAM output</text>
+  <text x="875" y="339" text-anchor="middle" class="tiny">all 8 tiles</text>
+
+  <rect x="24" y="366" width="912" height="1" fill="#cbd5e1"/>
+  <text x="480" y="384" text-anchor="middle" class="small">Small transactions -> many RISC-V-issued NoC reads -> NCRISC bottleneck.</text>
+  <text x="480" y="401" text-anchor="middle" class="small">Split ON shares those reads with BRISC; Split OFF makes NCRISC fill both CBs.</text>
+</svg>
