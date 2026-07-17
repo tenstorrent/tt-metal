@@ -26,7 +26,6 @@
 namespace tt::tt_metal {
 namespace {
 
-using ::testing::Eq;
 
 // Deterministic ramp for test data
 template <typename T>
