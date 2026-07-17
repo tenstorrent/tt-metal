@@ -15,6 +15,7 @@
 
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -622,16 +623,31 @@ ttnn::Tensor ttnn::operations::experimental::quasar::reshape(
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
 
-    bool this_is_view =
+    // Clone first to get independent storage, then adjust shape metadata.
+    // Clone cannot convert between sharded layouts / shard specs — fall through
+    // to the device reshape path in that case (it already copies).
+    bool shape_is_view_compatible =
         (tensor_shape_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
-        ((tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) ||              // Its row major
-         (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
-         (shape_second_last_dim % tile_second_dim == 0 &&
-          tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
+        ((tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) || (tensor_shape_second_last_dim == shape_second_last_dim) ||
+         (shape_second_last_dim % tile_second_dim == 0 && tensor_shape_second_last_dim % tile_first_dim == 0));
 
-    if (this_is_view) {
-        return PerformView(tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
+    const auto& input_mem_config = tensor.memory_config();
+    const bool memory_config_clone_compatible = [&]() {
+        if (mem_config.memory_layout() != input_mem_config.memory_layout()) {
+            return false;
+        }
+        if (!mem_config.is_sharded()) {
+            return true;
+        }
+        const auto& out_spec = mem_config.shard_spec();
+        const auto& in_spec = input_mem_config.shard_spec();
+        return out_spec.has_value() && in_spec.has_value() && out_spec.value() == in_spec.value();
+    }();
+
+    if (shape_is_view_compatible && memory_config_clone_compatible) {
+        auto cloned = ttnn::clone(tensor, std::nullopt, mem_config, std::nullopt);
+        return PerformView(cloned, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
     }
     if (logical_shape.volume() != tensor.logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558

@@ -583,10 +583,10 @@ def test_sort_rank5_all_dims(shape, dim, descending, device):
 
     The composite layer permutes the sort dim to the last position, squeezes
     leading dims into 4D, runs the kernel, then restores the original rank
-    and order.  The rank-restoration reshape targets the *transposed* shape,
-    keeping the last dim unchanged, so it routes through ttnn::reshape's
-    `this_is_view` fast path (metadata-only `view`).  This avoids the device
-    reshape kernel entirely — important because that kernel rejects UINT16.
+    and order.  The rank-restoration step targets the *transposed* shape,
+    keeping the last dim unchanged, and calls `ttnn::experimental::view`
+    directly (metadata-only view).  This avoids the device reshape kernel
+    entirely — important because that kernel rejects UINT16.
     """
     torch.manual_seed(0)
 
