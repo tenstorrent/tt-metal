@@ -135,7 +135,7 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
                 ringcost.append(g)
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    _in1preserve = (1 << 22) | (1 << 23) | (1 << 24) | (1 << 25)  # in1-delivery diagnostics (corr-preserving)
+    _in1preserve = (1 << 22) | (1 << 25)  # in1-delivery A/B diagnostics (correctness-preserving)
     checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576, 2097152) or (
         mask != 0 and (mask & ~_in1preserve) == 0
     )
@@ -828,14 +828,11 @@ def pickerresweep(relaunches=3):
 
 # in1-delivery experiment: forward-order (write->signal->flush) + CB1 depth 2/8 + coalesced read, each vs
 # the mask-0 default, on the shapes' NEW picker-winning configs. Then the winning combination.
-# After adoption, mask 0 = new fast default (fwd-signal-first + coalesce). The 1<<22 / 1<<25 flags now select
-# the OLD behaviour (A/B baselines), so they read as POSITIVE % (reverting costs that much). CB1 depth stays
-# a rejected diagnostic.
+# After adoption, mask 0 = new fast default (fwd-signal-first + coalesce). The 1<<22 / 1<<25 flags select the
+# OLD behaviour (A/B baselines), so they read as POSITIVE % (reverting to the old order costs that much).
 IN1EXP_MASKS = [
     ("base", 0),
     ("old_fwd_flush_first", 1 << 22),  # Sm>1 only (no-op at Sm=1)
-    ("cb1_d2", 1 << 23),
-    ("cb1_d8", 1 << 24),
     ("old_no_coalesce", 1 << 25),
 ]
 IN1EXP_SHAPES = [
@@ -892,14 +889,6 @@ def in1exp(relaunches=3):
             v = per[n]["vs_base_pct"]
             mre = per[n]["max_rel_err"]
             if v is not None and v < -1.0 and (mre is None or mre < 0.02):
-                # cb1_d2 and cb1_d8 are mutually exclusive: keep only the better one
-                if n in ("cb1_d2", "cb1_d8"):
-                    other = "cb1_d8" if n == "cb1_d2" else "cb1_d2"
-                    if (
-                        per.get(other, {}).get("vs_base_pct") is not None
-                        and per[other]["vs_base_pct"] < per[n]["vs_base_pct"]
-                    ):
-                        continue
                 combo_bits |= per[n]["mask"]
                 combo_names.append(n)
         if combo_bits and len(combo_names) >= 2:
