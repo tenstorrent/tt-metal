@@ -17,9 +17,18 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 using namespace ckernel;
 
-constexpr std::uint32_t buffer_A_tilized         = 0x30000;
-constexpr std::uint32_t buffer_B_tilized         = 0x50000;
+// Stride between consecutive staged tiles in the L1 scratch region. 0x1000 is one fp32 32x32
+// tile, the largest tile among the supported formats, so it is a safe upper bound for all of them.
 constexpr std::uint32_t intermediate_tile_stride = 0x1000;
+
+// L1 scratch that stages the tilized operands between the two fused pipeline runs is placed
+// immediately above the framework-allocated operands: buffer_Res is the highest operand (no
+// buffer_C/buffer_S here) and holds tile_count_res == NUM_BLOCKS tiles (tile_cnt_A == 1), so
+// buffer_Res[NUM_BLOCKS] is the first free byte above it. Deriving the base from the real
+// allocations keeps the scratch clear of the result buffer in the normal layout and of the
+// linker-reserved TRISC code/GCOV regions in the coverage layout, where a fixed address would
+// collide with one or the other. buffer_A_tilized/buffer_B_tilized are computed locally in the
+// unpack and pack kernels from these same expressions, so both threads agree on the addresses.
 
 // Translation of these lines:
 // const FormatConfig(&formats_array)[2] = params.formats;
@@ -40,7 +49,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig(&formats_array)[2] = params.formats;
 #endif
 
-    const std::uint32_t block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(BLOCK_CT_DIM);
+    const std::uint32_t block_ct_dim     = _llk_unpack_tilize_block_ct_dim_wrapper_(BLOCK_CT_DIM);
+    const std::uint32_t buffer_A_tilized = params.buffer_Res[params.NUM_BLOCKS];
+    const std::uint32_t buffer_B_tilized = buffer_A_tilized + params.NUM_BLOCKS * intermediate_tile_stride;
 
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -57,14 +68,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_unpack_tilize_wrapper_(
-            L1_ADDRESS(params.buffer_A[0]), 0, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, block_ct_dim, FACE_R_DIM, 4, false);
+            L1_ADDRESS(params.buffer_A[0]),
+            0 /* tile_index */,
+            formats_array[run].unpack_A_src,
+            formats_array[run].unpack_A_dst,
+            block_ct_dim,
+            FACE_R_DIM,
+            4 /* num_faces */,
+            false /* narrow_tile */);
     }
 
     _llk_unpack_tilize_init_wrapper_(formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, 1 /* ct_dim */, FACE_R_DIM, false /* narrow_tile */);
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         _llk_unpack_tilize_wrapper_(
-            L1_ADDRESS(params.buffer_B[0]), 0, formats_array[run].unpack_B_src, formats_array[run].unpack_B_dst, block_ct_dim, FACE_R_DIM, 4, false);
+            L1_ADDRESS(params.buffer_B[0]),
+            0 /* tile_index */,
+            formats_array[run].unpack_B_src,
+            formats_array[run].unpack_B_dst,
+            block_ct_dim,
+            FACE_R_DIM,
+            4 /* num_faces */,
+            false /* narrow_tile */);
     }
 
     /*
@@ -176,6 +201,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     static constexpr bool UNTILIZE = false;
     int run                        = 0;
+
+    const std::uint32_t buffer_A_tilized = params.buffer_Res[params.NUM_BLOCKS];
+    const std::uint32_t buffer_B_tilized = buffer_A_tilized + params.NUM_BLOCKS * intermediate_tile_stride;
 
     static constexpr bool TILIZE = true;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(

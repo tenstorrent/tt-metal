@@ -21,6 +21,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
+from helpers.tile_constants import FACE_C_DIM, MAX_FACE_ELEMENTS, MAX_TILE_ELEMENTS
 from helpers.utils import passed_test
 
 
@@ -46,12 +47,12 @@ def generate_specific_stimuli(input_dimensions, r_dim, data_format):
 def generate_golden_output(src_A, input_dimensions, r_dim, data_format):
     """Generate expected golden output for pack untilize test."""
     golden = []
-    row_offset = 16
-    block_offset = 16 * 16
-    num_blocks = (input_dimensions[1] // 16) * 2
+    row_offset = FACE_C_DIM
+    block_offset = MAX_FACE_ELEMENTS
+    num_blocks = (input_dimensions[1] // FACE_C_DIM) * 2
     for i in range(r_dim):
         for j in range(num_blocks):
-            for k in range(16):
+            for k in range(FACE_C_DIM):
                 golden.append(src_A[i * row_offset + j * block_offset + k])
     golden_tensor = torch.tensor(golden, dtype=format_dict[data_format])
     return golden_tensor
@@ -102,7 +103,7 @@ def test_pack_untilize(
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         dest_sync, dest_acc, formats, input_dimensions
     )
-    elements_per_block = num_tiles_in_block * 32 * 32
+    elements_per_block = num_tiles_in_block * MAX_TILE_ELEMENTS
     block_dimensions = [32, input_dimensions[1]]
     golden_tensor = torch.cat(
         [
