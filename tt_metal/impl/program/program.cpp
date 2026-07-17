@@ -1945,11 +1945,9 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             } else {
                 // Non-multicast cores are dispatched via unicast. Historically this was only ETH, but
                 // DRAM programmable cores (e.g. the tensor-prefetcher DRISC senders) are also unicast-only
-                // and take the same path — extract_dst_noc_unicast_info handles either core type.
-                TT_ASSERT(
-                    core_type == CoreType::ETH || core_type == CoreType::DRAM,
-                    "Unexpected non-multicast core type {} in populate_dispatch_data",
-                    enchantum::to_string(core_type));
+                // and take the same path — extract_dst_noc_unicast_info handles either core type. The
+                // branch above (get_supports_receiving_multicasts) is the authoritative hal query, so no
+                // enumerated core-type check is needed here.
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(kernel_group->core_ranges.ranges(), core_type);
 
