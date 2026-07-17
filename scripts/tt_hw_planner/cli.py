@@ -1042,9 +1042,10 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
 
     REUSE / ADAPT components don't carry per-op manifests today (they
     point at pre-existing tt-demo ports), so we treat them as a single
-    op apiece on device — same as the component-level summary already
-    does. NEW components without a manifest are also reported as a
-    single op on CPU (plain torch wrapper).
+    op apiece — on device ONLY when the reuse target is actually wired
+    into this demo (shared verified classifier), otherwise on CPU (an
+    unwired tag runs on the eager runner). NEW components without a
+    manifest are also reported as a single op on CPU (plain torch wrapper).
 
     Returns a dict with op counts plus a per-component breakdown so
     callers can render either a one-line summary or a full table.
@@ -1069,6 +1070,10 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
     except Exception:
         return out
 
+    from .final_categorization import reuse_adapt_on_device
+
+    verified_reuse = reuse_adapt_on_device(demo_dir, data.get("components", []) or [])
+
     rows: List[Dict[str, object]] = []
     on_device = 0
     on_cpu = 0
@@ -1083,21 +1088,23 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
         manifest_path = demo_dir / "_stubs" / f"{safe}.opplan.json"
 
-        # REUSE/ADAPT both run on device: REUSE as-is, ADAPT as cloned
-        # tt-module with possible LLM refinements.
         if status in ("REUSE", "ADAPT"):
+            wired = name in verified_reuse
             rows.append(
                 {
                     "name": name,
-                    "status": status,
-                    "where": "device",
-                    "on_device": 1,
-                    "on_cpu": 0,
+                    "status": status if wired else f"{status} (not wired — CPU)",
+                    "where": "device" if wired else "cpu",
+                    "on_device": 1 if wired else 0,
+                    "on_cpu": 0 if wired else 1,
                     "total": 1,
                     "has_manifest": False,
                 }
             )
-            on_device += 1
+            if wired:
+                on_device += 1
+            else:
+                on_cpu += 1
             continue
 
         if status != "NEW":
