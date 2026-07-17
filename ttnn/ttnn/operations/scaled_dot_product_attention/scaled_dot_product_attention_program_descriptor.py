@@ -324,6 +324,17 @@ def create_program_descriptor(
     # R1b: matmul subblocks are derived on-device from the per-chunk runtime tile
     # counts (sq_valid = M, skv_valid = QKᵀ N / PV K), so only the block knobs +
     # axis tile-counts + dest_limit are threaded (no host subblock CT args).
+    # R3c (perf): use the fast/approximate SFPU exp for the dominant softmax P=exp
+    # phase ONLY in the 16-bit-DEST throughput regime (fp32_dest_acc_en=False). Zone
+    # profiling showed the exact exp is ~54% of per-chunk compute; the fast exp is
+    # ~75% cheaper (flagged shape 9.01->5.80 ms = 1.55x, PCC 0.997 held). The fast
+    # exp adds ~0.003-0.02 normalized-RMS, which the fp32_dest_acc_en=False golden
+    # tolerances (0.12 for bf16/bf8b) absorb, but the max-precision fp32_dest_acc_en=
+    # True tolerances (fp32 0.02, bf16 0.05) do NOT — so those stay EXACT (byte-
+    # identical, no regression). The flagged perf shape is fp32_dest_acc_en=False,
+    # so it gets the full speedup. The alpha-correction exp (phase 5) stays exact
+    # regardless (protects the online-softmax running (m, l, O) across chunks).
+    fast_exp = 0 if fp32_dest else 1
     compute_ct = [
         Dt,
         Sq_chunk_t,
@@ -335,6 +346,7 @@ def create_program_descriptor(
         n_q_chunks,
         Skv_t,
         dest_limit,
+        fast_exp,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),

@@ -79,6 +79,12 @@ void kernel_main() {
     constexpr uint32_t n_q_chunks = get_compile_time_arg_val(7);
     constexpr uint32_t Skv_t = get_compile_time_arg_val(8);
     constexpr uint32_t dest_limit = get_compile_time_arg_val(9);
+    // R3c (perf): fast/approximate SFPU exp for the dominant P=exp phase, gated by
+    // the host to the fp32_dest_acc_en=False throughput regime only (loose tolerance
+    // absorbs the approximation; the max-precision regime stays exact -> no
+    // regression). The exp's Approx template is a compile-time value.
+    constexpr bool use_fast_exp = get_compile_time_arg_val(10) != 0;
+    constexpr ckl::Approx exp_approx = use_fast_exp ? ckl::Approx::Fast : ckl::Approx::Exact;
 
     const uint32_t num_wu = get_arg_val<uint32_t>(0);
     const uint32_t start_wu = get_arg_val<uint32_t>(1);
@@ -249,14 +255,14 @@ void kernel_main() {
                     Dst::D0,
                     OperandKind::Block,
                     OperandKind::Col>{},
-                // R3c: fast SFPU exp for the dominant softmax P=exp phase. Measured
-                // ~54% of per-chunk compute cycles as the exact exp; the fast exp is
-                // ~75% cheaper (per-chunk compute 71.1k -> 41.9k cyc on the flagged
-                // shape). Softmax normalization absorbs the exp's relative error
-                // (production SDPA uses the fast exp), so PCC holds — see changelog.
-                // The alpha-correction exp (phase 5, small) stays exact to protect the
-                // online-softmax recurrence's running (m, l, O).
-                ckl::Exp<ckl::Approx::Fast>{},
+                // R3c: fast SFPU exp for the dominant softmax P=exp phase (measured
+                // ~54% of per-chunk compute as the exact exp; the fast exp is ~75%
+                // cheaper -> flagged shape 9.01->5.80 ms = 1.55x). `exp_approx` is
+                // Fast only in the fp32_dest_acc_en=False throughput regime (host-
+                // gated); the max-precision regime stays Exact (byte-identical, no
+                // regression). The alpha-correction exp (phase 5) stays exact always
+                // to protect the online-softmax running (m, l, O).
+                ckl::Exp<exp_approx>{},
                 ckl::PackTile<cb_exp, OutputLifecycle::Bulk>{});
 
             // Phase 7: chunk row-sum + running sum l update.
