@@ -105,23 +105,8 @@ template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM>
 inline void llk_unpack_tilize_block_to_dest_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-#if defined(QSR_TILIZE_UNPACK_TO_DEST)
-    // DEBUG (tilize-to-DEST layout, PCC~0): dump the exact MOP strides the init programs, so they can be diffed
-    // against the reference test unpack_tilize_quasar_test.cpp. src_z_stride=num_faces_c_dim (per-tile L1 step),
-    // dst_z_stride=total_num_faces*face_r_dim (per-tile DEST step), stride_offset_0=FULL_CT_DIM*num_faces_c_dim
-    // (per-face-row L1 step). Remove after the layout is fixed.
-    DPRINT(
-        "TZINIT FULL_CT={} BLOCK_CT={} nfc={} nfr={} frdim={} tnf={} srcz={} dstz={} soff0={}\n",
-        (uint32_t)FULL_CT_DIM,
-        (uint32_t)BLOCK_CT_DIM,
-        (uint32_t)tensor_shape.num_faces_c_dim,
-        (uint32_t)tensor_shape.num_faces_r_dim,
-        (uint32_t)tensor_shape.face_r_dim,
-        (uint32_t)tensor_shape.total_num_faces(),
-        (uint32_t)tensor_shape.num_faces_c_dim,
-        (uint32_t)(tensor_shape.total_num_faces() * tensor_shape.face_r_dim),
-        (uint32_t)(FULL_CT_DIM * tensor_shape.num_faces_c_dim));
-#endif
+    // TZINIT probe removed: CONFIRMED FULL_CT=4 srcz=2 dstz=64 soff0=8 (match the LLK reference) via dprint_tr1.
+    // The unpack-side DPRINT perturbed the UNPACK<->PACK DEST-dvalid handshake and hung the tilize at ~block 4.
     _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM>(operand_id, tensor_shape);
 }
 
@@ -153,22 +138,8 @@ inline void llk_unpack_tilize_block_to_dest(
     // right one column-tile advances the source face counter by num_faces_c_dim (== the MOP's SRC_Z_STRIDE).
     const std::uint32_t l1_face_idx =
         (rd_entry_idx + input_tile_index) * faces_per_entry + col_tile_offset * tensor_shape.num_faces_c_dim;
-#if defined(QSR_TILIZE_UNPACK_TO_DEST)
-    // DEBUG (tilize-to-DEST layout, PCC~0): the cross-block L1 base is rd_entry_idx*faces_per_entry. This matches
-    // the reference (y*FULL_CT_DIM*num_faces_r_dim*face_r_dim) ONLY IF rd_entry_idx advances by FULL_CT_DIM per
-    // row-block, i.e. stride_size_tiles(sst)==1. If sst!=1, rd_entry_idx over-advances and every block reads the
-    // wrong L1 row -> scrambled output. Diff l1idx across the 8 blocks vs y*FULL_CT_DIM*fpe. Remove after fix.
-    DPRINT(
-        "TZL1 rd_entry={} iti={} fpe={} coff={} nfc={} l1idx={} dslot={} sst={}\n",
-        (uint32_t)rd_entry_idx,
-        (uint32_t)input_tile_index,
-        (uint32_t)faces_per_entry,
-        (uint32_t)col_tile_offset,
-        (uint32_t)tensor_shape.num_faces_c_dim,
-        (uint32_t)l1_face_idx,
-        (uint32_t)dest_tile_idx,
-        (uint32_t)local_dfb.stride_size_tiles);
-#endif
+    // TZL1 probe removed: CONFIRMED l1idx=0/128/256/384 = y*FULL_CT_DIM*fpe and sst=1 (index math exactly matches
+    // the reference) via dprint_tr1. Like TZINIT, the unpack-side DPRINT hung the tilize at ~block 4.
     _llk_unpack_tilize_block_(l1_face_idx, dest_tile_idx);
 }
 
