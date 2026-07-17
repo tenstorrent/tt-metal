@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -1005,8 +1006,9 @@ def test_glm_prefill_block(
     )
     # Sparse (DSA) MLA single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
     # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked path.
-    # GLM attention is always sparse, so this is unconditional here; the 1-layer/1-user index cache matches
-    # the layer_num=1 above (update_padded_kv_cache's num_slots = cache_batch / layer_num must be >= 1).
+    # GLM attention is always sparse, so this is unconditional here. The cache is strided by the compacted
+    # full-indexer count (num_full_indexer_layers) — >1 for glm_5_2 cross-layer reuse — matching the
+    # indexer's cache_batch stride; falls back to 1 when there is no indexer_types map (glm_5_1).
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=seq_len, chunk_size_global=seq_len
     )
@@ -1016,7 +1018,7 @@ def test_glm_prefill_block(
         seq_len=seq_len,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
-        num_kvpe_cache_layers=1,
+        num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
     )
