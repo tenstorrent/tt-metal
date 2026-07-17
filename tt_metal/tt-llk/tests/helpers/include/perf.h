@@ -162,11 +162,11 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
             }
 #endif
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
             /*
-             * BLACKHOLE SCHEME:
-             * Utilizes only one source register bank because bandwidth is better on BH
+             * BLACKHOLE/QUASAR SCHEME:
+             * Utilizes only one source register bank.
              * IF CT_DIM >= RT_DIM ->
              *   SRCB, SRCA * CT_DIM, SRCB, SRCA * CT_DIM, ...
              * ELSE ->
@@ -189,8 +189,6 @@ inline void _perf_unpack_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt
 
 inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_dim, std::uint32_t kt_dim, std::uint32_t ct_dim)
 {
-    // fixme: add quasar support
-
     for (std::uint32_t loop = 0; loop < loop_factor; loop++)
     {
         for (std::uint32_t j = 0; j < kt_dim; j++)
@@ -231,11 +229,11 @@ inline void _perf_math_matmul_mock(std::uint32_t loop_factor, std::uint32_t rt_d
             }
 #endif
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
 
             /*
-             * BLACKHOLE SCHEME:
-             * Utilizes only one source register bank because bandwidth is better on BH
+             * BLACKHOLE/QUASAR SCHEME:
+             * Utilizes only one source register bank.
              * IF CT_DIM >= RT_DIM ->
              *  SRCA * CT_DIM, SRCB, SRCA * CT_DIM, SRCB, ...
              * ELSE ->

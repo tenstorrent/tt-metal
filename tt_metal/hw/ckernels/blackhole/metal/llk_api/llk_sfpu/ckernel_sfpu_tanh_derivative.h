@@ -32,7 +32,7 @@ inline void calculate_tanh_derivative() {
             val = lut(val, l0, l1, l2);
         }
 
-        val = val * (-val) + vConst1;
+        val = val * (-val) + 1.0f;
         dst_reg[0] = val;
 
         dst_reg++;
@@ -103,14 +103,14 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     r = k * LN2_LO + r;
 
     // Degree-4 Taylor for exp(r)
-    sfpi::vFloat poly = PolynomialEvaluator::eval(r, sfpi::vConst1, sfpi::vConst1, C2, C3, C4);
+    sfpi::vFloat poly = PolynomialEvaluator::eval(r, 1.0f, 1.0f, C2, C3, C4);
 
     // 2^k scaling via direct exponent bit manipulation (FREE)
-    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::NoDebias);
+    sfpi::vInt p_exp = sfpi::exexp(poly, sfpi::ExponentMode::Biased);
     sfpi::vInt new_exp = p_exp + k_int;
 
     // FTZ: if exponent underflows, result is 0 (natural zero saturation)
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
     v_if(new_exp > 0) { result = sfpi::setexp(poly, new_exp); }
     v_endif;
 
@@ -173,7 +173,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATI
 inline void calculate_tanh_derivative_sech2() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::vConst0;
+        sfpi::vFloat result = 0.0f;
 
         // sech²(x) is an even function: sech²(-x) = sech²(x)
         sfpi::vFloat a = sfpi::abs(val);

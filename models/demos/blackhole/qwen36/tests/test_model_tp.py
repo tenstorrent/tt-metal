@@ -138,13 +138,16 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     """TP long-prompt (>2048) prefill via the CAPTURED chunk-outer trace — the path vLLM serves
     at long ISL (and the fix for the eager path's >7872-token crash). Replays the per-chunk trace
     for each full 2048 chunk, carrying GDN recurrent/conv + paged-KV state in place, then the
-    masked tail. Must match the bespoke single-pass prefill_tp. T=4096 (= 2*2048, no tail) hits the
-    exact-multiple branch (_masked_bucket_logits_tp on the last chunk's hidden); T=4352 (= 2*2048 +
-    256) exercises the multi-chunk replay + masked tail.
+    masked tail. T=4096 (= 2*2048, no tail) hits the exact-multiple branch (_masked_bucket_logits_tp
+    on the last chunk's hidden); T=4352 (= 2*2048 + 256) exercises the multi-chunk replay + masked
+    tail.
 
-    The oracle prefill_tp runs BEFORE any trace is parked (it compiles per-length, so it must not
-    run with the trace captured); the traced replay + masked buckets are all pre-warmed by
-    capture_prefill_trace_chunked, so they never compile at request time."""
+    Reference = the EAGER chunk-outer prefill (prefill_traced_chunked before any trace is parked),
+    which test_model_tp_long_prefill validates as equivalent to the single-pass prefill_tp oracle at
+    T<=2304. We use it here instead of prefill_tp because prefill_tp does the whole sequence in one
+    GDN pass, and the batched GDN chunk-prefill's L1 footprint scales with T/128 sub-chunks and
+    overflows at T>=4096 (production never single-passes >2048). Both the eager reference and the
+    traced replay re-zero GDN state at the start, so running them back-to-back on one model is safe."""
     nd = mesh_device.get_num_devices()
     assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
     model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=8192, n_layers=8)
@@ -154,16 +157,18 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     prompt = torch.randint(0, vocab, (T,)).tolist()
     comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    # bespoke oracle: single-pass prefill over the whole sequence (no trace parked yet).
-    model.reset_tp()
-    ref = model.prefill_tp(torch.tensor([prompt], dtype=torch.long), valid_len=T).reshape(-1).float()
-
-    # contract path: capture the chunk-outer trace (TP fork), then replay it per full chunk + tail.
     block_size = 64
     num_blocks = math.ceil(((T // block_size) + 8) / 32) * 32  # 32-aligned for the flexible SDPA
     page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
     kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
     model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
+
+    # Reference: eager chunk-outer prefill (no trace parked yet -> _prefill_chunked_eager_tp).
+    assert model._chunked_trace_id is None, "eager reference must run before the trace is captured"
+    ref_dev = model.prefill_traced_chunked(torch.tensor([prompt], dtype=torch.long), page_table, actual_len=T)
+    ref = ttnn.to_torch(ref_dev, mesh_composer=comp0).reshape(-1, vocab)[0].float()
+
+    # Contract path: capture the chunk-outer trace, then replay it per full chunk + tail.
     model.capture_prefill_trace_chunked(mesh_device, page_table, chunk_size=2048)
     assert model._chunked_trace_id is not None, "TP chunk-outer trace was not captured"
 
@@ -171,6 +176,54 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     c_logits = ttnn.to_torch(c_dev, mesh_composer=comp0).reshape(-1, vocab)[0].float()
 
     _, pcc = comp_pcc(ref.reshape(-1), c_logits.reshape(-1), 0.99)
-    logger.info(f"traced chunk-outer prefill (T={T}) logits PCC = {pcc}")
+    logger.info(f"traced vs eager chunk-outer prefill (T={T}) logits PCC = {pcc}")
     assert float(pcc) >= 0.99, f"traced chunk-outer prefill PCC below 0.99 at T={T}: {pcc}"
-    logger.info(f"PASSED: TP traced chunk-outer prefill matches bespoke single-pass (B=1, T={T})")
+    logger.info(f"PASSED: TP traced chunk-outer prefill matches eager chunk-outer (B=1, T={T})")
+
+
+@parametrize_mesh_tp()
+def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
+    """After capture_prefill_trace_chunked parks the trace, a request-time masked-bucket prefill
+    must reuse warmed programs only -- a post-park compile clobbers the trace (#48536).
+
+    paged_fill_cache is keyed per fill width, so sweep EVERY width (1..32, across mask buckets
+    128..2048) with program-cache misses disallowed and assert the cache does not grow. A sample
+    would miss a regression that skips one width in _warmup_paged_fill_widths; here it fails
+    op-named instead of hanging in serving. 8 layers suffices: warmed programs are layer-independent
+    and layers 0..7 include the full-attention layers (3, 7) that own the fill path.
+    """
+    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=2048, n_layers=8)
+    args = model.args
+
+    block_size = 64
+    num_blocks = math.ceil((2048 // block_size + 8) / 32) * 32  # 32-aligned for the flexible SDPA
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
+
+    # Warmup + park the per-chunk prefill trace.
+    model.capture_prefill_trace_chunked(mesh_device, page_table, chunk_size=2048)
+
+    # Request-time masked-bucket prefills must reuse warmed programs only.
+    before = mesh_device.num_program_cache_entries()
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        # One length per fill width 1..32: (width-1)*64 + 33 lands mid-block, so ceil(len/64) ==
+        # width and the length stays masked below its auto-selected mask bucket.
+        block_size = 64
+        for width in range(1, 2048 // block_size + 1):
+            actual_len = (width - 1) * block_size + 33
+            model.prefill_masked_bucket(
+                torch.zeros(1, actual_len, dtype=torch.int32), page_table, actual_len=actual_len
+            )
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    after = mesh_device.num_program_cache_entries()
+
+    logger.info(f"prefill-warmup no-recompile: program cache before={before} after={after} delta={after - before}")
+    assert after == before, (
+        f"{after - before} program(s) compiled after the trace was parked -> warmup missed a "
+        f"fill-width-dependent program (add it to _warmup_paged_fill_widths); at request time this "
+        f"clobbers the parked trace (hang)."
+    )
+    logger.info("PASSED: masked-bucket warmup pre-compiles every fill width (no post-capture recompile)")

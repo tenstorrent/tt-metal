@@ -63,10 +63,12 @@
 #include "tt_metal/fabric/fabric_init.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <impl/debug/watcher_server.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <impl/dispatch/dispatch_telemetry.hpp>
 
 namespace tt::tt_metal {
 
@@ -81,7 +83,7 @@ Device::Device(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
     uint32_t /*worker_thread_core*/,
     uint32_t /*completion_queue_reader_core*/,
@@ -91,6 +93,121 @@ Device::Device(
     TT_FATAL(env != nullptr, "env is nullptr");
     TT_FATAL(context != nullptr, "context is nullptr");
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
+}
+
+void Device::initialize_smc_dispatch_telemetry_control() {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+        return;
+    }
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+
+    smc_dispatch_telemetry_control_ = dispatch_telemetry_types::SMCDispatchTelemetryControl{};
+    smc_dispatch_telemetry_control_.dispatch_telemetry_addr =
+        context_->dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
+    smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
+    write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
+}
+
+void Device::invalidate_smc_dispatch_telemetry_control() {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+        return;
+    }
+
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+    tt::tt_metal::invalidate_smc_dispatch_telemetry_control(*tt_device);
+}
+
+void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
+    uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+        return;
+    }
+
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+
+    TT_FATAL(
+        cq_id < dispatch_telemetry_types::RESERVED_CQ_SPACE,
+        "CQ id {} exceeds reserved SMC dispatch telemetry CQ space",
+        cq_id);
+
+    smc_dispatch_telemetry_control_.cq_dispatch_core_coords[cq_id] = coords;
+    write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
+}
+
+void Device::set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled) {
+    if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
+        return;
+    }
+
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+
+    bool slow_dispatch_currently_enabled =
+        (smc_dispatch_telemetry_control_.flags &
+         static_cast<uint32_t>(dispatch_telemetry_types::SMCDispatchTelemetryFlags::SLOW_DISPATCH_ENABLED)) != 0;
+    if (slow_dispatch_currently_enabled == enabled) {
+        return;
+    }
+
+    if (enabled) {
+        smc_dispatch_telemetry_control_.flags |=
+            static_cast<uint32_t>(dispatch_telemetry_types::SMCDispatchTelemetryFlags::SLOW_DISPATCH_ENABLED);
+    } else {
+        smc_dispatch_telemetry_control_.flags &=
+            ~static_cast<uint32_t>(dispatch_telemetry_types::SMCDispatchTelemetryFlags::SLOW_DISPATCH_ENABLED);
+    }
+    write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
@@ -140,7 +257,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    ttsl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
     auto& dispatch_core_manager = context_->get_dispatch_core_manager();
@@ -436,7 +553,7 @@ bool Device::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     ZoneScoped;
     // Every initialization call should enable program cache
@@ -547,6 +664,7 @@ bool Device::initialize(
     }
 
     this->initialized_ = true;
+    this->initialize_smc_dispatch_telemetry_control();
 
     return true;
 }
@@ -556,6 +674,8 @@ bool Device::close() {
     if (not this->initialized_) {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
+
+    this->invalidate_smc_dispatch_telemetry_control();
 
     tt::tt_metal::MetalContext::instance().get_service_core_manager().impl().on_device_close(this->id_);
 
@@ -751,7 +871,7 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
+    ttsl::Span<const SubDeviceId> /*sub_device_ids*/) const {
     return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
@@ -815,7 +935,7 @@ SubDeviceManagerId Device::create_sub_device_manager(
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
+    ttsl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
     TT_FATAL(false, "create_sub_device_manager is deprecated for device");
     return SubDeviceManagerId{0U};
 }
@@ -844,7 +964,7 @@ const std::vector<SubDeviceId>& Device::get_sub_device_stall_group() const {
     return ids;
 }
 
-void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+void Device::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {
     TT_FATAL(false, "set_sub_device_stall_group is deprecated for device");
 }
 

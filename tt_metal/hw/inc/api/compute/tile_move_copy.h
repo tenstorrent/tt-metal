@@ -73,16 +73,16 @@ ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
  * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate transpose is set | False    |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
     LLK_SAN_FUNCTION();
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
-#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_cbid, new_cbid)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, new_cbid)));
     copy_tile_to_dst_init_short(new_cbid, transpose);
-#endif
 }
+#endif
 
 // clang-format off
 /**

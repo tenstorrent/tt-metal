@@ -9,6 +9,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <array>
 #include <bit>
 #include <map>
 #include <string>
@@ -145,6 +146,24 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_ct.push_back(q_elem_bytes);
     reader_ct.push_back(kv_elem_bytes);
     reader_ct.push_back(idx_elem_bytes);
+    // The cache layout is compile-time so the remap is fully optimized out for natural-order KV.
+    const auto block_cyclic_ct = [&attrs, &t]() {
+        std::array<uint32_t, 5> args{0, 1, 1, 0, 0};
+        if (!attrs.has_block_cyclic()) {
+            return args;
+        }
+        const auto& bc = attrs.block_cyclic.value();
+        const uint32_t seq_len_local = t.kv.logical_shape()[2] / bc.sp;
+        args = {
+            1,
+            bc.chunk_local,
+            bc.sp,
+            seq_len_local - bc.chunk_local,
+            bc.chunk_local * (bc.sp - 1),
+        };
+        return args;
+    }();
+    reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     // kv (the K cache) uses a RUNTIME tensor shape: its T dimension (the cache length) is passed as common
     // runtime args, NOT compile-time args, so changing T reuses the same program (no recompile). q/indices
     // stay compile-time — their dims define the program. The accessor's runtime metadata is the same on
@@ -157,6 +176,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
 
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
     std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
+    writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
@@ -197,8 +217,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.compile_time_args = reader_ct;
     reader_desc.common_runtime_args = reader_crt;  // kv runtime tensor-shape metadata (same on every core)
     reader_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
-    // Dual-NoC K gather: reader + writer each gather half the rows on their own NoC. The new CB ids are
-    // passed as defines (kept off the positional compile-arg blocks, which the kernels index tightly).
     {
         std::map<std::string, std::string> rdefs{
             {"CB_KREQ", std::to_string(cb_kreq)}, {"CB_KACK", std::to_string(cb_kack)}};
@@ -283,9 +301,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        // kv_batch_page_offset is the LAST positional arg of each list; its index is encoded once in
-        // sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg (used by get_dynamic_runtime_args to re-apply it on a
-        // cache hit). If you reorder these lists, update those constants or the re-apply targets the wrong slot.
+        // kv_batch_page_offset sits at a fixed index (sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg), re-applied
+        // on a cache hit by get_dynamic_runtime_args (the slot changes per dispatch). If you reorder the args
+        // before it, update those constants or the re-apply targets the wrong slot.
         reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
         writer_desc.emplace_runtime_args(
             core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});  // kv_buf: writer K-half gather

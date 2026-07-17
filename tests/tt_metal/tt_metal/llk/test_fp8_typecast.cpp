@@ -114,7 +114,7 @@ using tt::test_utils::fp8_to_floats;
 
 static vector<float> bfp8_to_floats(const vector<uint32_t>& packed) {
     return unpack_bfp8_tiles_into_float_vec(
-        tt::stl::make_const_span(packed), /*row_major_output=*/false, /*is_exp_a=*/false);
+        ttsl::make_const_span(packed), /*row_major_output=*/false, /*is_exp_a=*/false);
 }
 
 // --- Validation ---

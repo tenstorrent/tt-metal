@@ -552,9 +552,10 @@ targets:
               top5: 97
       p300x2:
         entries:
+          # Catch-all (no batch_size/seq_len): serves the data-parallel b4 perf run and the
+          # token-matching (b1) accuracy check. Perf seeded from data-parallel run 27016350392
+          # (b4 aggregate); accuracy is the token-matching (b1) target.
           - status: active
-            # Perf seeded from data-parallel run 27016350392 (b4 aggregate);
-            # accuracy is the token-matching (b1) target.
             perf:
               prefill_time_to_first_token: 19
               decode_t/s/u: 20.88
@@ -562,6 +563,19 @@ targets:
             accuracy:
               top1: 90.0
               top5: 97.6
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
+          # batch-32 ci-eval-32 DRAM-prefetcher run (single repeat batch) on bh_quietbox_2.
+          # Specific entry so it wins over the catch-all for this config without disturbing
+          # the b4/b1 runs above. Seeded from the prefetcher run once the job could pass (#47820).
+          - batch_size: 32
+            seq_len: 712
+            status: active
+            perf:
+              prefill_time_to_first_token: 28
+              decode_t/s/u: 57
+              decode_t/s: 1824
+            accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   # Active e2e combinations with no centralized target yet must remain explicit TODOs.
@@ -976,8 +990,17 @@ targets:
             status: active
             perf:
               prefill_time_to_first_token: 419
-              decode_t/s/u: 13.77
-              decode_t/s: 13.77
+              # b1 decode is run-to-run unstable: measured ~10.9-13.2 t/s across
+              # recent scheduled runs + 3 targeted reruns. The old 13.77 center
+              # sat at the top of the range, so its tol-0.15 floor (11.70) tripped
+              # on the low observations (10.87 on 06-30, 10.96 on a rerun).
+              # Recenter on the observed mean ~12 with a wide 0.2 tolerance
+              # ([9.6, 14.4]) to absorb the swing while still catching gross
+              # regressions (the one-off 07-01 collapse to 6.2 would still fail).
+              decode_t/s/u: 12.0
+              decode_t_s_u_tolerance: 0.2
+              decode_t/s: 12.0
+              decode_t_s_tolerance: 0.2
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
@@ -985,9 +1008,22 @@ targets:
             seq_len: 2048
             status: active
             perf:
+              # b32 decode throughput is strongly host-correlated on the
+              # wh_llmbox_perf T3K pool, not commit-correlated: healthy hosts
+              # (f10cs06/07/08/09) measure 311-406 t/s across the last 10
+              # scheduled runs, while the degraded host f10cs05 runs ~142-185
+              # (tracked as infra, INFRA-3). The default 0.15 tolerance made the
+              # gate flip between "too fast" (f10cs09 ~400 > 399.7 upper bound,
+              # 07-03) and "regression" (f10cs05, 07-01) purely by which box the
+              # scheduler picked. Keep center 347.6 and widen tolerance to 0.20
+              # ([278, 417]) to bracket the healthy-host spread; f10cs05's ~⅔
+              # readings still fail by design (do not lower the gate to mask a
+              # degraded host).
               prefill_time_to_first_token: 1163
               decode_t/s/u: 10.86
+              decode_t_s_u_tolerance: 0.2
               decode_t/s: 347.6
+              decode_t_s_tolerance: 0.2
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
@@ -1047,22 +1083,22 @@ targets:
             seq_len: 128
             status: active
             perf:
-              # TTFT is run-to-run unstable (observed 217–351ms across runs);
-              # target the slower observation with a wide tolerance so it gates
-              # gross regressions without flaking on the swing.
-              prefill_time_to_first_token: 351
+              # TTFT is run-to-run unstable and bimodal (observed ~205ms and ~327ms
+              # clusters across the last 8 scheduled runs, mean ~296ms). The old 351
+              # center left the tol-0.4 floor at 211ms, which the ~205ms cluster kept
+              # tripping ("much better than expected"). Center on the observed mean so
+              # the [178, 414] band spans both clusters and still gates gross regressions.
+              prefill_time_to_first_token: 296
               prefill_time_to_first_token_tolerance: 0.4
-              # decode_t/s/u is run-to-run unstable (observed 14.4-21.1 across runs,
-              # see #48510). The earlier 23.8 target was set pre-#48037; the on-device
-              # gibberish fix (#48037) traded decode throughput for correctness
-              # (per-step decode-input re-staging + eager, un-traced sampling), so
-              # sustained perf now centers ~18. This is a Tier 3 model (minimum
-              # coverage, not perf-optimized), so center on the post-fix mean with a
-              # wide 0.2 tolerance ([14.4, 21.6]) to gate gross regressions without
-              # flaking on the swing.
-              decode_t/s/u: 18.0
+              # decode_t/s/u is run-to-run unstable (see #48510). The earlier 18.0 center
+              # (set pre-data, post-#48037) is now stale-low: the last 8 scheduled runs
+              # measured ~19-25 t/s (mean ~22), so 22+ readings tripped the old 21.6
+              # ceiling ("better than expected"). Recenter on the observed mean ~22 with a
+              # wide 0.2 tolerance ([17.6, 26.4]) to absorb the swing while still catching
+              # gross regressions (e.g. a halving to ~11).
+              decode_t/s/u: 22.0
               decode_t_s_u_tolerance: 0.2
-              decode_t/s: 18.0
+              decode_t/s: 22.0
               decode_t_s_tolerance: 0.2
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
@@ -1160,9 +1196,9 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 820.0
-              decode_t/s: 18.2
-              decode_t/s/u: 18.2
+              prefill_time_to_first_token: 241.0
+              decode_t/s: 26.0
+              decode_t/s/u: 26.0
               tolerance: 0.2
             accuracy: {}
             owner_id: U08HL8X1ECD # Aniruddha Tupe

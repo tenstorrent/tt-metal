@@ -38,7 +38,7 @@ sfpi_inline void calculate_div_int32_body(
     // initial approximation.
     // We interleave SFPMAD with the loading and conversion of `a`.
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
-    sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
+    sfpi::vFloat e = -inv_b_f * b_f + 1.0f;
     sfpi::vInt a_orig = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     e = e * e + e;
     sfpi::vMag a = sfpi::abs(a_orig);

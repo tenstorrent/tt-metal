@@ -1,7 +1,8 @@
 set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/core_subset_write/tensor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/disaggregation/kv_chunk_address_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/kv_chunk_address_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/umd_dram_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_api/temp_quasar_api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
@@ -65,6 +66,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptor_patching.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
@@ -146,4 +148,17 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/tensor_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_live_ranges.cpp
 )
+
+if(TT_METAL_USE_EMULE)
+    list(
+        APPEND
+        IMPL_SRC
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_fiber_scheduler.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/host_sanitizers.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_asan_panic.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emule_sanitizers.cpp
+    )
+endif()

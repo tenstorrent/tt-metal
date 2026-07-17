@@ -345,6 +345,14 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
             cache_batch_idx (int, optional): select the batch slot of a shared [B, 1, T, K_DIM] kv cache.
                 It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+            block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), `indices` are NATURAL
+                token positions and kv is stored block-cyclic across an SP-sharded cache; the kernel remaps each
+                index natural->physical page on the fly (no host reorder needed). This is the MESH axis the cache
+                was striped over: `sp` is read from the mesh shape on that axis (the op derives it, so it cannot
+                disagree with the device). T % sp == 0 required. Both must be set together.
+            block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
+                Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
+                q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
@@ -358,14 +366,17 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("k_chunk_size") = 128,
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("cache_batch_idx") = nb::none());
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
         R"doc(
         MSA block-sparse prefill (MiniMax Sparse Attention), Blackhole single-chip.
         Attends the block_size-token K/V blocks named in `indices`; -1 (0xFFFFFFFF) sentinels mask a contiguous
-        tail. The op has no causal flag; causal behavior must be encoded by the selected blocks. RoPE and
+        tail. Block selection bounds causality to block granularity; pass `chunk_start_idx` to additionally
+        enforce a token-level causal mask on the diagonal block (required for correct causal prefill). RoPE and
         QK-norm are applied upstream.
 
         Args:
@@ -382,6 +393,11 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional). fp8 q requires fp32_dest_acc_en.
             cache_batch_idx (int, optional): select the batch slot of a shared [B, n_kv, T, feature_dim] K/V cache.
                 It is a dynamic runtime arg, so changing it (or T) does not recompile the kernels.
+            chunk_start_idx (int, optional): global position of query row 0. When set, enforces a token-level
+                causal mask on the diagonal block (the query's own block); toggling set/unset (None vs int)
+		selects a different cached program. Requires bf16 q; fp8 q with this set is rejected.
+            cluster_axis (int, optional): SP mesh axis used to derive the per-device chunk_start
+                (chunk_start_idx + rank*S) under sequence parallelism. Host-side only.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
@@ -398,7 +414,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("block_size") = 128,
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("cache_batch_idx") = nb::none());
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("cluster_axis") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(

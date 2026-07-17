@@ -30,6 +30,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_quasar_mesh_buffers.cpp
     test_quasar_mesh_workloads.cpp
     test_quasar_semaphores.cpp
+    test_quasar_trace.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp
     test_stress_noc_mcast.cpp

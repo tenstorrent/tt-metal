@@ -213,14 +213,14 @@ D2HStreamServiceDescriptor D2HStreamServiceDescriptor::wait_and_read(const std::
     {
         const auto* fb_shape = fb_spec->shape();
         TT_FATAL(fb_shape != nullptr, "D2H service descriptor missing global_spec.shape");
-        desc.global_shape = tt::tt_metal::Shape(tt::stl::Span<const uint32_t>(fb_shape->data(), fb_shape->size()));
+        desc.global_shape = tt::tt_metal::Shape(ttsl::Span<const uint32_t>(fb_shape->data(), fb_shape->size()));
         desc.global_dtype = static_cast<DataType>(fb_spec->dtype());
     }
 
     {
         const auto* fb_mesh_shape = fb->mesh_shape();
         TT_FATAL(fb_mesh_shape != nullptr, "D2H service descriptor missing mesh_shape");
-        desc.mesh_shape = MeshShape(tt::stl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
+        desc.mesh_shape = MeshShape(ttsl::Span<const uint32_t>(fb_mesh_shape->data(), fb_mesh_shape->size()));
     }
 
     {
@@ -234,7 +234,7 @@ D2HStreamServiceDescriptor D2HStreamServiceDescriptor::wait_and_read(const std::
         std::optional<MeshShape> shape_override;
         const auto* fb_override = fb->mapper_shape_override();
         if (fb_override != nullptr && fb_override->size() > 0) {
-            shape_override = MeshShape(tt::stl::Span<const uint32_t>(fb_override->data(), fb_override->size()));
+            shape_override = MeshShape(ttsl::Span<const uint32_t>(fb_override->data(), fb_override->size()));
         }
         desc.mapper_config = MeshMapperConfig{.placements = placements, .mesh_shape_override = shape_override};
     }
@@ -255,7 +255,7 @@ D2HStreamServiceDescriptor D2HStreamServiceDescriptor::wait_and_read(const std::
         const auto* fb_composer_override = fb->composer_shape_override();
         if (fb_composer_override != nullptr && fb_composer_override->size() > 0) {
             composer_shape_override =
-                MeshShape(tt::stl::Span<const uint32_t>(fb_composer_override->data(), fb_composer_override->size()));
+                MeshShape(ttsl::Span<const uint32_t>(fb_composer_override->data(), fb_composer_override->size()));
         }
         desc.composer_config =
             MeshComposerConfig{.dims = composer_dims, .mesh_shape_override = composer_shape_override};
@@ -267,7 +267,7 @@ D2HStreamServiceDescriptor D2HStreamServiceDescriptor::wait_and_read(const std::
     for (const auto* fb_entry : *fb_entries) {
         const auto* fb_coord = fb_entry->coord();
         TT_FATAL(fb_coord != nullptr, "PerCoordEntry missing coord");
-        MeshCoordinate coord(tt::stl::Span<const uint32_t>{fb_coord->data(), fb_coord->size()});
+        MeshCoordinate coord(ttsl::Span<const uint32_t>{fb_coord->data(), fb_coord->size()});
 
         const auto* fb_socket = fb_entry->socket_descriptor();
         TT_FATAL(fb_socket != nullptr, "PerCoordEntry missing socket_descriptor");

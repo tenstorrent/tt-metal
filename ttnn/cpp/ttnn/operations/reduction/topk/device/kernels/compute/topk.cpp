@@ -136,8 +136,6 @@ void kernel_main() {
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_cb_index, input_ind_cb_index, output_val_cb_index);
     ckernel::topk_tile_init();
-    transpose_init(input_val_cb_index);
-    transpose_init(input_ind_cb_index);
 
     CircularBuffer input_val_cb(input_val_cb_index);
     CircularBuffer input_ind_cb(input_ind_cb_index);

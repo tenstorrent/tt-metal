@@ -59,13 +59,21 @@ bool mock_firmware_sources_available_for(tt::ARCH arch) {
 }
 
 int firmware_wait_timeout_ms() {
+    // Default timeout for real silicon.
+    constexpr int kDefaultTimeoutMs = 10'000;
+    // Functional sim (.so) is slower than silicon; sometimes 10s is not enough, so use half a minute.
+    constexpr int kFunctionalSimTimeoutMs = 30'000;
+
     const auto& rtoptions = MetalContext::instance().rtoptions();
-    // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
-    // llrt treats timeout_ms==0 on sim as infinite wait.
-    if (rtoptions.get_simulator_enabled() && rtoptions.get_simulator_path().extension() != ".so") {
-        return 0;
+    if (rtoptions.get_simulator_enabled()) {
+        // RTL sim directory backends are event-driven and much slower than functional ttsim (.so).
+        // llrt treats timeout_ms==0 on sim as infinite wait.
+        if (rtoptions.get_simulator_path().extension() != ".so") {
+            return 0;
+        }
+        return kFunctionalSimTimeoutMs;
     }
-    return 10000;
+    return kDefaultTimeoutMs;
 }
 
 }  // namespace

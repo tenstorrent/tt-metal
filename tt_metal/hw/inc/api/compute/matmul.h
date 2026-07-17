@@ -105,7 +105,7 @@ ALWI void matmul_init(
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 #else
-    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
+    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
 #endif
@@ -185,7 +185,7 @@ ALWI void matmul_block_init(
     MATH((throttled_mop_status = 0));
 #endif
 #else
-    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
+    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 #endif
@@ -240,6 +240,8 @@ ALWI void matmul_block(
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
 #endif
 #else
+    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
+    LLK_ASSERT(idst == 0, "non-default idst not supported on Quasar");
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_block(ct_dim, rt_dim)));
 #endif
@@ -292,7 +294,7 @@ mm_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
     PACK((llk_pack_init(out_cb_id)));
 #else
-    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
+    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
 
@@ -320,12 +322,12 @@ mm_init(
  * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 template <uint32_t num_faces = 4>
 [[deprecated("Unused; slated for removal. Use matmul_tiles() instead.")]] ALWI void matmul_tiles_math(uint32_t idst) {
-#ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
-#endif
 }
+#endif
 
 // clang-format off
 /**
@@ -361,13 +363,13 @@ template <uint32_t num_faces = 4>
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set | False    |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 [[deprecated("Call reconfig_data_format_srca(old_srca, in1) then matmul_init(in0, in1, transpose).")]] ALWI void
 mm_init_short_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
-#ifndef ARCH_QUASAR
     reconfig_data_format_srca(c_in_old_srca, in1_cb_id);
     matmul_init(in0_cb_id, in1_cb_id, transpose);
-#endif
 }
+#endif
 
 // clang-format off
 /**
@@ -415,7 +417,7 @@ mm_block_init(
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
     PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
 #else
-    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
+    LLK_ASSERT(transpose == 0, "non-default transpose not supported on Quasar");
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
 
@@ -475,6 +477,7 @@ mm_block_init(
  * | kt_dim         | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension | False    |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 [[deprecated("Call reconfig_data_format_srca(old_in1, in1) then matmul_block_init(...).")]] ALWI void
 mm_block_init_short_with_dt(
     uint32_t in0_cb_id,
@@ -486,11 +489,10 @@ mm_block_init_short_with_dt(
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
-#ifndef ARCH_QUASAR
     reconfig_data_format_srca(old_in1_cb_id, in1_cb_id);
     matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
-#endif
 }
+#endif
 
 // clang-format off
 /**
@@ -510,6 +512,7 @@ mm_block_init_short_with_dt(
  * | kt_dim         | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension | False    |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 [[deprecated("Call reconfig_data_format(old_in1, in1, old_in0, in0) then matmul_block_init(...).")]] ALWI void
 mm_block_init_short_with_both_dt(
     uint32_t in0_cb_id,
@@ -521,10 +524,9 @@ mm_block_init_short_with_both_dt(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     LLK_SAN_FUNCTION();
-#ifndef ARCH_QUASAR
     reconfig_data_format(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id);
     matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
-#endif
 }
+#endif
 
 }  // namespace ckernel

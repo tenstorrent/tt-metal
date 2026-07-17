@@ -163,16 +163,16 @@ namespace host_buffer {
 HostBuffer get_host_buffer(const HostTensor& tensor);
 
 template <typename T>
-tt::stl::Span<const T> get_as(const HostBuffer& buffer);
+ttsl::Span<const T> get_as(const HostBuffer& buffer);
 
 template <typename T>
-tt::stl::Span<T> get_as(HostBuffer& buffer);
+ttsl::Span<T> get_as(HostBuffer& buffer);
 
 template <typename T>
-tt::stl::Span<const T> get_as(const HostTensor& tensor);
+ttsl::Span<const T> get_as(const HostTensor& tensor);
 
 template <typename T>
-tt::stl::Span<T> get_as(HostTensor& tensor);
+ttsl::Span<T> get_as(HostTensor& tensor);
 
 }  // namespace host_buffer
 

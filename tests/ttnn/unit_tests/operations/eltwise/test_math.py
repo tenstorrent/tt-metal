@@ -159,10 +159,24 @@ def test_rad2deg(device, h, w):
     run_math_unary_test(device, h, w, ttnn.rad2deg, ulp=1)
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_cbrt(device, h, w):
-    run_math_unary_test(device, h, w, ttnn.cbrt, ulp=1)
+def test_cbrt(device):
+    # Exhaustive over every bf16 value.
+    # Evaluate the registered golden in fp64 by upcasting the input,
+    # in bf16 the non-representable 1/3 was rounding the reference up to 2 ULP short of the true
+    # cube root while the kernel was correct. Subnormal bf16 inputs are flushed to zero on device.
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor[torch.isfinite(input_tensor.to(torch.float32))]
+    input_tensor = torch.where(
+        input_tensor.to(torch.float32).abs() < 2.0**-126, torch.zeros_like(input_tensor), input_tensor
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.cbrt)
+    golden = golden_function(input_tensor.to(torch.float64))
+
+    tt_in = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    result = ttnn.to_torch(ttnn.cbrt(tt_in))
+    assert_with_ulp(golden, result, 1)
 
 
 @pytest.mark.parametrize("h", [64])

@@ -71,6 +71,8 @@
 #ifdef TT_METAL_USE_EMULE
 #include "impl/emulation/emulated_program_runner.hpp"
 #endif
+#include "impl/emulation/host_sanitizers.hpp"
+#include "impl/emulation/emule_live_ranges.hpp"
 
 namespace tt::tt_metal {
 struct RuntimeArgsData;
@@ -174,7 +176,7 @@ void ConfigureKernelGroup(
 }
 
 inline void SetRuntimeArgsImpl(
-    const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
+    const Program& program, KernelHandle kernel_id, const CoreCoord& c, ttsl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_runtime_args(c, runtime_args);
     }
@@ -184,7 +186,7 @@ inline void SetRuntimeArgsImpl(
     const Program& program,
     KernelHandle kernel_id,
     const CoreRange& core_range,
-    stl::Span<const uint32_t> runtime_args) {
+    ttsl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
         auto kernel = program.impl().get_kernel(kernel_id);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -199,7 +201,7 @@ inline void SetRuntimeArgsImpl(
     const Program& program,
     KernelHandle kernel_id,
     const CoreRangeSet& core_range_set,
-    stl::Span<const uint32_t> runtime_args) {
+    ttsl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
         auto kernel = program.impl().get_kernel(kernel_id);
         for (const auto& core_range : core_range_set.ranges()) {
@@ -218,6 +220,10 @@ namespace detail {
 
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_dram_alignment(
+            device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceDRAMChannel");
+    }
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
@@ -236,6 +242,10 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_dram_alignment(
+            device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceDRAMChannel");
+    }
     bool pass = true;
     MetalContext::instance().get_cluster().dram_barrier(device->id());
     MetalContext::instance().get_cluster().read_dram_vec(
@@ -257,6 +267,13 @@ bool WriteToDeviceL1(
     std::span<const std::uint8_t> host_buffer,
     CoreType core_type) {
     ZoneScoped;
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceL1");
+        if (emule::emule_asan_enabled()) {
+            emule::LiveL1HostPokeRanges::add(
+                device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
+        }
+    }
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
@@ -288,6 +305,13 @@ bool ReadFromDeviceL1(
     uint32_t address,
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceL1");
+        if (emule::emule_asan_enabled()) {
+            emule::LiveL1HostPokeRanges::add(
+                device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
+        }
+    }
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().read_core(
@@ -302,6 +326,12 @@ bool ReadFromDeviceL1(
     uint32_t size,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_l1_alignment(device, address, size, "ReadFromDeviceL1");
+        if (emule::emule_asan_enabled()) {
+            emule::LiveL1HostPokeRanges::add(device->id(), address, address + size);
+        }
+    }
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     host_buffer = MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
@@ -411,12 +441,27 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
     auto device_id = device->id();
 
+#ifdef TT_METAL_USE_EMULE
+    if (MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+        // Emule lazily JIT-compiles inside execute_program_emulated, so is_finalized()/is_compiled()
+        // are never set — skip both asserts (HW-only) and run synchronously, mirroring LaunchProgram.
+        // Configure before writing runtime args: ConfigureDeviceWithProgram allocates the ephemeral
+        // scratchpad buffers whose addresses are passed as common runtime args, so the write must see
+        // them (matches LaunchProgram and the non-emule path below).
+        detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
+        detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
+        emule::execute_program_emulated(device, program);
+        return;
+    }
+#endif
+
     // Verify program was prepared by prior LaunchProgram call
     TT_FATAL(
         program.impl().is_finalized(),
         "Program must be finalized before calling DispatchCompiledProgramToDevice (target device {}). "
         "Call LaunchProgram on another device first.",
         device_id);
+
     TT_FATAL(
         program.impl().is_compiled(),
         "Program must be compiled on at least one device before calling DispatchCompiledProgramToDevice (target device "
@@ -500,7 +545,7 @@ void print_page(
 }
 
 void WriteToDeviceSharded(
-    Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+    Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -589,7 +634,7 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
     return addr;
 }
 
-void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
     if (GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
@@ -640,7 +685,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     }
 }
 
-void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+void WriteToDevice(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
         if (logical_core_filter != nullptr) {
@@ -658,7 +703,10 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, con
     }
 }
 
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "WriteToBuffer");
+    }
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
@@ -778,6 +826,9 @@ void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t>
 }
 
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "ReadFromBuffer");
+    }
     IDevice* device = buffer.device();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
@@ -799,6 +850,9 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
 }
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "ReadShard");
+    }
     IDevice* device = buffer.device();
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
 
@@ -830,6 +884,27 @@ void LaunchProgram(
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
+// Returns true iff the program has kernels and every core it targets is a DRAM programmable core.
+// Such programs (e.g. the persistent tensor-prefetcher DRISC senders) are disjoint from the FD
+// worker grid and dispatch column, so launching them via slow dispatch does not perturb an active
+// FD session. Used to scope the force-slow-dispatch guard in LaunchProgram.
+bool program_targets_only_dram_cores(const Program& program) {
+    const auto& logical_cores_used_in_program = program.impl().logical_cores();
+    const auto& hal = MetalContext::instance().hal();
+    bool has_any_core = false;
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        if (logical_cores_used_in_program[programmable_core_type_index].empty()) {
+            continue;
+        }
+        has_any_core = true;
+        if (hal.get_programmable_core_type(programmable_core_type_index) != HalProgrammableCoreType::DRAM) {
+            return false;
+        }
+    }
+    return has_any_core;
+}
+
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
@@ -846,8 +921,13 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             // Scope the service bypass to this device
             const bool service_active =
                 !tt::tt_metal::MetalContext::instance().get_service_core_manager().claimed_cores(device->id()).empty();
+            // DRAM-only programs (e.g. the persistent tensor-prefetcher DRISC senders) run on the DRAM
+            // programmable cores, which are disjoint from the FD worker grid and dispatch column. Launching
+            // them via slow dispatch does not touch FD-owned cores or the FD pipeline, so it is safe to mix
+            // with an active FD session regardless of profiler init state.
+            const bool dram_only = detail::program_targets_only_dram_cores(program);
             TT_ASSERT(
-                !(fd_active && rt_done) || service_active,
+                !(fd_active && rt_done) || service_active || dram_only,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
                 "completed on this device.");
         }
@@ -952,16 +1032,35 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     auto mesh_device = device->get_mesh_device();
     const IDevice* validation_device = mesh_device ? mesh_device.get() : device;
 
-    program.impl().allocate_circular_buffers(validation_device);
-    program.impl().validate_circular_buffer_core_ranges(validation_device);
-    program.impl().validate_circular_buffer_region(validation_device);
-    program.impl().allocate_dataflow_buffers(validation_device);
-    program.impl().validate_dataflow_buffer_region(validation_device);
-
     bool is_emulated = false;
 #ifdef TT_METAL_USE_EMULE
     is_emulated = MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
 #endif
+
+    try {
+        program.impl().allocate_circular_buffers(validation_device);
+        program.impl().validate_circular_buffer_core_ranges(validation_device);
+        program.impl().validate_circular_buffer_region(validation_device);
+        program.impl().allocate_dataflow_buffers(validation_device);
+        // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
+        // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
+        program.impl().allocate_scratchpads(validation_device);
+        program.impl().validate_dataflow_buffer_region(validation_device);
+
+        // Emule-only static KERNEL_CONFIG-window overflow sanitizer (no-op on
+        // hardware); a throw here is surfaced as an ASAN panic by the catch below.
+        if constexpr (emule::kEmuleAsanBuild) {
+            emule::check_program_metadata_size(program);
+        }
+    } catch (const std::exception& e) {
+        // Surface the overflow as an ASAN panic when emulating; no-op otherwise.
+        // Routed through the facade so this TU carries no __emule_asan_panic
+        // reference in a non-emule build. Always rethrows.
+        if constexpr (emule::kEmuleAsanBuild) {
+            emule::report_metadata_overflow(is_emulated, e.what());
+        }
+        throw;
+    }
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
@@ -982,7 +1081,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
-                if (!cbs_on_core.empty()) {
+                const bool scans_remote_cb_configs =
+                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_cbs;
+                if (!cbs_on_core.empty() || scans_remote_cb_configs) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
                         program.impl().get_program_config(index).cb_size / sizeof(uint32_t));
@@ -1129,7 +1230,10 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 
 namespace experimental::core_subset_write {
 
-void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "WriteToBuffer (core_subset_write)");
+    }
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
@@ -1158,8 +1262,13 @@ ChipId GetPCIeDeviceID(ChipId device_id) {
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
 
 std::string SerializeClusterDescriptor() {
-    std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
-    return path.string();
+    // Serialize the descriptor the cluster already holds. The cluster makes the
+    // mock-vs-real (emule) decision once when it builds the descriptor at init
+    // (see tt_cluster.cpp, gated on rtoptions.get_mock_enabled()), so this layer
+    // must not re-create it: a fresh real-UMD create here would open the physical
+    // card and bypass the emulator. Assumes the cluster is initialized (this API's
+    // only caller, ttnn serialize_cluster_descriptor, runs in an active session).
+    return MetalContext::instance().get_cluster().get_cluster_desc()->serialize_to_file().string();
 }
 
 // This function is used to set a default root directory for the tt_metal library.
@@ -1484,7 +1593,8 @@ static KernelHandle CreateDramKernel(
         MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
     TT_FATAL(
         MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DRAM programmable cores are not enabled. Set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 to enable.");
+        "DRAM programmable cores are not enabled; they auto-enable on Blackhole with firmware >= 19.12.0.0 "
+        "and either no harvested DRAM channels or a single device.");
     std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(kernel_src, core_range_set, config);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
 }
@@ -1607,17 +1717,6 @@ GlobalSemaphore CreateGlobalSemaphore(
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
 
-namespace experimental {
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type, address);
-}
-}  // namespace experimental
-
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
 }
@@ -1667,7 +1766,7 @@ void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    stl::Span<const uint32_t> runtime_args) {
+    ttsl::Span<const uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
@@ -1703,7 +1802,7 @@ void SetRuntimeArgs(
     }
 }
 
-void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);

@@ -64,7 +64,9 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
     if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
+        pytest.skip(
+            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
+        )
 
 
 def _select_num_dram_banks(available_banks: int) -> int:
@@ -674,7 +676,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     # Centralized recv-contig param + cross-check: returns the validated block_count
     # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, block_count)] * num_prefetch_layers,

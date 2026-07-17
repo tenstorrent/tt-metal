@@ -629,7 +629,11 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
     if not within_threshold:
         ulp_index = torch.argmax(ulp_tensor)
         ulp_index_tuple = tuple(int(idx) for idx in torch.unravel_index(ulp_index, golden.shape))
-        message += f" @ {list(ulp_index_tuple)} = |{calculated[ulp_index_tuple]} - {golden[ulp_index_tuple]}| / {ulp_value[ulp_index_tuple]}"
+        message += (
+            f" @ {list(ulp_index_tuple)} = "
+            f"|calculated {calculated[ulp_index_tuple]} - golden {golden[ulp_index_tuple]}| "
+            f"/ ULP(golden) {ulp_value[ulp_index_tuple]}"
+        )
     return (within_threshold, message)
 
 
@@ -1110,12 +1114,17 @@ def ttl_complex_2_torch_complex(tt_tensor):
     return result
 
 
-def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h, stride_w):
+def pad_and_fold_conv_filters_for_unity_stride(filter_pyt_nchw_tensor, stride_h, stride_w, align_c=4):
     assert stride_h == stride_w
     assert filter_pyt_nchw_tensor.shape[2] == filter_pyt_nchw_tensor.shape[3]
+    assert isinstance(align_c, int) and align_c > 0
     # Fold activation for unity stride
-    # Pad channel size to 4. This is to make sure L1 read addresses are 16 bit aligned
-    C = _nearest_y(filter_pyt_nchw_tensor.shape[1], 4)
+    # Pad channel size to align_c. This keeps L1 read addresses aligned; extra channels become
+    # zero-valued weights that contribute nothing to the convolution. align_c=4 is the WH/BH default
+    # (16B alignment for bf16 gives C a multiple of 4 with a tiled conv reader). Quasar's row-major
+    # fold needs align_c=8 (bf16 row-major shard width must be a multiple of 8) so the first conv
+    # folds to groups*8 input channels and consumes the aligned output without per-group padding strip.
+    C = _nearest_y(filter_pyt_nchw_tensor.shape[1], align_c)
     # Pad filter to nearest stride
     Padded_filter_height = _nearest_y(filter_pyt_nchw_tensor.shape[2], stride_h)
     Padded_filter_width = _nearest_y(filter_pyt_nchw_tensor.shape[3], stride_w)
