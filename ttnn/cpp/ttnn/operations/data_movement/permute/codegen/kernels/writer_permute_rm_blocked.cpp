@@ -7,7 +7,7 @@
 // Consumes the compute kernel's transposed [w_block_size x x_block_size] blocks
 // from cb_2 and scatters each of the w_block_size output rows (x_read_size bytes)
 // to its permuted output page. The compute transposed input axes x_dim <-> W, so
-// input_shape and perm are swapped on those two axes here before addressing.
+// perm is swapped on those two axes here before addressing.
 //
 // Named CT: N, output_page_size(=x_block_size*elem), num_rows, X, x_dim,
 //           x_blocks, w_blocks, x_block_size, w_block_size, W, element_size,
@@ -47,12 +47,7 @@ void kernel_main() {
         dest_strides[i] = get_arg_val<uint32_t>(3 + 2 * N + i);
     }
 
-    // The compute kernel transposed x_dim <-> W. Reflect that in shape + perm.
-    {
-        uint32_t t = input_shape[x_dim];
-        input_shape[x_dim] = input_shape[w_dim];
-        input_shape[w_dim] = t;
-    }
+    // The compute kernel transposed x_dim <-> W. Reflect that in perm.
     for (uint32_t i = 0; i < N; i++) {
         if (perm[i] == x_dim) {
             perm[i] = w_dim;
