@@ -1,6 +1,7 @@
 # Gemma 4 31B optimized multichip decoder (Stage 05)
 
-Status: complete; fresh independent stage review returned `clean-pass`.
+Status: complete.  The original Stage 05 review and the fresh 2026-07-17
+current-checkout review both returned `clean-pass`.
 
 ## Outcome
 
@@ -79,11 +80,12 @@ compatibility candidates were also slower: O 105.14 vs 49.21 us sliding and
 72.85 us full.  This exact family measurement supersedes the earlier
 source-backed bound and rejects fused AGMM without a mixed-family comparison.
 
-## Correctness and performance
+## Original Stage 05 correctness and performance
 
 PCC uses the accepted Stage 04 optimized single-chip oracle and covers all
-four device replicas.  Final numbers below are from the final default, not an
-earlier candidate.
+four device replicas.  These historical completion numbers came from the
+selected default, not an earlier candidate; the later current-checkout table
+is the authoritative reproduction on the present source tree.
 
 | Metric | Before Stage 05 | Final default | Change |
 |---|---:|---:|---:|
@@ -104,7 +106,7 @@ non-aligned prefill/decode, replica equality, cache/layout contract, and the
 runtime source audit.  The advertised-position trace reuses unchanged BFP8 KV
 layout while exercising the final default at position 262,143.
 
-### Decode performance accounting
+### Original Stage 05 decode performance accounting
 
 The Tracy workload and warmed host workload both use logical batch 1, a
 32-token populated cache, real layer shapes, and one traced replay.  BFP8 and
@@ -194,3 +196,71 @@ Core commands, environment, failures, recovery, and artifact paths are in
 
 The stage-owned local commit SHA(s) and independent review verdict are recorded
 at the end of `work_log.md`.  Nothing is pushed.
+
+## 2026-07-17 current-checkout revalidation
+
+The optimized decoder was revalidated at repository HEAD
+`b68b16df75d121dcbe0128d6fa4cea98f993b870` after later repo-local work had
+touched shared decoder code.  This pass did not run full-model, generation,
+vLLM, or serving paths.  It opened the target `MeshShape(1, 4)` over four
+Blackhole P150b boards and measured `MultichipDecoder` directly.
+
+The current operation-topology audit matches the reviewed Stage 05 winner:
+packed local QKV; explicit SDPA with local BFP8 KV heads; row-local O plus a
+persistent BFP8 async all-reduce; packed BFP4/LoFi gate-up with BFP8 output;
+BFP4/LoFi down plus the second persistent reduction; and a replicated BF16
+DRAM layer boundary.  The fresh reports have the same 33/30 prefill and 59/58
+decode op counts as `tracy/final_post_fused_review`.  Current device sums are
+1,153.2255/1,418.152 us for sliding/full prefill and
+427.9625/481.827 us for sliding/full decode.  No inter-layer collective,
+gather, or reshard is present; both reductions remain owned inside the layer.
+
+The exact packed/split projection, residual-layout, CCL placement and dtype,
+persistent-buffer, Ring/Linear, fused MMRS, and fused AGMM families remain
+applicable because the measured production topology and real tensor contracts
+are unchanged.  Their retained current-source evidence is in
+`candidates/summary.csv`, including the exact real-weight fused AGMM coherent
+spine that is 2.478x/2.553x slower without an immediate restore to the old
+replicated residual.  The current profile confirms the selected policy reached
+runtime: BFP8/LoFi QKV and O, BFP4/LoFi packed gate-up and down, BFP8 cache,
+and two BFP8-input/BFP8-output async reductions restored to BF16 at the layer
+boundary.
+
+Current-head acceptance results (the authoritative final-default numbers for
+this revalidation):
+
+| Metric | Stage 05 starting multichip path | Current final default | Result |
+|---|---:|---:|---:|
+| sliding prefill-33 PCC | 0.999846 | 0.999846 | preserved |
+| full prefill-33 PCC | 0.999757 | 0.999757 | preserved |
+| sliding traced decode PCC | gate 0.995 | 0.999802416 | pass |
+| full traced decode PCC | gate 0.995 | 0.999718188 | pass |
+| sliding warmed prefill-128 | 2.418039 ms | 2.3350725 ms | 3.43% faster |
+| full warmed prefill-128 | 2.180140 ms | 2.4464875 ms | 12.22% slower wall time |
+| sliding traced warmed decode | 0.5264925 ms | 0.4635775 ms | 11.95% faster |
+| full traced warmed decode | 0.575653 ms | 0.5181375 ms | 9.99% faster |
+
+The full-prefill wall-time shift is classified rather than dismissed: its
+fresh on-device sum is 1.418152 ms versus 1.42228 ms in the prior clean-pass
+profile, with the same 30 operations and dominant rows.  The device graph is
+0.29% faster, so the 12-sample wall difference is untraced host/harness
+variance rather than added device work.  The same-run TP4 path still beats the
+single-P150 full-prefill control by 1.396x.
+
+The standard suite is 12/12, including both layer kinds, non-aligned 33-token
+prefill, sliding 1,025/1,057 wrap, permuted page tables, mutable/repeated trace
+replay, batch 32, BFP8 cache/layout, replica equality, persistent-pool teardown,
+and a clean source fallback audit.  Both advertised-position traces pass at
+262,143 with the unchanged 262,144 context contract.  A separate watcher run
+passes four target-mesh tests with worker/NoC checks enabled; Ethernet watcher
+instrumentation remains scoped off only for the documented firmware config
+buffer limit.
+
+Current artifacts are under `evidence/current_head_*` and
+`tracy/current_head/`.  `perf_accounting.json` reconciles the current roofline,
+device, and end-to-end decode numbers.  Raw multi-hundred-megabyte profiler
+intermediates were removed after the compact enriched CSV, hash, reports,
+tables, PNGs, and JUnit results were retained.
+
+The independent current-checkout report is `stage_review_current_head.md`; its
+verdict is `CLEAN PASS` with no required work.

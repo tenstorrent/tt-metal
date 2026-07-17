@@ -1,0 +1,325 @@
+2026-07-17 02:06:07.778 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 60 items
+
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_persistent_pool_terminal_cleanup PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention] 2026-07-17 02:06:10.915 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-17 02:06:10.915 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-17 02:06:10.916 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-17 02:06:10.916 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-17 02:06:10.917 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-17 02:06:10.917 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-17 02:06:10.920 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-17 02:06:11.089 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[1, 2, 3, 0] and remote chip ids {} (cluster.cpp:168)
+2026-07-17 02:06:11.090 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-17 02:06:11.090 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-17 02:06:11.090 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-17 02:06:11.093 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-17 02:06:11.406 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-17 02:06:12.030 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-17 02:06:12.030 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-17 02:06:12.030 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-17 02:06:12.030 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-17 02:06:12.031 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-17 02:06:12.031 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-17 02:06:12.046 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-17 02:06:12.046 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-17 02:06:12.046 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-17 02:06:12.046 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-17 02:06:12.090 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:261)
+2026-07-17 02:06:12.142 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-17 02:06:12.142 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002118688_memory' (shm_resource_tracker.cpp:282)
+2026-07-17 02:06:12.142 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002114624_memory' (shm_resource_tracker.cpp:282)
+2026-07-17 02:06:12.142 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115584_memory' (shm_resource_tracker.cpp:282)
+2026-07-17 02:06:12.710 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349979 GHz, device_time_at_sync=6116841313594 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-17 02:07:12.229 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D, reinitializing control plane (metal_env.cpp:281)
+2026-07-17 02:07:12.229 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-17 02:07:12.229 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-17 02:07:12.230 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-17 02:07:12.230 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-17 02:07:12.230 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-17 02:07:12.231 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-17 02:07:12.255 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-17 02:07:12.258 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-17 02:07:12.261 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-17 02:07:12.264 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-17 02:07:12.310 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-17 02:07:12.351 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-17 02:07:12.366 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-17 02:07:12.367 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-17 02:07:12.368 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-17 02:07:12.368 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-17 02:07:12.368 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D (fabric_firmware_initializer.cpp:305)
+2026-07-17 02:07:12.995 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349927 GHz, device_time_at_sync=6197617672922 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-17 02:07:13.006 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=6198032357151 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-17 02:07:13.006 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=6198600514925 cycles (realtime_profiler_manager.cpp:1127)
+PCC=0.9998458099608858
+PCC=0.9998458099608858
+PCC=0.9998458099608858
+PCC=0.9998458099608858
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention] PCC=0.9997565724638809
+PCC=0.9997565724638809
+PCC=0.9997565724638809
+PCC=0.9997565724638809
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention] PCC=0.9998024158653508
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention] PCC=0.9997181878373204
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1025] PCC=0.9994971012252769
+PCC=0.9994971012252769
+PCC=0.9994971012252769
+PCC=0.9994971012252769
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1057] PCC=0.9991605607202836
+PCC=0.9991605607202836
+PCC=0.9991605607202836
+PCC=0.9991605607202836
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention] PCC=0.9996759606860449
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention] PCC=0.9996581729569184
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[0-sliding_attention-4-256] PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[5-full_attention-1-512] PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_advertised_context_traced_decode[0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_advertised_context_traced_decode[5-full_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_runtime_source_audit PASSED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[7] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[8] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[12] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[14] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[21] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[24] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[28] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[42] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[56] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[84] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[8-3] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[16-3] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-1] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-3] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-7] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-21] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[baseline] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[attention_bfp4] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[attention_hifi2] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_gate_hifi2] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_down_hifi2] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[kv_bfp4] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[qkv_split] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_packed_bf16] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_packed_bfp8] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[o_block16_full] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_k32] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_k128] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_exp_approx] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_full_grid_full] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_mmrs_model_shape SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[sliding_attention_o-8192-1344-DataType.BFLOAT8_B-8] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[full_attention_o-16384-1344-DataType.BFLOAT8_B-8] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[mlp_down-21504-1344-DataType.BFLOAT4_B-7] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[mlp_down_bfp8_adapted-21504-1344-DataType.BFLOAT8_B-7] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_coherent_boundary[0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_coherent_boundary[5-full_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_prefill_placement_sweep SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[32] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[128] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[5-full_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[prefill-0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[prefill-5-full_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[decode-0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[decode-5-full_attention] SKIPPED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/evidence/current_head_suite.xml -
+============================== slowest durations ===============================
+62.38s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention]
+35.24s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[5-full_attention-1-512]
+32.34s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+31.97s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+31.95s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention]
+30.57s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention]
+29.70s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1025]
+29.68s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+29.62s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1057]
+29.43s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention]
+29.32s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[0-sliding_attention-4-256]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1057]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[0-sliding_attention-4-256]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[5-full_attention-1-512]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1025]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_persistent_pool_terminal_cleanup
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_runtime_source_audit
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+0.17s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[decode-5-full_attention]
+0.01s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_runtime_source_audit
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[0-sliding_attention-4-256]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[5-full_attention-1-512]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention]
+0.00s call     models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_persistent_pool_terminal_cleanup
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1057]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1025]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_persistent_pool_terminal_cleanup
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_runtime_source_audit
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_packed_bfp8]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[28]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[mlp_down_bfp8_adapted-21504-1344-DataType.BFLOAT8_B-7]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_advertised_context_traced_decode[0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[7]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_advertised_context_traced_decode[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[7]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_advertised_context_traced_decode[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[8-3]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-21]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_advertised_context_traced_decode[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_full_grid_full]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[8]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[prefill-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[14]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[prefill-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_gate_hifi2]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[full_attention_o-16384-1344-DataType.BFLOAT8_B-8]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[mlp_down-21504-1344-DataType.BFLOAT4_B-7]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[42]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[12]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[24]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_packed_bf16]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[baseline]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[56]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[21]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[mlp_down_bfp8_adapted-21504-1344-DataType.BFLOAT8_B-7]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[128]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[attention_hifi2]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[sliding_attention_o-8192-1344-DataType.BFLOAT8_B-8]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[o_block16_full]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_k32]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[16-3]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_mmrs_model_shape
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-1]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[32]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[qkv_split]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[attention_bfp4]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_k128]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-3]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[decode-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[84]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[kv_bfp4]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_coherent_boundary[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-7]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_exp_approx]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_down_hifi2]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[8]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_coherent_boundary[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_prefill_placement_sweep
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[12]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[14]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[42]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[21]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[baseline]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[28]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[56]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[prefill-0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[decode-0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[24]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[o_block16_full]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[32]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[8-3]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_gate_hifi2]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[full_attention_o-16384-1344-DataType.BFLOAT8_B-8]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[prefill-5-full_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_k128]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-7]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_decode_geometry_sweep[84]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-1]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[attention_bfp4]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_k32]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_profile[decode-5-full_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[16-3]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fractured_residual_boundary_probe[128]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-3]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[attention_hifi2]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_qkv_decode_geometry_sweep[32-21]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_mmrs_model_shape
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_coherent_boundary[0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[sliding_attention_o-8192-1344-DataType.BFLOAT8_B-8]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_model_shape[mlp_down-21504-1344-DataType.BFLOAT4_B-7]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_packed_bfp8]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_exp_approx]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_warmed_latency[5-full_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_packed_bf16]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[qkv_split]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[kv_bfp4]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_mlp_prefill_placement_sweep
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_fused_agmm_coherent_boundary[5-full_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[mlp_down_hifi2]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_decode_precision_fidelity_sweep[sdpa_full_grid_full]
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_persistent_pool_terminal_cleanup
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_prefill_matches_optimized_baseline[5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_paged_decode_trace_matches_optimized_baseline[5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1025]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_sliding_nonaligned_window_wrap_matches_baseline[1057]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_batch32_nonaligned_prefill_and_traced_decode[5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[0-sliding_attention-4-256]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_kv_and_layout_contract[5-full_attention-1-512]
+PASSED models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py::test_multichip_runtime_source_audit
+SKIPPED [2] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:738: set GEMMA4_MULTICHIP_EXACT_CONTEXT=1 for advertised-position trace
+SKIPPED [10] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:814: set GEMMA4_MULTICHIP_MLP_SWEEP=1
+SKIPPED [6] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:913: set GEMMA4_MULTICHIP_QKV_SWEEP=1
+SKIPPED [14] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:985: set GEMMA4_MULTICHIP_PRECISION_SWEEP=1
+SKIPPED [1] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:1101: set GEMMA4_MULTICHIP_FUSED_MMRS=1
+SKIPPED [4] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:1136: set GEMMA4_MULTICHIP_FUSED_AGMM=1
+SKIPPED [2] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:1208: set GEMMA4_MULTICHIP_FUSED_AGMM_COHERENT=1
+SKIPPED [1] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:1790: set GEMMA4_MULTICHIP_MLP_PREFILL_SWEEP=1
+SKIPPED [2] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:1990: set GEMMA4_MULTICHIP_FRACTURED_PROBE=1
+SKIPPED [2] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:2181: set GEMMA4_MULTICHIP_BENCH=1
+SKIPPED [4] models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py:2264: set GEMMA4_MULTICHIP_PROFILE=1 and run under Tracy
+============ 12 passed, 48 skipped, 3 warnings in 376.60s (0:06:16) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-17 02:12:27.884 | info     |    BuildKernels | JIT cache stats: 1000/1000 hits (100.0%) [1000 cached, 1065 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-17 02:12:27.884 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-17 02:12:27.910 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-17 02:12:27.910 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-17 02:12:28.509 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-17 02:12:28.509 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-17 02:12:28.509 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

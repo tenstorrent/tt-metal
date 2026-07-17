@@ -390,3 +390,112 @@ signposts are recorded in `tracy/final_post_fused_review/README.md`.
 - Stage-owned technical checkpoint: `96d41fdf0c5` (`Optimize Gemma 4 31B
   multichip decoder`).  The follow-up metadata-only commit records this SHA.
   No push was performed.
+
+## 2026-07-17: current-checkout Stage 05 revalidation
+
+- Starting HEAD: `b68b16df75d121dcbe0128d6fa4cea98f993b870` on branch
+  `odjuricic/agentic-research/graph-rewrite-skill`.  Pre-existing unrelated
+  dirty paths (`tt_metal/python_env/requirements-dev.txt`, `.exp_run/`,
+  `fusion_tests/`, full-model artifacts, and `vllm/`) were not touched.
+- `timeout 60 tt-smi -ls --local` listed four Blackhole P150b boards.  A
+  source-backed `MeshShape(1, 4)` open/close printed `MESH_SMOKE_OK`; firmware
+  was 19.9.0.  No reset or recovery was required.
+- The starting topology audit and all candidate-family evidence were reread
+  before hardware work.  The current measured path reproduces the same
+  packed-QKV, SDPA, packed gate-up, persistent async CCL, replicated-residual
+  graph as the original clean-pass.  Fresh report op counts are identical to
+  `tracy/final_post_fused_review`, so prior exact family rejections remain
+  like-for-like rather than stale-source bounds.
+
+Current warmed latency command:
+
+```bash
+GEMMA4_MULTICHIP_BENCH=1 MPLCONFIGDIR=/tmp/mpl_stage05_revalidation \
+LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH pytest -vv -s --tb=short \
+  models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py \
+  -k test_multichip_warmed_latency \
+  --junitxml=models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/evidence/current_head_latency.xml
+```
+
+This passed both layer kinds.  Same-process single-P150 versus TP4 medians
+were 2.665372 -> 2.3350725 ms prefill and 1.186321 -> 0.4635775 ms traced
+decode for sliding attention; 3.415086 -> 2.4464875 ms prefill and
+1.333623 -> 0.5181375 ms traced decode for full attention.
+
+Current correctness/stress/fallback command:
+
+```bash
+MPLCONFIGDIR=/tmp/mpl_stage05_revalidation \
+LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH pytest -vv -s --tb=short \
+  models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py \
+  --junitxml=models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/evidence/current_head_suite.xml
+```
+
+Result: 12 passed and 48 intentional env-gated candidate/profile skips.
+PCC was 0.999845810/0.999756572 prefill and
+0.999802416/0.999718188 traced decode for sliding/full.  Non-aligned sliding
+1,025/1,057 scored 0.999497101/0.999160561; batch-32 decode scored
+0.999675961/0.999658173.  The runtime source audit and terminal persistent-pool
+cleanup passed.
+
+Advertised-position command:
+
+```bash
+GEMMA4_MULTICHIP_EXACT_CONTEXT=1 \
+MPLCONFIGDIR=/tmp/mpl_stage05_revalidation \
+LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH pytest -vv -s --tb=short \
+  models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py \
+  -k test_multichip_advertised_context_traced_decode \
+  --junitxml=models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/evidence/current_head_exact_context.xml
+```
+
+Both layer kinds passed at absolute position 262,143.  KV dtype/layout and
+persistent allocations are unchanged, so `doc/context_contract.json` needs no
+Stage 05 capacity update.
+
+The reduced profiler used `GEMMA4_MULTICHIP_PROFILE=1` and the four
+`test_multichip_profile` windows under Tracy.  `tt-perf-report` 1.2.7 was run
+with advice for each `MC_<kind>_<mode>` signpost.  The enriched source CSV hash
+is `0454648836ec291e6ee090a10ff1202f7a65d9bfe0ef0016c7bd0f8cc8fa6002`.
+Device sums are 1,153.2255/1,418.152 us prefill and
+427.9625/481.827 us decode for sliding/full.  Current versus prior clean-pass
+device sums and op counts are unchanged within measurement noise; the
+full-prefill wall anomaly therefore localizes outside device work.  Advice
+remains closed by the retained role-specific geometry, precision/fidelity,
+prefill L1/adapted-block, and coherent fused-family experiments.
+
+Watcher command:
+
+```bash
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_NOINLINE=1 \
+TT_METAL_WATCHER_DISABLE_ETH=1 \
+MPLCONFIGDIR=/tmp/mpl_stage05_revalidation \
+LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH pytest -vv -s --tb=short \
+  models/autoports/google_gemma_4_31b/tests/test_multichip_decoder.py \
+  -k 'paged_decode_trace_matches_optimized_baseline or sliding_nonaligned_window_wrap_matches_baseline' \
+  --junitxml=models/autoports/google_gemma_4_31b/doc/optimized_multichip_decoder/evidence/current_head_watcher.xml
+```
+
+Result: 4 passed, with no worker/NoC watcher error or assertion.  Ethernet-only
+instrumentation remains disabled for the inherited active-Ethernet firmware
+buffer limit; this does not disable fabric execution.  Watcher and profiler
+were separate hardware runs.
+
+- Compact current artifacts: `evidence/current_head_*`,
+  `tracy/current_head/{README.md,source_csv.sha256,*_PREFILL,*_DECODE}`, and
+  `perf_accounting.json`.
+- Raw Tracy/device intermediates totaling about 720 MB were deleted after the
+  enriched CSV and compact evidence were verified; rerunning the recorded
+  capture command is the recovery path.
+- No model implementation change was selected: the current default reproduces
+  the strongest correct topology and decode performance, while every material
+  alternative remains rejected by exact current-applicable evidence.
+- Fresh independent review: `stage_review_current_head.md`, verdict
+  `CLEAN PASS`, no required work.  The reviewer independently checked current
+  source/profile hashes, XML/JSON, device sums, current-versus-prior operation
+  signatures, runtime/inter-layer contracts, watcher scope, candidate
+  applicability, and unrelated-dirty-state isolation.
+- The local current-checkout technical checkpoint SHA is recorded below after
+  creation.  No push was performed.
+
+Current-checkout technical checkpoint: `PENDING`
