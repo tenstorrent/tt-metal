@@ -1349,8 +1349,25 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
         dram_deletion_high_water_mark = this->allocator_impl()->get_dram_deletion_high_water_mark();
     }
 
+    trace_buffer->dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
+    const auto min_live_trace_buffer_address = sub_device_manager_tracker_->get_min_trace_buffer_address();
+    TT_FATAL(
+        trace_region_size != 0 || !min_live_trace_buffer_address.has_value() ||
+            min_live_trace_buffer_address.value() >= trace_buffer->dram_high_water_mark,
+        "DRAM activity captured by trace {} has a high water mark of {}, which overlaps with an existing live trace "
+        "buffer at address {}. Release the existing trace before capturing this trace or set a non-zero "
+        "trace_region_size.",
+        *trace_id,
+        trace_buffer->dram_high_water_mark,
+        min_live_trace_buffer_address.value_or(0));
+
+    const DeviceAddr max_live_trace_high_water_mark = sub_device_manager_tracker_->get_max_trace_high_water_mark();
     MeshTrace::populate_mesh_buffer(
-        *(mesh_command_queues_[cq_id]), trace_buffer, dram_allocation_high_water_mark, dram_deletion_high_water_mark);
+        *(mesh_command_queues_[cq_id]),
+        trace_buffer,
+        dram_allocation_high_water_mark,
+        dram_deletion_high_water_mark,
+        max_live_trace_high_water_mark);
     this->mark_allocations_unsafe();
 }
 
