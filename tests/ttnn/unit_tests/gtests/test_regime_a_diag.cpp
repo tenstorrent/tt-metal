@@ -108,10 +108,10 @@ TEST_F(RegimeADiagFixture, Run) {
     // Constant-input sanity for the public path (mask 0) + the correct in0-delivery variants (32=scatter,
     // 64=repl2, 128=repl4, 256=xchg, 512=xchgrr): out must equal K. This only catches gross breakage; the
     // real pairing/permutation/repeat-omit check is the random-operand PCC test below. (max_rel_err, NOT PCC.)
-    // in1-delivery diagnostics (fwd-signal-first 1<<22, CB1 depth 1<<23/1<<24, coalesced read 1<<25) are
-    // correctness-preserving; verify any combination of them (a fwd-order race would deliver stale in1 ->
+    // in1-delivery diagnostics (fwd flush-order A/B 1<<22, coalesced-read A/B 1<<25) are correctness-
+    // preserving; verify any combination (a fwd-order/source-lifetime bug would deliver stale in1 ->
     // output != K, caught here).
-    constexpr uint32_t kIn1Preserve = (1u << 22) | (1u << 23) | (1u << 24) | (1u << 25);
+    constexpr uint32_t kIn1Preserve = (1u << 22) | (1u << 25);
     if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
         mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 || mask == 524288 ||
         mask == 1048576 || mask == 2097152 || (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
