@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "sfpi.h"
 using namespace sfpi;
@@ -24,7 +25,7 @@ inline void calculate_signbit() {
     //    | ...  | [a] L16 = cast_fp32(a) |     |            |          |
     //    | ...  |                        |     |            | [a] L16  |
 
-    constexpr int offset = 0;
+    [[maybe_unused]] constexpr int offset = 0;
 
 #ifndef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
@@ -37,10 +38,12 @@ inline void calculate_signbit() {
     TTI_SFPNOP;
 #else
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset);
-        TTI_SFPSHFT(-31 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);  // SFPSHFT_MOD1_ARG_IMM
-        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset);
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        // Logical-shift the fp32 bit pattern right by 31 to isolate the sign bit as 0/1,
+        // then convert that integer to 0.0f / 1.0f.
+        sfpi::vInt sign = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(in), -31));
+        sfpi::dst_reg[0] = sfpi::int32_to_float(sign, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
     }
 #endif
 }
@@ -57,7 +60,7 @@ inline void calculate_signbit_int32() {
     //    | ...  |        |     | [a] L16 = a >> 31 |          |
     //    | ...  |        |     |                   | [a] L16  |
 
-    constexpr int offset = 0;
+    [[maybe_unused]] constexpr int offset = 0;
 
 #ifndef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
@@ -69,13 +72,13 @@ inline void calculate_signbit_int32() {
     TTI_SFPNOP;
 #else
     for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, offset);
-        TTI_SFPSHFT(-31 & 0xfff, p_sfpu::LREG0, p_sfpu::LREG0, 1);  // SFPSHFT_MOD1_ARG_IMM
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, offset);
+        sfpi::vUInt in = sfpi::dst_reg[0];
+        // Logical-shift the int32 bit pattern right by 31 to isolate the sign bit as 0/1.
+        sfpi::dst_reg[0] = sfpi::shft(in, -31);
+        sfpi::dst_reg++;
     }
 #endif
 }
-
 inline void signbit_init() {
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
@@ -86,10 +89,10 @@ inline void signbit_init() {
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0x00 | 0x40 | (1 << 3) | 5;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x00 | (0 << 3) | 4;
-        constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x40 | (1 << 3) | 5;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0x80 | 0x00 | (0 << 3) | 4;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (2 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -112,10 +115,10 @@ inline void signbit_int32_init() {
 
     // Macro 0
     {
-        constexpr uint simple_bits = 0;
-        constexpr uint mad_bits = 0;
-        constexpr uint round_bits = 0x80 | 0x40 | (0 << 3) | 4;
-        constexpr uint store_bits = 0x00 | 0x40 | (1 << 3) | 3;
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0x80 | 0x40 | (0 << 3) | 4;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (1 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);

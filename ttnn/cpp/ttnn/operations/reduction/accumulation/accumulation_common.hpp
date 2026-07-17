@@ -18,7 +18,7 @@ namespace ttnn::operations::reduction::accumulation::common {
 constexpr uint32_t FOUR_DIMENSIONS{4};
 constexpr uint32_t FIRST_DIMENSION{0};
 
-using permutation_t = ttnn::SmallVector<int64_t>;
+using permutation_t = ttsl::SmallVector<int64_t>;
 
 Tensor preprocess_input_tensor(
     const Tensor& input_tensor,

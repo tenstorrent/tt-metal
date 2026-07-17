@@ -138,11 +138,8 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
 
         const auto detected_arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
-        // Watcher NOC sanitization currently only works on Quasar in slow dispatch.
-        // TODO: Remove the slow dispatch check once NOC sanitization is supported on Quasar in fast dispatch (#45878)
-        const bool slow_dispatch = !tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
-            detected_arch == tt::ARCH::BLACKHOLE || (detected_arch == tt::ARCH::QUASAR && slow_dispatch));
+            detected_arch == tt::ARCH::BLACKHOLE || (detected_arch == tt::ARCH::QUASAR));
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
@@ -219,6 +216,37 @@ protected:
     void SetUp() override {
         MeshWatcherFixture::SetUp();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_dump_all(true);
+    }
+};
+
+// Fixture for tile counter watcher tests.
+class MeshWatcherTileCounterFixture : public MeshWatcherDumpAllFixture {
+protected:
+    bool watcher_previous_assert_disabled_{};
+
+    void SetUp() override {
+        // Save before the skip check: TearDown() runs even when SetUp() skips, so the
+        // restore must be based on the real previous state regardless of skip.
+        watcher_previous_assert_disabled_ = MetalContext::instance().rtoptions().watcher_assert_disabled();
+        if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+            GTEST_SKIP() << "Tile counters are only used on Quasar";
+        }
+        // Must be set before parent SetUp: the TRISC HW fault ISR (handle_interrupt in
+        // risc_common.h, compiled as part of trisc.cc firmware) calls ASSERT on a
+        // TILE_COUNTERS fault, which writes to the watcher mailbox and hangs. Disabling
+        // assert here makes ASSERT a no-op so the ISR clears the interrupt and returns,
+        // allowing the test to verify that watcher logs the TC mismatch correctly.
+        if (!watcher_previous_assert_disabled_) {
+            MetalContext::instance().rtoptions().disable_watcher_assert();
+        }
+        MeshWatcherDumpAllFixture::SetUp();
+    }
+
+    void TearDown() override {
+        MeshWatcherDumpAllFixture::TearDown();
+        if (!watcher_previous_assert_disabled_) {
+            MetalContext::instance().rtoptions().enable_watcher_assert();
+        }
     }
 };
 

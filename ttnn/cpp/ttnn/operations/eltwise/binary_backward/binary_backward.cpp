@@ -525,19 +525,19 @@ std::vector<std::optional<Tensor>> concat_bw(
         input_grad, other_grad, input_tensor_a_arg, other, {are_required_outputs[0], are_required_outputs[1]});
 
     if (are_required_outputs[0]) {
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {
+        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> end_index = {
             input_tensor_a_arg.logical_shape()[0],
             input_tensor_a_arg.logical_shape()[1],
             input_tensor_a_arg.logical_shape()[2],
             input_tensor_a_arg.logical_shape()[3]};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
     }
 
     if (are_required_outputs[1]) {
-        ttnn::SmallVector<uint32_t> start_index_2 = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> start_index_2 = {0, 0, 0, 0};
         if (dim == 0) {
             start_index_2 = {input_tensor_a_arg.logical_shape()[0], 0, 0, 0};
         } else if (dim == 1) {
@@ -547,12 +547,12 @@ std::vector<std::optional<Tensor>> concat_bw(
         } else if (dim == 3) {
             start_index_2 = {0, 0, 0, input_tensor_a_arg.logical_shape()[3]};
         }
-        ttnn::SmallVector<uint32_t> end_index_2 = {
+        ttsl::SmallVector<uint32_t> end_index_2 = {
             grad_tensor_arg.logical_shape()[0],
             grad_tensor_arg.logical_shape()[1],
             grad_tensor_arg.logical_shape()[2],
             grad_tensor_arg.logical_shape()[3]};
-        ttnn::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
         ttnn::slice(grad_tensor_arg, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
     }

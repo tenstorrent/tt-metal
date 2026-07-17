@@ -32,3 +32,15 @@ set(TTNN_OP_POOL_SRCS
     upsample/device/upsample_nearest_float_program_factory.cpp
     upsample/upsample.cpp
 )
+
+# Registered on the shared `ttnn` Python module target from
+# ttnn/cpp/ttnn/operations/pool/CMakeLists.txt (see the `if(TARGET ttnn)` block there).
+# Listed here rather than inline in CMakeLists.txt so that
+# add/remove/rename doesn't touch a file with metalium-developers-infra
+# as a required co-owner.
+set(TTNN_OP_POOL_NANOBIND_SRCS
+    generic/generic_pools_nanobind.cpp
+    grid_sample/grid_sample_nanobind.cpp
+    rotate/rotate_nanobind.cpp
+    upsample/upsample_nanobind.cpp
+)

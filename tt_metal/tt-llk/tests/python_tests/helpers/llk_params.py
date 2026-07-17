@@ -39,6 +39,7 @@ class MathOpType(Enum):
     SFPU_BINARY = auto()
     SFPU_BINARY_INT = auto()
     SFPU_TERNARY = auto()
+    SFPU_BINOP_SCALAR = auto()
 
     FPU_BINARY = auto()
     REDUCE = auto()
@@ -92,8 +93,24 @@ class MathOperation(Enum):
     Sigmoid = OpSpec("sigmoid", MathOpType.SFPU_UNARY)
     Sin = OpSpec("sine", MathOpType.SFPU_UNARY)
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
+    Signbit = OpSpec("signbit", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
+    Erfinv = OpSpec("erfinv", MathOpType.SFPU_UNARY)
+    Heaviside = OpSpec("heaviside", MathOpType.SFPU_UNARY)
+    Softshrink = OpSpec("softshrink", MathOpType.SFPU_UNARY)
+    Softsign = OpSpec("softsign", MathOpType.SFPU_UNARY)
+    Mish = OpSpec("mish", MathOpType.SFPU_UNARY)
+    Selu = OpSpec("selu", MathOpType.SFPU_UNARY)
+    I0 = OpSpec("i0", MathOpType.SFPU_UNARY)
+    Rdiv = OpSpec("rdiv", MathOpType.SFPU_UNARY)
+    Clamp = OpSpec("clamp", MathOpType.SFPU_UNARY)
+    Hardtanh = OpSpec("hardtanh", MathOpType.SFPU_UNARY)
+    Tanhshrink = OpSpec("tanhshrink", MathOpType.SFPU_UNARY)
+    Floor = OpSpec("floor", MathOpType.SFPU_UNARY)
+    Ceil = OpSpec("ceil", MathOpType.SFPU_UNARY)
+    Trunc = OpSpec("trunc", MathOpType.SFPU_UNARY)
+    Frac = OpSpec("frac", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
@@ -116,10 +133,14 @@ class MathOperation(Enum):
     # unary-SFPU dispatch (see call_unary_sfpu_operation in sfpu_operations.h).
     Typecast = OpSpec("typecast", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
-    ReluMax = OpSpec(
-        "relu_max", MathOpType.SFPU_UNARY
-    )  # ReLU_max(x, U) = max(0, min(x, U))
-    ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)  # ReLU_min(x, L) = max(x, L)
+    ReluMax = OpSpec("relu_max", MathOpType.SFPU_UNARY)
+    ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)
+    Lrelu = OpSpec("lrelu", MathOpType.SFPU_UNARY)
+    AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
+    SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
+    AbsInt32 = OpSpec("abs_int32", MathOpType.SFPU_UNARY)
+    BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
+    LogicalNot = OpSpec("logical_not_unary", MathOpType.SFPU_UNARY)
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
@@ -153,8 +174,20 @@ class MathOperation(Enum):
     # SFPU TERNARY OPERATIONS
     # =============================================================================
     SfpuWhere = OpSpec("WHERE", MathOpType.SFPU_TERNARY)
-    # Alias maintained for backward compatibility with older test cases
     TTNNWhere = SfpuWhere
+    SfpuAddcmul = OpSpec("addcmul", MathOpType.SFPU_TERNARY)
+    SfpuAddcdiv = OpSpec("addcdiv", MathOpType.SFPU_TERNARY)
+    SfpuLerp = OpSpec("lerp", MathOpType.SFPU_TERNARY)
+    SfpuSnakeBeta = OpSpec("snake_beta", MathOpType.SFPU_TERNARY)
+
+    # =============================================================================
+    # SFPU FLOAT UNARY-WITH-SCALAR BINOPS
+    # =============================================================================
+    ScalarAdd = OpSpec("ADD", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarSub = OpSpec("SUB", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarMul = OpSpec("MUL", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarDiv = OpSpec("DIV", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarRsub = OpSpec("RSUB", MathOpType.SFPU_BINOP_SCALAR)
 
     # =============================================================================
     # REDUCE OPERATIONS
@@ -197,6 +230,16 @@ class MathOperation(Enum):
         return cls._get_operations_by_type(MathOpType.SFPU_BINARY)
 
     @classmethod
+    def get_sfpu_ternary_operations(cls):
+        """Get all SFPU ternary operations."""
+        return cls._get_operations_by_type(MathOpType.SFPU_TERNARY)
+
+    @classmethod
+    def get_sfpu_binop_scalar_operations(cls):
+        """Get all SFPU float unary-with-scalar binop operations."""
+        return cls._get_operations_by_type(MathOpType.SFPU_BINOP_SCALAR)
+
+    @classmethod
     def get_reduce_operations(cls):
         """Get all reduce operations."""
         return cls._get_operations_by_type(MathOpType.REDUCE)
@@ -204,6 +247,8 @@ class MathOperation(Enum):
 
 SFPU_UNARY_OPERATIONS = MathOperation.get_sfpu_unary_operations()
 SFPU_BINARY_OPERATIONS = MathOperation.get_sfpu_binary_operations()
+SFPU_TERNARY_OPERATIONS = MathOperation.get_sfpu_ternary_operations()
+SFPU_BINOP_SCALAR_OPERATIONS = MathOperation.get_sfpu_binop_scalar_operations()
 FPU_BINARY_OPERATIONS = MathOperation.get_fpu_binary_operations()
 REDUCE_OPERATIONS = MathOperation.get_reduce_operations()
 
@@ -554,6 +599,20 @@ class PerfRunType(Enum):
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
     L1_CONGESTION = 5
+
+
+# Single pytest case runs every PerfRunType so the module CSV has one
+# homogeneous schema (mean/TEXT_SIZE columns for all modes in each row).
+# Pass as a nested list so @parametrize yields one value: the full mode list.
+PERF_RUN_TYPES_QUASAR = [
+    [
+        PerfRunType.L1_TO_L1,
+        PerfRunType.UNPACK_ISOLATE,
+        PerfRunType.MATH_ISOLATE,
+        PerfRunType.PACK_ISOLATE,
+        PerfRunType.L1_CONGESTION,
+    ],
+]
 
 
 # ******** QUASAR specific ********

@@ -1,0 +1,63 @@
+---
+alwaysApply: false
+description: >-
+  Convert LLK lib/API tile-size args to ckernel::TensorShape and maintain TRISC
+  TensorShape coverage. Use when adding TensorShape parameters, replacing
+  face_r_dim/num_faces, editing LLK_VALIDATE_TENSOR_SHAPE_*, regenerating
+  tensor_shape_coverage_*.h, or reviewing TensorShape PRs.
+globs: "**/tensor_shape*.h,**/llk_unpack*.h,**/llk_math*.h,**/llk_pack*.h,**/llk_*_api.h,**/tile_shape.py,**/tensor_shape_coverage_parser.py"
+---
+
+# TensorShape Plumbing & Coverage
+
+## Activation Triggers
+
+Activate when the user (or a PR review) involves:
+
+- Adding / converting `TensorShape` on LLK lib or metal API
+- `LLK_VALIDATE_TENSOR_SHAPE_*`, `tensor_shape_coverage*.h`, coverage parser
+- Replacing `face_r_dim` / `num_faces` / `narrow_tile` / `partial_face` tile descriptors
+- Review comments about “must register every new API in coverage.h”
+
+## Mandatory First Step
+
+Read the canonical reference and follow it:
+
+```
+Read(".cursor/context/tensor-shape.md")
+```
+
+(Same content as `.claude/references/tensor-shape.md`.) For metal-layer propagation after signature changes, also read `.cursor/context/metal-integration.md`.
+
+## Modes
+
+### convert
+
+1. Replace scattered tile args with `ckernel::TensorShape` (default `DEFAULT_TENSOR_SHAPE`).
+2. Include `tensor_shape.h` + matching `tensor_shape_coverage_{unpack|math|pack}.h`.
+3. Call `LLK_VALIDATE_TENSOR_SHAPE_{UNPACK|MATH|PACK}("_llk_foo_...", tensor_shape)` with a **string literal** — **do not** add a per-API enum/list entry in `coverage.h`.
+4. Prefer 2D face-grid fields for new mop math; keep flat `total_num_faces()` only when preserving existing behavior.
+5. Mirror WH + BH; Quasar only when in scope.
+6. Metal: `get_operand_tensor_shape(operand_id)`.
+7. Tests/fuser: `make_tensor_shape` / `cpp_tensor_shape`; never legacy helper for 32×16.
+
+### coverage
+
+1. Coverage is TRISC-scoped allowlists, not a central API registry.
+2. Discover with `TT_LLK_DISABLE_ASSERTS=1` + DPRINT, then `helpers/tensor_shape_coverage_parser.py harvest|emit|summary`.
+3. New shape → named constant + regenerated TRISC header.
+4. New harvestable probe name → `MATH_FUNCTIONS` / `UNPACK_FUNCTIONS` in the parser only.
+
+### review
+
+Apply the **Review Checklist** in `.cursor/context/tensor-shape.md`. Correct the misconception that every new API must be listed in `coverage.h`.
+
+## Key Files
+
+| Role | Path |
+|------|------|
+| Struct / helpers | `common/tensor_shape.h` |
+| Macros / named shapes | `common/tensor_shape_coverage.h` |
+| TRISC tables | `common/tensor_shape_coverage_{math,unpack,pack}.h` |
+| Parser | `tests/python_tests/helpers/tensor_shape_coverage_parser.py` |
+| Reference | `.cursor/context/tensor-shape.md` |

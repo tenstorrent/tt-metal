@@ -108,33 +108,30 @@ ProgramDescriptor MorehDotBackwardOperation::create_descriptor(
     reader_desc.core_ranges = core_set;
     reader_desc.compile_time_args = std::move(reader_ct_args);
     reader_desc.config = ReaderConfigDescriptor{};
-    reader_desc.runtime_args.emplace_back(
+    reader_desc.emplace_runtime_args(
         core,
-        KernelDescriptor::CoreRuntimeArgs{
-            static_cast<uint32_t>(has_input_grad),
-            static_cast<uint32_t>(has_other_grad),
-            src0_buffer->address(),
-            src1_buffer->address(),
-            src2_buffer->address(),
-            num_tiles,
-            0u});
+        {static_cast<uint32_t>(has_input_grad),
+         static_cast<uint32_t>(has_other_grad),
+         src0_buffer,
+         src1_buffer,
+         src2_buffer,
+         num_tiles,
+         0u});
 
     // Writer kernel
-    uint32_t dst0_address = 0;
-    uint32_t dst1_address = 0;
+    Buffer* dst0_buffer = nullptr;
+    Buffer* dst1_buffer = nullptr;
 
     if (has_input_grad) {
         const auto& input_grad_tensor = input_grad.value();
-        auto* dst0_buffer = input_grad_tensor.buffer();
+        dst0_buffer = input_grad_tensor.buffer();
         TT_ASSERT(dst0_buffer != nullptr, "input_grad buffer should be allocated on device!");
-        dst0_address = dst0_buffer->address();
     }
 
     if (has_other_grad) {
         const auto& other_grad_tensor = other_grad.value();
-        auto* dst1_buffer = other_grad_tensor.buffer();
+        dst1_buffer = other_grad_tensor.buffer();
         TT_ASSERT(dst1_buffer != nullptr, "other_grad buffer should be allocated on device!");
-        dst1_address = dst1_buffer->address();
     }
 
     KernelDescriptor::CompileTimeArgs writer_ct_args = {
@@ -150,15 +147,23 @@ ProgramDescriptor MorehDotBackwardOperation::create_descriptor(
     writer_desc.core_ranges = core_set;
     writer_desc.compile_time_args = std::move(writer_ct_args);
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.runtime_args.emplace_back(
-        core,
-        KernelDescriptor::CoreRuntimeArgs{
-            static_cast<uint32_t>(has_input_grad),
-            static_cast<uint32_t>(has_other_grad),
-            dst0_address,
-            dst1_address,
-            num_tiles,
-            0u});
+    KernelDescriptor::RTArgList writer_args;
+    writer_args.push_back(static_cast<uint32_t>(has_input_grad));
+    writer_args.push_back(static_cast<uint32_t>(has_other_grad));
+    // Push the grad buffer when present, 0 when absent (framework treats an absent slot as 0).
+    if (has_input_grad) {
+        writer_args.push_back(dst0_buffer);
+    } else {
+        writer_args.push_back(0u);
+    }
+    if (has_other_grad) {
+        writer_args.push_back(dst1_buffer);
+    } else {
+        writer_args.push_back(0u);
+    }
+    writer_args.push_back(num_tiles);
+    writer_args.push_back(0u);
+    writer_desc.emplace_runtime_args(core, writer_args);
 
     // Compute kernel
     KernelDescriptor compute_desc;
