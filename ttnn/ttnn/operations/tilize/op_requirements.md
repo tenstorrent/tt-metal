@@ -41,7 +41,7 @@
 - **Golden baseline**: 36 / 36 in-scope cells passing (verifier CLI); bf16/fp32 identity
   exact, bf16→bf8b PCC ≥ 0.99.
 
-### [ ] Refinement 1 — uint32 integer passthrough
+### [x] Refinement 1 — uint32 integer passthrough
 
 **Goal**: add `ttnn.uint32` to `SUPPORTED["dtype"]` and `SUPPORTED["output_dtype"]` so the
 integer-passthrough family works (only `uint32 → uint32` is valid — int↔float crosses are

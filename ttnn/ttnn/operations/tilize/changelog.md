@@ -1,5 +1,57 @@
 # tilize — changelog
 
+## Refinement 1 — uint32 integer passthrough
+
+- **Date**: 2026-07-17
+- **What was done**: Added the integer-passthrough dtype family to the registry
+  contract — `uint32` (the named refinement axis value) plus `uint16` and
+  `int32`, which `feature_spec.py` documents `uint32` as "standing in for … (uint16
+  / int32 covered in test_regression)". Added all three to `SUPPORTED["dtype"]`
+  and `SUPPORTED["output_dtype"]`. **No kernel or program-descriptor change was
+  needed**: the tilize LLK reorders integer bytes with no arithmetic and no cast,
+  the CB `data_format`/`tile_size` are already dtype-derived in
+  `tilize_program_descriptor.py`, and `is_fp32_in` is 0 for integers so the fp32
+  `Lossless`/`UnpackToDestFp32`/`fp32_dest_acc_en` branch is never taken. The
+  helper's `has_supported_fast_tilize_format<>` returns false for
+  non-Float32/Float16_b formats, so integers correctly fall to the standard
+  (non-fast) tilize path. Verified this behavior with an isolated device probe
+  before touching SUPPORTED.
+- **Accuracy achieved**: **bit-exact identity** (comp_equal, PCC=1.0, max_abs=0)
+  for uint32 / uint16 / int32 across shapes
+  [(1,1,32,32),(1,1,64,128),(1,1,96,32),(1,1,32,96),(2,3,64,64),(128,256),(4,32,64)],
+  single- and multi-core, explicit dtype / L1 memory_config. No cast is involved
+  (integers pair only with the same integer dtype; int<->float crosses are INVALID
+  and skipped test-side).
+- **Golden test progress**: full `eval/golden_tests/tilize/` dir 111 passed /
+  45 failed (was 85 passed / 71 failed → **26 cells fail→pass**). The 6 pure
+  `uint32→uint32` interleaved cells in `test_golden.py` pass (comp_equal); the
+  int32/uint16 interleaved cells in `test_regression.py` pass. Every remaining
+  failure is a **sharded** cell (41× `shard_api='legacy_2d'` refusal + 4× nd-bf16
+  allocation) = Refinement 2 scope, plus 2 pre-existing `device_params` test-infra
+  errors — no integer-interleaved regression, no bf16/fp32/bf8b regression.
+- **Perf gate (inherited, no new data path)**: this refinement adds no data-path
+  change — same reader/compute/writer kernels, same depth-2 constant-bounded CBs
+  (`wt_chunk`), same tile-row multi-core split; only the dtype's `element_size`
+  feeds `tile_size`/`page_size`. DM perf-optimization checklist re-reviewed: all
+  levers (multi-core split, coalesced reader + one-barrier-per-block, depth-2
+  read/compute/write overlap, `Wt`-independent CB) already applied in Phase 0.
+  **Bound classification**: DM-bound, inherited — uint32 (4B/elem) has fp32's page
+  size, uint16 (2B) has bf16's. **Roofline re-target**: uint32 [1,1,2048,2048]
+  moves 16.78 MB read + 16.78 MB write = 33.56 MB; DRAM floor ≈ 33.56 MB /
+  288 GB/s ≈ **116 µs** (identical to fp32, 2× bf16's ≈58 µs). **Measured**:
+  uint32 warmed wall/iter median = **1241.7 µs** vs fp32 1140.9 µs (ratio 1.088,
+  within host-dispatch noise) on [1,1,2048,2048] multicore — confirms uint32
+  tracks fp32's DM profile. (Clean Tracy device-kernel-duration deferred: the
+  device profiler is not enabled in this pre-compiled-firmware build — same
+  caveat Phase 0 recorded for its wall-clock R0 numbers.)
+- **Issues encountered**: None. Integer passthrough worked on the first device
+  probe with the existing kernels; only the SUPPORTED gate needed widening.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_uint32.py`
+  (48 cases: `test_tilize_int_identity` × uint32/uint16/int32 × 7 shapes × single/
+  multi-core, plus explicit-dtype and explicit-memory_config per dtype). Probes
+  `probes/probe_003.py` (uint32), `probe_005.py` (int32/uint16), `probe_006.py`
+  (perf parity).
+
 ## Verification pass — 2026-07-17
 
 - **Date**: 2026-07-17
