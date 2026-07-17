@@ -60,10 +60,20 @@ class Qwen36DecoderLayer:
             "attention_norm",
             enable_all_gather=not self._fuse_norm_agmm,
         )
-        # MLP is NOT AG-fused: w1+w3 both consume the ff_norm output, so fusing needs 2 gathers
-        # (regressed TTFT) — ff_norm keeps its single all-gather (the one-gather optimum).
+        # Prefill: ff_norm skips AG (fused into gate/up AGMM); decode gathers pre-norm so this is a no-op there.
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
         self.ffn_norm = self._make_norm(
-            mesh_device, args, state_dict, layer_num, "post_attention_layernorm", tensor_cache_path, tt_ccl, "ff_norm"
+            mesh_device,
+            args,
+            state_dict,
+            layer_num,
+            "post_attention_layernorm",
+            tensor_cache_path,
+            tt_ccl,
+            "ff_norm",
+            enable_all_gather=not self._fuse_ff_agmm,
         )
 
         if self.num_devices > 1:
@@ -166,7 +176,7 @@ class Qwen36DecoderLayer:
                 _ff_norm_config = self.args.get_norm_config("attn", _norm_mode)
             else:
                 # ff_norm output stays DRAM: L1 keeps the full-width norm resident across the whole MLP,
-                # clashing with each matmul's CBs (w1/w3/w2) for no gain
+                # clashing with each matmul's CBs (w1/w3/w2) for no gain. Verified dead end; keep DRAM.
                 _ff_norm_config = self.args.get_norm_config("ff", _norm_mode)
         else:
             # In decode the norm output stays in L1 (as the old rms_norm_ttnn(memory_config=L1) did);

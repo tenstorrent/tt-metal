@@ -17,6 +17,29 @@ class MLPWeights:
     w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b
     w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
+    w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
+
+
+def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
+    """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
+    interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
+    import torch
+
+    from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+
+    gk = gate_w.to(torch.bfloat16).T.contiguous()  # [K=dim, N=hidden]
+    uk = up_w.to(torch.bfloat16).T.contiguous()
+    packed = torch.cat([gk, uk], dim=-1)  # [dim, 2*hidden], gate first
+    il = prepare_for_fused_swiglu(packed, ndev=tp, gate_is_first=True)  # [dim, 2*hidden]
+    return ttnn.as_tensor(
+        il,
+        dtype=ttnn.bfloat4_b,
+        device=mesh,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_file_name=cache_path,
+    )
 
 
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None) -> MLPWeights:
@@ -40,6 +63,19 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
 
         def cache(name, tag=""):
             return str(tensor_cache_path / f"mlp.{name}.weight{tag}.tp") if tensor_cache_path else None
+
+        # Prefill-only packed [gate|up] AGMM weight (decode keeps w1/w3; extra DRAM ~w1+w3/layer).
+        wgu = (
+            _build_gate_up(
+                state_dict["gate_proj.weight"],
+                state_dict["up_proj.weight"],
+                mesh_device,
+                tp,
+                cache("gate_up", ".swiglu"),
+            )
+            if tpc.mlp_gateup_agmm_enabled(tp)
+            else None
+        )
 
         if dram_sharded:
             return MLPWeights(
@@ -67,6 +103,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                     cache_path=cache("down_proj"),
                     dtype=ttnn.bfloat8_b,
                 ),
+                w_gate_up=wgu,
             )
 
         # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill.
@@ -95,6 +132,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 cache_path=cache("down_proj"),
                 dtype=ttnn.bfloat8_b,
             ),
+            w_gate_up=wgu,
         )
 
     def load(name, dtype):
@@ -134,8 +172,16 @@ class Qwen36MLP:
             and getattr(args, "mlp_w1_weight_memcfg", None) is not None
             and not self._mlp_1d_decode
         )
+        # Prefill fused-swiglu AGMM (ff_norm skips its AG; layer.py sets _fuse_ff_agmm to match).
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
         self.weights = load_mlp_weights(mesh_device, state_dict, tensor_cache_path, args=args)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+        # fuse_swiglu AGMM: fp32 acc (subblock_w=4) to match GDN/attn in-proj.
+        self.compute_kernel_config_agmm = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
@@ -177,44 +223,34 @@ class Qwen36MLP:
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
-        if getattr(self, "_dram_sharded", False):
-            # DRAM-WIDTH_SHARDED w1/w3. Sharded kernel needs M=1 tile (32 rows, decode).
-            # Use x.shape[-2] for seq/M (not x.shape[1], Z=1 in both modes). Prefill
-            # (M>1 tile) uses 2D progcfg. Convert outputs to DRAM-interleaved for rest of path.
-            seq = x.shape[-2]
-            if seq <= ttnn.TILE_SIZE:
-                x_sh = ttnn.to_memory_config(x, args.act_shard_hidden)
-                w1_out = ttnn.linear(
-                    x_sh,
-                    w.w1,
-                    compute_kernel_config=ckc,
-                    program_config=args.mlp_w1_progcfg,
-                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                )
-                w3_out = ttnn.linear(
-                    x_sh,
-                    w.w3,
-                    compute_kernel_config=ckc,
-                    program_config=args.mlp_w3_progcfg,
-                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                )
-                ttnn.deallocate(x_sh)
-                # Decode: keep gate/up outputs in L1 (they feed the L1 mul → w2 matmul, all
-                # consumed before the all-reduce), avoiding the L1→DRAM→L1 round-trip.
-                w1_out = ttnn.to_memory_config(w1_out, ttnn.L1_MEMORY_CONFIG)
-                w3_out = ttnn.to_memory_config(w3_out, ttnn.L1_MEMORY_CONFIG)
-            else:
-                # NOT fused via all_gather_minimal_matmul_async: w1+w3 are two consumers of the gathered
-                # norm output, and the op can't return the gathered activation, so fusing = 2 gathers
-                # (regressed TTFT). The ff_norm's single all-gather here is already the one-gather optimum.
-                # Fused SILU in progcfg; sharded/2D kernel rejects activation= kwarg with progcfg.
-                pc_gate = tpc.create_prefill_matmul_program_config(
-                    seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU
-                )
-                pc_up = args.prefill_progcfg(seq, args.dim, w.w3.shape[-1])
-                w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=mc)
-                w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=mc)
-                _silu_fused = True
+        # Prefill: x is K-sharded (ff_norm skipped AG); fused AG + [gate|up] + SwiGLU
+        _fused_gu = self._fuse_gateup_agmm and x.shape[-2] > ttnn.TILE_SIZE and w.w_gate_up is not None
+        if _fused_gu:
+            hidden = tpc.all_gather_swiglu_prefill(
+                x, w.w_gate_up, self.tt_ccl, self.compute_kernel_config_agmm, args.ccl_topology()
+            )
+            _silu_fused = True
+        elif getattr(self, "_dram_sharded", False) and x.shape[-2] <= ttnn.TILE_SIZE:
+            # DRAM-WIDTH_SHARDED w1/w3 decode (M=1 tile). Prefill uses fused AGMM above.
+            x_sh = ttnn.to_memory_config(x, args.act_shard_hidden)
+            w1_out = ttnn.linear(
+                x_sh,
+                w.w1,
+                compute_kernel_config=ckc,
+                program_config=args.mlp_w1_progcfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            w3_out = ttnn.linear(
+                x_sh,
+                w.w3,
+                compute_kernel_config=ckc,
+                program_config=args.mlp_w3_progcfg,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(x_sh)
+            # Keep gate/up in L1 for mul → w2 (avoid L1→DRAM→L1).
+            w1_out = ttnn.to_memory_config(w1_out, ttnn.L1_MEMORY_CONFIG)
+            w3_out = ttnn.to_memory_config(w3_out, ttnn.L1_MEMORY_CONFIG)
         elif self._mlp_1d_decode and x.shape[-2] <= ttnn.TILE_SIZE:
             # 1D mcast decode matmuls on a small explicit grid, silu fused in the w1 progcfg.
             # mcast_in0 needs interleaved in0, but ff-norm hands us a width-shard -> interleave first.
@@ -263,17 +299,19 @@ class Qwen36MLP:
         # gated activation (down-proj INPUT): L1 in decode, DRAM in prefill. The L1 win is OUTPUT-only;
         # keeping both down input (hidden) and output (partial) in L1 at seq 2048 overflows L1.
         _prefill_tuned = x.shape[-2] > ttnn.TILE_SIZE and _silu_fused
-        mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
-        # gate * up. Standalone silu only on DRAM-sharded decode path (SILU not fused there).
-        if _silu_fused:
-            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc_out)
-            ttnn.deallocate(w1_out)
-        else:
-            w1_act = ttnn.silu(w1_out, memory_config=mc_out)
-            ttnn.deallocate(w1_out)
-            hidden = ttnn.mul(w1_act, w3_out, memory_config=mc_out)
-            ttnn.deallocate(w1_act)
-        ttnn.deallocate(w3_out)
+        # gate * up (skipped when _fused_gu already produced `hidden` with SwiGLU in-kernel).
+        if not _fused_gu:
+            mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
+            # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
+            if _silu_fused:
+                hidden = ttnn.mul(w1_out, w3_out, memory_config=mc_out)
+                ttnn.deallocate(w1_out)
+            else:
+                w1_act = ttnn.silu(w1_out, memory_config=mc_out)
+                ttnn.deallocate(w1_out)
+                hidden = ttnn.mul(w1_act, w3_out, memory_config=mc_out)
+                ttnn.deallocate(w1_act)
+            ttnn.deallocate(w3_out)
         # Prefill w2: 2D progcfg on (8,10); decode (M<=32) keeps ttnn-auto.
         w2_pc = None
         if self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:

@@ -272,7 +272,7 @@ def all_gather_matmul_prefill(
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
         K_block_size=8,
-        N_block_size=4,
+        N_block_size=8,
         subblock_h=1,
         subblock_w=4,
         compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
@@ -295,6 +295,48 @@ def all_gather_matmul_prefill(
     )[0]
 
     return out
+
+
+def mlp_gateup_agmm_enabled(num_devices):
+    """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
+    return num_devices > 1
+
+
+def all_gather_swiglu_prefill(
+    x, weight, tt_ccl, compute_cfg, topology, grid=(7, 9), cluster_axis=1, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+):
+    """Fused all-gather + col-parallel gate/up matmul + SwiGLU for prefill (packing gate+up lets ff_norm's AG fuse in).
+
+    x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
+    S, K_local = x.shape[-2], x.shape[-1]
+    x4 = ttnn.reshape(x, (1, 1, S, K_local))
+    num_links = 2
+    grid = (8, grid[1])
+    workers = grid[0] // num_links
+    cfg = ttnn.MinimalMatmulConfig(
+        M_block_size=8,
+        K_block_size=8,
+        N_block_size=16,
+        subblock_h=1,
+        subblock_w=4,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+    )
+    return ttnn.experimental.all_gather_minimal_matmul_async(
+        input_tensor=x4,
+        weight_tensor=weight,
+        config=cfg,
+        compute_kernel_config=compute_cfg,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+        num_links=num_links,
+        topology=topology,
+        cluster_axis=cluster_axis,
+        memory_config=out_memory_config,
+        dtype=ttnn.bfloat16,
+        force_transpose=True,
+        num_workers_per_link=workers,
+        num_buffers_per_channel=8,
+        fuse_swiglu=True,
+    )[0]
 
 
 def build_mmrs_decode_state(mesh_device, M, K_local, N, nd, dtype=ttnn.bfloat16):

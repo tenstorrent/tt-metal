@@ -564,8 +564,9 @@ class TPGatedDeltaNet:
             # TILE->ROW_MAJOR->TILE round-trip. o is head-major (1,Nv,T,Dv).
             n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
             ttnn.deallocate(o)
+            # Fused head->token relayout: [1,Nv,T,Dv] -> [1,1,T,Nv*Dv].
             n = ttnn.reshape(n, (1, Nv, T, Dv))
-            n = ttnn.transpose(n, 1, 2, memory_config=_L1)  # (1, T, Nv, Dv)
+            n = ttnn.experimental.nlp_concat_heads(n, memory_config=_L1)
             out_f = ttnn.reshape(n, (1, T, self.value_dim_tp))
         else:
             out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
