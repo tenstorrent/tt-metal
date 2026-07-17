@@ -8,6 +8,8 @@
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
+#include "tilize_multi_core_sharded_retile_program_factory.hpp"
+#include "tilize_multi_core_retile_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
@@ -18,6 +20,20 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
+// A "retile" tilize takes an already-tiled input whose tile shape differs from the tile shape
+// requested on the op, and re-lays it out into the requested tile shape.
+bool is_retile(
+    const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
+    const TilizeDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    if (input_tensor.layout() != Layout::TILE) {
+        return false;
+    }
+    const auto& input_tile = input_tensor.tensor_spec().tile();
+    const auto& output_tile = operation_attributes.tile;
+    return input_tile.get_width() != output_tile.get_width() || input_tile.get_height() != output_tile.get_height();
+}
+
 bool can_use_sharded_optimized_factories(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
@@ -47,10 +63,12 @@ bool can_use_sharded_optimized_factories(
             operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
             return false;
         }
-        if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH != 0) {
+        const uint32_t tile_width = operation_attributes.tile.get_width();
+        const uint32_t tile_height = operation_attributes.tile.get_height();
+        if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tile_width != 0) {
             return false;
         }
-        if (operation_attributes.output_mem_config.shard_spec().value().shape[0] % tt::constants::TILE_HEIGHT != 0) {
+        if (operation_attributes.output_mem_config.shard_spec().value().shape[0] % tile_height != 0) {
             return false;
         }
     }
@@ -60,7 +78,9 @@ bool can_use_sharded_optimized_factories(
     // correct for ROW_MAJOR shard orientation (shards are ordered row-wise matching the output).
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& shard = input_tensor.shard_spec().value();
-        if (shard.shape[0] % tt::constants::TILE_HEIGHT != 0 || shard.shape[1] % tt::constants::TILE_WIDTH != 0) {
+        const uint32_t tile_width = operation_attributes.tile.get_width();
+        const uint32_t tile_height = operation_attributes.tile.get_height();
+        if (shard.shape[0] % tile_height != 0 || shard.shape[1] % tile_width != 0) {
             return false;  // Non-tile-aligned shard: num_tiles_per_shard would silently truncate.
         }
         const auto out_layout = operation_attributes.output_mem_config.memory_layout();
@@ -82,8 +102,9 @@ bool can_use_sharded_optimized_factories(
 
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
         const auto& out_shard = operation_attributes.output_mem_config.shard_spec().value();
-        if (out_shard.shape[0] % tt::constants::TILE_HEIGHT != 0 ||
-            out_shard.shape[1] % tt::constants::TILE_WIDTH != 0) {
+        const uint32_t tile_width = operation_attributes.tile.get_width();
+        const uint32_t tile_height = operation_attributes.tile.get_height();
+        if (out_shard.shape[0] % tile_height != 0 || out_shard.shape[1] % tile_width != 0) {
             return false;
         }
     }
@@ -122,14 +143,46 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input_tensor;
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+
+    // The retile path accepts an already-tiled input as long as its tile shape differs from the
+    // requested output tile shape. All other paths require row-major input.
+    const bool retile = is_retile(operation_attributes, tensor_args);
+    if (retile) {
+        TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Retile tilize (changing tile shape) requires a tiled input");
+    } else {
+        TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    }
+
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
+
+    // Tiny-tile support: the output tile height may be smaller than the standard 32, but the width
+    // must remain 32 (non-32 widths are not supported by the tilize kernels).
+    TT_FATAL(
+        tile_width == tt::constants::TILE_WIDTH,
+        "tilize requires tile width {}, got {}",
+        tt::constants::TILE_WIDTH,
+        tile_width);
+
+    // Blocked (exponent-shared) formats pack a full 32-row tile; a tiny tile height would split a
+    // block across faces incorrectly, so reject that combination.
+    if (tile_height < tt::constants::TILE_HEIGHT) {
+        const DataType out_dt = operation_attributes.output_dtype;
+        TT_FATAL(
+            out_dt != DataType::BFLOAT8_B && out_dt != DataType::BFLOAT4_B,
+            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+    }
 
     TT_FATAL(
-        input_tensor_a.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0,
-        "Input tensor width must be divisible by TILE_WIDTH");
+        input_tensor_a.padded_shape()[-1] % tile_width == 0,
+        "Input tensor width ({}) must be divisible by tile width ({})",
+        input_tensor_a.padded_shape()[-1],
+        tile_width);
     TT_FATAL(
-        input_tensor_a.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
-        "Input tensor height must be divisible by TILE_HEIGHT");
+        retile || input_tensor_a.padded_shape()[-2] % tile_height == 0,
+        "Input tensor height ({}) must be divisible by tile height ({})",
+        input_tensor_a.padded_shape()[-2],
+        tile_height);
 
     auto width = input_tensor_a.padded_shape()[-1];
     uint32_t stick_s = width;
@@ -195,24 +248,36 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
-                PageConfig(Layout::TILE),
+                PageConfig(Layout::TILE, operation_attributes.tile),
                 mem_config,
                 input_tensor.logical_shape(),
                 input_tensor.padded_shape()))};
     }
 
-    auto output_layout = TensorLayout(
-        operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
     return {TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
-            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
+            operation_attributes.output_dtype,
+            PageConfig(Layout::TILE, operation_attributes.tile),
+            operation_attributes.output_mem_config))};
 }
 
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor;
+
+    // A tiled input whose tile shape differs from the requested tile shape is re-laid out by the
+    // dedicated retile factory.
+    if (is_retile(operation_attributes, tensor_args)) {
+        // A sharded input can be re-tiled in place (zero-copy) when the shard geometry is
+        // compatible with the optimized sharded path; otherwise fall back to the interleaved retile.
+        if (input_tensor_a.memory_config().is_sharded() &&
+            can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+            return ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory{};
+        }
+        return ttnn::prim::TilizeMultiCoreRetileProgramFactory{};
+    }
 
     bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
                            (operation_attributes.sub_core_grids.has_value() &&
@@ -232,12 +297,16 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
 
-    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_height = operation_attributes.tile.get_height();
+    const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
 
-    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tile_width;
 
-    int32_t ntiles = input_tensor_a.physical_volume() / tt::constants::TILE_HW;
-    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tile_height;
+
+    int32_t ntiles = input_tensor_a.physical_volume() / tile_hw;
+    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tile_width;
     uint32_t nblocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_block);
 
     auto* device = input_tensor_a.device();
@@ -251,8 +320,8 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
-        uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
-                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        uint32_t num_blocks_block =
+            (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) / (tile_height * tile_width);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
             return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
@@ -272,19 +341,26 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> TilizeDeviceOperation::get_dynamic_
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the sharded factory is CB-bound (in/out addresses ride on the sharded CBs, no Buffer* rt-arg).
-    // Re-apply reader arg0 (num_tiles_per_shard, unchanged) on the first core to trip the fast-path so
-    // apply_resolved_bindings re-patches the CB base addresses instead of rebuilding create_descriptor.
-    if (!std::holds_alternative<TilizeMultiCoreShardedProgramFactory>(
-            select_program_factory(operation_attributes, tensor_args))) {
+    // Only the sharded factories are CB-bound (in/out addresses ride on the sharded CBs, no Buffer*
+    // rt-arg). Re-apply reader arg0 (num_tiles_per_shard, unchanged) on the first core to trip the
+    // fast-path so apply_resolved_bindings re-patches the CB base addresses instead of rebuilding
+    // create_descriptor.
+    const auto factory = select_program_factory(operation_attributes, tensor_args);
+    const bool is_sharded_tilize = std::holds_alternative<TilizeMultiCoreShardedProgramFactory>(factory);
+    const bool is_sharded_retile = std::holds_alternative<TilizeMultiCoreShardedRetileProgramFactory>(factory);
+    if (!is_sharded_tilize && !is_sharded_retile) {
         return {};
     }
     const auto& shard_spec = tensor_args.input_tensor.shard_spec().value();
+    // The reader consumes input-geometry tiles: the sharded retile reader sees the (differing) input
+    // tile shape, whereas the plain sharded tilize reads row-major sticks counted with the op tile.
+    const uint32_t reader_tile_hw = is_sharded_retile ? tensor_args.input_tensor.tensor_spec().tile().get_tile_hw()
+                                                      : operation_attributes.tile.get_tile_hw();
     return {tt::tt_metal::DynamicRuntimeArg{
         /*kernel_idx=*/0,
         corerange_to_cores(shard_spec.grid).front(),
         /*arg_idx=*/0,
-        shard_spec.shape[0] * shard_spec.shape[1] / tt::constants::TILE_HW}};
+        shard_spec.shape[0] * shard_spec.shape[1] / reader_tile_hw}};
 }
 
 ttnn::Tensor tilize(
@@ -295,6 +371,7 @@ ttnn::Tensor tilize(
     bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
+    const Tile& tile,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<TilizeDeviceOperation>(
         TilizeParams{
@@ -304,6 +381,7 @@ ttnn::Tensor tilize(
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,
+            .tile = tile,
             .sub_core_grids = sub_core_grids,
         },
         TilizeInputs{input_tensor, std::nullopt});

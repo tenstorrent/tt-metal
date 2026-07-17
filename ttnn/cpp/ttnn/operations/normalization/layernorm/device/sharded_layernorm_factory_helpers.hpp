@@ -14,6 +14,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "tt-metalium/tile.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
@@ -394,6 +395,8 @@ struct CBConfig {
     // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
     // alias, while keeping the original CB descriptor with default value.
     bool welford_fp32_alias = false;
+
+    tt::tt_metal::Tile tile;
 };
 
 //////////////////////////////////////////////////////////////////////////////

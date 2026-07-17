@@ -30,7 +30,8 @@ inline void push_cb_pair(
     uint32_t input_single_tile_size,
     uint32_t output_single_tile_size,
     tt::DataFormat input_cb_data_format,
-    tt::DataFormat output_cb_data_format) {
+    tt::DataFormat output_cb_data_format,
+    const Tile& tile) {
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_tiles * input_single_tile_size,
         .core_ranges = core_ranges,
@@ -38,6 +39,7 @@ inline void push_cb_pair(
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
     desc.cbs.push_back(CBDescriptor{
@@ -47,6 +49,7 @@ inline void push_cb_pair(
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 }
@@ -60,10 +63,15 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
 
     ProgramDescriptor desc;
 
+    const auto& tile = a.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+    const uint32_t tile_hw = tile.get_tile_hw();
+
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
     const auto& output_shape = output.padded_shape();
@@ -76,10 +84,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
     uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
-    uint32_t num_tiles_per_row = a.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = a.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / tile_width;
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / tile_height;
 
-    uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+    uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (tile_height * tile_width);
     uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     auto
@@ -132,7 +140,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             input_single_tile_size,
             output_single_tile_size,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            tile);
     }
     if (has_cliff_col && has_cliff_row) {
         push_cb_pair(
@@ -142,7 +151,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             input_single_tile_size,
             output_single_tile_size,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            tile);
     }
     if (has_cliff_row) {
         push_cb_pair(
@@ -152,7 +162,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             input_single_tile_size,
             output_single_tile_size,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            tile);
     }
     if (has_cliff_col) {
         push_cb_pair(
@@ -162,7 +173,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             input_single_tile_size,
             output_single_tile_size,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            tile);
     }
 
     Buffer* src0_buffer = a.buffer();
@@ -171,7 +183,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
 
     // reader
 
-    uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
+    uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / tile_hw;
 
     auto log_shape = output.logical_shape();
     uint32_t third_dim = 1;
@@ -193,7 +205,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
 
     // writer
     uint32_t total_num_rows = output.logical_shape()[-2];
-    std::vector<uint32_t> writer_ct_args = {total_num_rows, third_dim, TILE_HEIGHT, unpadded_row_size_bytes};
+    std::vector<uint32_t> writer_ct_args = {total_num_rows, third_dim, tile_height, unpadded_row_size_bytes};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -298,18 +310,18 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
         writer_desc.emplace_runtime_args(
             core,
             {dst_buffer,
-             TILE_WIDTH * el_size * single_block_size_row_arg,
+             tile_width * el_size * single_block_size_row_arg,
              start_row_id,
              start_column_id,
              single_block_size_row_arg,
              single_block_size_col_arg,
-             TILE_WIDTH * el_size * single_sub_block_size_row_arg,
+             tile_width * el_size * single_sub_block_size_row_arg,
              single_sub_block_size_row_arg});
 
-        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
+        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * tile_width * el_size);
         start_column_id = end_column_id % padded_row_size_bytes;
         if (end_column_id % padded_row_size_bytes == 0 && end_column_id != 0) {
-            start_row_id += single_block_size_col_arg * TILE_HEIGHT;
+            start_row_id += single_block_size_col_arg * tile_height;
         }
 
         if (start_column_id == 0) {

@@ -13,6 +13,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <optional>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -72,6 +74,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
 void ConcatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
+    using tt::tt_metal::Tile;
 
     const auto& input_tensors = tensor_args.input_tensors;
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
@@ -82,6 +85,20 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     shape_first[args.dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
+
+    std::optional<Tile> first_tile = std::nullopt;
+    if (first_input.layout() == Layout::TILE) {
+        first_tile = first_input.tensor_spec().tile();
+        TT_FATAL(
+            first_tile->get_width() == TILE_WIDTH,
+            "ttnn.concat requires tile width {}, got {}",
+            TILE_WIDTH,
+            first_tile->get_width());
+        if (first_tile->get_height() < TILE_HEIGHT &&
+            (first_input.dtype() == DataType::BFLOAT8_B || first_input.dtype() == DataType::BFLOAT4_B)) {
+            TT_FATAL(false, "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+        }
+    }
 
     for (const auto& in_ref : input_tensors) {
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
@@ -94,6 +111,14 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         curr_shape[args.dim] = 0;
         // last tensor can support without any kernel changes
         if (in_ref.layout() == Layout::TILE) {
+            const auto& tile = in_ref.tensor_spec().tile();
+            TT_FATAL(
+                tile == first_tile.value(),
+                "All TILE-layout concat inputs must share the same tile shape (got {}x{} vs {}x{})",
+                tile.get_height(),
+                tile.get_width(),
+                first_tile->get_height(),
+                first_tile->get_width());
             const uint32_t logical_dim = in_ref.logical_shape()[args.dim];
             const uint32_t padded_dim = in_ref.padded_shape()[args.dim];
             if (logical_dim != padded_dim) {
@@ -175,8 +200,11 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out[args.dim] += curr_shape[args.dim];
     }
 
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the output relative to CBs sized from the real tile.
     return TensorSpec(
-        shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
+        shape_out,
+        TensorLayout(ref_in_tensor.dtype(), ref_in_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
 Tensor ConcatDeviceOperation::create_output_tensors(
@@ -198,6 +226,7 @@ ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
 
     for (std::size_t tensor_index = 0; tensor_index < tensor_args.input_tensors.size(); ++tensor_index) {
         const auto& tensor = tensor_args.input_tensors[tensor_index];
+        const auto& tile = tensor.tensor_spec().tile();
         hash = ttsl::hash::hash_objects(
             hash,
             tensor_index,
@@ -206,10 +235,13 @@ ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
             tensor.padded_shape(),
             tensor.layout(),
             tensor.dtype(),
-            tensor.memory_config());
+            tensor.memory_config(),
+            tile.get_height(),
+            tile.get_width());
     }
 
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    const auto& output_tile = output_spec.tile();
     hash = ttsl::hash::hash_objects(
         hash,
         tensor_args.input_tensors.size(),
@@ -218,7 +250,9 @@ ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
         output_spec.padded_shape(),
         output_spec.layout(),
         output_spec.data_type(),
-        output_spec.memory_config());
+        output_spec.memory_config(),
+        output_tile.get_height(),
+        output_tile.get_width());
 
     return hash;
 }

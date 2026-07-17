@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp, select_tile
 from models.common.utility_functions import torch_random
 
 pytestmark = pytest.mark.use_module_device
@@ -29,8 +29,9 @@ def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9
     golden_fn = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
 
     output_tensor = ttnn_function(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -111,8 +112,9 @@ def test_arithmetic_operators(device):
     b_torch = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
 
     # Convert to ttnn tensors on device
-    a = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT)
-    b = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    a = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT, tile=tile)
+    b = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, tile=tile)
 
     # Test operations
     c = a + b  # Addition: 4 + 2 = 6
@@ -172,8 +174,9 @@ def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
 
     golden = torch.relu(torch_a + torch_b)
 
-    tt_a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-    tt_b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tile = select_tile(dtype)
+    tt_a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, tile=tile)
+    tt_b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, tile=tile)
 
     tt_out = ttnn.add(tt_a, tt_b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
     result = ttnn.to_torch(tt_out)

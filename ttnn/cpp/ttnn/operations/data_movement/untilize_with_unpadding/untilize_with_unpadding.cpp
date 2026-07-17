@@ -87,11 +87,12 @@ Tensor untilize_with_unpadding(
         output_end = ttnn::Shape(std::move(output_end_vector));
     }
 
+    const auto& tile = input_tensor.tensor_spec().tile();
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size = input_single_tile_size;
 
-    uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tile.get_width();
 
     bool enough_space_height = operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);

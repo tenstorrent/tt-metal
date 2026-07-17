@@ -35,10 +35,15 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     CoreRange default_core({0, 0}, {0, 0});
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
 
+    const auto& tile = a.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+    const uint32_t tile_hw = tile.get_tile_hw();
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
     log_debug(tt::LogOp, "untilize_with_unpadding_single_core");
     log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
@@ -46,7 +51,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    int32_t num_tiles = a.physical_volume() / TILE_HW;
+    int32_t num_tiles = a.physical_volume() / tile_hw;
 
     // This should allocate a DRAM buffer on the device
 
@@ -68,13 +73,13 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
 
     constexpr uint32_t alignment = 32;
 
-    uint32_t num_tiles_in_row = input_x / TILE_WIDTH;
+    uint32_t num_tiles_in_row = input_x / tile_width;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size =
         (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
-    uint32_t max_X = (max_l1_size - alignment) / (output.element_size() * TILE_HEIGHT * 2 + output.element_size());
-    uint32_t max_tiles = max_X / TILE_WIDTH;
+    uint32_t max_X = (max_l1_size - alignment) / (output.element_size() * tile_height * 2 + output.element_size());
+    uint32_t max_tiles = max_X / tile_width;
 
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
@@ -88,7 +93,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
             }
         }
     }
-    uint32_t block_width = num_tiles_per_block * TILE_WIDTH;
+    uint32_t block_width = num_tiles_per_block * tile_width;
     uint32_t block_row_size = block_width * output.element_size();
     uint32_t num_blocks_w_output = unpadded_stick_size / block_row_size;
     uint32_t num_blocks_w_input = padded_stick_size / block_row_size;
@@ -97,10 +102,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     // Number of blocks that differ between input and output
     const uint32_t num_blocks_w_diff = num_blocks_w_input - num_blocks_w_output - (block_row_leftover_size > 0 ? 1 : 0);
 
-    const uint32_t padded_Y_diff_blocks = (input_y - output_y) / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t padded_Z_diff_blocks = (input_z - output_z) * input_y / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t padded_W_diff_blocks = (input_w - output_w) * input_z * input_y / TILE_HEIGHT * num_blocks_w_input;
-    const uint32_t num_leftover_Y = output_y - (output_y / TILE_HEIGHT * TILE_HEIGHT);
+    const uint32_t padded_Y_diff_blocks = (input_y - output_y) / tile_height * num_blocks_w_input;
+    const uint32_t padded_Z_diff_blocks = (input_z - output_z) * input_y / tile_height * num_blocks_w_input;
+    const uint32_t padded_W_diff_blocks = (input_w - output_w) * input_z * input_y / tile_height * num_blocks_w_input;
+    const uint32_t num_leftover_Y = output_y - (output_y / tile_height * tile_height);
 
     constexpr uint8_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
@@ -111,6 +116,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
             .buffer_index = src0_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -123,6 +129,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
             .buffer_index = output_cb_index,
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -133,7 +140,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
         (std::uint32_t)((
             input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
             input_cb_data_format == tt::DataFormat::Int32)),
-        unpadded_stick_size};
+        tile_height};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader

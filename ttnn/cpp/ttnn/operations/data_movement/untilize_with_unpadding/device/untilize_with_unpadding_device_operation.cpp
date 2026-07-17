@@ -43,18 +43,20 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
     CoreRangeSet available_grid =
         operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
 
-    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / tt::constants::TILE_HEIGHT;
-    uint32_t num_tiles_per_row = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    const auto& tile = a.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.physical_volume() / input_shape[-1] / tile_height;
+    uint32_t num_tiles_per_row = a.padded_shape()[-1] / tile_width;
 
-    uint32_t num_tiles_per_col = a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_col = a.padded_shape()[-2] / tile_height;
 
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
-        uint32_t num_blocks_block =
-            (a.padded_shape()[-1] * a.padded_shape()[-2]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        uint32_t num_blocks_block = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (tile_height * tile_width);
 
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
@@ -72,11 +74,21 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Can only untilize tile major data");
 
+    const auto& tile = input_tensor_a.tensor_spec().tile();
     TT_FATAL(
-        input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0,
-        "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
+        tile.get_width() == tt::constants::TILE_WIDTH,
+        "untilize_with_unpadding requires tile width {}, got {}",
+        tt::constants::TILE_WIDTH,
+        tile.get_width());
+    TT_FATAL(
+        tile.get_height() >= tt::constants::TILE_HEIGHT ||
+            (input_tensor_a.dtype() != DataType::BFLOAT8_B && input_tensor_a.dtype() != DataType::BFLOAT4_B),
+        "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+    TT_FATAL(
+        input_tensor_a.physical_volume() % tile.get_tile_hw() == 0,
+        "Input tensor physical volume ({}) must be divisible by tile HW ({})",
         input_tensor_a.physical_volume(),
-        tt::constants::TILE_HW);
+        tile.get_tile_hw());
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (input_tensor_a.shard_spec().has_value()) {
@@ -309,6 +321,26 @@ UntilizeWithUnpaddingDeviceOperation::create_op_performance_model(
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, output_tensor, ideal_dev_clock_cycles);
     return result;
+}
+
+ttsl::hash::hash_t UntilizeWithUnpaddingDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input) {
+    const auto& tile = input.tensor_spec().tile();
+    auto program_factory = select_program_factory(operation_attributes, input);
+    return tt::tt_metal::operation::hash_operation<UntilizeWithUnpaddingDeviceOperation>(
+        operation_attributes.output_tensor_end,
+        operation_attributes.output_mem_config,
+        operation_attributes.use_multicore,
+        operation_attributes.fp32_dest_acc_en,
+        operation_attributes.enough_space_height,
+        operation_attributes.sub_core_grids,
+        input.dtype(),
+        input.memory_config(),
+        input.layout(),
+        input.padded_shape(),
+        program_factory.index(),
+        tile.get_height(),
+        tile.get_width());
 }
 
 Tensor untilize_with_unpadding(

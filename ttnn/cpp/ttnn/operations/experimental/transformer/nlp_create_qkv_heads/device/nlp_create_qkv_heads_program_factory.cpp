@@ -34,8 +34,11 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
+    const auto input_tile = input_tensor.tensor_spec().tile();
+    const auto input_tile_width = input_tile.get_width();
+    const auto input_tile_height = input_tile.get_height();
 
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = input_tile.get_tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = input_tensor.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
@@ -59,8 +62,8 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     // Output shape for K/V is: [B, num_kv_heads, s, head_dim], shuffled from [B, 1, s, num_kv_heads * head_dim]
     // NOTE: Output h and w dims are identical for Q, K, V, so any arg that is related to these dims for q_* can be
     // shared for K, V
-    uint32_t q_out_h_tiles = input_shape[2] / TILE_HEIGHT;
-    uint32_t q_out_w_tiles = head_dim / TILE_WIDTH;  // tiles along head_dim
+    uint32_t q_out_h_tiles = input_shape[2] / input_tile_height;
+    uint32_t q_out_w_tiles = head_dim / input_tile_width;  // tiles along head_dim
     uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;
     uint32_t q_out_CHtWt = num_q_heads * q_out_HtWt;
     uint32_t kv_out_CHtWt = num_kv_heads * q_out_HtWt;
@@ -69,7 +72,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
 
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of in0_w_tiles per core
-    uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
+    uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / input_tile_height;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
 
@@ -183,6 +186,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src1_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -200,6 +204,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(src0_cb_index),
                 .data_format = cb_data_format,
                 .page_size = single_tile_size,
+                .tile = input_tile,
             }}},
         });
 
@@ -212,6 +217,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
                 .data_format = cb_data_format,
                 .page_size = single_tile_size,
+                .tile = input_tile,
             }}},
         });
     }
@@ -306,10 +312,17 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
     auto num_kv_heads = operation_attributes.num_kv_heads;
 
     tt_metal::IDevice* device = input_tensor.device();
+
+    const auto input_tile = input_tensor.tensor_spec().tile();
+    const auto input_tile_width = input_tile.get_width();
+    // const auto input_tile_height = input_tile.get_height();
+    const auto input_tile_hw = input_tile.get_tile_hw();
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t head_tiles = head_dim / TILE_WIDTH;
+
+    uint32_t single_tile_size = input_tile.get_tile_size(cb_data_format);
+
+    uint32_t head_tiles = head_dim / input_tile_width;
     uint32_t head_size = head_tiles * single_tile_size;
 
     auto q_shard_spec = std::get<0>(output).shard_spec().value();
@@ -322,7 +335,7 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
 
     auto k_shard_spec = std::get<1>(output).shard_spec().value();
     auto k_cores = k_shard_spec.grid;
-    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
+    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / input_tile_hw;
 
     uint32_t per_core_out_kv_heads = num_kv_heads / k_cores.num_cores();
     uint32_t per_core_in_kv_heads =
@@ -450,11 +463,13 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    const auto input_tile = input_tensor.tensor_spec().tile();
+    const auto input_tile_hw = input_tile.get_tile_hw();
+    uint32_t single_tile_size = input_tile.get_tile_size(cb_data_format);
 
     auto q_shard_spec = std::get<0>(output).shard_spec().value();
     auto q_cores = q_shard_spec.grid;
-    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / input_tile_hw;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
     desc.cbs.push_back(CBDescriptor{
@@ -464,13 +479,14 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
             .buffer_index = static_cast<uint8_t>(q_output_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = input_tile,
         }}},
         .buffer = std::get<0>(output).buffer(),
     });
 
     auto k_shard_spec = std::get<1>(output).shard_spec().value();
     auto k_cores = k_shard_spec.grid;
-    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
+    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / input_tile_hw;
 
     uint32_t k_output_cb_index = CBIndex::c_17;
     desc.cbs.push_back(CBDescriptor{
@@ -480,13 +496,14 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
             .buffer_index = static_cast<uint8_t>(k_output_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = input_tile,
         }}},
         .buffer = std::get<1>(output).buffer(),
     });
 
     auto v_shard_spec = std::get<2>(output).shard_spec().value();
     auto v_cores = v_shard_spec.grid;
-    auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
+    auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / input_tile_hw;
 
     uint32_t v_output_cb_index = CBIndex::c_18;
     desc.cbs.push_back(CBDescriptor{
@@ -496,6 +513,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
             .buffer_index = static_cast<uint8_t>(v_output_cb_index),
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = input_tile,
         }}},
         .buffer = std::get<2>(output).buffer(),
     });

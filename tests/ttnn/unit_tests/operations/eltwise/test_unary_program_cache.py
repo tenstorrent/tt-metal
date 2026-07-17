@@ -30,7 +30,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, select_tile
 
 
 def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -43,7 +43,8 @@ def run_unary_op(device, op, shape, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM
     torch_ops = {ttnn.relu: torch.relu, ttnn.sqrt: torch.sqrt, ttnn.abs: torch.abs, ttnn.floor: torch.floor}
     torch_result = torch_ops[op](torch_a)
 
-    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    tile = select_tile(dtype)
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config, tile=tile)
     with device.cache_entries_counter.measure():
         tt_result = op(tt_a, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
@@ -165,7 +166,8 @@ def test_unary_cache_miss_different_sub_core_grids(device):
     torch_a1 = torch.rand(shape, dtype=torch.float32) + 0.5
     torch_ref1 = torch.floor(torch_a1)
     grid_a = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
-    tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    tt_a1 = ttnn.from_torch(torch_a1, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     with device.cache_entries_counter.measure():
         tt_out1 = ttnn.floor(tt_a1, sub_core_grids=grid_a)
     assert_equal(torch_ref1, ttnn.to_torch(tt_out1))
@@ -173,7 +175,8 @@ def test_unary_cache_miss_different_sub_core_grids(device):
     torch_a2 = torch.rand(shape, dtype=torch.float32) + 0.5
     torch_ref2 = torch.floor(torch_a2)
     grid_b = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
-    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.floor(tt_a2, sub_core_grids=grid_b)
     assert_equal(torch_ref2, ttnn.to_torch(tt_out2))
@@ -196,7 +199,8 @@ def test_unary_cache_miss_different_factories(device):
         torch_ref2 = torch.floor(torch_a2)
 
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 5))])
-    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    tt_a2 = ttnn.from_torch(torch_a2, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     with device.cache_entries_counter.measure():
         tt_out2 = ttnn.floor(tt_a2, sub_core_grids=grid)
     assert_equal(torch_ref2, ttnn.to_torch(tt_out2))
@@ -244,8 +248,10 @@ def test_unary_cache_rm_different_widths_need_separate_entries(device):
     torch_b = torch.empty([1, 1, 32, 64], dtype=torch.bfloat16).uniform_(1, 100)
     torch_result1 = torch.abs(torch_a)
     torch_result2 = torch.abs(torch_b)
-    tt_a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    tt_b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, tile=tile)
+    tile = select_tile(ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_b = ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, tile=tile)
     with device.cache_entries_counter.measure():
         tt_result1 = ttnn.abs(tt_a)
         tt_result2 = ttnn.abs(tt_b)
@@ -281,12 +287,14 @@ def test_unary_sharded_cache_correctness_different_grids(device):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
         torch_tensor = torch.randn(shape, dtype=torch.bfloat16)
+        tile = select_tile(ttnn.bfloat16)
         input_tensor = ttnn.from_torch(
             torch_tensor,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=memory_config,
+            tile=tile,
         )
         with device.cache_entries_counter.measure():
             output = ttnn.abs(input_tensor)

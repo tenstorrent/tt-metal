@@ -1,0 +1,2349 @@
+{
+  "source": "/home/ttuser/smanoj/metal_2/generated/profiler/reports/md_m32/2026_07_09_06_09_28/ops_perf_results_md_m32_2026_07_09_06_09_28.csv",
+  "original_total_ops": 934,
+  "dedup_key": "op_code + input shape_logical",
+  "total_ops": 35,
+  "ops": [
+    {
+      "op_code": "BinaryNgDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "binary_op_type": "BinaryOpType::MUL",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::FLOAT32",
+        "input_dtype": "DataType::FLOAT32",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::INVALID",
+        "is_quant_op": "false",
+        "is_sfpu": "true",
+        "is_where_op": "false",
+        "lhs_activations": "{}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "scalar": "0.00390625",
+        "sub_core_grids": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::NONE",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 2048,
+      "first_index": 1
+    },
+    {
+      "op_code": "UnaryDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "bfp8_pack_precise": "false",
+        "fp32_dest_acc_en": "true",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "op_chain": "{BasicUnaryWithParam<float; int; unsigned int>(base=BasicUnaryWithParam<float>(op_type=UnaryOpType::FILL;param={10000}))}",
+        "output_dtype": "DataType::FLOAT32",
+        "preserve_fp32_precision": "true",
+        "sub_core_grids": "std::nullopt",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 3072,
+      "first_index": 2
+    },
+    {
+      "op_code": "BinaryNgDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "binary_op_type": "BinaryOpType::POWER",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::FLOAT32",
+        "input_dtype": "DataType::FLOAT32",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::TILE",
+        "is_quant_op": "false",
+        "is_sfpu": "true",
+        "is_where_op": "false",
+        "lhs_activations": "{}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "scalar": "std::nullopt",
+        "sub_core_grids": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::NONE",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 4096,
+      "first_index": 3
+    },
+    {
+      "op_code": "ReshapeViewDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "logical_output_shape": "Shape([1; 864; 1])",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "padded_output_shape": "Shape([1; 864; 32])",
+        "recreate_mapping_tensor": "false",
+        "sub_core_grid": "std::nullopt"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            864
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            864
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            32
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            1
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 27,
+      "first_global_call_count": 7168,
+      "first_index": 6
+    },
+    {
+      "op_code": "BinaryNgDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "binary_op_type": "BinaryOpType::MUL",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::FLOAT32",
+        "input_dtype": "DataType::FLOAT32",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::TILE",
+        "is_quant_op": "false",
+        "is_sfpu": "true",
+        "is_where_op": "false",
+        "lhs_activations": "{}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "scalar": "std::nullopt",
+        "sub_core_grids": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::ROW_B_COL_A",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            32
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            1
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 8192,
+      "first_index": 7
+    },
+    {
+      "op_code": "UnaryDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "bfp8_pack_precise": "false",
+        "fp32_dest_acc_en": "true",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "op_chain": "{BasicUnaryWithParam<float; int; unsigned int>(base=BasicUnaryWithParam<float>(op_type=UnaryOpType::COS;param={}))}",
+        "output_dtype": "DataType::FLOAT32",
+        "preserve_fp32_precision": "true",
+        "sub_core_grids": "std::nullopt",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 9216,
+      "first_index": 8
+    },
+    {
+      "op_code": "ConcatDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "dim": "1",
+        "groups": "1",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            128
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 110,
+      "first_global_call_count": 11264,
+      "first_index": 10
+    },
+    {
+      "op_code": "TypecastDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "bfp8_pack_precise": "false",
+        "fp32_dest_acc_en": "true",
+        "input_dtype": "DataType::FLOAT32",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "preserve_fp32_precision": "true",
+        "sub_core_grids": "std::nullopt"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "FLOAT32",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 13312,
+      "first_index": 12
+    },
+    {
+      "op_code": "ConcatDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "dim": "1",
+        "groups": "1",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::DRAM;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            2048
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            2048
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            2560
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            2560
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 110,
+      "first_global_call_count": 15360,
+      "first_index": 14
+    },
+    {
+      "op_code": "InterleavedToShardedDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "keep_l1_aligned": "false",
+        "output_dtype": "DataType::BFLOAT8_B",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":10;\"y\":4}; {\"start\":{\"x\":0;\"y\":5};\"end\":{\"x\":8;\"y\":5}]; shape=[1024; 64]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 64,
+      "first_global_call_count": 16384,
+      "first_index": 15
+    },
+    {
+      "op_code": "InterleavedToShardedDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "keep_l1_aligned": "false",
+        "output_dtype": "DataType::BFLOAT8_B",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":10;\"y\":1}; {\"start\":{\"x\":0;\"y\":2};\"end\":{\"x\":9;\"y\":2}]; shape=[4096; 32]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            4096,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            4096,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            4096,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            4096,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 32,
+      "first_global_call_count": 18432,
+      "first_index": 17
+    },
+    {
+      "op_code": "CopyDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "backwards": "false",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 110,
+      "first_global_call_count": 23552,
+      "first_index": 22
+    },
+    {
+      "op_code": "CopyDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "backwards": "false",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            6144
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            6144
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            6144
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            6144
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 110,
+      "first_global_call_count": 25600,
+      "first_index": 24
+    },
+    {
+      "op_code": "CopyDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "backwards": "false",
+        "output_dtype": "DataType::BFLOAT8_B",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            2560
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            2560
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            2560
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            2560
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 110,
+      "first_global_call_count": 26624,
+      "first_index": 25
+    },
+    {
+      "op_code": "CopyDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "backwards": "false",
+        "output_dtype": "DataType::BFLOAT8_B",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            2048,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            2048,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            2048,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            2048,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 110,
+      "first_global_call_count": 27648,
+      "first_index": 26
+    },
+    {
+      "op_code": "InterleavedToShardedDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "keep_l1_aligned": "false",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::BLOCK_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":7;\"y\":0}]; shape=[32; 128]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_BLOCK_SHARDED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 8,
+      "first_global_call_count": 35840,
+      "first_index": 34
+    },
+    {
+      "op_code": "LayerNormDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "distributed_norm_stage": "DistributedLayerNormStage::NOT_DISTRIBUTED",
+        "dtype": "std::nullopt",
+        "eps": "1e-06",
+        "fused_activation": "std::nullopt",
+        "norm_type": "LayerNormType::RMSNORM",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::BLOCK_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":7;\"y\":0}]; shape=[32; 128]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "program_config": "LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=8-1;subblock_w=4;block_h=1;block_w=4;inplace=0;legacy_reduction=0;legacy_rsqrt=0;use_welford=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_BLOCK_SHARDED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_BLOCK_SHARDED"
+        }
+      ],
+      "math_fidelity": "HiFi2",
+      "core_count": 8,
+      "first_global_call_count": 36864,
+      "first_index": 35
+    },
+    {
+      "op_code": "ShardedToInterleavedDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "num_slices": "1",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "slice_index": "0"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_BLOCK_SHARDED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 8,
+      "first_global_call_count": 37888,
+      "first_index": 36
+    },
+    {
+      "op_code": "MatmulDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "bcast_batch": "true",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "global_cb": "std::nullopt",
+        "output_dtype": "DataType::BFLOAT8_B",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "output_tile": "Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)",
+        "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-6;in0_block_w=8;out_subblock_h=1;out_subblock_w=2;out_block_h=1;out_block_w=2;per_core_M=1;per_core_N=2;fuse_batch=1;fused_activation=std::nullopt;mcast_in0=1;gather_in0=0;hop_cores={};num_global_cb_receivers=1;untilize_out=0)",
+        "sub_device_id": "std::nullopt",
+        "transpose_a": "false",
+        "transpose_b": "false",
+        "untilize_out": "false",
+        "user_core_coord": "std::nullopt",
+        "user_fused_activation": "std::nullopt",
+        "user_run_batched": "false"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            2560
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            2560
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            2560
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            2560
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "LoFi",
+      "core_count": 40,
+      "first_global_call_count": 38912,
+      "first_index": 37
+    },
+    {
+      "op_code": "NlpCreateHeadsDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "head_dim": "256",
+        "num_kv_heads": "1",
+        "num_q_heads": "8",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "transpose_k_heads": "false"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            2560
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            2560
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 8,
+      "first_global_call_count": 39936,
+      "first_index": 38
+    },
+    {
+      "op_code": "SliceDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "num_devices": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "slice_dim": "std::nullopt",
+        "slice_end": "Shape([1; 1; 32; 256])",
+        "slice_start": "Shape([0; 0; 0; 0])",
+        "step": "Shape([1; 1; 1; 1])",
+        "sub_core_grids": "std::nullopt",
+        "use_tensor_args": "false"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            864,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 8,
+      "first_global_call_count": 40960,
+      "first_index": 39
+    },
+    {
+      "op_code": "RotaryEmbeddingDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi4;math_approx_mode=1;fp32_dest_acc_en=0;packer_l1_acc=0;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "seq_len": "32",
+        "token_idx": "std::nullopt"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 8,
+      "first_global_call_count": 43008,
+      "first_index": 41
+    },
+    {
+      "op_code": "RotaryEmbeddingDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi4;math_approx_mode=1;fp32_dest_acc_en=0;packer_l1_acc=0;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "seq_len": "32",
+        "token_idx": "std::nullopt"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 1,
+      "first_global_call_count": 44032,
+      "first_index": 42
+    },
+    {
+      "op_code": "ConcatDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "dim": "2",
+        "groups": "1",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "sub_core_grids": "std::nullopt"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            768,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            768,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            800,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            800,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 110,
+      "first_global_call_count": 45056,
+      "first_index": 43
+    },
+    {
+      "op_code": "SDPAOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "chunk_start_idx": "std::nullopt",
+        "chunk_start_idx_tensor": "std::nullopt",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "head_dim_v": "std::nullopt",
+        "is_causal": "false",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "program_config": "SDPAProgramConfig(compute_with_storage_grid_size=11-10;sub_core_grids=std::nullopt;q_chunk_size=32;k_chunk_size=96;exp_approx_mode=0;max_cores_per_head_batch=16)",
+        "scale": "0.0625",
+        "sliding_window_size": "std::nullopt",
+        "use_mla": "false"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            800,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            800,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            800,
+            256
+          ],
+          "shape_logical": [
+            1,
+            1,
+            800,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi2",
+      "core_count": 110,
+      "first_global_call_count": 47104,
+      "first_index": 45
+    },
+    {
+      "op_code": "NLPConcatHeadsDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "shape_logical": [
+            1,
+            8,
+            32,
+            256
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            2048
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            2048
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 8,
+      "first_global_call_count": 48128,
+      "first_index": 46
+    },
+    {
+      "op_code": "MatmulDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "bcast_batch": "true",
+        "compute_kernel_config": "ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=0;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)",
+        "global_cb": "std::nullopt",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "output_tile": "Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)",
+        "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-11;in0_block_w=32;out_subblock_h=1;out_subblock_w=1;out_block_h=1;out_block_w=1;per_core_M=1;per_core_N=1;fuse_batch=1;fused_activation=std::nullopt;mcast_in0=1;gather_in0=0;hop_cores={};num_global_cb_receivers=1;untilize_out=0)",
+        "sub_device_id": "std::nullopt",
+        "transpose_a": "false",
+        "transpose_b": "false",
+        "untilize_out": "false",
+        "user_core_coord": "std::nullopt",
+        "user_fused_activation": "std::nullopt",
+        "user_run_batched": "false"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            2048
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            2048
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            2048,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            2048,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "LoFi",
+      "core_count": 32,
+      "first_global_call_count": 49152,
+      "first_index": 47
+    },
+    {
+      "op_code": "BinaryNgDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "binary_op_type": "BinaryOpType::MUL",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::BFLOAT16",
+        "input_dtype": "DataType::BFLOAT16",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::TILE",
+        "is_quant_op": "false",
+        "is_sfpu": "true",
+        "is_where_op": "false",
+        "lhs_activations": "{}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "scalar": "std::nullopt",
+        "sub_core_grids": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::ROW_B",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 50176,
+      "first_index": 48
+    },
+    {
+      "op_code": "BinaryNgDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "binary_op_type": "BinaryOpType::ADD",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::BFLOAT16",
+        "input_dtype": "DataType::BFLOAT16",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::TILE",
+        "is_quant_op": "false",
+        "is_sfpu": "false",
+        "is_where_op": "false",
+        "lhs_activations": "{}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "scalar": "std::nullopt",
+        "sub_core_grids": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::NONE",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_DRAM_INTERLEAVED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 51200,
+      "first_index": 49
+    },
+    {
+      "op_code": "MatmulDecodeDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "K": "1024",
+        "M": "32",
+        "N": "4096",
+        "output_dtype": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":1;\"y\":0}]; shape=[32; 512]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec={\"shard_shape\":[32; 512];\"grid\":[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":1;\"y\":0}}];\"orientation\":\"ShardOrientation::ROW_MAJOR\";\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"};created_with_nd_shard_spec=0)",
+        "partial_width_sharded": "false"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            1024,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            1024,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 66,
+      "first_global_call_count": 56320,
+      "first_index": 54
+    },
+    {
+      "op_code": "UnaryDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "bfp8_pack_precise": "false",
+        "fp32_dest_acc_en": "false",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":10;\"y\":4}; {\"start\":{\"x\":0;\"y\":5};\"end\":{\"x\":8;\"y\":5}]; shape=[32; 64]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec={\"shard_shape\":[32; 64];\"grid\":[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":10;\"y\":4}}; {\"start\":{\"x\":0;\"y\":5};\"end\":{\"x\":8;\"y\":5}}];\"orientation\":\"ShardOrientation::ROW_MAJOR\";\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"};created_with_nd_shard_spec=0)",
+        "op_chain": "{BasicUnaryWithParam<float; int; unsigned int>(base=BasicUnaryWithParam<float>(op_type=UnaryOpType::GELU;param={1}))}",
+        "output_dtype": "DataType::BFLOAT16",
+        "preserve_fp32_precision": "false",
+        "sub_core_grids": "std::nullopt",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 57344,
+      "first_index": 55
+    },
+    {
+      "op_code": "BinaryNgDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "binary_op_type": "BinaryOpType::MUL",
+        "compute_kernel_config": "std::nullopt",
+        "dtype": "DataType::BFLOAT16",
+        "input_dtype": "DataType::BFLOAT16",
+        "input_layout_a": "Layout::TILE",
+        "input_layout_b": "Layout::TILE",
+        "is_quant_op": "false",
+        "is_sfpu": "true",
+        "is_where_op": "false",
+        "lhs_activations": "{}",
+        "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":10;\"y\":4}; {\"start\":{\"x\":0;\"y\":5};\"end\":{\"x\":8;\"y\":5}]; shape=[32; 64]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec={\"shard_shape\":[32; 64];\"grid\":[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":10;\"y\":4}}; {\"start\":{\"x\":0;\"y\":5};\"end\":{\"x\":8;\"y\":5}}];\"orientation\":\"ShardOrientation::ROW_MAJOR\";\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"};created_with_nd_shard_spec=0)",
+        "output_layout": "Layout::TILE",
+        "post_activations": "{}",
+        "rhs_activations": "{}",
+        "scalar": "std::nullopt",
+        "sub_core_grids": "std::nullopt",
+        "subtile_broadcast_type": "SubtileBroadcastType::NONE",
+        "worker_grid": "{[0-0 - 10-9]}"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 110,
+      "first_global_call_count": 59392,
+      "first_index": 57
+    },
+    {
+      "op_code": "ShardedToInterleavedDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "num_slices": "1",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)",
+        "slice_index": "0"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 64,
+      "first_global_call_count": 60416,
+      "first_index": 58
+    },
+    {
+      "op_code": "InterleavedToShardedDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "keep_l1_aligned": "false",
+        "output_dtype": "DataType::BFLOAT16",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":1;\"y\":0}]; shape=[32; 2048]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0)"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_INTERLEAVED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "math_fidelity": null,
+      "core_count": 2,
+      "first_global_call_count": 61440,
+      "first_index": 59
+    },
+    {
+      "op_code": "MatmulDecodeDeviceOperation",
+      "op_type": "tt_dnn_device",
+      "attributes": {
+        "K": "4096",
+        "M": "32",
+        "N": "1024",
+        "output_dtype": "std::nullopt",
+        "output_mem_config": "MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=ShardSpec{grid=[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":1;\"y\":0}]; shape=[32; 2048]; orientation=ShardOrientation::ROW_MAJOR};nd_shard_spec={\"shard_shape\":[32; 2048];\"grid\":[{\"start\":{\"x\":0;\"y\":0};\"end\":{\"x\":1;\"y\":0}}];\"orientation\":\"ShardOrientation::ROW_MAJOR\";\"shard_distribution_strategy\":\"ShardDistributionStrategy::ROUND_ROBIN_1D\"};created_with_nd_shard_spec=0)",
+        "partial_width_sharded": "false"
+      },
+      "inputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            4096
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        },
+        {
+          "shape_padded": [
+            1,
+            1,
+            4096,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            4096,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT8_B",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "outputs": [
+        {
+          "shape_padded": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "shape_logical": [
+            1,
+            1,
+            32,
+            1024
+          ],
+          "layout": "TILE",
+          "datatype": "BFLOAT16",
+          "memory": "DEV_1_L1_WIDTH_SHARDED"
+        }
+      ],
+      "math_fidelity": "HiFi4",
+      "core_count": 33,
+      "first_global_call_count": 62464,
+      "first_index": 60
+    }
+  ],
+  "filter": "op_code + input shape_logical dedup; all inputs layout == TILE",
+  "removed_non_tile_count": 2
+}

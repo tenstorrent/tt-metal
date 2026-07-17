@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
 
@@ -73,9 +74,31 @@ static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
 }
 
 // True if the inner-2D of `shape` is not tile-aligned, i.e. the tiled output has implicit padding lanes.
-static bool has_inner_2d_tile_padding(const ttnn::Shape& shape) {
+static bool has_inner_2d_tile_padding(
+    const ttnn::Shape& shape,
+    uint32_t tile_height = tt::constants::TILE_HEIGHT,
+    uint32_t tile_width = tt::constants::TILE_WIDTH) {
     TT_ASSERT(shape.rank() >= 2, "has_inner_2d_tile_padding requires rank >= 2");
-    return (shape[-1] % tt::constants::TILE_WIDTH != 0) || (shape[-2] % tt::constants::TILE_HEIGHT != 0);
+    return (shape[-1] % tile_width != 0) || (shape[-2] % tile_height != 0);
+}
+
+// Pad logical shape to the given tile geometry. The shared compute_padded_shape() helper
+// currently ignores its tile args and always pads to 32x32; use this for tiny-tile tensors.
+static ttnn::Shape compute_padded_shape_for_tile(ttnn::Shape logical_shape, uint32_t tile_height, uint32_t tile_width) {
+    if (logical_shape.rank() == 1) {
+        logical_shape = ttnn::Shape({1, logical_shape[0]});
+    }
+    ttsl::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
+    std::copy(logical_shape.cbegin(), logical_shape.cend(), output_shape_vec.begin());
+    if (output_shape_vec.size() >= 1) {
+        output_shape_vec[output_shape_vec.size() - 1] =
+            tt::round_up(output_shape_vec[output_shape_vec.size() - 1], tile_width);
+    }
+    if (output_shape_vec.size() >= 2) {
+        output_shape_vec[output_shape_vec.size() - 2] =
+            tt::round_up(output_shape_vec[output_shape_vec.size() - 2], tile_height);
+    }
+    return ttnn::Shape(std::move(output_shape_vec));
 }
 
 // Returns a sharded output MemoryConfig, or INTERLEAVED if no valid grid exists.
@@ -328,8 +351,11 @@ ttnn::Tensor PerformView(
         return ttnn::experimental::view(tensor, logical_shape);
     }
     if (tensor.layout() == ttnn::TILE_LAYOUT &&
-        (logical_shape[-1] % tile_first_dim != 0 || logical_shape[-2] % tile_second_dim != 0)) {
-        return ttnn::experimental::view(tensor, logical_shape, compute_padded_shape(logical_shape));
+        (logical_shape[-1] % tile_second_dim != 0 || logical_shape[-2] % tile_first_dim != 0)) {
+        return ttnn::experimental::view(
+            tensor,
+            logical_shape,
+            detail::compute_padded_shape_for_tile(logical_shape, tile_first_dim, tile_second_dim));
     }
     // Perform a reshape (view)
     return ttnn::experimental::view(tensor, logical_shape, padded_shape);
@@ -373,6 +399,9 @@ ttnn::Tensor reshape_tiled(
     const bool pad_value_explicit) {
     // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
     const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
+    const auto& tile = tensor.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
     // squeeze input tensor and requested shape to 3D
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
         if (shape.rank() > 3) {
@@ -387,9 +416,11 @@ ttnn::Tensor reshape_tiled(
     const auto input_tensor_shape_3d = transform_to_3d(tensor.logical_shape());
     const auto requested_shape_3d = transform_to_3d(logical_shape);
 
-    const auto requested_padded_shape_3d = compute_padded_shape(requested_shape_3d);
-    const auto input_padded_shape_3d = compute_padded_shape(input_tensor_shape_3d);
-    auto tensor3d = PerformView(tensor, input_tensor_shape_3d, input_padded_shape_3d);
+    const auto requested_padded_shape_3d =
+        detail::compute_padded_shape_for_tile(requested_shape_3d, tile_height, tile_width);
+    const auto input_padded_shape_3d =
+        detail::compute_padded_shape_for_tile(input_tensor_shape_3d, tile_height, tile_width);
+    auto tensor3d = PerformView(tensor, input_tensor_shape_3d, input_padded_shape_3d, tile_height, tile_width);
 
     if (memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
@@ -421,7 +452,7 @@ ttnn::Tensor reshape_tiled(
             // Fill in BF16 (rank-3, non-recursive). skip_padding_fill is *intentionally*
             // ignored for block-float: shared exponent over 16-elem sub-blocks would otherwise
             // let unfilled padding corrupt logical lanes. See skip_padding_fill docstring.
-            if (detail::has_inner_2d_tile_padding(requested_shape_3d)) {
+            if (detail::has_inner_2d_tile_padding(requested_shape_3d, tile_height, tile_width)) {
                 output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
             }
             output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
@@ -435,7 +466,12 @@ ttnn::Tensor reshape_tiled(
                     output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
                 }
             }
-            return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
+            return PerformView(
+                output_tensor_3d,
+                logical_shape,
+                detail::compute_padded_shape_for_tile(logical_shape, tile_height, tile_width),
+                tile_height,
+                tile_width);
         }
 
         // Direct sharded path: TILED factories use TensorAccessorArgs for transparent sharded I/O.
@@ -476,7 +512,8 @@ ttnn::Tensor reshape_tiled(
         // logical lanes of aliased tensors. Output may be sharded (typical) or INTERLEAVED if
         // recompute fell back; handle both. Tensors here are rank-3, so the fill stays
         // on its non-recursive path and cannot loop back into ttnn::reshape.
-        if (pad_value_explicit && !skip_padding_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
+        if (pad_value_explicit && !skip_padding_fill &&
+            detail::has_inner_2d_tile_padding(requested_shape_3d, tile_height, tile_width)) {
             if (output_tensor_3d.memory_config().is_sharded()) {
                 // TODO(#43090): drop this s2i/i2s detour once prim::fill_pad supports sharded buffers
                 // without overflowing fill_pad_writer's per-core runtime-arg cap (341).
@@ -490,7 +527,12 @@ ttnn::Tensor reshape_tiled(
             }
         }
 
-        return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
+        return PerformView(
+            output_tensor_3d,
+            logical_shape,
+            detail::compute_padded_shape_for_tile(logical_shape, tile_height, tile_width),
+            tile_height,
+            tile_width);
     }
 
     // Interleaved (DRAM / L1) tensors: call prim::reshape_view directly.
@@ -543,7 +585,7 @@ ttnn::Tensor reshape_tiled(
     //   - skip_padding_fill (when caller did pass pad_value) still suppresses non-block-float fills.
     const bool is_block_float_output = is_block_float(tensor.dtype());
     const bool should_fill = is_block_float_output || (pad_value_explicit && !skip_padding_fill);
-    if (should_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
+    if (should_fill && detail::has_inner_2d_tile_padding(requested_shape_3d, tile_height, tile_width)) {
         output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
     }
 
@@ -552,7 +594,12 @@ ttnn::Tensor reshape_tiled(
         output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
     }
 
-    return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
+    return PerformView(
+        output_tensor_3d,
+        logical_shape,
+        detail::compute_padded_shape_for_tile(logical_shape, tile_height, tile_width),
+        tile_height,
+        tile_width);
 }
 
 }  // namespace ttnn::operations::data_movement
@@ -586,8 +633,9 @@ ttnn::Tensor ttnn::reshape(
         default_pad_value = (uint32_t)0;
     }
 
-    const uint32_t tile_first_dim = tt::constants::TILE_HEIGHT;
-    const uint32_t tile_second_dim = tt::constants::TILE_WIDTH;
+    const auto& tile = tensor.tensor_spec().tile();
+    const uint32_t tile_first_dim = tile.get_height();
+    const uint32_t tile_second_dim = tile.get_width();
 
     // The following case should only be called for the device storage case, the rest is a bandaid
     // for issue 15317
@@ -614,8 +662,8 @@ ttnn::Tensor ttnn::reshape(
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
         ((tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) ||              // Its row major
          (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
-         (shape_second_last_dim % tile_second_dim == 0 &&
-          tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
+         (shape_second_last_dim % tile_first_dim == 0 &&
+          tensor_shape_second_last_dim % tile_first_dim == 0));  // No tile-height padding on the second last dimension
 
     if (this_is_view) {
         return operations::data_movement::PerformView(
@@ -623,10 +671,9 @@ ttnn::Tensor ttnn::reshape(
     }
     if (logical_shape.volume() != tensor.logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558
-        const auto& tile = tensor.tensor_spec().tile();
         bool tile_tensor_view_reshape_possible =
-            (layout == ttnn::Layout::TILE and padded_shape.rank() >= 2 and padded_shape[-2] % tile.get_height() == 0 and
-             padded_shape[-1] % tile.get_width() == 0 and tensor.padded_shape()[-1] == padded_shape[-1]);
+            (layout == ttnn::Layout::TILE and padded_shape.rank() >= 2 and padded_shape[-2] % tile_first_dim == 0 and
+             padded_shape[-1] % tile_second_dim == 0 and tensor.padded_shape()[-1] == padded_shape[-1]);
 
         if (tile_tensor_view_reshape_possible) {
             // This case has been allowed in the past though it means introducing padding values to the data

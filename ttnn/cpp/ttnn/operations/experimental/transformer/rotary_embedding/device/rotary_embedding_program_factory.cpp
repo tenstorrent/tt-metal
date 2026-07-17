@@ -35,22 +35,26 @@ ProgramDescriptor create_single_tile_descriptor(
     auto& output = tensor_return_value;
     const auto& token_idx = operation_attributes.token_idx;
 
+    const auto input_tile = input.tensor_spec().tile();
+    const auto input_tile_height = input_tile.get_height();
+    const auto input_tile_hw = input_tile.get_tile_hw();
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
 
     tt::DataFormat cos_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
+    uint32_t cos_single_tile_size = input_tile.get_tile_size(cos_cb_data_format);
 
     tt::DataFormat sin_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
+    uint32_t sin_single_tile_size = input_tile.get_tile_size(sin_cb_data_format);
 
     // trans_mat is constructed in L1 by the reader and is always bf16.
     tt::DataFormat trans_mat_cb_data_format =
         (input_cb_data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
-    uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
+    uint32_t trans_mat_single_tile_size = input_tile.get_tile_size(trans_mat_cb_data_format);
 
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = input_tile.get_tile_size(output_cb_data_format);
 
     constexpr uint32_t Wt = 1;
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
@@ -83,10 +87,12 @@ ProgramDescriptor create_single_tile_descriptor(
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet();
-        num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
+        num_rows_per_core_group_1 = shard_spec.value().shape[0] / input_tile_height;
         num_rows_per_core_group_2 = 0;
-        num_input_tiles = in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        num_output_tiles = out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
+        num_input_tiles =
+            in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / input_tile_hw : 2 * Wt;
+        num_output_tiles =
+            out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / input_tile_hw : 2 * Wt;
         auto bbox = all_cores.bounding_box();
         num_cores_x = bbox.end_coord.x + 1;
         num_cores_y = bbox.end_coord.y + 1;
@@ -107,6 +113,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .buffer_index = input_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = input_tile,
         }}},
         .buffer = in_sharded ? input.buffer() : nullptr,
     });
@@ -120,6 +127,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .buffer_index = trans_mat_cb_index,
             .data_format = trans_mat_cb_data_format,
             .page_size = trans_mat_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -132,6 +140,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .buffer_index = cos_cb_index,
             .data_format = cos_cb_data_format,
             .page_size = cos_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -143,6 +152,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .buffer_index = sin_cb_index,
             .data_format = sin_cb_data_format,
             .page_size = sin_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -155,6 +165,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .buffer_index = rotated_input_interm_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -169,6 +180,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .buffer_index = cos_interm_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -180,6 +192,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .buffer_index = sin_interm_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -191,6 +204,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .buffer_index = output_cb_index,
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = input_tile,
         }}},
         .buffer = out_sharded ? output.buffer() : nullptr,
     });
@@ -212,6 +226,7 @@ ProgramDescriptor create_single_tile_descriptor(
                 .buffer_index = retilized_cos_cb_index,
                 .data_format = cos_cb_data_format,
                 .page_size = cos_single_tile_size,
+                .tile = input_tile,
             }}},
         });
 
@@ -222,6 +237,7 @@ ProgramDescriptor create_single_tile_descriptor(
                 .buffer_index = retilized_sin_cb_index,
                 .data_format = sin_cb_data_format,
                 .page_size = sin_single_tile_size,
+                .tile = input_tile,
             }}},
         });
 
@@ -233,11 +249,13 @@ ProgramDescriptor create_single_tile_descriptor(
                     .buffer_index = untilized_cos_interm_cb_index,
                     .data_format = scalar_cb_data_format,
                     .page_size = scalar_single_tile_size,
+                    .tile = input_tile,
                 },
                 CBFormatDescriptor{
                     .buffer_index = untilized_cos_sync_cb_index,
                     .data_format = scalar_cb_data_format,
                     .page_size = scalar_single_tile_size,
+                    .tile = input_tile,
                 },
             }},
         });
@@ -250,11 +268,13 @@ ProgramDescriptor create_single_tile_descriptor(
                     .buffer_index = untilized_sin_interm_cb_index,
                     .data_format = scalar_cb_data_format,
                     .page_size = scalar_single_tile_size,
+                    .tile = input_tile,
                 },
                 CBFormatDescriptor{
                     .buffer_index = untilized_sin_sync_cb_index,
                     .data_format = scalar_cb_data_format,
                     .page_size = scalar_single_tile_size,
+                    .tile = input_tile,
                 },
             }},
         });
@@ -443,24 +463,29 @@ ProgramDescriptor create_multi_tile_descriptor(
     auto& output = tensor_return_value;
     const auto& token_idx = operation_attributes.token_idx;
 
+    const auto input_tile = input.tensor_spec().tile();
+    const auto input_tile_width = input_tile.get_width();
+    const auto input_tile_height = input_tile.get_height();
+    const auto input_tile_hw = input_tile.get_tile_hw();
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
 
     tt::DataFormat cos_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
+    uint32_t cos_single_tile_size = input_tile.get_tile_size(cos_cb_data_format);
 
     tt::DataFormat sin_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
+    uint32_t sin_single_tile_size = input_tile.get_tile_size(sin_cb_data_format);
 
     tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
+    uint32_t scalar_single_tile_size = input_tile.get_tile_size(scalar_cb_data_format);
 
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = input_tile.get_tile_size(output_cb_data_format);
 
-    uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
-    uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / input_tile_height;
+    uint32_t Ht = input.padded_shape()[-2] / input_tile_height;
+    uint32_t Wt = input.padded_shape()[-1] / input_tile_width;
     uint32_t half_Wt = Wt / 2;
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.padded_shape()[-1] * sizeof(bfloat16);
@@ -491,10 +516,12 @@ ProgramDescriptor create_multi_tile_descriptor(
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet();
-        num_rows_per_core_group_1 = shard_spec.value().shape[0] / TILE_HEIGHT;
+        num_rows_per_core_group_1 = shard_spec.value().shape[0] / input_tile_height;
         num_rows_per_core_group_2 = 0;
-        num_input_tiles = in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
-        num_output_tiles = out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW : 2 * Wt;
+        num_input_tiles =
+            in_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / input_tile_hw : 2 * Wt;
+        num_output_tiles =
+            out_sharded ? shard_spec.value().shape[0] * shard_spec.value().shape[1] / input_tile_hw : 2 * Wt;
         auto bbox = all_cores.bounding_box();
         num_cores_x = bbox.end_coord.x + 1;
         num_cores_y = bbox.end_coord.y + 1;
@@ -515,6 +542,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = input_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = input_tile,
         }}},
         .buffer = in_sharded ? input.buffer() : nullptr,
     });
@@ -528,6 +556,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = rotated_input_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -540,6 +569,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = cos_cb_index,
             .data_format = cos_cb_data_format,
             .page_size = cos_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -551,6 +581,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = sin_cb_index,
             .data_format = sin_cb_data_format,
             .page_size = sin_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -564,6 +595,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = src_scalar_cb_index,
             .data_format = scalar_cb_data_format,
             .page_size = scalar_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -576,6 +608,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = rotated_input_interm_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -587,6 +620,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = cos_interm_cb_index,
             .data_format = cos_cb_data_format,
             .page_size = cos_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -598,6 +632,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = sin_interm_cb_index,
             .data_format = sin_cb_data_format,
             .page_size = sin_single_tile_size,
+            .tile = input_tile,
         }}},
     });
 
@@ -609,6 +644,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .buffer_index = output_cb_index,
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = input_tile,
         }}},
         .buffer = out_sharded ? output.buffer() : nullptr,
     });
@@ -628,6 +664,7 @@ ProgramDescriptor create_multi_tile_descriptor(
                 .buffer_index = retilized_cos_cb_index,
                 .data_format = cos_cb_data_format,
                 .page_size = cos_single_tile_size,
+                .tile = input_tile,
             }}},
         });
 
@@ -638,6 +675,7 @@ ProgramDescriptor create_multi_tile_descriptor(
                 .buffer_index = retilized_sin_cb_index,
                 .data_format = sin_cb_data_format,
                 .page_size = sin_single_tile_size,
+                .tile = input_tile,
             }}},
         });
 
@@ -649,11 +687,13 @@ ProgramDescriptor create_multi_tile_descriptor(
                     .buffer_index = untilized_cos_interm_cb_index,
                     .data_format = scalar_cb_data_format,
                     .page_size = scalar_single_tile_size,
+                    .tile = input_tile,
                 },
                 CBFormatDescriptor{
                     .buffer_index = untilized_cos_sync_cb_index,
                     .data_format = scalar_cb_data_format,
                     .page_size = scalar_single_tile_size,
+                    .tile = input_tile,
                 },
             }},
         });
@@ -666,11 +706,13 @@ ProgramDescriptor create_multi_tile_descriptor(
                     .buffer_index = untilized_sin_interm_cb_index,
                     .data_format = scalar_cb_data_format,
                     .page_size = scalar_single_tile_size,
+                    .tile = input_tile,
                 },
                 CBFormatDescriptor{
                     .buffer_index = untilized_sin_sync_cb_index,
                     .data_format = scalar_cb_data_format,
                     .page_size = scalar_single_tile_size,
+                    .tile = input_tile,
                 },
             }},
         });

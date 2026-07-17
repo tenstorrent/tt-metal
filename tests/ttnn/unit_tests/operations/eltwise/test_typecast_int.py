@@ -10,6 +10,7 @@ from tests.ttnn.python_api_testing.typecast_test_helpers import (
     make_typecast_test_input,
     typecast_test_input_bounds,
 )
+from tests.ttnn.utils_for_testing import select_tile
 
 
 # use case for TG Llama : need to achieve (int32 + int32) addition with (uint16 + int32) inputs
@@ -21,10 +22,12 @@ def test_typecast_uint16(device):
 
     input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
+    tile1 = select_tile(ttnn.uint16, ttnn.uint32)
     input_tensor1 = ttnn.from_torch(
         in_data1,
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile1,
         device=device,
         memory_config=input_mem_config,
     )
@@ -103,10 +106,12 @@ def test_typecast_subcore_grid(device, shape, sub_core_grid):
 
     input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
+    tile1 = select_tile(ttnn.uint16, ttnn.uint32)
     input_tensor1 = ttnn.from_torch(
         in_data1,
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile1,
         device=device,
         memory_config=input_mem_config,
     )
@@ -173,10 +178,12 @@ def test_typecast_subcore_grid_large_tensor(device, shape, sub_core_grid):
     in_data = make_typecast_test_input(shape, torch.int32, *typecast_test_input_bounds(ttnn.uint16, ttnn.uint32))
     input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
+    tile = select_tile(ttnn.uint16, ttnn.uint32)
     input_tensor = ttnn.from_torch(
         in_data,
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -241,10 +248,12 @@ def test_typecast_bfloat_subcore_grid_large_tensor(device, shape, output_dtype, 
     in_data = torch.randn(shape, dtype=torch.bfloat16)
     input_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
+    tile = select_tile(ttnn.bfloat16, output_dtype)
     input_tensor = ttnn.from_torch(
         in_data,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -285,10 +294,12 @@ def test_typecast_uint16_subcore_grid(device):
         ]
     )
 
+    tile1 = select_tile(ttnn.uint16, ttnn.uint32)
     input_tensor1 = ttnn.from_torch(
         in_data1,
         dtype=ttnn.uint16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile1,
         device=device,
         memory_config=input_mem_config,
     )

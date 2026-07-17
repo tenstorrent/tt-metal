@@ -9,16 +9,20 @@ from models.common.utility_functions import comp_pcc, tt2torch_tensor
 import torch
 from models.common.utility_functions import is_wormhole_b0
 import ttnn
+from tests.ttnn.utils_for_testing import select_tile
 
 
 def run_nlp_concat_heads_test(batch, seq_len, num_heads, head_dim, dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
 
+    tile = select_tile(dtype)
     in0_shape = [batch, num_heads, seq_len, head_dim]
 
     A = torch.randn(in0_shape)
 
-    in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, in0_mem_config)
+    in0_t = ttnn.from_torch(
+        A, dtype=dtype, layout=ttnn.TILE_LAYOUT, tile=tile, memory_config=in0_mem_config, device=device
+    )
 
     out = ttnn.experimental.nlp_concat_heads(in0_t, memory_config=out_mem_config)
 

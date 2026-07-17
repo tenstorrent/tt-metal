@@ -13,16 +13,15 @@
 void kernel_main() {
     // Constexpr
     constexpr uint32_t dfb_id_out0 = 16;
-    constexpr uint32_t tile_height = 32;
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(2);
     const uint32_t n_block_reps = get_arg_val<uint32_t>(3);
-
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
@@ -39,8 +38,7 @@ void kernel_main() {
     };
 
     auto write_block = [&](uint32_t base_stick_id, uint32_t num_rows) {
-        uint32_t padding_rows = (tile_height - num_rows) & 31;
-        bool has_rows = (num_rows + padding_rows) > 0;
+        bool has_rows = num_rows > 0;
 
         dfb_out0.wait_front(num_tiles_per_row * has_rows);
         uint32_t l1_read_addr = dfb_out0.get_read_ptr();

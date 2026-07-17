@@ -64,15 +64,17 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     // row-major (stick) kernels still rely on ShardedAddrGen for sharded tensors.
     const bool use_sharded_addrgen = sharded && !tilized;
     const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    const auto& input_tile = input.tensor_spec().tile();
+    const auto& output_tile = output.tensor_spec().tile();
     uint32_t input_unit_size =
-        tilized ? tt::tile_size(input_cb_data_format) : input.padded_shape()[-1] * input.element_size();
+        tilized ? input_tile.get_tile_size(input_cb_data_format) : input.padded_shape()[-1] * input.element_size();
     const uint32_t full_input_row = input_unit_size;
     if (sharded && !tilized) {
         input_unit_size = input.memory_config().shard_spec()->shape[1] * input.element_size();
     }
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_unit_size =
-        tilized ? tt::tile_size(output_cb_data_format) : output.padded_shape()[-1] * output.element_size();
+        tilized ? output_tile.get_tile_size(output_cb_data_format) : output.padded_shape()[-1] * output.element_size();
     const uint32_t full_output_row = output_unit_size;
     if (sharded && !tilized) {
         output_unit_size = output.memory_config().shard_spec()->shape[1] * output.element_size();
@@ -80,8 +82,8 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
 
     const bool convert_dtype = input_cb_data_format != output_cb_data_format;
 
-    const uint32_t num_units =
-        tilized ? output.physical_volume() / TILE_HW : output.physical_volume() / output.padded_shape()[-1];
+    const uint32_t num_units = tilized ? output.physical_volume() / input_tile.get_tile_hw()
+                                       : output.physical_volume() / output.padded_shape()[-1];
 
     IDevice* device = output.device();
 
@@ -96,15 +98,22 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
     const uint32_t num_input_units = 2;
     const uint32_t input_alignment = input.buffer()->alignment();
     const uint32_t aligned_input_unit_size = tt::align(input_unit_size, input_alignment);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_units * aligned_input_unit_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
+    {
+        CBFormatDescriptor format_desc{
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = aligned_input_unit_size,
-        }}},
-    });
+        };
+        // Attach TileDescriptor on TILE-layout CBs so JIT get_tile_size(cb) matches tiny tiles.
+        if (tilized) {
+            format_desc.tile = TileDescriptor(input_tile);
+        }
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_input_units * aligned_input_unit_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{std::move(format_desc)}},
+        });
+    }
 
     uint32_t output_cb_index = src0_cb_index;  // same as input cb
     if (convert_dtype) {
@@ -112,14 +121,18 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         const uint32_t num_output_units = 2;
         const uint32_t output_alignment = output.buffer()->alignment();
         const uint32_t aligned_output_unit_size = tt::align(output_unit_size, output_alignment);
+        CBFormatDescriptor format_desc{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = output_cb_data_format,
+            .page_size = aligned_output_unit_size,
+        };
+        if (tilized) {
+            format_desc.tile = TileDescriptor(output_tile);
+        }
         desc.cbs.push_back(CBDescriptor{
             .total_size = num_output_units * aligned_output_unit_size,
             .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(output_cb_index),
-                .data_format = output_cb_data_format,
-                .page_size = aligned_output_unit_size,
-            }}},
+            .format_descriptors = {{std::move(format_desc)}},
         });
     }
 
