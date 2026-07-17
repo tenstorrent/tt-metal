@@ -278,15 +278,14 @@ def test_quasar_conv2d_split_program_e2e_bias_relu(mesh_device):
 #   * larger K (in_ch / kernel) -> wider tilize block + bigger [full_K, N] weights (must stay K<=32 tiles for
 #     the no-spill/split path; kQuasarConvNoSpillMaxKTiles)
 #   * larger M (out_h*out_w)  -> more sharded cores / more mcast receivers
-# act_block_h_override=None lets the factory pick (force_conv_no_spill caps act_block_h to fit the DFB ring).
+# act_block_h_override=128 (4 tiles) bounds the reader no-spill gather to <=4 M-tiles/block — REQUIRED on the
+# Quasar emulator (read_activation_data mis-reads beyond ~4 M-tiles in one gather). Harmless on WH/BH.
 _LARGER_SHAPES = [
-    dict(in_channels=32, out_channels=128, kernel_size=(4, 4), out_h=16, out_w=32, act_block_h_override=None),  # N=4t
-    dict(in_channels=32, out_channels=256, kernel_size=(4, 4), out_h=16, out_w=32, act_block_h_override=None),  # N=8t
-    dict(
-        in_channels=32, out_channels=64, kernel_size=(3, 3), out_h=16, out_w=32, act_block_h_override=None
-    ),  # 3x3 K=9t
-    dict(in_channels=64, out_channels=64, kernel_size=(3, 3), out_h=16, out_w=32, act_block_h_override=None),  # K=18t
-    dict(in_channels=32, out_channels=64, kernel_size=(4, 4), out_h=32, out_w=32, act_block_h_override=None),  # M=1024
+    dict(in_channels=32, out_channels=128, kernel_size=(4, 4), out_h=16, out_w=32, act_block_h_override=128),  # N=4t
+    dict(in_channels=32, out_channels=256, kernel_size=(4, 4), out_h=16, out_w=32, act_block_h_override=128),  # N=8t
+    dict(in_channels=32, out_channels=64, kernel_size=(3, 3), out_h=16, out_w=32, act_block_h_override=128),  # 3x3 K=9t
+    dict(in_channels=64, out_channels=64, kernel_size=(3, 3), out_h=16, out_w=32, act_block_h_override=128),  # K=18t
+    dict(in_channels=32, out_channels=64, kernel_size=(4, 4), out_h=32, out_w=32, act_block_h_override=128),  # M=1024
 ]
 _LARGER_IDS = [
     "N128_k4x4",
