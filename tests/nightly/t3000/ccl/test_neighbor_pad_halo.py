@@ -578,6 +578,20 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
 
+    # Fold mode (NP_FOLD): the halo op writes the FULL padded output too, so it is apples-to-apples with
+    # neighbor_pad_async (both produce the same [.,H+2pH,W+2pW,.] buffer). Default is compact (transport only).
+    fold = bool(os.environ.get("NP_FOLD"))
+    halo_padded = None
+    if fold:
+        halo_padded = ttnn.from_torch(
+            torch.zeros(out_shape).bfloat16(),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mem,
+            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+        )
+
     def run_halo():
         return ttnn.experimental.neighbor_pad_halo(
             inp_mesh,
@@ -596,6 +610,7 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
             np_pad2_cluster_axis=w_axis,
             np_pad2_num_links=num_links,
             padding_mode="zeros",
+            **({"padded_output": halo_padded} if fold else {}),
         )
 
     def run_async():
@@ -633,9 +648,9 @@ def run_halo_vs_async_perf(mesh_device, input_shape, h_dim, w_dim, h_axis, w_axi
     # also holds edge zero-fill that never leaves the chip, so buffer-size/time overstates bandwidth ~4x.
     transfer_bytes = outer * (H_dev + W_dev) * C * 2  # bf16, minimal halo transport per device
     gbps = transfer_bytes / (halo_us * 1e-6) / 1e9
-    print(f"\n=== PERF (trace wall/iter, device latency) shape={input_shape} outer={outer} 2x4 ===")
-    print(f"  neighbor_pad_async (full-pad): {async_us:8.1f} us")
-    print(f"  neighbor_pad_halo  (compact):  {halo_us:8.1f} us")
+    print(f"\n=== PERF (trace wall/iter, device latency) shape={input_shape} outer={outer} mesh={mesh_shape} ===")
+    print(f"  neighbor_pad_async (full-pad):     {async_us:8.1f} us")
+    print(f"  neighbor_pad_halo  ({'fold/full-pad' if fold else 'compact     '}): {halo_us:8.1f} us")
     print(f"  speedup: {async_us / halo_us:.2f}x")
     print(f"  halo transfer/device: {transfer_bytes/1e6:.2f} MB;  achieved: {gbps:.1f} GB/s ({gbps/50*100:.0f}% of 50)")
 
@@ -697,6 +712,31 @@ _LTX_PROD_4x8 = [
 )
 @pytest.mark.parametrize("input_shape, shape_id", _LTX_PROD_4x8, ids=[s[1] for s in _LTX_PROD_4x8])
 def test_neighbor_pad_halo_prod_perf(mesh_device, device_params, input_shape, shape_id):
+    run_halo_vs_async_perf(
+        mesh_device, input_shape=input_shape, h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
+    )
+
+
+# WAN 2.2 VAE decoder NP inputs, captured live from test_wan_decoder_production_blocking[bh_4x8_h0_w1-480p_t7]
+# (NP_LOG_SHAPES). Captured shapes were PER-DEVICE (H_dev,W_dev); these are the GLOBAL shapes (H_dev*4, W_dev*8)
+# the perf harness shards back to per-device on the 4x8 mesh. All k333 (pH=pW=1).
+_WAN_PROD_4x8 = [
+    ([1, 9, 60, 104, 32], "wan_15x13_C32"),  # per-dev 15x13, from [1,9,15,13,32]
+    ([1, 9, 60, 104, 384], "wan_15x13_C384"),  # per-dev 15x13
+    ([1, 15, 120, 208, 192], "wan_30x26_C192"),  # per-dev 30x26
+    ([1, 15, 120, 208, 384], "wan_30x26_C384"),  # per-dev 30x26
+    ([1, 27, 240, 416, 192], "wan_60x52_C192"),  # per-dev 60x52
+    ([1, 27, 480, 832, 96], "wan_120x104_C96"),  # per-dev 120x104
+]
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112 * 64}], indirect=True
+)
+@pytest.mark.parametrize("input_shape, shape_id", _WAN_PROD_4x8, ids=[s[1] for s in _WAN_PROD_4x8])
+def test_neighbor_pad_halo_wan_perf(mesh_device, device_params, input_shape, shape_id):
     run_halo_vs_async_perf(
         mesh_device, input_shape=input_shape, h_dim=2, w_dim=3, h_axis=0, w_axis=1, pH=1, pW=1, num_links=2
     )
