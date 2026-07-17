@@ -120,13 +120,13 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*TensixTestWatcherSanitizeNOCAlignmentL1Write*"
+  - filter: "MeshWatcherFixture.TensixTestWatcherQuasarAlignmentContract"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*QuasarTestWatcherSanitizeMultiDMRace*"
+  - filter: "MeshWatcherFixture.QuasarTestWatcherSanitizeMultiDMRace"
     config: 1x3
     back2back: true
     env:
@@ -150,19 +150,17 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
-#  - filter: "*TestWatcherTileCounterLogRemapper*"
-#    config: 1x3
-#    back2back: true
-#    env:
-#      TT_METAL_SLOW_DISPATCH_MODE: 1
+  - filter: "*TestWatcherTileCounterLogRemapper*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Hangs. Tracked by https://github.com/tenstorrent/tt-metal/issues/44129
-#  - filter: "*TestWatcherTileCounterLogBypass*"
-#    config: 1x3
-#    back2back: true
-#    env:
-#      TT_METAL_SLOW_DISPATCH_MODE: 1
+  - filter: "*TestWatcherTileCounterLogBypass*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*QuasarMultiDMOutOfBoundsArgDetection*"
     config: 1x3
@@ -170,24 +168,24 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# Have to run these sequentially for some reason.
-#   - filter: "DevicePrintOutputFixture.PrintConcurrentBabyRiscs"
-#     config: 1x3
-# #    back2back: true
-#     env:
-#       TT_METAL_SLOW_DISPATCH_MODE: 1
+# Temporarily disabled until fixes go in.
+  # - filter: "DevicePrintOutputFixture.PrintConcurrentBabyRiscs"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
 
-#   - filter: "DevicePrintOutputFixture.PrintConcurrentRocketRiscs"
-#     config: 1x3
-# #    back2back: true
-#     env:
-#       TT_METAL_SLOW_DISPATCH_MODE: 1
+  # - filter: "DevicePrintOutputFixture.PrintConcurrentRocketRiscs"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
 
-#   - filter: "DevicePrintOutputFixture.PrintConcurrentAllRiscs"
-#     config: 1x3
-# #    back2back: true
-#     env:
-#       TT_METAL_SLOW_DISPATCH_MODE: 1
+  # - filter: "DevicePrintOutputFixture.PrintConcurrentAllRiscs"
+  #   config: 1x3
+  #   back2back: true
+  #   env:
+  #     TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_api:
   - filter: "*QuasarCRTASharedL1Address*"
