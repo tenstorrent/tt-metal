@@ -432,6 +432,32 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.UNIFORM, low=-math.pi, high=math.pi
         )
     ),
+    # tan: stay inside the poles at +-pi/2 (~1.5708); tan grows rapidly near them.
+    MathOperation.Tan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.3, high=1.3)
+    ),
+    # atan: defined for all reals; span both signs and the saturating tails.
+    MathOperation.Atan: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
+    # asin/acos: domain [-1, 1]; stay just inside to avoid the NaN region for |x|>1.
+    MathOperation.Asin: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    MathOperation.Acos: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=0.99)
+    ),
+    # sinh/cosh: keep the range moderate so exp(|x|) stays well within fp range.
+    MathOperation.Sinh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    MathOperation.Cosh: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+    ),
+    # round: round-half-to-even to integer; span both signs across integer knees.
+    MathOperation.Round: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
     # sqrt: domain x >= 0
     MathOperation.Sqrt: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=100.0)

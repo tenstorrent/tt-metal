@@ -111,6 +111,16 @@ class MathOperation(Enum):
     Ceil = OpSpec("ceil", MathOpType.SFPU_UNARY)
     Trunc = OpSpec("trunc", MathOpType.SFPU_UNARY)
     Frac = OpSpec("frac", MathOpType.SFPU_UNARY)
+    # Trigonometric / inverse / hyperbolic unary SFPU ops (shared harness).
+    # cpp_enum_value must match the SfpuType enumerator name exactly.
+    Tan = OpSpec("tan", MathOpType.SFPU_UNARY)
+    Atan = OpSpec("atan", MathOpType.SFPU_UNARY)
+    Asin = OpSpec("asin", MathOpType.SFPU_UNARY)
+    Acos = OpSpec("acos", MathOpType.SFPU_UNARY)
+    Sinh = OpSpec("sinh", MathOpType.SFPU_UNARY)
+    Cosh = OpSpec("cosh", MathOpType.SFPU_UNARY)
+    # round-half-to-even to integer (decimals = 0).
+    Round = OpSpec("round", MathOpType.SFPU_UNARY)
     # Comparison-to-zero unary SFPU ops. cpp_enum_value must exactly match the
     # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
@@ -165,6 +175,9 @@ class MathOperation(Enum):
     UnaryLt = OpSpec("unary_lt", MathOpType.SFPU_UNARY)
     UnaryGe = OpSpec("unary_ge", MathOpType.SFPU_UNARY)
     UnaryLe = OpSpec("unary_le", MathOpType.SFPU_UNARY)
+    # Equality/inequality against threshold 0.5 (see dedicated crafted-stimuli test).
+    UnaryNe = OpSpec("unary_ne", MathOpType.SFPU_UNARY)
+    UnaryEq = OpSpec("unary_eq", MathOpType.SFPU_UNARY)
     UnaryMax = OpSpec("unary_max", MathOpType.SFPU_UNARY)
     UnaryMin = OpSpec("unary_min", MathOpType.SFPU_UNARY)
     Polygamma = OpSpec("polygamma", MathOpType.SFPU_UNARY)

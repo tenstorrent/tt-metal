@@ -2177,6 +2177,13 @@ class UnarySFPUGolden:
             MathOperation.Ceil: self._ceil,
             MathOperation.Trunc: self._trunc,
             MathOperation.Frac: self._frac,
+            MathOperation.Round: self._round,
+            MathOperation.Tan: self._tan,
+            MathOperation.Atan: self._atan,
+            MathOperation.Asin: self._asin,
+            MathOperation.Acos: self._acos,
+            MathOperation.Sinh: self._sinh,
+            MathOperation.Cosh: self._cosh,
             MathOperation.Gelu: self._gelu,
             MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.Neg: self._neg,
@@ -2214,6 +2221,8 @@ class UnarySFPUGolden:
             MathOperation.UnaryLt: self._unary_lt,
             MathOperation.UnaryGe: self._unary_ge,
             MathOperation.UnaryLe: self._unary_le,
+            MathOperation.UnaryNe: self._unary_ne,
+            MathOperation.UnaryEq: self._unary_eq,
             MathOperation.UnaryMax: self._unary_max,
             MathOperation.UnaryMin: self._unary_min,
             MathOperation.Polygamma: self._polygamma,
@@ -2554,6 +2563,31 @@ class UnarySFPUGolden:
         # Fractional part with sign of x: frac(x) = x - trunc(x)
         return (x - math.trunc(x)) if math.isfinite(x) else x
 
+    def _round(self, x):
+        # decimals=0, round-half-to-even (matches the kernel's _round_even_ and
+        # torch.round / Python's banker's rounding).
+        return float(round(x)) if math.isfinite(x) else x
+
+    def _tan(self, x):
+        return math.tan(x)
+
+    def _atan(self, x):
+        return math.atan(x)
+
+    def _asin(self, x):
+        # Domain restricted to [-1, 1] by the stimuli spec.
+        return math.asin(x)
+
+    def _acos(self, x):
+        # Domain restricted to [-1, 1] by the stimuli spec.
+        return math.acos(x)
+
+    def _sinh(self, x):
+        return math.sinh(x)
+
+    def _cosh(self, x):
+        return math.cosh(x)
+
     def _square(self, x):
         if not math.isfinite(x * x):
             return self.handle_infinite_numbers(math.inf)
@@ -2850,6 +2884,12 @@ class UnarySFPUGolden:
 
     def _unary_le(self, x):
         return 1.0 if x <= self._UNARY_COMP_THRESHOLD else 0.0
+
+    def _unary_ne(self, x):
+        return 1.0 if x != self._UNARY_COMP_THRESHOLD else 0.0
+
+    def _unary_eq(self, x):
+        return 1.0 if x == self._UNARY_COMP_THRESHOLD else 0.0
 
     def _unary_max(self, x):
         return max(x, self._UNARY_MAX_MIN_VALUE)
