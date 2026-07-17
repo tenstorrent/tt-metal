@@ -72,8 +72,15 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED  — per-axis accepted values (grows per refinement toward TARGET)
 # ---------------------------------------------------------------------------
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16, ttnn.float32],
-    "output_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    # Integer passthrough (uint32 + the uint16/int32 family it stands in for in
+    # feature_spec.py): the tilize LLK reorders bytes with no arithmetic and no
+    # cast (integers only pair with the same integer dtype; int<->float crosses
+    # are pruned by INVALID in feature_spec.py). The integer path must NOT take
+    # the fp32 branch (no Lossless / UnpackToDestFp32 / fp32_dest_acc_en) — those
+    # are float precision levers only; the tilize helper falls back to the
+    # standard (non-fast) tilize path for non-Float32/Float16_b formats.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.uint16, ttnn.int32],
+    "output_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.uint32, ttnn.uint16, ttnn.int32],
     "use_multicore": [False, True],
     "shard_api": ["none"],
     "out_scheme": ["interleaved"],
