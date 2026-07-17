@@ -410,7 +410,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_fp32(sfpi::vFloat x) {
         sfpi::vFloat a3 = s * a;
         p = p * s + sfpi::vConstFloatPrgm1;
         p = p * s + sfpi::vConstFloatPrgm2;
-        pio2 = 0x1.921fb6p+0f;
+        pio2 = PI_2;
         r = p * a3 + a;
     }
 
@@ -518,7 +518,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     p = __builtin_rvtt_sfpmad(p.get(), s.get(), c.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
     sfpi::vFloat neg_two = -2.0f;
     p *= s;
-    sfpi::vFloat pio2 = 1.57079637050628662109f;
+    sfpi::vFloat pio2 = PI_2;
     r = __builtin_rvtt_sfpmad(p.get(), z.get(), z.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // Undo the endpoint reduction and restore the input sign.
@@ -575,7 +575,7 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     sfpi::vUInt pio2_bits = sfpi::as<sfpi::vUInt>(z);
     pio2_bits |= t_bits;
     sfpi::vFloat pio2_pred = sfpi::as<sfpi::vFloat>(pio2_bits);
-    v_if(pio2_pred < 0.0f) { r += 1.57079637050628662109f; }
+    v_if(pio2_pred < 0.0f) { r += PI_2; }
     v_endif;
 
     // Endpoint reconstruction.
