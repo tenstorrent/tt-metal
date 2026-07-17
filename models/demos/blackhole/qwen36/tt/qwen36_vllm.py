@@ -13,11 +13,6 @@ from typing import Mapping, Optional
 
 import torch
 from loguru import logger
-
-import ttnn
-from models.demos.blackhole.qwen36.tt.common import create_tt_model
-from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch
-from models.tt_transformers.tt.generator import Generator
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.qwen3_5 import (
     Qwen3_5ProcessingInfo,
@@ -25,6 +20,11 @@ from vllm.model_executor.models.qwen3_5 import (
     Qwen3VLMultiModalProcessor,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
+
+import ttnn
+from models.demos.blackhole.qwen36.tt.common import create_tt_model
+from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch
+from models.tt_transformers.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
 _PREFILL_WARMUP_BUCKET = 4096
