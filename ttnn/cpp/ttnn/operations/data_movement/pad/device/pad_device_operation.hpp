@@ -22,7 +22,7 @@
 #include "ttnn/operations/data_movement/pad/device/pad_tile_program_factory.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <tt-metalium/program.hpp>
 
 namespace ttnn::prim {
 struct PadDeviceOperation {
@@ -52,8 +52,11 @@ struct PadDeviceOperation {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors);
 
-    // #48928: the height-sharded RM factory is pure CB-bound; opt into the descriptor fast-path on a cache hit.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Re-derive ALL per-dispatch state on a cache hit from the selected factory's create_descriptor
+    // (single source of truth). Only reached for ProgramDescriptor factories; WorkloadDescriptor factories
+    // are served by the adapter's workload path. Supersedes get_dynamic_runtime_args + resolve_bindings.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&,

@@ -380,6 +380,86 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
         device.set_program_cache_misses_allowed(False)
 
 
+@pytest.mark.parametrize("n,c,h,w", [(1, 1, 64, 64)])
+@pytest.mark.parametrize("padding,torch_padding", [(((0, 0), (0, 64), (0, 64)), (0, 64, 0, 64, 0, 0))])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_pad_singlecore_program_cache(device, n, c, h, w, padding, torch_padding, layout):
+    """Single-core factories (use_multicore=False): RM -> PadRmReaderWriterProgramFactory
+    (WorkloadDescriptor variant), TILE -> PadTileCoreProgramFactory. The 2nd run hits the same cache
+    entry with a shifted allocation, so buffer addresses must be re-derived -> correct output, no miss."""
+    device.cache_entries_counter.reset()
+    for i in range(2):
+        torch.manual_seed(i)
+        torch_input_tensor = random_torch_tensor(ttnn.bfloat16, (n, c, h, w))
+        torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=0)
+        input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=ttnn.bfloat16)
+        with device.cache_entries_counter.measure():
+            output_tensor = ttnn.pad(input_tensor, padding=padding, value=0, use_multicore=False)
+        output_tensor = ttnn.to_torch(output_tensor)
+        assert output_tensor.shape == torch_output_tensor.shape
+        assert torch.equal(torch_output_tensor, output_tensor)
+        # dummy tensor shifts the allocator so the 2nd pad hits the cache with different addresses
+        ttnn.from_torch(
+            torch.randn([1, 1, 32, 32]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        device.set_program_cache_misses_allowed(False)
+    assert device.cache_entries_counter.total == 1
+
+
+def run_pad_rm_sharded_width(device, n, c, h, w, w_out, value, dtype):
+    torch.manual_seed(0)
+    padding = ((0, 0), (0, 0), (0, w_out - w))
+    torch_padding = (0, w_out - w, 0, 0, 0, 0)
+    torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    compute_grid = device.compute_with_storage_grid_size()
+    num_cores_x = min(8, compute_grid.x)
+    num_cores_y = min(8, compute_grid.y)
+    num_cores = num_cores_x * num_cores_y
+    grid_coord = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_h = ttnn.core.divup(n * c * h, num_cores)  # height unchanged -> same shard height in/out
+
+    in_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
+    in_mem = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, in_spec)
+    out_spec = ttnn.ShardSpec(shard_grid, (shard_h, w_out), ttnn.ShardOrientation.ROW_MAJOR)
+    out_mem = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, out_spec)
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    tt_output_tensor = ttnn.pad(tt_input_tensor, padding=padding, value=value, memory_config=out_mem)
+    tt_output_tensor = ttnn.to_torch(ttnn.from_device(tt_output_tensor))
+
+    assert tt_output_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+def test_pad_rm_sharded_width_program_cache(device):
+    """Width-only sharded pad (PadRmShardedWidthOnlyProgramFactory): re-run on a cache hit with a
+    shifted allocation must re-derive the sharded CB base addresses -> correct output, 1 cache entry."""
+    if device.compute_with_storage_grid_size().x < 2 or device.compute_with_storage_grid_size().y < 2:
+        pytest.skip("requires at least a 2x2 core grid")
+    device.cache_entries_counter.reset()
+    for _ in range(2):
+        with device.cache_entries_counter.measure():
+            run_pad_rm_sharded_width(device, 1, 1, 64, 8, 16, 3.0, ttnn.int32)
+        # dummy tensor shifts the allocator so the 2nd pad hits the cache with different addresses
+        ttnn.from_torch(
+            torch.randn([1, 1, 32, 32]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.cache_entries_counter.total == 1
+
+
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 64),), (0, 64)), (((16, 16), (0, 32)), (0, 32, 0, 32))])
