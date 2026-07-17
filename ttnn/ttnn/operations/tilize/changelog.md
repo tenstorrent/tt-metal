@@ -1,5 +1,56 @@
 # tilize — changelog
 
+## Refinement 1b — uint32 integer passthrough (debug: fix gate violations)
+
+- **Date**: 2026-07-17
+- **What was done**: Fixed the hard completion-gate violation from Refinement 1
+  (`Bullet 3 FAIL: golden responsible cells 42/72 below majority threshold`).
+  **Root cause**: Refinement 1 added `uint32`/`uint16`/`int32` to both
+  `SUPPORTED["dtype"]` and `SUPPORTED["output_dtype"]`. Because `dtype` (input)
+  and `output_dtype` (kwarg) are independent cartesian axes, every int↔float
+  cross cell (`bf16→uint32`, `fp32→uint32`, `uint32→bf16`, `uint32→fp32`,
+  `uint32→bf8b`) then fell *inside* `cartesian(SUPPORTED)`. Those cells are
+  `INVALID` in `feature_spec.py` (skipped test-side), but the harness completion
+  gate counts every `is_supported ∧ non-xfail` cell as "responsible" — and a
+  `skipped` cell is not `xfail`, so the 30 INVALID-skipped crosses
+  (6 interleaved scenarios × 5 crosses) inflated `responsible_total` from 42 to
+  72 while only the 42 valid cells passed → 42/72 = 58% < 75% expansion
+  threshold. **Fix**: added the int↔float crosses to `EXCLUSIONS` (generated over
+  the int × float dtype families). This (a) makes `is_supported()` return False
+  for those cells so the gate no longer counts them (`responsible` now 42/42 =
+  100%), and (b) makes `validate()` raise `ExcludedCell` at runtime instead of
+  running the kernel on a garbage int↔float reinterpret. `invalid_reason` still
+  takes precedence in `test_golden.py`, so the cells stay `skipped` (INVALID),
+  not `xfail` — no XPASS drift, `verify_supported` still categorizes them
+  `invalid_skipped`. **No kernel or program-descriptor change** — pure registry
+  correction.
+- **Accuracy achieved**: unchanged from Refinement 1 — bit-exact identity
+  (comp_equal, PCC=1.0, max_abs=0) for uint32/uint16/int32 interleaved.
+- **Golden test progress**: full `eval/golden_tests/tilize/` = **111 passed /
+  45 failed / 83 skipped / 35 xfailed / 2 errors** (identical set to Refinement
+  1 — no regression). `test_golden.py` responsible cells = **42 passed /
+  0 failed** (55 skipped INVALID, 35 xfailed sharded) → responsible 42/42 =
+  **100%**. The 45 failures are all `shard_api='legacy_2d'` refusals in
+  `test_golden_main_tests.py` / `test_regression.py` (Refinement 2 scope, not
+  registry-`axes`-tagged, so not counted as responsible). The 2 errors are the
+  pre-existing `device_params` + `use_module_device` conflict in
+  `test_deepseek_v3_mla_tilize_trace_mode` (test-infra, present in the prior
+  phase). Gate bullets: (1) no hang — suite completes in ~5s; (2) acceptance +
+  refinement tests 83 passed; (3) responsible 42/42 ≥ 75%, no regression.
+- **Perf gate**: inherited from Refinement 1 — this is a registry-only change
+  with **no data-path delta** (same reader/compute/writer kernels, same
+  constant-bounded CBs, same tile-row multi-core split). DM-bound classification
+  and roofline from Refinement 1 stand unchanged.
+- **Issues encountered**: The tension between "INVALID lives in feature_spec, not
+  the op file" and the gate's responsible-cell counting: when SUPPORTED's
+  cartesian rectangle overlaps INVALID (independent dtype × output_dtype axes),
+  the op file must hole-punch those cells via EXCLUSIONS so both the runtime gate
+  (`validate()`) and the completion gate (`is_supported()`) agree the op does not
+  claim them. EXCLUSIONS here mirrors feature_spec's INVALID (structural, not
+  future-work) precisely because the two axes cross with no valid cell.
+- **Tests added**: none beyond Refinement 1's `test_tilize_uint32.py` (still
+  83 passing). No kernel debugging loop needed — this was a registry-logic fix.
+
 ## Refinement 1 — uint32 integer passthrough
 
 - **Date**: 2026-07-17

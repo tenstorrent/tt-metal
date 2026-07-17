@@ -70,7 +70,7 @@ in the bf16/fp32/bf8b cells.
 
 
 
-### [ ] Refinement 1b — uint32 integer passthrough (debug: fix gate violations)
+### [x] Refinement 1b — uint32 integer passthrough (debug: fix gate violations)
 
 **Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
 
