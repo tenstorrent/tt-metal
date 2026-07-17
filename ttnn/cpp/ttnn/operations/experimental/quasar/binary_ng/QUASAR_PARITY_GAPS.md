@@ -86,15 +86,8 @@ message instead of a deep validator/compile error.
 fp32 routes the SFPU kernel for **every** op (`is_binary_sfpu_op` is true for any fp32 op, incl. add);
 the factory sets `fp32_dest_acc_en=true` + `unpack_to_dest_mode=UnpackToDestFp32`.
 
-- fp32 **multiply / divide** → **WORK** (PCC 1.0); the op test covers them.
-- fp32 **add / sub** → **JIT compile fail** — SFPU `add_binary_tile` is unported on Quasar (matrix Table 1,
-  `add` row = `kernel` for fp32; MUL/DIV are ported, ADD/SUB are not). The op test **skips** fp32 add/sub.
-
-**Actionable (op-author risk context; tracked in tenstorrent/tt-metal#49883):** a probe confirmed the fix — mirror the MUL/DIV path across the 3
-LLK layers (compute-API `#else` branch, LLK-API `_add` wrapper, relax the ckernel `static_assert(MUL||DIV)`)
-→ fp32 add PCC 1.0, mul/div unchanged. It touches **shared Quasar LLK/compute-API files outside this op
-dir**, so it needs code-review + a WH/BH SFPU-add regression check; also wire `sub_binary_tile`. Once
-landed, un-skip fp32 add/sub. (bf16 add/sub are unaffected — they use the FPU kernel.)
+- fp32 **multiply / divide / add / sub** → **WORK** (PCC 1.0); the op test covers all four.
+  (bf16 add/sub are unaffected — they use the FPU kernel.)
 
 ## 4. Arch / HW constraints  [ARCH]
 
@@ -157,16 +150,15 @@ Subtile broadcast is the next milestone (§1). Its LLK + compute-API foundation 
    `ckernel_sfpu_gelu.h::gelu_init`. Unblocks `gelu` + `bias_gelu` (both `broken`). Highest value/effort.
 2. **Remaining class-(C) coverage** (§5) — `tanh`/`square`/`sigmoid` now done; add tests for
    `maximum`/`minimum`/int-add-mul/derived ops (all matrix-`✓`). No LLK work.
-3. **SFPU add/sub port** (§3) — un-blocks fp32 add/sub; shared-file change + WH/BH regression check.
-4. **Subtile broadcast** (§1, §6) — the next major porting milestone; foundation is ready, so op-side
+3. **Subtile broadcast** (§1, §6) — the next major porting milestone; foundation is ready, so op-side
    wiring (gate + factory/kernel).
-5. **Gate hygiene** (§2) — optionally reject Quasar-unsupported formats/ops with a clear message.
+4. **Gate hygiene** (§2) — optionally reject Quasar-unsupported formats/ops with a clear message.
 
 ## Systemic lesson
 
 Every Quasar "gap" audited this session was an **op/port/coverage matter**, not a sim/LLK/arch wall — the
 CB→DFB mirror assumed WH/BH had fully-ported Quasar primitives. On Quasar the descriptor path can't run,
-`*_with_dt` reconfig is a no-op, `pack_reconfig` is gasket-only, and some SFPU ops (int families + float
-add/sub) are unported — but many primitives the op never exercised (§5) already work. Treat "it's a
+`*_with_dt` reconfig is a no-op, `pack_reconfig` is gasket-only, and some SFPU ops (int families) are
+unported — but many primitives the op never exercised (§5) already work. Treat "it's a
 sim/LLK/arch gap" as a hypothesis to disprove with an instruction-level trace and a matrix lookup, not a
 conclusion.
