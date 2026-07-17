@@ -149,7 +149,7 @@ ChunkedParams compute_chunked_params(
     return p;
 }
 
-tt::DataFormat qk_intermediate_dataformat(bool fp32_dest_acc_en) {
+tt::DataFormat fp32_dest_intermediate_dataformat(bool fp32_dest_acc_en) {
     return fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 }
 
@@ -660,10 +660,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
-    tt::DataFormat qk_im_df = qk_intermediate_dataformat(fp32_dest_acc_en);
+    tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+    tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
-    TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
+    TT_ASSERT(
+        !use_streaming_compute || sum_df == im_df,
+        "SDPA fused SALAD correction requires out and sum CBs to share data format");
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -673,6 +676,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
     uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
+    uint32_t sum_tile_size = tt::tile_size(sum_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -682,6 +686,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+    log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
+    log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
 
     sdpa_cb::CBIds cb_ids;
     uint32_t next_cb_index = 0;
@@ -764,8 +770,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
