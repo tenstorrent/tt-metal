@@ -66,6 +66,7 @@
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
+#include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
 // This header expects a DST_ACCUM_MODE macro; scope it to the include so it
 // doesn't clash with the DST_ACCUM_MODE template param used below.
@@ -499,6 +500,22 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::unary_min)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_init<false>);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max_int32)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_int32_init<true /* IS_MAX_OP */, false /* IS_UNSIGNED */>);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min_int32)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_int32_init<false /* IS_MAX_OP */, false /* IS_UNSIGNED */>);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max_uint32)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_int32_init<true /* IS_MAX_OP */, true /* IS_UNSIGNED */>);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min_uint32)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(unary_max_min_int32_init<false /* IS_MAX_OP */, true /* IS_UNSIGNED */>);
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
@@ -1274,6 +1291,56 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min, (false, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0u /* value = 0.0f */);
+    }
+    // Integer unary max/min against a fixed scalar (1000). IS_UNSIGNED selects the
+    // uint32 vs int32 SFPSWAP handling. The golden compares against the same 1000.
+    else if constexpr (OPERATION == SfpuType::unary_max_int32)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min_int32, (true, false, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 1000u);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min_int32)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min_int32, (false, false, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 1000u);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_max_uint32)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min_int32, (true, true, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 1000u);
+    }
+    else if constexpr (OPERATION == SfpuType::unary_min_uint32)
+    {
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min_int32, (false, true, APPROX_MODE, ITERATIONS), dst_index, vector_mode, 1000u);
+    }
+    // Unary shift by a fixed immediate (3 bits). Integer-only kernels; the DATA_FORMAT
+    // template is chosen from the runtime math_format. The golden shifts by the same 3.
+    else if constexpr (OPERATION == SfpuType::left_shift)
+    {
+        if (math_format == ckernel::to_underlying(DataFormat::UInt16))
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX_MODE, DataFormat::UInt16, ITERATIONS), dst_index, vector_mode, 3u);
+        }
+        else if (math_format == ckernel::to_underlying(DataFormat::UInt32))
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX_MODE, DataFormat::UInt32, ITERATIONS), dst_index, vector_mode, 3u);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_left_shift, (APPROX_MODE, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, 3u);
+        }
+    }
+    else if constexpr (OPERATION == SfpuType::right_shift)
+    {
+        if (math_format == ckernel::to_underlying(DataFormat::UInt16))
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX_MODE, DataFormat::UInt16, ITERATIONS), dst_index, vector_mode, 3u);
+        }
+        else if (math_format == ckernel::to_underlying(DataFormat::UInt32))
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX_MODE, DataFormat::UInt32, ITERATIONS), dst_index, vector_mode, 3u);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_right_shift, (APPROX_MODE, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, 3u);
+        }
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {

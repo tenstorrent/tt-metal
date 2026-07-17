@@ -34,32 +34,28 @@ WAIVED = {
     "reduce": "covered by the dedicated reduce harness (test_sfpu_reduce.py)",
     # -- dead / placeholder enum ---------------------------------------------
     "unused": "placeholder enumerator, no kernel behind it",
-    # -- GROUP B: integer / format-typed variants (gap; needs per-op int-format
-    #    verification — sign-magnitude packing / InstrModLoadStore correctness) -
-    "add_uint32": "gap(B): uint32 add-with-scalar; needs int-format golden+dispatch",
-    "add_uint16": "gap(B): uint16 add-with-scalar; needs int-format golden+dispatch",
-    "sub_uint16": "gap(B): uint16 sub-with-scalar; needs int-format golden+dispatch",
-    "mul_uint16": "gap(B): uint16 mul-with-scalar; needs int-format golden+dispatch",
-    "remainder_int32": "gap(B): int32 remainder; needs int golden+dispatch",
-    "remainder_uint32": "gap(B): uint32 remainder; needs int golden+dispatch",
-    "fmod_int32": "gap(B): int32 fmod; needs int golden+dispatch",
+    # -- GROUP B: integer / format-typed variants -----------------------------
+    # The integer *unary* harness now exists (test_eltwise_unary_sfpu_int): shifts and
+    # unary max/min int32/uint32 are wired and removed from this ledger. The entries
+    # below are the remaining integer gaps.
+    #   unary-with-scalar arithmetic: kernels exist (calculate_add_int32 / binop_with_scalar
+    #   unsigned variants) and can now use the int harness, but each needs its own scalar
+    #   plumbing + golden; left as a focused follow-up.
+    "add_uint32": "gap(B): uint32 add-with-scalar; int harness ready, needs scalar plumbing + golden",
+    "add_uint16": "gap(B): uint16 add-with-scalar; int harness ready, needs scalar plumbing + golden",
+    "sub_uint16": "gap(B): uint16 sub-with-scalar; int harness ready, needs scalar plumbing + golden",
+    "mul_uint16": "gap(B): uint16 mul-with-scalar; int harness ready, needs scalar plumbing + golden",
+    "remainder_int32": "gap(B): int32 remainder; int harness ready, needs golden+dispatch",
+    "remainder_uint32": "gap(B): uint32 remainder; int harness ready, needs golden+dispatch",
+    "fmod_int32": "gap(B): int32 fmod; int harness ready, needs golden+dispatch",
+    #   binary integer ops belong in the binary harness (test_sfpu_binary.py), not the
+    #   unary int harness added here.
     "eq_int": "gap(B): int32 binary eq; needs binary-int path",
     "ne_int": "gap(B): int32 binary ne; needs binary-int path",
     "max_int32": "gap(B): int32 binary max; needs binary-int path",
     "min_int32": "gap(B): int32 binary min; needs binary-int path",
     "max_uint32": "gap(B): uint32 binary max; needs binary-int path",
     "min_uint32": "gap(B): uint32 binary min; needs binary-int path",
-    "unary_max_int32": "gap(B): int32 unary max-with-scalar; needs int path",
-    "unary_min_int32": "gap(B): int32 unary min-with-scalar; needs int path",
-    "unary_max_uint32": "gap(B): uint32 unary max-with-scalar; needs int path",
-    "unary_min_uint32": "gap(B): uint32 unary min-with-scalar; needs int path",
-    # unary shift-by-immediate: real dedicated unary kernels (calculate_left_shift /
-    # calculate_right_shift in ckernel_sfpu_unary_shift.h, prod API left/right_shift_tile),
-    # but Int32/UInt32/UInt16-only. Same int-format blocker as the rest of group B: the
-    # shared UnarySFPUGolden path is float-only and the Int32 unary harness is skipped
-    # (fast-tilize, tt-llk#495), so they can't run bit-exact yet.
-    "left_shift": "gap(B): integer unary left shift; dedicated kernel, needs int-format golden+harness (#495)",
-    "right_shift": "gap(B): integer unary arithmetic right shift; dedicated kernel, needs int-format golden+harness (#495)",
     # -- GROUP C: quantization -----------------------------------------------
     "quant_int32": "gap(C): quantization; scalar scale/zero-point golden pending",
     "requant_int32": "gap(C): requantization; scalar scale/zero-point golden pending",

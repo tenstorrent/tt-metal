@@ -354,36 +354,61 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
     )
 
 
+# Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
+# shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
+# the 32-bit int path). Golden is exact (no PCC/tolerance).
+_INT_UNARY_OPS = [
+    MathOperation.LeftShift,
+    MathOperation.RightShift,
+    MathOperation.UnaryMaxInt32,
+    MathOperation.UnaryMinInt32,
+    MathOperation.UnaryMaxUint32,
+    MathOperation.UnaryMinUint32,
+]
+
+# Ops whose kernel interprets DST as unsigned; run them under UInt32.
+_UINT32_INT_UNARY_OPS = {
+    MathOperation.UnaryMaxUint32,
+    MathOperation.UnaryMinUint32,
+}
+
+
+def _int_unary_stimuli_spec(mathop):
+    # Shifts use a fixed shift of 3, so keep inputs small-positive: x << 3 must stay
+    # inside the positive int32 range (Dst is sign-magnitude, so hitting the sign bit
+    # would diverge from the two's-complement golden).
+    if mathop in (MathOperation.LeftShift, MathOperation.RightShift):
+        return StimuliSpec.uniform(low=0.0, high=1_000_000.0)
+    # Unary max/min compare against the fixed scalar 1000; straddle it so both the
+    # keep-input and take-scalar branches are exercised. Positive-only keeps signed
+    # and unsigned interpretations identical (safe under sign-magnitude Dst).
+    return StimuliSpec.uniform(low=0.0, high=2000.0)
+
+
 @parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    mathop=[
-        MathOperation.Neg,
-        MathOperation.Fill,
-    ],
-    fast_mode=[FastMode.No, FastMode.Yes],
+    mathop=_INT_UNARY_OPS,
     dest_acc=[DestAccumulation.Yes],
-    input_dimensions=[[128, 256]],
+    input_dimensions=[[64, 64]],
 )
 def test_eltwise_unary_sfpu_int(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
     mathop: MathOperation,
-    fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if formats.input_format == DataFormat.Int32:
-        pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
+    int_format = (
+        DataFormat.UInt32 if mathop in _UINT32_INT_UNARY_OPS else DataFormat.Int32
+    )
+    formats = InputOutputFormat(int_format, int_format)
 
     eltwise_unary_sfpu(
-        "sources/eltwise_unary_sfpu_int.cpp",
+        "sources/eltwise_unary_sfpu_test.cpp",
         formats,
         dest_acc,
-        approx_mode,
+        ApproximationMode.No,
         mathop,
-        fast_mode,
+        FastMode.No,
         input_dimensions,
+        spec_A=_int_unary_stimuli_spec(mathop),
     )
 
 

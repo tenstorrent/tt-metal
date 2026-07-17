@@ -206,6 +206,15 @@ class MathOperation(Enum):
     AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
     SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     AbsInt32 = OpSpec("abs_int32", MathOpType.SFPU_UNARY)
+    # Integer unary ops (int32/uint32/uint16). cpp_enum_value must match the
+    # SfpuType enumerator name so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    # Exercised through the dedicated integer harness (test_eltwise_unary_sfpu_int).
+    LeftShift = OpSpec("left_shift", MathOpType.SFPU_UNARY)
+    RightShift = OpSpec("right_shift", MathOpType.SFPU_UNARY)
+    UnaryMaxInt32 = OpSpec("unary_max_int32", MathOpType.SFPU_UNARY)
+    UnaryMinInt32 = OpSpec("unary_min_int32", MathOpType.SFPU_UNARY)
+    UnaryMaxUint32 = OpSpec("unary_max_uint32", MathOpType.SFPU_UNARY)
+    UnaryMinUint32 = OpSpec("unary_min_uint32", MathOpType.SFPU_UNARY)
     BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
     # logical_not(x) = (x == 0) ? 1 : 0, exercised on the float (DEFAULT-layout)
     # path. cpp_enum_value must match the SfpuType enumerator name.
