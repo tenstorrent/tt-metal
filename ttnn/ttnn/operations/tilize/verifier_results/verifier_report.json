@@ -1,0 +1,2463 @@
+{
+  "summary": {
+    "total": 276,
+    "supported_pass": 36,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 41,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 55,
+    "invalid_unexpected": 0,
+    "no_axes_found": 144
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=FLOAT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT16-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=FLOAT32-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT16-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=FLOAT32-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "passed"
+      }
+    ],
+    "invalid_skipped": [
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=FLOAT32-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=UINT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=UINT32-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=UINT32-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=BFLOAT16-out_scheme=interleaved-output_dtype=UINT32-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=FLOAT32-out_scheme=interleaved-output_dtype=UINT32-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT16-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=FLOAT32-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=BFLOAT8_B-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=HEIGHT_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=HEIGHT_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=HEIGHT_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=HEIGHT_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=HEIGHT_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=WIDTH_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=WIDTH_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=UINT32-out_scheme=WIDTH_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=UINT32-out_scheme=WIDTH_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=UINT32-out_scheme=WIDTH_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=BLOCK_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=BLOCK_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=UINT32-out_scheme=BLOCK_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=UINT32-out_scheme=BLOCK_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=UINT32-out_scheme=BLOCK_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=nd-output_dtype=UINT32-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=nd-output_dtype=UINT32-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=UINT32-out_scheme=nd-output_dtype=BFLOAT16-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=UINT32-out_scheme=nd-output_dtype=FLOAT32-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=UINT32-out_scheme=nd-output_dtype=BFLOAT8_B-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=nd-output_dtype=UINT32-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=nd-output_dtype=UINT32-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=nd-output_dtype=BFLOAT16-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=nd-output_dtype=FLOAT32-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=nd-output_dtype=BFLOAT8_B-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "skipped"
+      }
+    ],
+    "xfail_expected": [
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=False]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": false,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x128-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x32x64-buffer=dram_to_l1-dtype=UINT32-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-1x1x64x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=interleaved-output_dtype=UINT32-rank=4-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-64x128-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=UINT32-rank=2-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 2
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[none-2x32x64-buffer=dram_to_dram-dtype=UINT32-out_scheme=interleaved-output_dtype=UINT32-rank=3-shard_api=none-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "none",
+          "out_scheme": "interleaved",
+          "buffer": "dram_to_dram",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=HEIGHT_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=HEIGHT_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=HEIGHT_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=HEIGHT_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=HEIGHT_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=HEIGHT_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x512x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=HEIGHT_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "HEIGHT_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=WIDTH_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=WIDTH_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=WIDTH_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=WIDTH_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=WIDTH_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=WIDTH_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x64x512-buffer=l1_to_l1-dtype=UINT32-out_scheme=WIDTH_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "WIDTH_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=BLOCK_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=BLOCK_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=BLOCK_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=BLOCK_SHARDED-output_dtype=BFLOAT16-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=BLOCK_SHARDED-output_dtype=FLOAT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=BLOCK_SHARDED-output_dtype=BFLOAT8_B-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[legacy_2d-1x1x128x128-buffer=l1_to_l1-dtype=UINT32-out_scheme=BLOCK_SHARDED-output_dtype=UINT32-rank=4-shard_api=legacy_2d-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "legacy_2d",
+          "out_scheme": "BLOCK_SHARDED",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=nd-output_dtype=BFLOAT16-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=nd-output_dtype=FLOAT32-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=nd-output_dtype=BFLOAT8_B-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=nd-output_dtype=BFLOAT16-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=nd-output_dtype=FLOAT32-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=nd-output_dtype=BFLOAT8_B-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-1x1x128x128-buffer=l1_to_l1-dtype=UINT32-out_scheme=nd-output_dtype=UINT32-rank=4-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 4
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=nd-output_dtype=BFLOAT16-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=nd-output_dtype=FLOAT32-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=BFLOAT16-out_scheme=nd-output_dtype=BFLOAT8_B-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=nd-output_dtype=BFLOAT16-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT16",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=nd-output_dtype=FLOAT32-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "FLOAT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=FLOAT32-out_scheme=nd-output_dtype=BFLOAT8_B-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "FLOAT32",
+          "output_dtype": "BFLOAT8_B",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "xfail"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden.py::test_op[nd-4x32x64-buffer=l1_to_l1-dtype=UINT32-out_scheme=nd-output_dtype=UINT32-rank=3-shard_api=nd-use_multicore=True]",
+        "axes": {
+          "dtype": "UINT32",
+          "output_dtype": "UINT32",
+          "use_multicore": true,
+          "shard_api": "nd",
+          "out_scheme": "nd",
+          "buffer": "l1_to_l1",
+          "rank": 3
+        },
+        "status": "xfail"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_test[tilize_args0-input_shapes0]",
+        "test_name": "test_tilize_test[tilize_args0-input_shapes0]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_test[tilize_args0-input_shapes1]",
+        "test_name": "test_tilize_test[tilize_args0-input_shapes1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_test[tilize_args0-input_shapes2]",
+        "test_name": "test_tilize_test[tilize_args0-input_shapes2]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_fp32_truncation[False-shape0]",
+        "test_name": "test_tilize_fp32_truncation[False-shape0]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_fp32_truncation[False-shape1]",
+        "test_name": "test_tilize_fp32_truncation[False-shape1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_fp32_truncation[True-shape0]",
+        "test_name": "test_tilize_fp32_truncation[True-shape0]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_fp32_truncation[True-shape1]",
+        "test_name": "test_tilize_fp32_truncation[True-shape1]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_row_major_to_width_sharded[shard_core_grid0-shard_shape0-tensor_shape0-DataType.BFLOAT16]",
+        "test_name": "test_tilize_row_major_to_width_sharded[shard_core_grid0-shard_shape0-tensor_shape0-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-True-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-True-False-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-True-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[True-False-False-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-True-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-True-False-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-True-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape0-shard_shape0-None-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape1-shard_shape1-None-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape2-shard_shape2-None-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape3-shard_shape3-None-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape4-shard_shape4-output_shard_shape4-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape5-shard_shape5-output_shard_shape5-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape6-shard_shape6-output_shard_shape6-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded[False-False-False-shard_core_grid0-tensor_shape7-shard_shape7-output_shard_shape7-DataType.BFLOAT16]",
+        "status": "skipped"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.HEIGHT_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.WIDTH_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape0-shard_shape0-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape1-shard_shape1-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]",
+        "test_name": "test_tilize_nd_sharded_to_legacy_sharded[TensorMemoryLayout.BLOCK_SHARDED-shard_core_grid0-tensor_shape2-shard_shape2-DataType.BFLOAT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row[Layout.TILE-torch_dtype0-DataType.BFLOAT4_B-shape0]",
+        "test_name": "test_from_torch_conversion_deep_seek_mc_large_number_of_pages_per_row[Layout.TILE-torch_dtype0-DataType.BFLOAT4_B-shape0]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_deepseek_v3_mla_tilize_trace_mode[device_params0-100-10-interleaved-wo_tilize-32]",
+        "test_name": "test_deepseek_v3_mla_tilize_trace_mode[device_params0-100-10-interleaved-wo_tilize-32]",
+        "status": "error"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_deepseek_v3_mla_tilize_trace_mode[device_params0-100-10-width_sharded-wo_tilize-32]",
+        "test_name": "test_deepseek_v3_mla_tilize_trace_mode[device_params0-100-10-width_sharded-wo_tilize-32]",
+        "status": "error"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-False-DataType.BFLOAT16]",
+        "test_name": "test_tilize_2D[32-128-False-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-False-DataType.FLOAT32]",
+        "test_name": "test_tilize_2D[32-128-False-DataType.FLOAT32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-False-DataType.INT32]",
+        "test_name": "test_tilize_2D[32-128-False-DataType.INT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-False-DataType.UINT32]",
+        "test_name": "test_tilize_2D[32-128-False-DataType.UINT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-False-DataType.UINT16]",
+        "test_name": "test_tilize_2D[32-128-False-DataType.UINT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-True-DataType.BFLOAT16]",
+        "test_name": "test_tilize_2D[32-128-True-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-True-DataType.FLOAT32]",
+        "test_name": "test_tilize_2D[32-128-True-DataType.FLOAT32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-True-DataType.INT32]",
+        "test_name": "test_tilize_2D[32-128-True-DataType.INT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-True-DataType.UINT32]",
+        "test_name": "test_tilize_2D[32-128-True-DataType.UINT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-128-True-DataType.UINT16]",
+        "test_name": "test_tilize_2D[32-128-True-DataType.UINT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-False-DataType.BFLOAT16]",
+        "test_name": "test_tilize_2D[32-2048-False-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-False-DataType.FLOAT32]",
+        "test_name": "test_tilize_2D[32-2048-False-DataType.FLOAT32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-False-DataType.INT32]",
+        "test_name": "test_tilize_2D[32-2048-False-DataType.INT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-False-DataType.UINT32]",
+        "test_name": "test_tilize_2D[32-2048-False-DataType.UINT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-False-DataType.UINT16]",
+        "test_name": "test_tilize_2D[32-2048-False-DataType.UINT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-True-DataType.BFLOAT16]",
+        "test_name": "test_tilize_2D[32-2048-True-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-True-DataType.FLOAT32]",
+        "test_name": "test_tilize_2D[32-2048-True-DataType.FLOAT32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-True-DataType.INT32]",
+        "test_name": "test_tilize_2D[32-2048-True-DataType.INT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-True-DataType.UINT32]",
+        "test_name": "test_tilize_2D[32-2048-True-DataType.UINT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[32-2048-True-DataType.UINT16]",
+        "test_name": "test_tilize_2D[32-2048-True-DataType.UINT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-False-DataType.BFLOAT16]",
+        "test_name": "test_tilize_2D[1056-128-False-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-False-DataType.FLOAT32]",
+        "test_name": "test_tilize_2D[1056-128-False-DataType.FLOAT32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-False-DataType.INT32]",
+        "test_name": "test_tilize_2D[1056-128-False-DataType.INT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-False-DataType.UINT32]",
+        "test_name": "test_tilize_2D[1056-128-False-DataType.UINT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-False-DataType.UINT16]",
+        "test_name": "test_tilize_2D[1056-128-False-DataType.UINT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-True-DataType.BFLOAT16]",
+        "test_name": "test_tilize_2D[1056-128-True-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-True-DataType.FLOAT32]",
+        "test_name": "test_tilize_2D[1056-128-True-DataType.FLOAT32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-True-DataType.INT32]",
+        "test_name": "test_tilize_2D[1056-128-True-DataType.INT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-True-DataType.UINT32]",
+        "test_name": "test_tilize_2D[1056-128-True-DataType.UINT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-128-True-DataType.UINT16]",
+        "test_name": "test_tilize_2D[1056-128-True-DataType.UINT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-False-DataType.BFLOAT16]",
+        "test_name": "test_tilize_2D[1056-2048-False-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-False-DataType.FLOAT32]",
+        "test_name": "test_tilize_2D[1056-2048-False-DataType.FLOAT32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-False-DataType.INT32]",
+        "test_name": "test_tilize_2D[1056-2048-False-DataType.INT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-False-DataType.UINT32]",
+        "test_name": "test_tilize_2D[1056-2048-False-DataType.UINT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-False-DataType.UINT16]",
+        "test_name": "test_tilize_2D[1056-2048-False-DataType.UINT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-True-DataType.BFLOAT16]",
+        "test_name": "test_tilize_2D[1056-2048-True-DataType.BFLOAT16]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-True-DataType.FLOAT32]",
+        "test_name": "test_tilize_2D[1056-2048-True-DataType.FLOAT32]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-True-DataType.INT32]",
+        "test_name": "test_tilize_2D[1056-2048-True-DataType.INT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-True-DataType.UINT32]",
+        "test_name": "test_tilize_2D[1056-2048-True-DataType.UINT32]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_tilize_2D[1056-2048-True-DataType.UINT16]",
+        "test_name": "test_tilize_2D[1056-2048-True-DataType.UINT16]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_matmul_test",
+        "test_name": "test_run_tilize_matmul_test",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[False-5-2-4-8]",
+        "test_name": "test_run_tilize_test[False-5-2-4-8]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[False-5-2-4-7]",
+        "test_name": "test_run_tilize_test[False-5-2-4-7]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[False-1-1-784-2]",
+        "test_name": "test_run_tilize_test[False-1-1-784-2]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[False-8-1-2-64]",
+        "test_name": "test_run_tilize_test[False-8-1-2-64]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[False-1-1-1-64]",
+        "test_name": "test_run_tilize_test[False-1-1-1-64]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[True-5-2-4-8]",
+        "test_name": "test_run_tilize_test[True-5-2-4-8]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[True-5-2-4-7]",
+        "test_name": "test_run_tilize_test[True-5-2-4-7]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[True-1-1-784-2]",
+        "test_name": "test_run_tilize_test[True-1-1-784-2]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[True-8-1-2-64]",
+        "test_name": "test_run_tilize_test[True-8-1-2-64]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_golden_main_tests.py::test_run_tilize_test[True-1-1-1-64]",
+        "test_name": "test_run_tilize_test[True-1-1-1-64]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.BFLOAT16-interleaved-dram]",
+        "test_name": "test_identity_integrity[DataType.BFLOAT16-interleaved-dram]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.BFLOAT16-legacy-block-col]",
+        "test_name": "test_identity_integrity[DataType.BFLOAT16-legacy-block-col]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.BFLOAT16-nd-rank3-batch-fold]",
+        "test_name": "test_identity_integrity[DataType.BFLOAT16-nd-rank3-batch-fold]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.UINT16-interleaved-dram]",
+        "test_name": "test_identity_integrity[DataType.UINT16-interleaved-dram]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.UINT16-legacy-block-col]",
+        "test_name": "test_identity_integrity[DataType.UINT16-legacy-block-col]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.UINT16-nd-rank3-batch-fold]",
+        "test_name": "test_identity_integrity[DataType.UINT16-nd-rank3-batch-fold]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.INT32-interleaved-dram]",
+        "test_name": "test_identity_integrity[DataType.INT32-interleaved-dram]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.INT32-legacy-block-col]",
+        "test_name": "test_identity_integrity[DataType.INT32-legacy-block-col]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/tilize/test_regression.py::test_identity_integrity[DataType.INT32-nd-rank3-batch-fold]",
+        "test_name": "test_identity_integrity[DataType.INT32-nd-rank3-batch-fold]",
+        "status": "failed"
+      }
+    ]
+  }
+}

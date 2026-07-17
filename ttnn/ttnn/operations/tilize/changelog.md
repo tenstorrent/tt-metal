@@ -1,5 +1,34 @@
 # tilize — changelog
 
+## Verification pass — 2026-07-17
+
+- **Date**: 2026-07-17
+- **What was done**: Registry-model verification of the Phase-0 delivery. Code review,
+  acceptance + golden + verifier CLI runs, precision baseline, refinement queue setup.
+- **SUPPORTED verified**: dtype=[bf16, fp32], output_dtype=[bf16, fp32, bf8b],
+  use_multicore=[False, True], shard_api=[none], out_scheme=[interleaved],
+  buffer=[dram/l1 × dram/l1], rank=[2, 3, 4]. `xpass_drift=0` — the SUPPORTED block is
+  honest; no drift auto-fixes needed.
+- **Accuracy achieved**: bf16→bf16 and fp32→fp32 are **bit-exact** (PCC=1.0,
+  max_abs=0.0, rms=0.0); bf16→bf8b cast PCC≥0.99 (max_abs≈0.047, rel_rms≈9.3e-3).
+  Measured on 4 shapes via `test_tilize_precision_baseline.py`.
+- **Golden suite**: **36 / 36** in-scope cells passing; 41 `xfail_expected` (35 sharded +
+  6 uint32→uint32 — the refinement queue), 55 `invalid_skipped`. All loud verifier
+  categories at 0 (`supported_fail`, `xpass_drift`, `xfail_wrong_mode`).
+  Artifact: `verifier_results/verifier_report.json`.
+- **Issues encountered / fixed**:
+  - **Golden helper bug** `eval/golden_tests/tilize/helpers.py:71` — `core_range.end_coord`
+    → `core_range.end` (attribute does not exist; crashed every sharded scenario during
+    test setup, mis-categorizing 35 cells as `xfail_wrong_mode`). Mechanical test-infra
+    fix; after it, those 35 cells correctly land in `xfail_expected`. (This is the
+    `CoreRange.end_coord` issue the baseline changelog flagged but left unfixed.)
+  - fp32 `Fp32Mode::Lossless` deviation from `op_design.md` reviewed and **kept** — it is
+    correct for a terminal op and required for the exact fp32 identity oracle.
+- **Refinement queue**: 2 refinements — (1) uint32 integer passthrough
+  (`/numeric-formats-metal`), (2) sharded I/O legacy_2d + nd (`/memory-layouts`). See
+  `op_requirements.md`.
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_precision_baseline.py`.
+
 ## Baseline (fresh implementation) — 2026-07-17
 
 **What was done.** End-to-end `tilize` (ROW_MAJOR → TILE layout conversion) built
