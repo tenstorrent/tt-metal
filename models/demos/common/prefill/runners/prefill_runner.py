@@ -34,7 +34,9 @@ and the per-chunk schedule; it does not reimplement embed / layers / forward.
 import json
 import os
 import signal
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from loguru import logger
 
@@ -181,6 +183,91 @@ _shutdown = False
 def _handle_sigterm(signum, frame):
     global _shutdown
     _shutdown = True
+
+
+class _Metrics:
+    """Thread-safe prefill metrics; snapshot() renders Prometheus text.
+
+    Recorded once per request from each rank's serving loop, then scraped over HTTP by an external
+    Prometheus. Every rank exposes its own endpoint tagged with the rank label, so one dashboard can
+    show per-stage timing across the pipeline. The lock guards the scrape thread against a
+    half-updated record."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.rank = 0
+        self.requests_total = 0
+        self.tokens_total = 0
+        self.latency_ms_sum = 0.0
+        self.latency_ms_count = 0
+        self.last_latency_ms = 0.0
+
+    def record(self, latency_ms: float, num_tokens: int) -> None:
+        with self._lock:
+            self.requests_total += 1
+            self.tokens_total += num_tokens
+            self.latency_ms_sum += latency_ms
+            self.latency_ms_count += 1
+            self.last_latency_ms = latency_ms
+
+    def snapshot(self) -> str:
+        with self._lock:
+            r = f'{{rank="{self.rank}"}}'
+            lines = [
+                "# HELP prefill_up 1 if runner is alive.",
+                "# TYPE prefill_up gauge",
+                f"prefill_up{r} 1",
+                "# HELP prefill_requests_total Total prefill requests served.",
+                "# TYPE prefill_requests_total counter",
+                f"prefill_requests_total{r} {self.requests_total}",
+                "# HELP prefill_tokens_total Total input tokens prefilled (actual_isl).",
+                "# TYPE prefill_tokens_total counter",
+                f"prefill_tokens_total{r} {self.tokens_total}",
+                "# HELP prefill_last_latency_ms Latency of the most recent prefill request.",
+                "# TYPE prefill_last_latency_ms gauge",
+                f"prefill_last_latency_ms{r} {self.last_latency_ms:.3f}",
+                "# HELP prefill_latency_ms_sum Sum of prefill request latencies in ms.",
+                "# TYPE prefill_latency_ms_sum counter",
+                f"prefill_latency_ms_sum{r} {self.latency_ms_sum:.3f}",
+                "# HELP prefill_latency_ms_count Number of observed prefill requests.",
+                "# TYPE prefill_latency_ms_count counter",
+                f"prefill_latency_ms_count{r} {self.latency_ms_count}",
+            ]
+            return "\n".join(lines) + "\n"
+
+
+_metrics = _Metrics()
+
+
+class _MetricsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802 - http.server API
+        if self.path == "/metrics":
+            body = _metrics.snapshot().encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):  # silence default stderr access log
+        return
+
+
+def _maybe_start_metrics_server() -> ThreadingHTTPServer | None:
+    """Start the /metrics HTTP server iff PREFILL_METRICS_PORT is set (>0); otherwise a no-op so the
+    telemetry path adds nothing when unconfigured. Daemon thread — dies with the process."""
+    port = int(os.environ.get("PREFILL_METRICS_PORT", "0"))
+    if port <= 0:
+        return None
+    host = os.environ.get("PREFILL_METRICS_HOST", "0.0.0.0")
+    server = ThreadingHTTPServer((host, port), _MetricsHandler)
+    thread = threading.Thread(target=server.serve_forever, name="prefill-metrics", daemon=True)
+    thread.start()
+    logger.info(f"[metrics] serving on http://{host}:{port}/metrics")
+    return server
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +589,12 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    # Per-request telemetry, first rank only (it owns the scraped /metrics endpoint and sees the
+    # producer's [actual_start, actual_end)). actual_start==0 marks a new request; latency is measured
+    # to the last chunk's completion so the idle gap between requests is not counted.
+    req_start = None
+    req_last_end = 0.0
+    req_tokens = 0
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
@@ -515,8 +608,20 @@ def run_request_loop(
             ttnn.deallocate(inp)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
+            if req_start is not None:
+                _metrics.record((req_last_end - req_start) * 1000.0, req_tokens)
             break
+        # Every rank tracks its own request span (start/end/tokens from the chunk metadata — rank 0
+        # gets it from the producer socket, downstream ranks from D2D), so each exposes its per-stage
+        # latency under its rank label.
+        if meta["actual_start"] == 0:
+            if req_start is not None:
+                _metrics.record((req_last_end - req_start) * 1000.0, req_tokens)
+            req_start = time.perf_counter()
         t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
+        if req_start is not None:
+            req_last_end = time.perf_counter()
+            req_tokens = meta["actual_end"]
         if first is None:
             first = t
         c += 1
@@ -636,6 +741,8 @@ def _print_config() -> None:
         ),
         ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
         ("MIGRATION_DONE_FILE", os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")),
+        ("PREFILL_METRICS_PORT", os.environ.get("PREFILL_METRICS_PORT", "0")),
+        ("PREFILL_METRICS_HOST", os.environ.get("PREFILL_METRICS_HOST", "0.0.0.0")),
     ]
     sep = "=" * 70
     lines = [sep, "prefill_runner configuration", sep]
@@ -845,17 +952,27 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
+    # Every rank exposes its own /metrics tagged with its rank, so Prometheus scrapes all ranks and
+    # one dashboard shows per-stage timing across the pipeline.
+    _metrics.rank = rank
+    metrics_server = _maybe_start_metrics_server()
+
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
-    run_request_loop(
-        runtime,
-        kv_caches,
-        rank,
-        num_ranks,
-        hidden_size=hf_config.hidden_size,
-        h2d_service=h2d_service,
-        d2d_in=d2d_in,
-        d2d_out=d2d_out,
-    )
+    try:
+        run_request_loop(
+            runtime,
+            kv_caches,
+            rank,
+            num_ranks,
+            hidden_size=hf_config.hidden_size,
+            h2d_service=h2d_service,
+            d2d_in=d2d_in,
+            d2d_out=d2d_out,
+        )
+    finally:
+        if metrics_server is not None:
+            metrics_server.shutdown()
+            metrics_server.server_close()
 
     # Release services while the mesh + command queues are still alive (their dtors free a command
     # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
