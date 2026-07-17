@@ -347,11 +347,11 @@ class ElfStrings:
             self._info_record_size, self._info_unpack_fmt = _STRING_INFO_LAYOUT[
                 self.pointer_size
             ]
-            strings = elf.get_sections_by_name(".device_print_strings")
+            strings = elf.get_section_by_name(".device_print_strings")
             if strings is not None:
                 self._strings_addr = strings.address
                 self._strings_data = bytes(strings.data)
-            info = elf.get_sections_by_name(".device_print_strings_info")
+            info = elf.get_section_by_name(".device_print_strings_info")
             if info is not None:
                 self._info_addr = info.address
                 self._info_data = bytes(info.data)
@@ -374,7 +374,10 @@ class ElfStrings:
             try:
                 die = self._parsed_elf.find_die_by_name(enum_name)
                 if die is not None:
-                    result = [(int(c.value), c.name) for c in die.iter_children()]
+                    result = [
+                        (int(c.get_constant_value()), c.name)
+                        for c in die.iter_children()
+                    ]
             except Exception:
                 result = None
         self._enum_cache[enum_name] = result
