@@ -433,7 +433,63 @@ S5 = f"{HERE}/regime_a_campaign_expand.json"
 EXPAND = [
     (256, 2048, 512, "full"),  # worst abs performer + 24.9% gap; small -> exhaustive
     (256, 15360, 1536, "bounded"),  # biggest gap 26.2%; ~185us/cfg -> bounded cost-ranked expansion
+    # largest remaining picker gaps -> true-best oracle targets for training + winner validation
+    (32, 15360, 768, "full"),  # 23.6%, deep-K thin
+    (256, 2304, 6144, "bounded"),  # 22.0%
+    (128, 15360, 1536, "bounded"),  # 20.5%
+    (256, 2048, 1536, "full"),  # 20.1%, Mt8 small
+    (32, 2048, 1024, "full"),  # 18.2%, tiny
+    (256, 2048, 2048, "full"),  # 9.6%, Mt8 small
 ]
+
+# Explicit relaunch A/B validation (ds.run_one at mask 0 -> timing + PCC), before finalizing table entries.
+FINALIZE_VALIDATE = [
+    (256, 15360, 1536, (2, 6, 1, 2, 1), (1, 6, 2, 2, 6)),  # auto vs new nsb=6 winner (beat stability cand)
+    (256, 2048, 1024, (1, 4, 2, 2, 2), (1, 4, 2, 2, 4)),  # picker Sm2 nsb2 vs nsb4 candidate
+]
+
+
+def validate(relaunches=4, deadline=None):
+    """Interleaved relaunch A/B of specific (ref cfg, candidate cfg) pairs with PCC, for entries about to be
+    finalized. Writes regime_a_campaign_validate.json."""
+    out = []
+    for M, K, N, ref, cand in FINALIZE_VALIDATE:
+        if deadline and time.time() > deadline:
+            break
+        runs, pcc = {"ref": [], "cand": []}, {"ref": [], "cand": []}
+        for _ in range(relaunches):
+            for name, cfg in (("ref", ref), ("cand", cand)):
+                x = ds.run_one(M, K, N, tuple(cfg), 0)
+                if x.get("ok") and x.get("wall_us"):
+                    runs[name].append(x["wall_us"])
+                    if x.get("max_rel_err") is not None:
+                        pcc[name].append(x["max_rel_err"])
+        rm = statistics.median(runs["ref"]) if runs["ref"] else None
+        cm = statistics.median(runs["cand"]) if runs["cand"] else None
+        gain = ((rm / cm - 1) * 100) if (rm and cm) else None
+        rec = {
+            "M": M,
+            "K": K,
+            "N": N,
+            "ref_cfg": list(ref),
+            "cand_cfg": list(cand),
+            "ref_us": rm,
+            "cand_us": cm,
+            "cand_gain_pct": gain,
+            "ref_walls": sorted(runs["ref"]),
+            "cand_walls": sorted(runs["cand"]),
+            "ref_maxrelerr": max(pcc["ref"], default=None),
+            "cand_maxrelerr": max(pcc["cand"], default=None),
+        }
+        out.append(rec)
+        json.dump(out, open(f"{HERE}/regime_a_campaign_validate.json", "w"), indent=2)
+        print(
+            f"[validate] {M}x{K}x{N} ref={ref}@{rm and round(rm,1)} cand={cand}@{cm and round(cm,1)} "
+            f"gain={gain and round(gain,1)}% cand_maxrelerr={max(pcc['cand'], default=None)}",
+            flush=True,
+        )
+    print("VALIDATE DONE", flush=True)
+    return out
 
 
 def expand(deadline=None):
@@ -814,6 +870,72 @@ def aggregate():
     return REPORT
 
 
+RERUN_CACHE = f"{HERE}/regime_a_campaign_rerun_cache.json"
+S7 = f"{HERE}/regime_a_campaign_rerun.json"
+
+
+def rerun(deadline=None):
+    """Re-run the full 60-shape corpus through the NEW picker (product path) and diff vs the ORIGINAL
+    deployed baseline S1. Strict no-regression gate: flag any shape >3% slower than before. FRESH cache
+    so run_cfg(None) actually invokes the rebuilt C++ auto_select_config (the campaign cache holds stale
+    old-picker auto results)."""
+    if not os.path.exists(RERUN_CACHE):
+        json.dump({}, open(RERUN_CACHE, "w"))
+    cache = rb.load_cache(RERUN_CACHE)
+    old = {(r["M"], r["K"], r["N"]): r for r in json.load(open(S1)) if r.get("cls") == "ok"}
+    out = []
+    cor = corpus()
+    for i, (shape, cats) in enumerate(cor.items()):
+        M, K, N = shape
+        if deadline and time.time() > deadline:
+            print(f"[rerun] deadline hit at {i}/{len(cor)}", flush=True)
+            break
+        r = rb.run_cfg(M, K, N, None, cache)
+        newcfg = tuple(rb.auto_config(M, K, N))
+        o = old.get(shape, {})
+        oldus, oldcfg = o.get("us_med"), o.get("auto_cfg")
+        newus = r["us_med"] if rb._ok(r) else None
+        delta = ((newus / oldus - 1) * 100) if (newus and oldus) else None
+        rec = {
+            "M": M,
+            "K": K,
+            "N": N,
+            "old_cfg": oldcfg,
+            "old_us": oldus,
+            "new_cfg": list(newcfg),
+            "new_us": newus,
+            "pcc": (r.get("pcc") if rb._ok(r) else None),
+            "cls": r.get("cls"),
+            "delta_pct": delta,
+            "changed": (oldcfg != list(newcfg)),
+            "regressed": bool(delta is not None and delta > 3.0),
+            "improved": bool(delta is not None and delta < -3.0),
+        }
+        out.append(rec)
+        json.dump(out, open(S7, "w"), indent=2)
+        tag = "REGRESSED" if rec["regressed"] else "improved" if rec["improved"] else "~"
+        print(
+            f"[rerun {i+1}/{len(cor)}] {M}x{K}x{N} {oldcfg}@{oldus and round(oldus,1)} -> "
+            f"{list(newcfg)}@{newus and round(newus,1)} ({delta and round(delta,1)}%) pcc={rec['pcc']} {tag}",
+            flush=True,
+        )
+    imp = [r for r in out if r["improved"]]
+    reg = [r for r in out if r["regressed"]]
+    bad_pcc = [r for r in out if r.get("pcc") is not None and r["pcc"] < 0.999]
+    print(f"\nRERUN GATE: improved(>3%)={len(imp)} regressed(>3%)={len(reg)} pcc<0.999={len(bad_pcc)}", flush=True)
+    for r in sorted(reg, key=lambda r: -r["delta_pct"]):
+        print(
+            f"  REGRESSION {r['M']}x{r['K']}x{r['N']} {r['old_cfg']}@{r['old_us']:.1f} -> "
+            f"{r['new_cfg']}@{r['new_us']:.1f} (+{r['delta_pct']:.1f}%)",
+            flush=True,
+        )
+    tot_old = sum(r["old_us"] for r in out if r.get("old_us") and r.get("new_us"))
+    tot_new = sum(r["new_us"] for r in out if r.get("old_us") and r.get("new_us"))
+    print(f"corpus total us: {tot_old:.0f} -> {tot_new:.0f} ({(tot_new/tot_old-1)*100:+.1f}%)", flush=True)
+    print(f"RERUN DONE -> {S7}", flush=True)
+    return out
+
+
 def state_start():
     st = {"start": time.time()}
     if os.path.exists(STATE):
@@ -845,5 +967,12 @@ if __name__ == "__main__":
     elif mode == "stability":
         start = state_start()
         stability(deadline=start + LAUNCH_DEADLINE_S)
+    elif mode == "rerun":
+        rerun()
+    elif mode == "validate":
+        validate()
+    elif mode == "finalize":  # pre-training: validate specific candidates + expand the largest gaps
+        validate()
+        expand()
     else:
         {"baseline": baseline, "picker": picker, "select": select, "ablate": ablate, "aggregate": aggregate}[mode]()
