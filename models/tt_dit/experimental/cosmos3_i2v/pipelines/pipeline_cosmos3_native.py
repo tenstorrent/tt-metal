@@ -966,7 +966,9 @@ def build_cosmos3_i2v_native_pipeline(
         num_attention_heads=config.num_attention_heads,
         num_key_value_heads=config.num_key_value_heads,
         intermediate_size=config.intermediate_size,
-        num_hidden_layers=config.num_hidden_layers,
+        # TT_COSMOS3_NUM_LAYERS truncates the trunk for profiling/bring-up — one layer
+        # keeps the run under the device profiler's per-core marker cap. 0/unset = full depth.
+        num_hidden_layers=int(os.environ.get("TT_COSMOS3_NUM_LAYERS", "0")) or config.num_hidden_layers,
         patch_latent_dim=config.patch_latent_dim if (enable_device_proj_in or enable_device_proj_out) else None,
         enable_proj_in=enable_device_proj_in,
         enable_proj_out=enable_device_proj_out,

@@ -130,7 +130,9 @@ def _build_second_trunk(
         num_attention_heads=hf_config.num_attention_heads,
         num_key_value_heads=hf_config.num_key_value_heads,
         intermediate_size=hf_config.intermediate_size,
-        num_hidden_layers=hf_config.num_hidden_layers,
+        # Honor the same TT_COSMOS3_NUM_LAYERS profiling knob as trunk_a so both submeshes
+        # stay symmetric under a truncated-depth run. 0/unset = full depth.
+        num_hidden_layers=int(os.environ.get("TT_COSMOS3_NUM_LAYERS", "0")) or hf_config.num_hidden_layers,
         patch_latent_dim=hf_config.patch_latent_dim if (enable_device_proj_in or enable_device_proj_out) else None,
         enable_proj_in=enable_device_proj_in,
         enable_proj_out=enable_device_proj_out,
