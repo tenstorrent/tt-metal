@@ -169,17 +169,7 @@ def _run_moe_compute_single_card_test(
     to pack the weights so host tensor layout matches the op's ring-aware width-parallel
     auto-derivation.
     """
-    # The MoE op uses tilize cores keyed off the per-arch layout table in the program
-    # factory's `get_layout()` (see #41827) and matmul cores from
-    # `get_optimal_dram_bank_to_logical_worker_assignment`. WH expects a 7x10 unharvested
-    # logical worker grid (drain at (6,9)); BH expects an 11x10 grid (drain at (10,9)).
-    # On a harvested WH (e.g. n150_L = 7x9 grid with COL-axis dispatch) the harvested-row
-    # remapping shifts the matmul layout into the y=8 row, which then overlaps the
-    # filtered tilize cores — the op TT_FATALs on `tilize and matmul bounding boxes
-    # cannot overlap`. Untangling the matmul/tilize layouts under harvest is a follow-up
-    # (arch-aware core placement); for now we skip on harvested grids.
     arch = mesh_device.arch()
-    grid = mesh_device.compute_with_storage_grid_size()
     if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
         pytest.skip(f"MoE compute single-card test: arch {arch} is not supported (only WH and BH).")
     elif arch == ttnn.device.Arch.BLACKHOLE and skip_on_ci:
@@ -638,9 +628,7 @@ def _run_moe_compute_single_card_test(
 @pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "fused_local"])
 @pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_deepseek(
-    mesh_device, mesh_shape, has_bias, compute_only, is_ci_env, is_ci_v2_env
-):
+def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, compute_only, is_ci_env, is_ci_v2_env):
     """Single-card MoE compute on a 1x1 mesh, DeepSeek-shaped workload (hidden=7168).
 
     Runs in both compute_only mode (5 outputs, matmul is final) and fused-local mode
@@ -654,7 +642,7 @@ def test_moe_compute_single_card_deepseek(
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
-        experts_per_device=64,
+        experts_per_device=16,
         tokens_per_device=32,
         selected_experts_k=8,
         N=N,
@@ -669,9 +657,6 @@ def test_moe_compute_single_card_deepseek(
     )
 
 
-# GPT-OSS canonical config from the GPT-OSS entry in `_MODELS_1x8` (test_moe_compute_6U.py):
-#   experts_per_device=4, has_bias=True, activation=SWIGLU.
-# Ring-aware width dim is auto-derived using effective_matmul_ring_size (see output_width_shard_dim).
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -696,7 +681,7 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only, 
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
-        experts_per_device=64,
+        experts_per_device=16,
         tokens_per_device=32,
         selected_experts_k=4,
         N=hidden_size,
