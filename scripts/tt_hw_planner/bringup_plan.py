@@ -121,18 +121,15 @@ def _shape(cfg: dict) -> Dict[str, Any]:
 
 
 def _diff_status(new_shape: Dict[str, Any], sibling_shape: Dict[str, Any]) -> str:
-    # ADAPT restored 2026-06-01: when shapes differ from sibling, the
-    # tt-module exists (sibling has one) but needs refinement for this
-    # model's specifics. ADAPT components get a canonical-wrapper stub
-    # + per-component PCC test + LLM refinement (not rewrite). See the
-    # ADAPT description on the constants at the top of this file.
+    # A sibling tt-module is never trusted blind: whether shapes match or
+    # differ, it is ADAPT (canonical-wrapper stub + per-component PCC test +
+    # LLM refinement, graduate on native pass). Only a missing sibling is NEW.
     if not sibling_shape:
         return NEW
     shared_keys = [k for k in new_shape if k in sibling_shape]
     if not shared_keys:
         return NEW
-    differ = [k for k in shared_keys if new_shape[k] != sibling_shape[k]]
-    return REUSE if not differ else ADAPT
+    return ADAPT
 
 
 def _sibling_tt_file(
