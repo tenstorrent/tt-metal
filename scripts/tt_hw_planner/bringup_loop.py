@@ -1248,7 +1248,7 @@ def run_bringup_loop(
     _freshly_emitted_tests: List[Path] = []
 
     for comp in components:
-        if comp.get("status") not in ("NEW", "ADAPT"):
+        if comp.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         name = comp["name"]
         stub_rel = demo_dir / "_stubs" / f"{_safe_id(name)}.py"
@@ -2068,7 +2068,7 @@ def autofill_stubs(
 
     actions: List[Tuple[str, str]] = []
     for comp in data.get("components", []):
-        if comp.get("status") not in ("NEW", "ADAPT"):
+        if comp.get("status") not in ("NEW", "ADAPT", "REUSE"):
             continue
         safe = _safe_id(comp["name"])
         stub_path = demo_dir / "_stubs" / f"{safe}.py"

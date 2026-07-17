@@ -100,7 +100,7 @@ def _preflight_capture_real_inputs(model_id: str, demo_dir: Path) -> int:
         components_all = [
             str(c.get("name", "")).strip()
             for c in json.loads(status_path.read_text()).get("components", [])
-            if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
+            if c.get("status") in ("NEW", "ADAPT", "REUSE") and str(c.get("name", "")).strip()
         ]
         to_capture: List[str] = []
         for cn in components_all:
