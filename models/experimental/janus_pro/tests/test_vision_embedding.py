@@ -46,8 +46,7 @@ def test_vision_embedding_integration(
     image_size = model_args.vision_chunk_size
     patch_size = model_args.vision_patch_size
     hidden_dim = model_args.vision_dim
-    dim = model_args.vision_dim
-    in_channels = 3
+    in_channels = model_args.vision_in_channels
 
     input_tensor = torch.randn((bsz, in_channels, image_size, image_size))
 
@@ -72,8 +71,9 @@ def test_vision_embedding_integration(
     out = ttnn.from_device(embeddings)
     tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
-    # Only select output from one device
-    tt_output_torch = tt_output_torch[..., :dim]
+    # Weights are replicated across devices, so ConcatMeshToTensor(dim=-1) stacks an identical
+    # per-device copy along the last dim; keep only the first (device 0) copy.
+    tt_output_torch = tt_output_torch[..., :hidden_dim]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     # To get RTOL values
