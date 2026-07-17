@@ -157,7 +157,6 @@ def _run_moe_compute_single_card_test(
     dtype,
     activation_type,
     has_bias=False,
-    skip_on_ci=False,
     compute_only=True,
 ):
     """
@@ -172,13 +171,6 @@ def _run_moe_compute_single_card_test(
     arch = mesh_device.arch()
     if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
         pytest.skip(f"MoE compute single-card test: arch {arch} is not supported (only WH and BH).")
-    elif arch == ttnn.device.Arch.BLACKHOLE and skip_on_ci:
-        # Matmul output fails PCC on BH; runs locally for regression, skipped in CI pending fix.
-        # https://github.com/tenstorrent/tt-metal/issues/50038
-        pytest.skip(
-            "MoE compute single-card test fails PCC on BH; skipped in CI pending fix "
-            "(https://github.com/tenstorrent/tt-metal/issues/50038)."
-        )
 
     torch.manual_seed(2003)
     random.seed(2003)
@@ -628,7 +620,7 @@ def _run_moe_compute_single_card_test(
 @pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "fused_local"])
 @pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "with_bias"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, compute_only, is_ci_env, is_ci_v2_env):
+def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, compute_only):
     """Single-card MoE compute on a 1x1 mesh, DeepSeek-shaped workload (hidden=7168).
 
     Runs in both compute_only mode (5 outputs, matmul is final) and fused-local mode
@@ -652,7 +644,6 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, com
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=has_bias,
-        skip_on_ci=is_ci_env or is_ci_v2_env,
         compute_only=compute_only,
     )
 
@@ -669,7 +660,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, com
 )
 @pytest.mark.parametrize("compute_only", [True, False], ids=["compute_only", "fused_local"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only, is_ci_env, is_ci_v2_env):
+def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only):
     """Single-card MoE compute on a 1x1 mesh, GPT-OSS-shaped workload (hidden=N=2880, SWIGLU+bias).
 
     Runs in both compute_only mode (5 outputs, matmul is final) and fused-local mode
@@ -691,7 +682,6 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only, 
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
-        skip_on_ci=is_ci_env or is_ci_v2_env,
         compute_only=compute_only,
     )
 
