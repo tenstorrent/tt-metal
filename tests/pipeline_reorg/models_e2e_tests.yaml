@@ -217,7 +217,7 @@
   model: qwen3-32b-galaxy
   skus:
     wh_galaxy_perf:
-      timeout: 10
+      timeout: 30
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
