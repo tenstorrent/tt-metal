@@ -170,7 +170,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     reader.unique_id = READER;
     reader.dfb_bindings = {
         DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}};
-    reader.hw_config = ttnn::create_reader_datamovement_config(device->arch());
+    reader.hw_config =
+        ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true);
     if (use_block_reader) {
         reader.source = kdir / "reader_unary_sharded_blocks_metal2.cpp";
         reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
@@ -208,7 +209,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                   "num_unpadded_cols_per_input_block",
                   "width_wise_output_block_start_index",
                   "num_cols_already_processed_in_first_output_block"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute KernelSpec(s) (common; full + optional interleaved cliff) ----
@@ -222,10 +224,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), hw);
         if (fp32_dest_acc_en) {
             std::visit(
-                [&](auto& c) {
-                    c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                },
-                compute_hw);
+                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
         return compute_hw;
     };

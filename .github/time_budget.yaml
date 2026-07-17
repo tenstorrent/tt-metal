@@ -84,8 +84,7 @@ ttnn:
     wh_n300_civ2: 545
     bh_p100: 545
     bh_p150b_civ2: 545
-    bh_quietbox_2: 35
-    bh_quietbox_2_iommu: 30 # sdpa nightly (20) + ring sdpa PERF (10); both need IOMMU for the RT profiler (IOMMU-enabled QB2)
+    bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox: 25
     sim_wormhole_b0: 680
@@ -323,10 +322,10 @@ models:
   unit_tier1:
     wh_llmbox: 61
     wh_n150: 110
-    wh_galaxy: 45
+    wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 250  # GPT-OSS-120B 15->22 (host-variance headroom)
+    bh_quietbox_2: 260
     bh_galaxy: 70
   unit_tier2:
     wh_llmbox: 114

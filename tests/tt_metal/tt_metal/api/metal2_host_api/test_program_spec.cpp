@@ -169,7 +169,7 @@ protected:
 };
 
 // ============================================================================
-// SECTION 1: Structural Validation Tests (CollectSpecData)
+// Structural Validation Tests (CollectSpecData)
 // ============================================================================
 // These test the structural integrity checks that happen during spec collection.
 
@@ -944,7 +944,7 @@ TEST_F(ProgramSpecTestQuasar, DisableImplicitSyncForAllAgreesWithExplicitList) {
 }
 
 // ============================================================================
-// SECTION 2: Semantic Validation Tests (ValidateProgramSpec)
+// Semantic Validation Tests (ValidateProgramSpec)
 // ============================================================================
 
 TEST_F(ProgramSpecTestQuasar, EmptyKernelsFails) {
@@ -1700,10 +1700,10 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     auto producer = MakeMinimalGen2DMKernel("producer");
     auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
-    // Set unpack_to_dest_mode referencing a DFB this kernel doesn't bind
+    // Set an unpack_modes entry referencing a DFB this kernel doesn't bind
     // (in this case, a DFB that doesn't exist in the spec at all).
     auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
-    compute_config.unpack_to_dest_mode = {{DFBSpecName{"nonexistent_dfb"}, UnpackToDestMode::UnpackToDestFp32}};
+    compute_config.unpack_modes = {{DFBSpecName{"nonexistent_dfb"}, UnpackMode::UnpackToDest}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1718,7 +1718,7 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnboundDFBF
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'consumer' unpack_to_dest_mode entry references DFB 'nonexistent_dfb', "
+            ::testing::HasSubstr("Kernel 'consumer' unpack_modes entry references DFB 'nonexistent_dfb', "
                                  "which the kernel does not bind")));
 }
 
@@ -1734,30 +1734,30 @@ TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithExplicitDefaultUnpackToDestModeSucce
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
-    // UnpackToDestFp32 on a non-Float32 DFB is INERT: the LLK ignores the mode where the data
+    // UnpackToDest on a non-Float32 DFB is INERT: the LLK ignores the mode where the data
     // isn't FP32. The validator tolerates it (rejecting it would force porters to dtype-gate
     // legacy unpack_to_dest_mode vectors that set UnpackToDestFp32 unconditionally). With
-    // fp32_dest_acc_en=true the entry is coherent, so the spec validates.
+    // enable_32_bit_dest=true the entry is coherent, so the spec validates.
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b (non-FP32)
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            config.enable_32_bit_dest = true;
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
-    // The narrow case where a choice is required: CONSUMER + FP32 + fp32_dest_acc_en=true.
+    // The narrow case where a choice is required: CONSUMER + FP32 + enable_32_bit_dest=true.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
@@ -1767,34 +1767,34 @@ TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.fp32_dest_acc_en = true;
+            config.enable_32_bit_dest = true;
         }
     }
-    // Compute kernel intentionally has no unpack_to_dest_mode entry.
+    // Compute kernel intentionally has no unpack_modes entry.
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "Kernel 'compute_kernel' consumes FP32 DFB 'dfb_0' with fp32_dest_acc_en=true, but has no "
-            "unpack_to_dest_mode entry for it")));
+            "Compute kernel 'compute_kernel' consumes FP32 DFB 'dfb_0' with enable_32_bit_dest=true, but "
+            "provides no unpack_modes entry for this DFB")));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ConsumerWithoutFp32DestAccEnDoesNotRequireEntry) {
-    // Without fp32_dest_acc_en, UnpackToDestFp32 is incoherent (Dest is 16-bit), so there's
-    // no real choice — Default is the only valid value. No explicit entry required.
+    // Without enable_32_bit_dest, UnpackToDest is incoherent (Dest is 16-bit), so there's
+    // no real choice — UnpackToSrc is the only valid value. No explicit entry required.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
         }
     }
-    // fp32_dest_acc_en stays at its default (false). No unpack_to_dest_mode entry.
+    // enable_32_bit_dest stays at its default (false). No unpack_modes entry.
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
     // A compute kernel that only PRODUCES an FP32 DFB never unpacks it, so the unpack mode
-    // is dead config — no explicit entry required regardless of fp32_dest_acc_en.
+    // is dead config — no explicit entry required regardless of enable_32_bit_dest.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1802,7 +1802,7 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
 
     auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
-    producer_config.fp32_dest_acc_en = true;
+    producer_config.enable_32_bit_dest = true;
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
 
@@ -1821,8 +1821,8 @@ TEST_F(ProgramSpecTestQuasar, FP32ProducerOnlyBindingDoesNotRequireEntry) {
 }
 
 TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
-    // UnpackToDestFp32 on a producer-only binding is INERT (producers don't unpack), so the
-    // validator tolerates it rather than rejecting. With fp32_dest_acc_en=true it is coherent.
+    // UnpackToDest on a producer-only binding is INERT (producers don't unpack), so the
+    // validator tolerates it rather than rejecting. With enable_32_bit_dest=true it is coherent.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1830,8 +1830,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
 
     auto producer_compute = MakeMinimalGen2ComputeKernel("producer_compute");
     auto& producer_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(producer_compute.hw_config));
-    producer_config.fp32_dest_acc_en = true;
-    producer_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+    producer_config.enable_32_bit_dest = true;
+    producer_config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
 
     auto consumer_dm = MakeMinimalGen2DMKernel("consumer_dm");
 
@@ -1850,7 +1850,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32OnProducerBindingSucceeds) {
 }
 
 TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
-    // UnpackToDestFp32 requires fp32_dest_acc_en=true (Dest must be 32-bit-wide to hold FP32).
+    // A 32-bit-format DFB (here Float32) cannot be unpacked into a 16-bit Dest, so UnpackToDest
+    // on a consumed 32-bit DFB with enable_32_bit_dest=false is rejected on every generation.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
@@ -1860,18 +1861,33 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            // fp32_dest_acc_en stays at its default (false).
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            // enable_32_bit_dest stays at its default (false).
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("specifies UnpackToDestFp32, but fp32_dest_acc_en is false")));
+            ::testing::HasSubstr("A 32-bit datum cannot be unpacked into a 16-bit Dest register")));
+}
+
+TEST_F(ProgramSpecTestQuasar, ConsumerUnpackToDestBelow32BitWithoutEnableSucceeds) {
+    // Gen2 has no unpack-to-Dest performance penalty, so UnpackToDest on a consumed <=16-bit DFB
+    // is accepted even without enable_32_bit_dest (a 16-bit Dest holds a <=16-bit datum). On Gen1
+    // the same spec is rejected as bad-for-perf — see the ProgramSpecTestGen1 counterpart.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b, consumed by compute_kernel
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            // enable_32_bit_dest stays at its default (false).
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+        }
+    }
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
-    // Default is always a valid value, even outside the (CONSUMER + FP32 + fp32_dest_acc_en) triple.
+    // UnpackToSrc is always a valid value, even outside the (CONSUMER + FP32 + enable_32_bit_dest) triple.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
@@ -1881,8 +1897,8 @@ TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::Default}};
+            config.enable_32_bit_dest = true;
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
@@ -1945,7 +1961,7 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
 }
 
 // ============================================================================
-// SECTION 3: WorkUnitSpec Validation Tests
+// WorkUnitSpec Validation Tests
 // ============================================================================
 
 TEST_F(ProgramSpecTestQuasar, EmptyWorkUnitSpecsFails) {
@@ -2128,7 +2144,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBConsumerOnNodeWithoutProducerFails) {
 }
 
 // ============================================================================
-// SECTION 4: Programs Creation Tests
+// Programs Creation Tests
 // ============================================================================
 // These verify that valid ProgramSpec configurations produce a Program without throwing.
 // They exercise the full MakeProgramFromSpec pipeline, but only on mock device.
@@ -2352,7 +2368,7 @@ TEST_F(ProgramSpecTestQuasar, VarargPerNodeOverlapFails) {
 }
 
 // ============================================================================
-// SECTION 5: Edge Cases and Boundary Tests
+// Edge Cases and Boundary Tests
 // ============================================================================
 
 TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
@@ -2392,9 +2408,9 @@ TEST_F(ProgramSpecTestQuasar, ComputeConfigMathFidelitySucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.math_fidelity = MathFidelity::LoFi;
-            config.fp32_dest_acc_en = true;
-            config.math_approx_mode = true;
+            config.fpu_math_fidelity = MathFidelity::LoFi;
+            config.enable_32_bit_dest = true;
+            config.sfpu_precision_mode = tt::tt_metal::Precision::Approximate;
         }
     }
 
@@ -2405,7 +2421,7 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // The full meaningfulness triple: FP32 DFB, consumed by a compute kernel with
-    // fp32_dest_acc_en=true. UnpackToDestFp32 is meaningful here.
+    // enable_32_bit_dest=true. UnpackToDest is meaningful here.
     for (auto& dfb : spec.dataflow_buffers) {
         if (dfb.unique_id == DFBSpecName{"dfb_0"}) {
             dfb.data_format_metadata = tt::DataFormat::Float32;
@@ -2414,8 +2430,8 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     for (auto& kernel : spec.kernels) {
         if (kernel.is_compute_kernel()) {
             auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
-            config.fp32_dest_acc_en = true;
-            config.unpack_to_dest_mode = {{DFBSpecName{"dfb_0"}, UnpackToDestMode::UnpackToDestFp32}};
+            config.enable_32_bit_dest = true;
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
 
@@ -2439,7 +2455,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     auto dfb0 = MakeMinimalDFB("dfb_0");
     dfb0.data_format_metadata = tt::DataFormat::Float16_b;
     auto dfb1 = MakeMinimalDFB("dfb_1");
-    // dfb_1 is FP32 so the user can opt into UnpackToDestFp32 on it.
+    // dfb_1 is FP32 so the user can opt into UnpackToDest on it.
     dfb1.data_format_metadata = tt::DataFormat::Float32;
 
     producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out0"));
@@ -2448,8 +2464,8 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "in1"));
 
     auto& compute_config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(consumer.hw_config));
-    compute_config.fp32_dest_acc_en = true;
-    compute_config.unpack_to_dest_mode = {{DFBSpecName{"dfb_1"}, UnpackToDestMode::UnpackToDestFp32}};
+    compute_config.enable_32_bit_dest = true;
+    compute_config.unpack_modes = {{DFBSpecName{"dfb_1"}, UnpackMode::UnpackToDest}};
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb0, dfb1};
@@ -2472,7 +2488,58 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 }
 
 // ============================================================================
-// SECTION 6: Processor Assignment Edge Cases
+// Compute-config translation stability (defaults + inversion/enum)
+// ============================================================================
+// These tests pin the public ComputeGen{1,2}Config -> internal
+// ComputeConfig / QuasarComputeConfig translation at the boundary where the
+// field rename is absorbed (MakeGen1ComputeConfig / MakeGen2ComputeConfig).
+//
+// Several of these knobs are performance / numerical-precision settings that do
+// NOT change a functional pass/fail result, so a flipped inversion
+// (dst_full_sync_en <-> double_buffer_dest) or a wrong precision-enum direction
+// would be invisible to the behavioral tests. Asserting the internal values
+// documents that the defaults must not change and guards the conversions
+// against silent drift. (The public -> internal translation is Metal-side and
+// testable here; the TTNN ComputeKernelConfig -> public bridge lives above this
+// layer and is out of scope for a Metal unit test.)
+
+TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigDefaultsMapToInternalDefaults) {
+    // A default ComputeGen2Config{} must yield the historical internal QuasarComputeConfig defaults.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();  // compute_kernel carries a default ComputeGen2Config
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
+    EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
+    EXPECT_FALSE(built.fp32_dest_acc_en);
+    EXPECT_FALSE(built.dst_full_sync_en);      // double_buffer_dest defaults true -> !true
+    EXPECT_FALSE(built.math_approx_mode);      // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.enable_2x_src_format);  // enable_2x_src_register defaults false
+    EXPECT_FALSE(built.unpack_to_dest_en);
+}
+
+TEST_F(ProgramSpecTestQuasar, ComputeGen2ConfigInversionAndEnumMapToInternal) {
+    // Non-default polarity: the double_buffer_dest inversion and the SFPU precision-enum mapping
+    // must reach the internal config correctly. Guards the case a defaults-only check would miss
+    // (a flip compensated by a changed default).
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeGen2Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            config.double_buffer_dest = false;                                  // -> internal dst_full_sync_en == true
+            config.sfpu_precision_mode = tt::tt_metal::Precision::Approximate;  // -> internal math_approx_mode == true
+        }
+    }
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
+    EXPECT_TRUE(built.dst_full_sync_en);
+    EXPECT_TRUE(built.math_approx_mode);
+}
+
+// ============================================================================
+// Processor Assignment Edge Cases
 // ============================================================================
 // Here, we test several edge cases:
 //
@@ -2717,7 +2784,7 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingForcesUniformRiscMaskAcrossProducer
 }
 
 // ============================================================================
-// SECTION 7: Aggregate Type Enforcement Tests
+// Aggregate Type Enforcement Tests
 // ============================================================================
 //
 // DESIGN DECISION: All *Spec types must remain aggregates (POD-like structs).
@@ -2795,8 +2862,8 @@ TEST(AggregateSpecTypes, KernelSpecDesignatedInitializers) {
         .hw_config =
             ComputeHardwareConfig{
                 ComputeGen2Config{
-                    .math_fidelity = MathFidelity::LoFi,
-                    .fp32_dest_acc_en = true,
+                    .fpu_math_fidelity = MathFidelity::LoFi,
+                    .enable_32_bit_dest = true,
                 },
             },
     };
@@ -3005,7 +3072,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
 }
 
 // ============================================================================
-// SECTION 8: Gen1 (WH/BH) Tests
+// Gen1 (WH/BH) Tests
 // ============================================================================
 
 // Test fixture for ProgramSpec on Wormhole - uses WORMHOLE_B0 mock device
@@ -3029,9 +3096,42 @@ protected:
     std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
+// Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
+// Quasar suite): a default ComputeGen1Config{} must yield the historical internal ComputeConfig
+// defaults. Guards the perf/precision knobs that don't move a functional pass/fail result.
+TEST_F(ProgramSpecTestGen1, ComputeGen1ConfigDefaultsMapToInternalDefaults) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // compute_kernel carries a default ComputeGen1Config
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<ComputeConfig>(built_variant);
+    EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
+    EXPECT_FALSE(built.fp32_dest_acc_en);
+    EXPECT_FALSE(built.dst_full_sync_en);   // double_buffer_dest defaults true -> !true
+    EXPECT_FALSE(built.bfp8_pack_precise);  // bfp_pack_precision_mode defaults Approximate
+    EXPECT_FALSE(built.math_approx_mode);   // sfpu_precision_mode defaults Precise
+}
+
 TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, ConsumerUnpackToDestBelow32BitWithoutEnableFailsForPerf) {
+    // On Gen1, UnpackToDest on a consumed <=16-bit DFB without enable_32_bit_dest bypasses the
+    // SrcA/B path for no precision benefit — rejected as bad-for-perf. (On Gen2 the identical spec
+    // is accepted — see ProgramSpecTestQuasar.ConsumerUnpackToDestBelow32BitWithoutEnableSucceeds.)
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();  // dfb_0 is Float16_b, consumed by compute_kernel
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(kernel.hw_config));
+            // enable_32_bit_dest stays at its default (false).
+            config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+        }
+    }
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("leads to worse performance")));
 }
 
 TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
@@ -3476,7 +3576,7 @@ TEST_F(ProgramSpecTestGen1, DuplicateKernelNameFails) {
 }
 
 // ============================================================================
-// SECTION 9: TensorParameter Validation Tests (Gen1 / WH)
+// TensorParameter Validation Tests (Gen1 / WH)
 // ============================================================================
 // Spec-level validation for the Metal 2.0 TensorAccessor binding feature. These tests exercise
 // CollectSpecData paths only — they do not need a MeshTensor at enqueue (those run-params paths
@@ -3593,7 +3693,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 }
 
 // ============================================================================
-// SECTION 10: TensorParameter JIT Smoke Tests (Gen1 / WH)
+// TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
 // CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
