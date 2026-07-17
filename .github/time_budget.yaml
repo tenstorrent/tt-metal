@@ -290,7 +290,7 @@ models:
     wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
-    bh_loudbox: 190
+    bh_loudbox: 193
     bh_quietbox_2: 80
     bh_spsg: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
