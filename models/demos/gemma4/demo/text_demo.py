@@ -8,7 +8,7 @@ Simple prefill + decode loop following gpt-oss text_demo.py pattern.
 
 Long-context policy (see ``GEMMA4_LONG_CONTEXT_POLICY`` in generator_trace.py)
 matches ``text_demo_v2.py``: per-(model, device) bounded sliding / chunked
-prefill cutovers on QB2 (P150x4 / P300x2). Overrides:
+prefill cutovers on QB2 (P150x4 / P300x2) and P150x8. Overrides:
 ``GEMMA4_BOUNDED_SLIDING``, ``GEMMA4_GEN_PREFILL_CHUNK``, ``GEMMA4_DEMO_SINGLE_CHUNK``,
 ``GEMMA4_MAX_SEQ_LEN``, ``GEMMA4_MAX_NEW_TOKENS``.
 
@@ -18,8 +18,10 @@ Usage:
     # With fewer layers for testing:
     pytest models/demos/gemma4/demo/text_demo.py -v --timeout=600 -k "test_demo"
 
-    # Long-context (64k/128k/256k) on QB2:
+    # Long-context (64k/128k/256k) on QB2 or P150x8:
     MESH_DEVICE=P150x4 HF_MODEL=google/gemma-4-12B-it pytest \\
+        models/demos/gemma4/demo/text_demo.py -k long-context-128k -s --timeout 1800
+    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \\
         models/demos/gemma4/demo/text_demo.py -k long-context-128k -s --timeout 1800
 
     # Batch-32 batched prefill:
@@ -43,6 +45,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
@@ -63,6 +66,22 @@ from models.tt_transformers.tt.model_config import determine_device_name
 
 _TT_TRANSFORMERS_PROMPTS_DIR = "models/tt_transformers/demo/sample_prompts"
 _CONTEXT_CACHE_DIR = "models/tt_transformers/demo/context_cache"
+
+_MESH_DEVICE_SHAPES = {
+    # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P300x2": (1, 4),
+    "P300X2": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
 
 
 def _snap_to_bucket(prompt_len, max_seq_len):
@@ -180,18 +199,30 @@ def _install_hybrid_page_tables(model, model_args, batch_size, block_size, max_s
 
 
 def _mesh_shape_from_env():
-    """MESH_DEVICE → mesh shape. QB2 is P150x4 or P300x2 (both 1x4)."""
-    return {
-        "N150": (1, 1),
-        "N300": (1, 2),
-        "P150": (1, 1),
-        "P300": (1, 2),
-        "P150x4": (1, 4),
-        "P300x2": (1, 4),
-        "P300X2": (1, 4),
-        "P150x8": (1, 8),
-        "T3K": (1, 8),
-    }.get(os.environ.get("MESH_DEVICE"), (1, 4))
+    """Resolve mesh shape from ``MESH_DEVICE`` as a hardcoded (rows, cols) tuple.
+
+    Always returns a 2D shape tuple — never ``len(get_device_ids())``. An int
+    param opens ``MeshShape(1, N)`` in conftest, which is wrong for DP layouts
+    like ``2x4`` (same chip count as ``1x8``). Unset / unknown → ``(1, 4)``
+    (QB2), matching qwen36 / gemma3 / ``text_demo_v2`` defaults.
+    """
+    return _MESH_DEVICE_SHAPES.get(os.environ.get("MESH_DEVICE"), (1, 4))
+
+
+def _device_params():
+    """Blackhole needs a larger trace region; keep a single command queue (host sampling).
+
+    Matches ``text_demo_v2._device_params``. ``GEMMA4_TRACE_REGION_SIZE`` overrides
+    the Blackhole budget when needed.
+    """
+    if is_blackhole():
+        trace_region_size = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
+        return {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": trace_region_size,
+            "num_command_queues": 1,
+        }
+    return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30_000_000, "num_command_queues": 1}
 
 
 def _host_sample_greedy(logits):
@@ -595,12 +626,15 @@ def _run_generation_via_generator(
             num_layers=num_layers,
         )
 
+    from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_decode_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_decode_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     if enable_decode_trace and not prefill_enable_trace:
         logger.info(
             f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
-            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ to override."
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
 
     logger.info("Warming up prefill...")
@@ -1305,10 +1339,14 @@ def test_demo_single_layer(device, model_path):
 _DEMO_PREFILL_LENGTHS = [128, 4096]
 
 # NOTE on long-context-64k/128k/256k (see GEMMA4_LONG_CONTEXT_POLICY):
-#   Per-(model, device) cutovers on QB2 (P150x4 / P300x2):
-#     31B: bounded @ 64k, chunked @ 256k
-#     12B/26B-A4B: unbounded through 128k; bounded(+chunked) @ 256k
-#     E2B/E4B: unbounded through 256k (HF native max_pos is 128k)
+#   Per-(model, device) cutovers:
+#     QB2 (P150x4 / P300x2):
+#       31B: bounded @ 64k, chunked @ 256k
+#       12B/26B-A4B: unbounded through 128k; bounded(+chunked) @ 256k
+#       E2B/E4B: unbounded through 256k (HF native max_pos is 128k)
+#     P150x8:
+#       E2B/E4B/12B: unbounded through 256k
+#       26B-A4B/31B: unbounded through 128k; bounded (single-chunk OK) @ 256k
 #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
 #   GEMMA4_DEMO_SINGLE_CHUNK.
 _LONG_CONTEXT_CASES = [
@@ -1378,9 +1416,14 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     _LONG_CONTEXT_CASES,
     ids=[c[0] for c in _LONG_CONTEXT_CASES],
 )
+@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [_mesh_shape_from_env()],
+    [
+        # Hardcoded MESH_DEVICE → (rows, cols). Do not fall back to device count:
+        # 8 chips may be 1x8 (TP) or 2x4 (DP).
+        _mesh_shape_from_env()
+    ],
     indirect=True,
 )
 def test_demo_long_context(
@@ -1388,11 +1431,13 @@ def test_demo_long_context(
 ):
     """Long-context demo rows aligned with ``text_demo_v2`` / ``GEMMA4_LONG_CONTEXT_POLICY``.
 
-    Uses ``MESH_DEVICE`` (default P150x4 / QB2; also accepts P300x2). Policy auto-enables
-    bounded sliding / multi-chunk prefill per model × device.
+    Uses ``MESH_DEVICE`` (P150x4 / P300x2 / P150x8 / 2x4 / …; unset → (1, 4) QB2).
+    Policy auto-enables bounded sliding / multi-chunk prefill per model × device.
 
     Examples:
         MESH_DEVICE=P150x4 HF_MODEL=google/gemma-4-12B-it pytest \\
+            models/demos/gemma4/demo/text_demo.py -k long-context-128k -s --timeout 1800
+        MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \\
             models/demos/gemma4/demo/text_demo.py -k long-context-128k -s --timeout 1800
         MESH_DEVICE=P300x2 GEMMA4_BOUNDED_SLIDING=1 HF_MODEL=google/gemma-4-26B-A4B pytest \\
             models/demos/gemma4/demo/text_demo.py -k long-context-256k -s --timeout 7200
