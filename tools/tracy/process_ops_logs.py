@@ -39,6 +39,7 @@ from tracy.common import (
 from tracy import device_post_proc_config
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
+    RATIO_LABELS,
     compute_device_only_metrics,
     compute_perf_counter_metrics,
     extract_perf_counters,
@@ -787,7 +788,6 @@ def _enrich_ops_from_device_logs(
 
         # Check if perf counters data is available
         risc_data = device_data["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
-        device_arch = device_data["deviceInfo"].get("arch", "")
         perf_counter_df = None
         if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
             perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
@@ -799,7 +799,7 @@ def _enrich_ops_from_device_logs(
         perf_metrics = None
         if perf_counter_df is not None and not perf_counter_df.empty:
             total_compute_cores = device_data["deviceInfo"]["max_compute_cores"]
-            perf_metrics = compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cores)
+            perf_metrics = compute_perf_counter_metrics(perf_counter_df, total_compute_cores)
 
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
@@ -823,156 +823,29 @@ def _enrich_ops_from_device_logs(
                 per_op_counts = perf_metrics["per_op_counts"]
                 lookup_key = (global_call_count, trace_id_counter)
 
-                def assign_metric(base_name, metric_dict, suffix=" (%)", lookup=lookup_key):
-                    if metric_dict:
-                        device_op[f"{base_name} Min{suffix}"] = metric_dict["min"].get(lookup, nan)
-                        device_op[f"{base_name} Median{suffix}"] = metric_dict["median"].get(lookup, nan)
-                        device_op[f"{base_name} Max{suffix}"] = metric_dict["max"].get(lookup, nan)
-                        device_op[f"{base_name} Avg{suffix}"] = metric_dict["avg"].get(lookup, nan)
-
-                assign_metric("SFPU Util", per_op_stats.get("SFPU Util", {}))
-                assign_metric("FPU Util", per_op_stats.get("FPU Util", {}))
-                assign_metric("MATH Util", per_op_stats.get("MATH Util", {}))
-
                 device_op["avg_sfpu_count"] = per_op_counts.get("avg_sfpu_count", {}).get(lookup_key, nan)
                 device_op["avg_fpu_count"] = per_op_counts.get("avg_fpu_count", {}).get(lookup_key, nan)
                 device_op["avg_math_count"] = per_op_counts.get("avg_math_count", {}).get(lookup_key, nan)
 
-                assign_metric("Unpacker0 Write Efficiency", per_op_stats.get("Unpacker0 Write Efficiency", {}))
-                assign_metric("Unpacker1 Write Efficiency", per_op_stats.get("Unpacker1 Write Efficiency", {}))
-                assign_metric("Unpacker Write Efficiency", per_op_stats.get("Unpacker Write Efficiency", {}))
-                assign_metric("Packer Efficiency", per_op_stats.get("Packer Efficiency", {}))
-
-                # FPU Execution Efficiency
-                assign_metric("FPU Execution Efficiency", per_op_stats.get("FPU Execution Efficiency", {}))
-
-                # Math Pipeline Utilization
-                assign_metric("Math Pipeline Utilization", per_op_stats.get("Math Pipeline Utilization", {}))
-
-                # Math-to-Pack Handoff Efficiency
-                assign_metric(
-                    "Math-to-Pack Handoff Efficiency", per_op_stats.get("Math-to-Pack Handoff Efficiency", {})
-                )
-
-                # Unpacker-to-Math Data Flow
-                assign_metric("Unpacker-to-Math Data Flow", per_op_stats.get("Unpacker-to-Math Data Flow", {}))
-
-                # Thread stall rates
-                for t in range(3):
-                    assign_metric(f"Thread {t} Stall Rate", per_op_stats.get(f"Thread {t} Stall Rate", {}))
-
-                # Pipeline wait metrics
-                pipeline_wait_names = [
-                    "SrcA Valid Wait",
-                    "SrcB Valid Wait",
-                    "SrcA Clear Wait",
-                    "SrcB Clear Wait",
-                    "Math Idle Wait T1",
-                    "Pack Idle Wait T2",
-                    "Unpack Idle Wait T0",
-                ]
-                for metric_name in pipeline_wait_names:
-                    assign_metric(metric_name, per_op_stats.get(metric_name, {}))
-
-                # Semaphore wait metrics
-                for t in range(3):
-                    assign_metric(f"Semaphore Zero Wait T{t}", per_op_stats.get(f"Semaphore Zero Wait T{t}", {}))
-                    assign_metric(f"Semaphore Full Wait T{t}", per_op_stats.get(f"Semaphore Full Wait T{t}", {}))
-
-                # Data Hazard Stall Rate
-                assign_metric("Data Hazard Stall Rate", per_op_stats.get("Data Hazard Stall Rate", {}))
-
-                # L1 Bank 0 metrics
-                assign_metric("L1 Unpacker Port Util", per_op_stats.get("L1 Unpacker Port Util", {}))
-                assign_metric("L1 TDMA Bundle Util", per_op_stats.get("L1 TDMA Bundle Util", {}))
-                assign_metric("NOC Ring 0 Outgoing Util", per_op_stats.get("NOC Ring 0 Outgoing Util", {}))
-                assign_metric("NOC Ring 0 Incoming Util", per_op_stats.get("NOC Ring 0 Incoming Util", {}))
-
-                # L1 Bank 1 metrics
-                assign_metric("NOC Ring 1 Outgoing Util", per_op_stats.get("NOC Ring 1 Outgoing Util", {}))
-                assign_metric("NOC Ring 1 Incoming Util", per_op_stats.get("NOC Ring 1 Incoming Util", {}))
-
-                # L1 Port 1 (arch-specific)
-                assign_metric("L1 Packer Port Util", per_op_stats.get("L1 Packer Port Util", {}))
-
-                # L1 back-pressure
-                assign_metric(
-                    "NOC Ring 0 Outgoing Backpressure", per_op_stats.get("NOC Ring 0 Outgoing Backpressure", {})
-                )
-                assign_metric(
-                    "NOC Ring 0 Incoming Backpressure", per_op_stats.get("NOC Ring 0 Incoming Backpressure", {})
-                )
-                assign_metric(
-                    "NOC Ring 1 Outgoing Backpressure", per_op_stats.get("NOC Ring 1 Outgoing Backpressure", {})
-                )
-                assign_metric(
-                    "NOC Ring 1 Incoming Backpressure", per_op_stats.get("NOC Ring 1 Incoming Backpressure", {})
-                )
-                assign_metric("L1 Unpacker Backpressure", per_op_stats.get("L1 Unpacker Backpressure", {}))
-                assign_metric("L1 Packer Port Backpressure", per_op_stats.get("L1 Packer Port Backpressure", {}))
-
-                # Math pipeline stall breakdown
-                assign_metric("Math Src Data Ready Rate", per_op_stats.get("Math Src Data Ready Rate", {}))
-                assign_metric("SrcA Write Port Blocked Rate", per_op_stats.get("SrcA Write Port Blocked Rate", {}))
-                assign_metric(
-                    "SrcA Write Overwrite Blocked Rate",
-                    per_op_stats.get("SrcA Write Overwrite Blocked Rate", {}),
-                )
-                assign_metric(
-                    "SrcB Write Overwrite Blocked Rate",
-                    per_op_stats.get("SrcB Write Overwrite Blocked Rate", {}),
-                )
-                assign_metric("Dest Read Backpressure", per_op_stats.get("Dest Read Backpressure", {}))
-                assign_metric(
-                    "Math Dest Write Port Stall Rate", per_op_stats.get("Math Dest Write Port Stall Rate", {})
-                )
-                assign_metric("Math Scoreboard Stall Rate", per_op_stats.get("Math Scoreboard Stall Rate", {}))
-
-                # Fidelity metrics
-                assign_metric("Fidelity Stall Rate", per_op_stats.get("Fidelity Stall Rate", {}))
-                assign_metric("HiFi Fraction", per_op_stats.get("HiFi Fraction", {}))
-                assign_metric("Avg HF Cycles Per Instrn", per_op_stats.get("Avg HF Cycles Per Instrn", {}), suffix="")
-
-                # Instruction issue rates
-                assign_metric("T0 Instrn Issue Rate", per_op_stats.get("T0 Instrn Issue Rate", {}), suffix="")
-                assign_metric("T1 Instrn Issue Rate", per_op_stats.get("T1 Instrn Issue Rate", {}), suffix="")
-                assign_metric("T2 Instrn Issue Rate", per_op_stats.get("T2 Instrn Issue Rate", {}), suffix="")
-
-                # Per-type instruction issue efficiency
-                assign_metric("CFG Instrn Avail Rate T0", per_op_stats.get("CFG Instrn Avail Rate T0", {}))
-                assign_metric("SYNC Instrn Avail Rate T0", per_op_stats.get("SYNC Instrn Avail Rate T0", {}))
-                assign_metric("THCON Instrn Avail Rate T0", per_op_stats.get("THCON Instrn Avail Rate T0", {}))
-                assign_metric("MOVE Instrn Avail Rate T0", per_op_stats.get("MOVE Instrn Avail Rate T0", {}))
-                assign_metric("MATH Instrn Avail Rate T1", per_op_stats.get("MATH Instrn Avail Rate T1", {}))
-                assign_metric("UNPACK Instrn Avail Rate T0", per_op_stats.get("UNPACK Instrn Avail Rate T0", {}))
-                assign_metric("PACK Instrn Avail Rate T2", per_op_stats.get("PACK Instrn Avail Rate T2", {}))
-
-                # Write port blocking
-                assign_metric("SrcB Write Port Blocked Rate", per_op_stats.get("SrcB Write Port Blocked Rate", {}))
-                assign_metric("SrcA Write Actual Efficiency", per_op_stats.get("SrcA Write Actual Efficiency", {}))
-                assign_metric("SrcB Write Actual Efficiency", per_op_stats.get("SrcB Write Actual Efficiency", {}))
-
-                # Packer engine granularity
-                assign_metric("Packer Engine 0 Util", per_op_stats.get("Packer Engine 0 Util", {}))
-                assign_metric("Packer Engine 1 Util", per_op_stats.get("Packer Engine 1 Util", {}))
-                assign_metric("Packer Engine 2 Util", per_op_stats.get("Packer Engine 2 Util", {}))
-
-                # Low priority waits
-                assign_metric("MMIO Idle Wait T0", per_op_stats.get("MMIO Idle Wait T0", {}))
-                assign_metric("SFPU Idle Wait T1", per_op_stats.get("SFPU Idle Wait T1", {}))
-                assign_metric("THCON Idle Wait T0", per_op_stats.get("THCON Idle Wait T0", {}))
-                assign_metric("MOVE Idle Wait T0", per_op_stats.get("MOVE Idle Wait T0", {}))
-                assign_metric("RISC Core L1 Util", per_op_stats.get("RISC Core L1 Util", {}))
-
-                # L1 composite metrics
-                assign_metric("L1 Total Bandwidth Util", per_op_stats.get("L1 Total Bandwidth Util", {}))
-                assign_metric("L1 Read vs Write Ratio", per_op_stats.get("L1 Read vs Write Ratio", {}))
-                assign_metric("NOC Ring 0 Asymmetry", per_op_stats.get("NOC Ring 0 Asymmetry", {}))
-                assign_metric("L1 Contention Index", per_op_stats.get("L1 Contention Index", {}))
-                assign_metric("Unpacker L1 Efficiency", per_op_stats.get("Unpacker L1 Efficiency", {}))
-                assign_metric("Packer L1 Efficiency", per_op_stats.get("Packer L1 Efficiency", {}))
-                assign_metric("NOC vs Compute Balance", per_op_stats.get("NOC vs Compute Balance", {}))
-                assign_metric("TDMA vs NOC L1 Share", per_op_stats.get("TDMA vs NOC L1 Share", {}))
+                # Emit every computed metric (keyed by the shared METRIC_LABELS display name) with its
+                # Min/Median/Max/Avg columns. Generic loop over per_op_stats (mirrors the device-only
+                # writer) so this can't drift from the metric engine and picks up new metrics
+                # automatically. The unbounded ratio family (RATIO_LABELS) gets a "(ratio)" unit;
+                # everything else gets "(%)"; the three primary utilizations keep the legacy
+                # "Avg ... on full grid" Avg column name for CSV back-compat.
+                _legacy_avg = {
+                    "SFPU Util": "Avg SFPU util on full grid (%)",
+                    "FPU Util": "Avg FPU util on full grid (%)",
+                    "MATH Util": "Avg Math util on full grid (%)",
+                }
+                for base_name, mstat in per_op_stats.items():
+                    suffix = " (ratio)" if base_name in RATIO_LABELS else " (%)"
+                    device_op[f"{base_name} Min{suffix}"] = mstat["min"].get(lookup_key, nan)
+                    device_op[f"{base_name} Median{suffix}"] = mstat["median"].get(lookup_key, nan)
+                    device_op[f"{base_name} Max{suffix}"] = mstat["max"].get(lookup_key, nan)
+                    device_op[_legacy_avg.get(base_name, f"{base_name} Avg{suffix}")] = mstat["avg"].get(
+                        lookup_key, nan
+                    )
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1127,7 +1000,6 @@ def get_device_data_generate_report(
         freq = deviceData["deviceInfo"]["freq"]
 
         # Calculate efficiency metrics for all devices (device-only mode)
-        device_arch = deviceData["deviceInfo"].get("arch", "")
         device_efficiency_metrics = {}
         for device in deviceData["devices"]:
             risc_data = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
@@ -1141,7 +1013,7 @@ def get_device_data_generate_report(
                     # Calculate efficiency metrics for this device
                     import pandas as pd
 
-                    agg_metrics, eff_summary_rows = compute_device_only_metrics(perf_counter_df, device_arch)
+                    agg_metrics, eff_summary_rows = compute_device_only_metrics(perf_counter_df)
                     device_efficiency_metrics[device] = agg_metrics
 
                     if eff_summary_rows:
@@ -1227,10 +1099,9 @@ def get_device_data_generate_report(
                     metrics = device_efficiency_metrics[device]
 
                     for base_name, m in metrics.items():
-                        is_raw = (
-                            "IPC" in base_name or "Issue Rate" in base_name or base_name == "Avg HF Cycles Per Instrn"
-                        )
-                        suffix = "" if is_raw else " (%)"
+                        # Unbounded ratio family gets "(ratio)"; everything else (incl. instruction-
+                        # issue rates, now bounded percentages) gets "(%)".
+                        suffix = " (ratio)" if base_name in RATIO_LABELS else " (%)"
                         # Legacy "Avg on full grid" column names.
                         if base_name == "SFPU Util":
                             rowDict["Avg SFPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
@@ -1303,7 +1174,7 @@ def get_device_data_generate_report(
                 for header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
                     if header in csv_row_headers:
                         allHeaders.append(header)
-                writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
+                writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders, extrasaction="ignore")
                 writer.writeheader()
                 for rowDict in rowDicts:
                     for field, fieldData in rowDict.items():
@@ -1313,7 +1184,7 @@ def get_device_data_generate_report(
             with open(perCoreCSVPath, "w") as perCoreCSV:
                 perCoreCSVHeader = ["device ID", "op2op ID"] + [core for core in perCoreCSVHeader]
 
-                writer = csv.DictWriter(perCoreCSV, fieldnames=perCoreCSVHeader)
+                writer = csv.DictWriter(perCoreCSV, fieldnames=perCoreCSVHeader, extrasaction="ignore")
                 writer.writeheader()
 
                 for rowDict in perCoreRowDicts:
@@ -1756,7 +1627,7 @@ def generate_reports(
             + active_perf_headers
             + sorted(list(childCallKeys))
         )
-        writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
+        writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders, extrasaction="ignore")
         writer.writeheader()
         for csv_row in csv_rows:
             for field, fieldData in csv_row.items():

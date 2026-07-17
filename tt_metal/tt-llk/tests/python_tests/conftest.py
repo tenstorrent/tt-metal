@@ -251,21 +251,7 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
-        "--dump-raw-counters",
-        action="store_true",
-        default=False,
-        help="Print raw hardware counter values to console (implies --enable-perf-counters)",
-    )
-
-    parser.addoption(
-        "--dump-raw-metrics",
-        action="store_true",
-        default=False,
-        help="Print derived efficiency metrics to console (implies --enable-perf-counters)",
-    )
-
-    parser.addoption(
-        "--dump-csv-counters",
+        "--dump-perf-counters",
         action="store_true",
         default=False,
         help="Export raw hardware counter values to a separate .counters.csv file (implies --enable-perf-counters)",
@@ -312,19 +298,13 @@ def pytest_configure(config):
         os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
-    TestConfig.DUMP_RAW_COUNTERS = config.getoption(
-        "--dump-raw-counters", default=False
+    TestConfig.DUMP_PERF_COUNTERS = config.getoption(
+        "--dump-perf-counters", default=False
     )
-    TestConfig.DUMP_RAW_METRICS = config.getoption("--dump-raw-metrics", default=False)
-    TestConfig.DUMP_CSV_COUNTERS = config.getoption(
-        "--dump-csv-counters", default=False
-    )
-    # --dump-raw-counters, --dump-raw-metrics, or --dump-csv-counters imply --enable-perf-counters
+    # --dump-perf-counters implies --enable-perf-counters
     TestConfig.ENABLE_PERF_COUNTERS = (
         config.getoption("--enable-perf-counters", default=False)
-        or TestConfig.DUMP_RAW_COUNTERS
-        or TestConfig.DUMP_RAW_METRICS
-        or TestConfig.DUMP_CSV_COUNTERS
+        or TestConfig.DUMP_PERF_COUNTERS
     )
 
     # Device print is enabled on debug or trace.
@@ -808,8 +788,8 @@ def pytest_sessionstart(session):
 
 @pytest.fixture(scope="module", autouse=True)
 def counter_report(request, worker_id):
-    """Separate report for raw hardware counter CSV data (--dump-csv-counters)."""
-    if not TestConfig.DUMP_CSV_COUNTERS:
+    """Separate report for raw hardware counter CSV data (--dump-perf-counters)."""
+    if not TestConfig.DUMP_PERF_COUNTERS:
         PerfConfig.COUNTER_REPORT = None
         yield None
         return
@@ -825,7 +805,7 @@ def counter_report(request, worker_id):
 
     PerfConfig.COUNTER_REPORT = None
 
-    if TestConfig.MODE == TestMode.PRODUCE:
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
 
     if PerfConfig.TEST_COUNTER == 0:
