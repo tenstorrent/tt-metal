@@ -65,7 +65,80 @@ Measurement instruments still present (default-off, byte-identical): `SDPA_ABLAT
 
 ---
 
-## NoC-multicast (KV read-once + broadcast) — BUILT and MEASURED: a +44% REGRESSION (roofline confirmed)
+## NoC-multicast (KV read-once + broadcast) — TWO variants BUILT + MEASURED
+
+Two multicast variants were built and measured on device (both opt-in, default OFF — the fast Q-outer
+path stays default for every shape). They differ in ONE decision — whether the loop is restructured —
+and that decision is the whole story:
+
+| variant | flag | loop | compute floor | e2e (flagged shape) | vs baseline 5.28 ms |
+|---|---|---|---|---|---|
+| **A. Q-outer LOCKSTEP** | `SDPA_LOCKSTEP=1` | Q-outer **preserved** (reuses shipped fused compute) | **4.888 ms** (unchanged) | **4.921 ms** | **−6.7% (1.072× WIN)** |
+| B. KV-outer restructure | `SDPA_MCAST=1` | KV-outer (4 resident q-chunk states) | 7.620 ms (**+56%**) | 7.626 ms | +44.3% (loss) |
+
+The delta between them is entirely the compute floor: preserving the Q-outer loop (variant A) keeps the
+4.888 ms floor, so the broadcast's read-contention reduction shows up as a real win; restructuring to
+KV-outer (variant B) inflates the floor +56%, swamping any read benefit. **Lesson: for a multicast to
+help SDPA, it must NOT restructure the loop — put the broadcast on top of the unchanged Q-outer compute.**
+
+---
+
+### VARIANT A: Q-outer LOCKSTEP multicast — MEASURED +6.7% WIN (compute floor PRESERVED)
+
+**Status:** BUILT (opt-in `SDPA_LOCKSTEP=1`, default OFF) and MEASURED. This is the variant that WORKS.
+The thesis — keep the compute floor at 4.888 ms by NOT restructuring, put broadcast on top, shave the
+exposed reads — is confirmed with a structural proof (the floor number) and a real e2e win.
+
+**What was built:** the loop structure is UNCHANGED from baseline (Q-outer — one q-chunk + one `(m,l,O)`
+state per core at a time), so the **shipped optimized compute kernel is reused VERBATIM** (`fuse_rowsum` /
+`fuse_oaccum` / packer-L1-acc, `Skv_chunk_t=8` → 37 KV chunks). The ONLY changes from baseline: (1) work
+is head-grouped — each head's q-chunks live on one grid row (10 heads × 11 = 110); (2) the KV stream is
+delivered by ONE column-0 injector per row (`Mcast1D` PerRow) that reads each KV chunk once from DRAM and
+`noc_async_write_multicast`es it, while the row marches its KV index in LOCKSTEP over "waves" (wave w =
+every core folds its w-th owned q-chunk over the full KV loop, one state live; `num_waves = ceil(37/11) =
+4`; the mcast semaphore handshake is the barrier; KV CB double-buffered so the injector prefetches j+1).
+The compute cannot tell whether K/V arrived via DRAM or mcast — it just consumes `cb_k_in`/`cb_v_in`. Only
+the reader + writer + host wiring are new: `scaled_dot_product_attention_lockstep_{reader,writer}.cpp`,
+`_lockstep_eligible` / `_create_lockstep_program_descriptor` (reuses the baseline compute kernel + CB
+layout). Last wave is clamp-padded (short-wave cores recompute the last q-chunk, writing it again with the
+same value) so every core stays active every wave — no idle receivers, critical path stays 4 waves = the
+baseline max-per-core.
+
+**Measured (same session, warm median ×5 device-kernel ns, flagged 1×10×9472×128, bf16 HiFi2 fp32_dest_acc_en=False):**
+
+| variant | flag | e2e | vs baseline |
+|---|---|---|---|
+| baseline Q-outer | default | 5.275 ms | — |
+| **Q-outer lockstep, broadcast ON** | `SDPA_LOCKSTEP=1` | **4.921 ms** | **−6.7% (1.072×)** |
+| Q-outer lockstep compute FLOOR (reads+writes stubbed) | `+ SDPA_MCAST_ABLATE_READER=1 SDPA_MCAST_ABLATE_WRITER=1` | **4.888 ms** | — |
+| Q-outer lockstep, broadcast OFF (per-wave per-core DRAM re-reads) | `+ SDPA_MCAST_NO_BCAST=1` | 8.183 ms | +55% |
+
+- **CRITICAL THESIS CHECK — the compute floor is 4.888 ms, IDENTICAL to the baseline Q-outer floor.** The
+  grouping + lockstep did NOT raise the floor (structural proof: the compute kernel is byte-identical to
+  the shipped one). This is the single number that distinguishes this variant from the KV-outer one.
+- **Broadcast SHAVES the exposed reads.** e2e 4.921 ms sits only 0.033 ms (0.67 %) above the floor —
+  reads-visible dropped from the baseline's **0.387 ms (7.3 %)** to **0.033 ms (0.67 %)**. So the broadcast
+  captured ~91 % of the baseline's read headroom (Amdahl ceiling was 4.896 ms). Mechanism: the baseline
+  has 110 cores independently hammering DRAM (contention → 0.39 ms exposed); the lockstep funnels reads
+  through **10 injectors** (10× less DRAM contention) and delivers over the NoC, which hides behind
+  compute under the double-buffer. Read volume 1.8 GB → ~192 MB (10 injectors × 4 waves × 4.8 MB ≈ 9× less).
+- **The lockstep barrier does NOT stall.** e2e within 0.7 % of the floor ⇒ the injector's read+mcast+
+  handshake is fully hidden behind one step of QK^T+softmax+PV compute (double-buffered); for this uniform
+  non-causal shape the 11 cores march in tight lockstep. The 10:1 injector serial-read path did NOT expose
+  more than the baseline's independent reads — it exposed LESS (contention win).
+- **Broadcast is load-bearing here** (unlike variant B): broadcast ON 4.921 vs OFF 8.183 ms. Without it,
+  the lockstep's per-wave re-read structure has all 110 cores re-reading their head's KV 4× → worse DRAM
+  contention than baseline. The broadcast is what turns the per-wave structure from a pessimization into a
+  win.
+
+**Conclusion:** a multicast CAN help SDPA — but only by staying Q-outer (floor untouched) and letting the
+broadcast cut DRAM read contention. Measured +6.7 %, correct (PCC ≥ 0.999 across the eligible class incl.
+golden long-context cells, no hang under `--dev`). Kept opt-in pending broader validation; recommended to
+ship default-on for the eligible class (a real, low-risk improvement).
+
+---
+
+### VARIANT B: KV-outer restructure — MEASURED +44% REGRESSION (roofline confirmed)
 
 **Status:** BUILT (guarded, **opt-in `SDPA_MCAST=1`** — default OFF) and MEASURED on device. Verdict, now
 with evidence instead of a model: **net loss, not shipped on.** The roofline's design-first prediction
