@@ -54,6 +54,17 @@ class EncoderSDPAConfig:
     k_buffer_depth: int = 2
     v_buffer_depth: int = 2
     q_buffer_depth: int = 2
+    # Experiment F4 (OPT-IN, NOT launched): physically ALIAS the K and V CBs onto
+    # ONE shared L1 allocation (same base address). K (bf4 576B/page) and V (bf8
+    # 1088B/page) never co-live within a k-chunk (K dead after QK, V read only in
+    # PV), so they can share bytes IF strict K_CONSUMED/V_CONSUMED handshakes
+    # serialize fill-K -> QK -> fill-V -> PV. Requires k/v_buffer_depth=1.
+    # Shared alloc = kv_alias_lcm_multiple * LCM(576,1088)=9792 so both page
+    # sizes divide it exactly and full-capacity push/pop (255 K / 135 V pages)
+    # wraps each ring to base. See f4_alias_cadence_sim.py for the proven
+    # protocol. Only valid at the exact q256/k2048 non-fp32 single-buffer shape.
+    kv_alias: bool = False
+    kv_alias_lcm_multiple: int = 15  # 15 * 9792 = 146,880 B shared allocation
 
     @property
     def q_shape(self) -> tuple[int, int, int, int]:
@@ -251,6 +262,65 @@ class EncoderSDPAPlan:
     def reduce_granularity(self) -> int:
         return self._valid_granularity(self.q_chunk_tiles, self.DST_SIZE // 2)
 
+    # ── Experiment F4 (aliased K/V) derived quantities ──────────────────────
+    # Tile byte sizes on Wormhole (32x32 tiles): bf4_b=576, bf8_b=1088.
+    K_TILE_BYTES = 576   # bfloat4_b
+    V_TILE_BYTES = 1088  # bfloat8_b
+
+    @property
+    def kv_alias_page_lcm(self) -> int:
+        import math
+        return self.K_TILE_BYTES * self.V_TILE_BYTES // math.gcd(self.K_TILE_BYTES, self.V_TILE_BYTES)
+
+    @property
+    def kv_alias_total_bytes(self) -> int:
+        # One shared L1 allocation backing BOTH the K (bf4) and V (bf8) CBs. Must
+        # be a multiple of LCM(576,1088)=9792 so BOTH page sizes divide it (the
+        # CircularBufferConfig ctor throws if total_size % page_size != 0).
+        return self.config.kv_alias_lcm_multiple * self.kv_alias_page_lcm
+
+    @property
+    def kv_alias_k_capacity_pages(self) -> int:
+        return self.kv_alias_total_bytes // self.K_TILE_BYTES
+
+    @property
+    def kv_alias_v_capacity_pages(self) -> int:
+        return self.kv_alias_total_bytes // self.V_TILE_BYTES
+
+    @property
+    def kv_alias_real_k_pages(self) -> int:
+        # Real K data per chunk = k_chunk_tiles * DHt.
+        return self.k_chunk_tiles * self.head_dim_tiles
+
+    @property
+    def kv_alias_real_v_pages(self) -> int:
+        # Real V data per chunk = k_chunk_tiles * vDHt.
+        return self.k_chunk_tiles * self.head_dim_tiles
+
+    def validate_kv_alias_contract(self) -> None:
+        """Point #5: restrict F4 aliasing to the EXACT validated shape/format.
+
+        Any deviation is a static error (never a silent fallback), because an
+        aliased-CB handshake bug hangs the shared board.
+        """
+        c = self.config
+        if not c.kv_alias:
+            return
+        if c.k_buffer_depth != 1 or c.v_buffer_depth != 1:
+            raise ValueError("F4 kv_alias requires k_buffer_depth == v_buffer_depth == 1")
+        if c.q_chunk_size != 256 or c.k_chunk_size != 2048:
+            raise ValueError("F4 kv_alias only validated at q_chunk=256, k_chunk=2048")
+        if c.fp32_dest_acc_en or c.dst_full_sync_en:
+            raise ValueError("F4 kv_alias only validated with non-fp32 half-sync dest (DEST=8)")
+        if c.score_cb_bf8:
+            raise ValueError("F4 kv_alias keeps BF16 score (bf8 score fails PCC)")
+        if self.kv_alias_total_bytes % self.K_TILE_BYTES != 0 or self.kv_alias_total_bytes % self.V_TILE_BYTES != 0:
+            raise ValueError("F4 shared alloc must be divisible by both K and V page sizes")
+        if self.kv_alias_real_k_pages > self.kv_alias_k_capacity_pages:
+            raise ValueError("F4 shared alloc too small to hold one real K chunk")
+        if self.kv_alias_real_v_pages > self.kv_alias_v_capacity_pages:
+            raise ValueError("F4 shared alloc too small to hold one real V chunk")
+
     def global_q_range(self, core_id: int) -> tuple[int, int]:
         if not 0 <= core_id < self.num_cores:
             raise ValueError(f"invalid core_id={core_id}")
@@ -285,6 +355,7 @@ def validate_encoder_sdpa_inputs(
 ) -> EncoderSDPAPlan:
     plan = EncoderSDPAPlan(config)
     plan.validate_static_contract()
+    plan.validate_kv_alias_contract()
 
     if _shape_tuple(q) != config.q_shape:
         raise ValueError(f"expected Q shape {config.q_shape}, got {_shape_tuple(q)}")

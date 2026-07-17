@@ -51,6 +51,15 @@ CB_EXP_MAX_DIFF = 12
 CB_OUT = 13
 CB_RECIP_SCRATCH = 14  # streaming-only: 1-tile recip scratch for normalize_row_streaming
 
+# F4 (kv_alias) NOTE: the originally-specified compute->reader K_CONSUMED/
+# V_CONSUMED semaphore handshake is NOT implementable — compute (TRISC) kernels
+# cannot issue NOC semaphore ops (dataflow-only). See .auto/guidance.md "F4
+# ARCHITECTURAL OBSTACLE". The 2-format K/V CBDescriptor below and the kv_alias
+# config/asserts are retained as reviewable host-side scaffolding, but the kernel
+# ring cannot be built as specified; a reader-side reserve-ahead variant (no
+# compute signal) is the only remaining avenue and awaits reviewer sign-off.
+# Therefore bge_encoder_sdpa_experimental() refuses to LAUNCH kv_alias builds.
+
 
 @dataclass(frozen=True)
 class EncoderSDPABuild:
@@ -93,6 +102,38 @@ def _cb_descriptor(
                 data_format=dtype,
                 page_size=page_size,
             )
+        ],
+    )
+
+
+def _aliased_kv_cb_descriptor(
+    total_size: int,
+    core_grid: ttnn.CoreRangeSet,
+) -> ttnn.CBDescriptor:
+    """F4: ONE L1 allocation backing BOTH CB_K (bf4) and CB_V (bf8).
+
+    Two format_descriptors on a single CBDescriptor => two buffer indices sharing
+    the SAME base address (the standard multi-index shared-CB pattern; see
+    CircularBufferConfig(const CBDescriptor&) in circular_buffer_config.cpp). The
+    ctor requires total_size divisible by EACH page_size, hence total_size must be
+    a multiple of LCM(576,1088). Safety against K/V mutual clobber is NOT provided
+    by the CB machinery here — it is enforced entirely by the kernel-side
+    K_CONSUMED/V_CONSUMED handshakes (see f4_alias_cadence_sim.py).
+    """
+    return ttnn.CBDescriptor(
+        total_size=total_size,
+        core_ranges=core_grid,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=CB_K,
+                data_format=ttnn.bfloat4_b,
+                page_size=_tile_size_bytes(ttnn.bfloat4_b),
+            ),
+            ttnn.CBFormatDescriptor(
+                buffer_index=CB_V,
+                data_format=ttnn.bfloat8_b,
+                page_size=_tile_size_bytes(ttnn.bfloat8_b),
+            ),
         ],
     )
 
@@ -394,8 +435,17 @@ def build_encoder_sdpa_descriptor(
         # Defaults (q128/k2048): Q=16, K=V=256, QK=256 — identical to the
         # parity-verified sizes. K/V are double-buffered (x2), Q holds 2 chunks.
         _cb_descriptor(CB_Q, plan.config.q_buffer_depth * plan.q_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
-        _cb_descriptor(CB_K, plan.config.k_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat4_b, core_grid),
-        _cb_descriptor(CB_V, plan.config.v_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
+        # K/V: either two separate CBs (default) or ONE shared aliased allocation
+        # (F4). The aliased path is appended after this list to keep the common
+        # ordering intact; see below.
+        *(
+            [
+                _cb_descriptor(CB_K, plan.config.k_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat4_b, core_grid),
+                _cb_descriptor(CB_V, plan.config.v_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
+            ]
+            if not plan.config.kv_alias
+            else [_aliased_kv_cb_descriptor(plan.kv_alias_total_bytes, core_grid)]
+        ),
         _cb_descriptor(CB_IDENTITY, 1, ttnn.bfloat16, core_grid),
         _cb_descriptor(CB_COL_IDENTITY, 1, ttnn.bfloat16, core_grid),
         _cb_descriptor(
@@ -486,6 +536,17 @@ def bge_encoder_sdpa_experimental(
     Use only from a dedicated parity probe until PCC, device time, repeat-cache,
     and trace replay all match production SDPA.
     """
+    if config.kv_alias:
+        # Safety: the kv_alias kernel ring is NOT implemented (compute cannot
+        # signal the reader; see op.py header note + guidance). Launching a
+        # descriptor whose kernels lack the K/V ordering handshake would clobber
+        # shared L1 and wedge Tensix cores. Refuse until a verified reader-side
+        # reserve-ahead variant exists and is cleared for coordinated board time.
+        raise NotImplementedError(
+            "kv_alias (F4) is host-side scaffolding only; the aliased-CB kernel "
+            "ring is not implemented (compute->reader signalling is impossible on "
+            "TRISC). See .auto/guidance.md 'F4 ARCHITECTURAL OBSTACLE'."
+        )
     build = build_encoder_sdpa_descriptor(
         q,
         k,
