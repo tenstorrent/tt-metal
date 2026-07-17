@@ -96,3 +96,15 @@
 {"event": "phase", "phase": "refinement_3d_golden", "state": "end", "at_ms": 1784252425585}
 {"source":"run_safe_pytest","pid":1450097,"started_at_ms":1784252429449,"wait_ms":2,"run_ms":31751,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
 {"event": "phase", "phase": "refinement_3e", "state": "start", "at_ms": 1784252461229}
+{"source":"run_safe_pytest","pid":1459921,"started_at_ms":1784254146305,"wait_ms":2,"run_ms":24986,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_fused_rowsum.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1460444,"started_at_ms":1784254184749,"wait_ms":2,"run_ms":42358,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1461445,"started_at_ms":1784254236607,"wait_ms":2,"run_ms":62125,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_precision_matrix.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1463125,"started_at_ms":1784254309821,"wait_ms":3,"run_ms":120010,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1466852,"started_at_ms":1784254441448,"wait_ms":3,"run_ms":176085,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1467854,"started_at_ms":1784254622507,"wait_ms":2,"run_ms":135057,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"tt-probe","pid":1469189,"started_at_ms":1784254906850,"wait_ms":217,"run_ms":46553,"test_path":"scaled_dot_product_attention","exit_code":1}
+{"source":"tt-probe","pid":1469486,"started_at_ms":1784254969533,"wait_ms":217,"run_ms":46362,"test_path":"scaled_dot_product_attention","exit_code":1}
+{"source":"tt-probe","pid":1469778,"started_at_ms":1784255031196,"wait_ms":197,"run_ms":54489,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"tt-probe","pid":1471580,"started_at_ms":1784255464532,"wait_ms":221,"run_ms":58091,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"tt-probe","pid":1472816,"started_at_ms":1784255694787,"wait_ms":221,"run_ms":55770,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"run_safe_pytest","pid":1473440,"started_at_ms":1784255770086,"wait_ms":2,"run_ms":208682,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":0}

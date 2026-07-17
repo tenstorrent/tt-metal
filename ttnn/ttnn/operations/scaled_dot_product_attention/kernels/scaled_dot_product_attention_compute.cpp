@@ -48,10 +48,11 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/compute/bcast.h"              // init_bcast, sub_tiles_bcast_cols
-#include "api/compute/eltwise_unary/exp.h"  // exp_tile, exp_tile_init
-#include "api/compute/pack.h"               // pack_tile, pack_reconfig_l1_acc
-#include "api/compute/reg_api.h"            // tile_regs_acquire/commit/wait/release
+#include "api/compute/bcast.h"                 // sub_tiles_bcast_cols, sub_bcast_cols_init_short
+#include "api/compute/eltwise_unary/exp.h"     // exp_tile, exp_tile_init
+#include "api/compute/pack.h"                  // pack_tile, pack_reconfig_l1_acc
+#include "api/compute/reconfig_data_format.h"  // reconfig_data_format, pack_reconfig_data_format
+#include "api/compute/reg_api.h"               // tile_regs_acquire/commit/wait/release
 
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -117,13 +118,20 @@ FORCE_INLINE void fused_exp_dual_pack(uint32_t sq_valid, uint32_t skv_valid) {
     cb_reserve_back(cb_exp, sq_skv);
     cb_reserve_back(cb_sum_chunk, sq_valid);
 
-    // Complete unpack/math/pack hw-configure for the sub-bcast-col op (in0=scores,
-    // in1=row_max, out=cb_exp) — self-contained, resets whatever the prior SFPU/
-    // eltwise phase left. Then the fast SFPU exp init (matches ckl::Exp<Approx::Fast>
-    // == exp_tile<true>, default ClampToNegative). L1-acc is forced off so the
-    // cb_exp packs below never accumulate.
-    ckernel::init_bcast<ckernel::EltwiseBinaryType::ELWSUB, ckernel::BroadcastType::COL>(cb_scores, cb_row_max, cb_exp);
+    // LIGHTWEIGHT reconfig (mirrors the eltwise_chain's own lowering — see file-head
+    // note), NOT a full init_bcast: reconfig the unpack/math src formats to
+    // (scores, row_max), switch the math/unpack op-type to sub-bcast-col, init the
+    // fast SFPU exp (matches ckl::Exp<Approx::Fast> == exp_tile<true>, default
+    // ClampToNegative), and reconfig ONLY the pack DATA FORMAT to cb_exp. A full
+    // init_bcast (llk_pack_hw_configure + llk_pack_init) would re-init the packer and
+    // clobber the boot-time matmul_block_init packer state that the per-KV-chunk
+    // matmul's InitMode::Short relies on (Short does not fully re-issue packer cfg),
+    // drifting across chunks x work-units. L1-acc is forced off so the cb_exp packs
+    // below never accumulate.
+    ckernel::reconfig_data_format(cb_scores, cb_row_max);
+    ckernel::sub_bcast_cols_init_short(cb_scores, cb_row_max);
     ckernel::exp_tile_init<true>();
+    ckernel::pack_reconfig_data_format(cb_exp);
     ckernel::pack_reconfig_l1_acc(0);
 
     for (uint32_t i = 0; i < sq_valid; ++i) {
