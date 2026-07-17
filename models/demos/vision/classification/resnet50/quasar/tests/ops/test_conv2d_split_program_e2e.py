@@ -17,9 +17,11 @@ and checks the ACTUAL conv output against a torch golden — validating BOTH tha
 that the unpack-to-dest tilize produced CORRECT data (fed through the matmul). Stem-like K=16-tile shape shrunk
 to fit L1; act_block_h_override forces >=2 height blocks so the multi-block tilize (which faulted) is exercised.
 
-Run (craq-sim / emulator, slow dispatch + forced JIT):
-  TT_METAL_QSR_CONV_SPLIT_PROGRAM=1 TT_METAL_QSR_TILIZE_UNPACK_TO_DEST=1 \
-  TT_METAL_SIMULATOR=~/sim/libttsim.so \
+Program A runs the DATACOPY tilize (per-tile FPU dest-dvalid clear = the 0x19 fix), NOT UnpackToDestEn — the
+test sets TT_METAL_QSR_CONV_SPLIT_PROGRAM itself and deliberately DROPS TT_METAL_QSR_TILIZE_UNPACK_TO_DEST
+(the batched UNP_DEST tilize intermittently hangs on Quasar).
+
+Run (emulator / WH, slow dispatch + forced JIT; the split env is set inside the test):
   TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_FORCE_JIT_COMPILE=1 \
   pytest -s models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_split_program_e2e.py
 """
@@ -109,10 +111,15 @@ def _run(
         device.arch(), math_fidelity=ttnn.MathFidelity.LoFi, packer_l1_acc=True
     )
 
-    # Two-program split: Program A tilize (UnpackToDestEn) + Program B matmul. Both flags set; no leak after.
+    # Two-program split: Program A tilize + Program B matmul.
+    # Program A uses the DATACOPY tilize (per-tile FPU dest-dvalid clear = the 0x19 fix in tilize.h), NOT
+    # UnpackToDestEn. On WH datacopy is the only path anyway; on Quasar we explicitly DROP
+    # TT_METAL_QSR_TILIZE_UNPACK_TO_DEST so tilize_block takes the datacopy branch. The batched UNP_DEST tilize
+    # intermittently HANGS on Quasar (pack frozen inside tilize_block mid DEST-dvalid handshake, ~block 4 —
+    # dprint_spe1 / utd10-12); the datacopy path is what validated on WH.
     saved = {k: os.environ.get(k) for k in ("TT_METAL_QSR_CONV_SPLIT_PROGRAM", "TT_METAL_QSR_TILIZE_UNPACK_TO_DEST")}
     os.environ["TT_METAL_QSR_CONV_SPLIT_PROGRAM"] = "1"
-    os.environ["TT_METAL_QSR_TILIZE_UNPACK_TO_DEST"] = "1"
+    os.environ.pop("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST", None)
     try:
         out, [oh, ow], _wb = ttnn.experimental.quasar.conv2d(
             input_tensor=tt_input,
