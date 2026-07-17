@@ -4,6 +4,7 @@
 
 import pytest
 import ttnn
+from loguru import logger
 
 from tests.nightly.t3000.ccl.test_strided_all_gather_minimal_matmul_async import (
     run_strided_all_gather_minimal_matmul_impl,
@@ -12,6 +13,12 @@ from models.common.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_n_or_less_dev,
 )
+
+
+def create_fabric_router_config(max_payload_size):
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
 
 
 # SP=8 / TP=4 on the blackhole galaxy. The (8, 4) mesh puts the M/sequence shard (other_dim) on
@@ -86,7 +93,14 @@ from models.common.utility_functions import (
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(8192),
+                "trace_region_size": 1171456,
+            },
+            ttnn.Topology.Ring,
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric_ring"],
@@ -119,6 +133,8 @@ def test_strided_all_gather_minimal_matmul_async(
     ag_offset,
     read_local_slice_from_input,
 ):
+    logger.info(f"fabric max payload = {ttnn._ttnn.fabric.get_tt_fabric_max_payload_size_bytes()} B")
+
     grid = mesh_device.compute_with_storage_grid_size()
     if grid.x < mm_core_grid.x or grid.y < ag_offset[1] + 1:
         pytest.skip(f"Requires worker grid >= {mm_core_grid.x}x{ag_offset[1] + 1}, got {grid.x}x{grid.y}")
@@ -141,6 +157,7 @@ def test_strided_all_gather_minimal_matmul_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=8,
         mm_block_m=mm_block_m,
         mm_block_k=mm_block_k,
         mm_block_n=mm_block_n,
