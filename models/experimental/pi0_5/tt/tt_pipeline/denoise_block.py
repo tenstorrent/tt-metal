@@ -18,6 +18,7 @@ from typing import Optional, Tuple
 
 import ttnn
 
+from models.experimental.pi0_5.tt.tile_config import from_torch_pi05
 from models.experimental.pi0_5.tt._ttnn_compat import (
     concat_heads_matmul,
     concat_heads_matmul_decode,
@@ -143,7 +144,7 @@ def _pws_B(device, w_kn, n_blocks):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    return ttnn.from_torch(br, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc, dtype=ttnn.bfloat8_b)
+    return from_torch_pi05(br, device=device, memory_config=mc, dtype=ttnn.bfloat8_b)
 
 
 def _ws_in_mc(device, m, k):

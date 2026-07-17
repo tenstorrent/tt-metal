@@ -27,6 +27,14 @@ def _rms_compute():
     return _RMS_NORM_COMPUTE_CONFIG
 
 
+def _activation_tile(x):
+    return x.get_tile()
+
+
+def _m_tile_count(m_padded: int, tile_h: int) -> int:
+    return (m_padded + tile_h - 1) // tile_h
+
+
 def matmul_pcfg(m_tiles, k_tiles, n_tiles, grid_x, grid_y, **kw):
     if not bs_enabled():
         return None
@@ -53,8 +61,14 @@ def sharded_rms_norm(x, weight, eps, m_padded, hidden, *, batch=1, bias=None, ou
     block-sharded ``normed`` (memory_config == ``memcfg``) is returned directly -- the downstream
     consumer (matmul_decode with ``reshard_input=True``) reshards it internally, so the S2I and the
     interleaved intermediate are both eliminated. Falls back to interleaved if no sharded pcfg."""
-    m_tiles = m_padded // 32
-    cfg = sharded_norm_pcfg(m_tiles, hidden // 32, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles)))
+    tile_h, tile_w = _activation_tile(x).tile_shape
+    # Block-sharded layernorm currently requires 32x32 shard geometry; tiny-tile
+    # activations (e.g. 16x32) use the interleaved path with matched gamma/beta tiles.
+    if tile_h != 32 or tile_w != 32:
+        normed = ttnn.rms_norm(x, weight=weight, bias=bias, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return normed
+    m_tiles = _m_tile_count(m_padded, tile_h)
+    cfg = sharded_norm_pcfg(m_tiles, hidden // tile_w, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles)))
     if cfg is None:
         return ttnn.rms_norm(x, weight=weight, bias=bias, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
     pc, memcfg_factory, _grid = cfg
@@ -99,8 +113,9 @@ def sdpa_program_config(seq_q, seq_kv, grid_x, grid_y, *, q_chunk=None, k_chunk=
 
 def sharded_layer_norm(x, weight, bias, eps, m_padded, hidden, *, batch=1):
     """Sharded LayerNorm (affine), INTERLEAVED-L1 result; falls back to plain interleaved."""
-    m_tiles = m_padded // 32
-    cfg = sharded_norm_pcfg(m_tiles, hidden // 32, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles)))
+    tile_h, tile_w = _activation_tile(x).tile_shape
+    m_tiles = _m_tile_count(m_padded, tile_h)
+    cfg = sharded_norm_pcfg(m_tiles, hidden // tile_w, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles)))
     if cfg is None:
         return ttnn.layer_norm(x, weight=weight, bias=bias, epsilon=eps, memory_config=ttnn.L1_MEMORY_CONFIG)
     pc, memcfg_factory, _grid = cfg

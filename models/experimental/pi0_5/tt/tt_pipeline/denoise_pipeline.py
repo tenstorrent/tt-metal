@@ -26,6 +26,7 @@ from .mesh_carve import carve_four_submeshes
 from .modeling.common import precompute_freqs_cis_meta
 from .modeling.gemma import TTNNPi05AdaRMSGemmaBlock, _linear_weight_to_tt
 from .modeling.suffix import TTNNPi05SuffixEmbedding
+from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, from_torch_pi05
 
 TT_METAL_COMMIT = "58672b47cfd304195798bcf34d44f5dbcbcf5189"
 
@@ -54,8 +55,8 @@ def perf_action_horizon(default: int = 50) -> int:
     return int(default)
 
 
-def perf_suffix_len(action_horizon: int) -> int:
-    return ((action_horizon + 31) // 32) * 32
+def perf_suffix_len(action_horizon: int, tile_height: int = TILE_HEIGHT) -> int:
+    return ((action_horizon + tile_height - 1) // tile_height) * tile_height
 
 
 def _d2d_transport_modules():
@@ -126,15 +127,13 @@ def _bind_prefix_kv(entry, mesh, dtype, memcfg):
     on-device, no host round-trip (zero-copy when already in target format). Device tensor on
     another mesh -> relocated via host (to_torch -> from_torch), matching the legacy behaviour."""
     if not isinstance(entry, ttnn.Tensor):
-        return ttnn.from_torch(entry, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=memcfg)
+        return from_torch_pi05(entry, dtype=dtype, device=mesh, memory_config=memcfg)
     try:
         co_resident = entry.device() is mesh
     except Exception:
         co_resident = False
     if not co_resident:
-        return ttnn.from_torch(
-            ttnn.to_torch(entry), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=memcfg
-        )
+        return from_torch_pi05(ttnn.to_torch(entry), dtype=dtype, device=mesh, memory_config=memcfg)
     t = entry if entry.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(entry, ttnn.TILE_LAYOUT)
     if t.dtype != dtype:
         return ttnn.typecast(t, dtype, memory_config=memcfg)
@@ -220,17 +219,14 @@ class TTNNPi05DenoisePipelineStage(StatelessTTNNModule):
         if self._is_last and self._raw_final_norm_mod_w is not None:
             self._tt_final_mod_w = _linear_weight_to_tt(self._raw_final_norm_mod_w, dtype=ttnn.bfloat16)
             self._tt_final_mod_b = (
-                ttnn.from_torch(
+                from_torch_pi05(
                     self._raw_final_norm_mod_b.reshape(1, -1).contiguous(),
                     dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
                 )
                 if self._raw_final_norm_mod_b is not None
                 else None
             )
-            self._tt_expert_norm_ones = ttnn.from_torch(
-                torch.ones(1, self._expert_width), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
+            self._tt_expert_norm_ones = from_torch_pi05(torch.ones(1, self._expert_width), dtype=ttnn.bfloat16)
 
     def move_weights_to_device_impl(self):
         dev = self.device
@@ -322,13 +318,13 @@ def _bind_stage_runtime(
                 ttnn.deallocate(k_dev)
                 ttnn.deallocate(v_dev)
         if bind_mods:
-            cond_dev = ttnn.from_torch(adarms_cond_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh)
+            cond_dev = from_torch_pi05(adarms_cond_torch, dtype=ttnn.bfloat16, device=mesh)
             st._precomputed_block_mods = [_to_dram(blk.precompute_mods(cond_dev)) for blk in st.blocks]
             if st._is_last and st._tt_final_mod_w is not None:
                 st._precomputed_final_mod = st._precompute_final_mod(cond_dev)
             ttnn.deallocate(cond_dev)
-        st._attention_mask = ttnn.from_torch(
-            attention_mask_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=_DRAM
+        st._attention_mask = from_torch_pi05(
+            attention_mask_torch, dtype=ttnn.bfloat16, device=mesh, memory_config=_DRAM
         )
 
 
@@ -623,12 +619,12 @@ def build_single_stage_reference(
             blk.fill_static_prefix(k_dev, v_dev)
             ttnn.deallocate(k_dev)
             ttnn.deallocate(v_dev)
-    cond_dev = ttnn.from_torch(adarms_cond_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=submesh)
+    cond_dev = from_torch_pi05(adarms_cond_torch, dtype=ttnn.bfloat16, device=submesh)
     stage._precomputed_block_mods = [_to_dram(blk.precompute_mods(cond_dev)) for blk in stage.blocks]
     stage._precomputed_final_mod = stage._precompute_final_mod(cond_dev)
     ttnn.deallocate(cond_dev)
-    stage._attention_mask = ttnn.from_torch(
-        attention_mask_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=_DRAM
+    stage._attention_mask = from_torch_pi05(
+        attention_mask_torch, dtype=ttnn.bfloat16, device=submesh, memory_config=_DRAM
     )
     return stage
 
@@ -728,9 +724,7 @@ class TTNNPi05DenoiseStreamedPipeline:
         self._dump("T7_xt_out", self._x_t)
 
     def _warmup_caches(self, x_t_init):
-        self._x_t = ttnn.from_torch(
-            x_t_init, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._stage0_mesh, memory_config=_L1
-        )
+        self._x_t = from_torch_pi05(x_t_init, dtype=ttnn.float32, device=self._stage0_mesh, memory_config=_L1)
         self._hop_sock = [None]
         x_bf16 = ttnn.typecast(self._x_t, ttnn.bfloat16, memory_config=_L1)
         out = self._stages[0].forward(x_bf16)
@@ -760,9 +754,7 @@ class TTNNPi05DenoiseStreamedPipeline:
     def stream_euler(self, x_t_init, *, capture=True):
         self._warmup_caches(x_t_init)
         ttnn.copy(
-            ttnn.from_torch(
-                x_t_init, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self._stage0_mesh, memory_config=_L1
-            ),
+            from_torch_pi05(x_t_init, dtype=ttnn.float32, device=self._stage0_mesh, memory_config=_L1),
             self._x_t,
         )
         if not capture:
@@ -855,9 +847,7 @@ def build_denoise_loop_pipeline(
         step_block = []
         step_final = None
         for k, st in enumerate(stages):
-            cond_dev = ttnn.from_torch(
-                adarms_cond_per_step[i], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=meshes[k]
-            )
+            cond_dev = from_torch_pi05(adarms_cond_per_step[i], dtype=ttnn.bfloat16, device=meshes[k])
             step_block.append([_to_dram(blk.precompute_mods(cond_dev)) for blk in st.blocks])
             if st._is_last:
                 step_final = st._precompute_final_mod(cond_dev)

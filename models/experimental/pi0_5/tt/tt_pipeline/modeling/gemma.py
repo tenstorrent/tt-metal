@@ -27,6 +27,7 @@ from .bs import matmul_pcfg, sdpa_program_config, sharded_rms_norm
 from .common import get_sdpa_compute_kernel_config
 
 from models.experimental.pi0_5.common.configs import GemmaConfig
+from models.experimental.pi0_5.tt.tile_config import from_torch_pi05
 
 TT_METAL_COMMIT = "58672b47cfd304195798bcf34d44f5dbcbcf5189"
 
@@ -48,13 +49,13 @@ _DRAM = ttnn.DRAM_MEMORY_CONFIG
 # ---------------------------------------------------------------------------
 def _linear_weight_to_tt(w: torch.Tensor, dtype: "ttnn.DataType" = ttnn.bfloat8_b) -> ttnn.Tensor:
     """Transpose a torch ``[out, in]`` linear weight to ttnn ``[in, out]`` host tensor."""
-    return ttnn.from_torch(w.t().contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    return from_torch_pi05(w.t().contiguous(), dtype=dtype)
 
 
 def _norm_weight_to_tt(w: torch.Tensor) -> ttnn.Tensor:
     """Gemma RMSNorm weight with the ``+1.0`` offset folded in, shape ``[1, dim]``."""
     folded = (w + 1.0).reshape(1, w.shape[0]).contiguous()
-    return ttnn.from_torch(folded, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    return from_torch_pi05(folded, dtype=ttnn.bfloat16)
 
 
 def _rms_norm(x: ttnn.Tensor, weight: ttnn.Tensor, eps: float) -> ttnn.Tensor:
@@ -164,7 +165,7 @@ class TTNNPi05GemmaAttention(StatefulTTNNModule):
         wk = self._k_w.t().contiguous()
         wv = self._v_w.t().contiguous()
         wqkv = torch.cat([wq, wk, wv], dim=-1)  # [in, (Q+K+V)_out]
-        self.tt_wqkv = ttnn.from_torch(wqkv, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
+        self.tt_wqkv = from_torch_pi05(wqkv, dtype=ttnn.bfloat8_b)
         self.tt_o = _linear_weight_to_tt(self._o_w)
 
     def move_weights_to_device_impl(self):
@@ -186,12 +187,8 @@ class TTNNPi05GemmaAttention(StatefulTTNNModule):
         zeros = torch.zeros(1, self.num_kv_heads, total, self.head_dim)
         # BAKED bf8_b (PI05_VLM_KV_BF16 dropped); bf16 PCC-recovery flip documented in PORT_NOTES.
         _static_kv_dtype = ttnn.bfloat8_b
-        self._static_k = ttnn.from_torch(
-            zeros, dtype=_static_kv_dtype, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM
-        )
-        self._static_v = ttnn.from_torch(
-            zeros, dtype=_static_kv_dtype, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=_DRAM
-        )
+        self._static_k = from_torch_pi05(zeros, dtype=_static_kv_dtype, device=self.device, memory_config=_DRAM)
+        self._static_v = from_torch_pi05(zeros, dtype=_static_kv_dtype, device=self.device, memory_config=_DRAM)
         self._static_prefix_len = prefix_len
 
     def fill_static_prefix(self, past_k: ttnn.Tensor, past_v: ttnn.Tensor) -> None:
@@ -329,16 +326,12 @@ class TTNNPi05AdaRMSGemmaBlock(StatefulTTNNModule):
         self.tt_pre_attn_mod_w = _linear_weight_to_tt(self._pre_attn_mod_w, dtype=ttnn.bfloat16)
         self.tt_pre_ffw_mod_w = _linear_weight_to_tt(self._pre_ffw_mod_w, dtype=ttnn.bfloat16)
         self.tt_pre_attn_mod_b = (
-            ttnn.from_torch(
-                self._pre_attn_mod_b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
+            from_torch_pi05(self._pre_attn_mod_b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16)
             if self._pre_attn_mod_b is not None
             else None
         )
         self.tt_pre_ffw_mod_b = (
-            ttnn.from_torch(
-                self._pre_ffw_mod_b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
+            from_torch_pi05(self._pre_ffw_mod_b.reshape(1, -1).contiguous(), dtype=ttnn.bfloat16)
             if self._pre_ffw_mod_b is not None
             else None
         )

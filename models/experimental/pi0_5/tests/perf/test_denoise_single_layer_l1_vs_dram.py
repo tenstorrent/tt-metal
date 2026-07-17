@@ -30,6 +30,8 @@ _apply_production_env_defaults()
 
 import pytest  # noqa: E402
 import torch  # noqa: E402
+from models.experimental.pi0_5.tt.tt_pipeline.denoise_pipeline import perf_suffix_len
+from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, from_torch_pi05
 
 ttnn = pytest.importorskip("ttnn")
 
@@ -39,12 +41,6 @@ _PREFIX_LEN = 1024
 _ACTION_HORIZON = 10
 _PCC = 0.99
 _DEVICE_PARAMS = {"trace_region_size": 134_217_728, "l1_small_size": 24576}
-
-
-def _perf_suffix_len(ah):
-    from models.experimental.pi0_5.tt.tt_pipeline.denoise_pipeline import perf_suffix_len
-
-    return perf_suffix_len(ah)
 
 
 def _compute_pcc(a, b):
@@ -159,19 +155,15 @@ def _build_l1(submesh, ref_blocks, ec, config, suffix_len, ah, adarms_cond, pref
     stage._prefix_kv = []
     for gi in range(_LO, _HI):
         pk, pv = prefix_kv[gi]
-        pk_dev = ttnn.from_torch(
-            pk, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        pv_dev = ttnn.from_torch(
-            pv, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        pk_dev = from_torch_pi05(pk, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pv_dev = from_torch_pi05(pv, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
         stage._prefix_kv.append((pk_dev, pv_dev))
         dev += [pk_dev, pv_dev]
-    cond_dev = ttnn.from_torch(adarms_cond, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=submesh)
+    cond_dev = from_torch_pi05(adarms_cond, dtype=ttnn.bfloat16, device=submesh)
     stage._precomputed_block_mods = [_to_dram(blk.precompute_mods(cond_dev)) for blk in stage.blocks]
     ttnn.deallocate(cond_dev)
-    stage._attention_mask = ttnn.from_torch(
-        mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    stage._attention_mask = from_torch_pi05(
+        mask, dtype=ttnn.bfloat16, device=submesh, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     dev.append(stage._attention_mask)
     return dev, lambda x: stage.forward(x)
@@ -182,10 +174,9 @@ def _precomputed_mods(submesh, expert_config, chunk_weights, adarms_cond):
     cond = adarms_cond.to(torch.bfloat16)
 
     def _up(t2d):
-        return ttnn.from_torch(
+        return from_torch_pi05(
             t2d.unsqueeze(1).contiguous(),
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
             device=submesh,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -233,7 +224,7 @@ def _build_dram(submesh, expert_config, chunk_weights, config, suffix_len, ah, a
         max_seq_len=config.max_seq_len,
     )
     cos_suf, sin_suf = _slice_rope(slice_.cos_meta, slice_.sin_meta, suffix_len, _PREFIX_LEN)
-    cond_dev = ttnn.from_torch(adarms_cond, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=submesh)
+    cond_dev = from_torch_pi05(adarms_cond, dtype=ttnn.bfloat16, device=submesh)
     block_mods = _precomputed_mods(submesh, expert_config, chunk_weights, adarms_cond)
     dev = [cond_dev]
     for tup in block_mods:
@@ -241,17 +232,11 @@ def _build_dram(submesh, expert_config, chunk_weights, config, suffix_len, ah, a
     prefix_kv_for_chunk = []
     for gi in range(_LO, _HI):
         pk, pv = prefix_kv[gi]
-        pk_dev = ttnn.from_torch(
-            pk, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-        pv_dev = ttnn.from_torch(
-            pv, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        pk_dev = from_torch_pi05(pk, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
+        pv_dev = from_torch_pi05(pv, dtype=ttnn.bfloat8_b, device=submesh, memory_config=ttnn.L1_MEMORY_CONFIG)
         prefix_kv_for_chunk.append((pk_dev, pv_dev))
         dev += [pk_dev, pv_dev]
-    attn_mask_dev = ttnn.from_torch(
-        mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=submesh, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    attn_mask_dev = from_torch_pi05(mask, dtype=ttnn.bfloat16, device=submesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     dev.append(attn_mask_dev)
 
     def _fwd(x):
@@ -297,7 +282,7 @@ def _setup(mesh):
     from models.experimental.pi0_5.common.configs import Pi0_5ModelConfig
 
     ah = _ACTION_HORIZON
-    suffix_len = _perf_suffix_len(ah)
+    suffix_len = perf_suffix_len(ah, TILE_HEIGHT)
     config = Pi0_5ModelConfig(action_horizon=ah, num_denoising_steps=5)
     bw, ref_blocks, adarms_cond, hidden, prefix_kv, mask, cos, sin = _build_inputs(config, suffix_len, ah)
     h_oracle = _torch_oracle(ref_blocks, hidden, adarms_cond, prefix_kv, mask, cos, sin, suffix_len)
@@ -314,10 +299,9 @@ def test_dram_single_layer_pcc(mesh_device):
         mesh_device, GemmaConfig.gemma_300m(), _chunk_weights(bw), config, suffix_len, ah, adarms_cond, prefix_kv, mask
     )
     try:
-        xi = ttnn.from_torch(
+        xi = from_torch_pi05(
             hidden,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -342,11 +326,11 @@ def test_l1_single_layer_pcc(mesh_device):
     dev, l1_fwd = _build_l1(
         mesh_device, ref_blocks, config.expert_config, config, suffix_len, ah, adarms_cond, prefix_kv, mask
     )
+    print(f"Hidden shape: {hidden.shape}")
     try:
-        xi = ttnn.from_torch(
+        xi = from_torch_pi05(
             hidden,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -374,9 +358,7 @@ def test_walltime_l1_vs_dram_single_layer(mesh_device):
     l1_dev, l1_fwd = _build_l1(
         mesh_device, ref_blocks, config.expert_config, config, suffix_len, ah, adarms_cond, prefix_kv, mask
     )
-    x = ttnn.from_torch(
-        hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    x = from_torch_pi05(hidden, dtype=ttnn.bfloat16, device=mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG)
     l1_dev.append(x)
     try:
         l1_med = _time_replay(mesh_device, l1_fwd, x)
@@ -391,9 +373,7 @@ def test_walltime_l1_vs_dram_single_layer(mesh_device):
     dram_dev, dram_fwd = _build_dram(
         mesh_device, GemmaConfig.gemma_300m(), _chunk_weights(bw), config, suffix_len, ah, adarms_cond, prefix_kv, mask
     )
-    x = ttnn.from_torch(
-        hidden, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    x = from_torch_pi05(hidden, dtype=ttnn.bfloat16, device=mesh_device, memory_config=ttnn.L1_MEMORY_CONFIG)
     dram_dev.append(x)
     try:
         dram_med = _time_replay(mesh_device, dram_fwd, x)

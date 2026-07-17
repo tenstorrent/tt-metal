@@ -16,6 +16,8 @@ from typing import Tuple
 import torch
 import ttnn
 
+from models.experimental.pi0_5.tt.tile_config import TILE_HEIGHT, from_torch_pi05
+
 TT_METAL_COMMIT = "58672b47cfd304195798bcf34d44f5dbcbcf5189"
 
 __all__ = [
@@ -46,7 +48,7 @@ def get_sdpa_compute_kernel_config() -> "ttnn.WormholeComputeKernelConfig":
     )
 
 
-def sdpa_prefill_chunk_sizes(seq_len_q: int, seq_len_kv: int, *, tile: int = 32) -> Tuple[int, int]:
+def sdpa_prefill_chunk_sizes(seq_len_q: int, seq_len_kv: int, *, tile: int = TILE_HEIGHT) -> Tuple[int, int]:
     """q_chunk / k_chunk sizes for ttnn SDPA, mirroring the tt_transformers baseline."""
     longest = max(seq_len_q, seq_len_kv)
     if longest >= 2048:
@@ -74,8 +76,8 @@ def precompute_freqs_cis_meta(
     sin = torch.cat([torch.sin(outer), torch.sin(outer)], dim=-1)
     cos = cos.reshape(1, 1, max_seq_len, head_dim).contiguous()
     sin = sin.reshape(1, 1, max_seq_len, head_dim).contiguous()
-    cos_tt = ttnn.from_torch(cos, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    sin_tt = ttnn.from_torch(sin, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    cos_tt = from_torch_pi05(cos, dtype=ttnn.bfloat16, device=device)
+    sin_tt = from_torch_pi05(sin, dtype=ttnn.bfloat16, device=device)
     return cos_tt, sin_tt
 
 
@@ -96,4 +98,4 @@ def create_sinusoidal_pos_embedding(
     time = time.reshape(-1, 1).to(torch.float32)
     sin_input = time * scaling.reshape(1, half)
     emb = torch.cat([torch.sin(sin_input), torch.cos(sin_input)], dim=-1)
-    return ttnn.from_torch(emb.contiguous(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return from_torch_pi05(emb.contiguous(), dtype=ttnn.bfloat16, device=device)
