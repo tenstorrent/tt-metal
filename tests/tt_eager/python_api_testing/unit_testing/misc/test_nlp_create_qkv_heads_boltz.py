@@ -90,3 +90,22 @@ def run_nlp_create_qkv_heads_boltz_test(batch, seq_len, head_dim, n_heads, dtype
 @pytest.mark.timeout(120)
 def test_nlp_create_qkv_heads_boltz(batch, seq_len, n_heads, head_dim, dtype, in0_mem_config, request, device):
     run_nlp_create_qkv_heads_boltz_test(batch, seq_len, head_dim, n_heads, dtype, in0_mem_config, device)
+
+
+@pytest.mark.timeout(120)
+def test_nlp_create_qkv_heads_boltz_program_cache(device):
+    # override_runtime_arguments must re-derive per-dispatch state on every cache hit. Re-allocating the
+    # input between runs (via the dummy tensor) shifts buffer addresses; a stale-address bug fails PCC.
+    dtype = ttnn.bfloat16
+    mem_config = ttnn.DRAM_MEMORY_CONFIG
+    for _ in range(2):
+        # Same shape twice -> cache HIT on the 2nd run, but different buffer addresses.
+        run_nlp_create_qkv_heads_boltz_test(1, 768, 32, 4, dtype, mem_config, device)
+        # Different shape -> a second distinct cache entry, then a HIT on its own 2nd run.
+        run_nlp_create_qkv_heads_boltz_test(1, 704, 32, 4, dtype, mem_config, device)
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+
+    # Two shapes -> exactly two program-cache entries; the hit path must not grow the cache.
+    assert device.num_program_cache_entries() == 2
