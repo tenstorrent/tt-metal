@@ -23,10 +23,9 @@ struct FillCacheMultiCoreProgramFactory {
 // Per-core writer cache_start_id, in the SAME core order create_descriptor emits runtime args.
 // cache_start_id derives from operation_attributes (batch_idx, update_idx) which
 // UpdateKVCacheOperation::compute_program_hash deliberately EXCLUDES from the program-cache key
-// (so two fills that differ only in those cache-hit), yet it is baked into a writer runtime arg —
-// so it must be re-patched on every cache hit via UpdateKVCacheOperation::get_dynamic_runtime_args.
-// This helper is the single source of truth for the work-split + formula: both create_descriptor
-// (cache miss) and get_dynamic_runtime_args (cache hit) call it, so the two paths cannot drift.
+// (so two fills that differ only in those cache-hit), yet it is baked into a writer runtime arg.
+// create_descriptor re-derives it from the current attrs on every dispatch (cache miss and, via
+// override_runtime_arguments, cache hit), so it never freezes.
 std::vector<std::pair<tt::tt_metal::CoreCoord, uint32_t>> compute_fill_cache_start_ids(
     const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args);
 

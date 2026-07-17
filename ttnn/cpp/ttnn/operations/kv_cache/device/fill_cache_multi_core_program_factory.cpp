@@ -112,8 +112,8 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
     uint32_t num_blocks_of_work = input_tensor.padded_shape()[1] * input_tensor.padded_shape()[-2] / TILE_HEIGHT;
 
     // Wt is the only shape-derived geometry create_descriptor still needs directly; the
-    // batch_idx/update_idx-dependent cache_start_id lives in compute_fill_cache_start_ids so the
-    // cache-miss and cache-hit (get_dynamic_runtime_args) paths share one source of truth.
+    // batch_idx/update_idx-dependent cache_start_id lives in compute_fill_cache_start_ids, which
+    // create_descriptor re-runs every dispatch (miss and, via override_runtime_arguments, hit).
     uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
     tt::tt_metal::IDevice* device = input_tensor.device();
 
@@ -220,9 +220,9 @@ ProgramDescriptor FillCacheMultiCoreProgramFactory::create_descriptor(
     // framework patches the (possibly reallocated) addresses directly on cache hits (fast path).
     // The per-core writer cache_start_id derives from operation_attributes (batch_idx, update_idx)
     // which UpdateKVCacheOperation::compute_program_hash deliberately excludes from the
-    // program-cache key, so it is NOT stable across cache hits: it is re-patched every dispatch by
-    // UpdateKVCacheOperation::get_dynamic_runtime_args. compute_fill_cache_start_ids is the shared
-    // single source of truth for the work-split and cache_start_id formula so the two paths agree.
+    // program-cache key, so it is NOT stable across cache hits: create_descriptor re-derives it here
+    // every dispatch (miss and, via override_runtime_arguments, hit). compute_fill_cache_start_ids
+    // is the single source of truth for the work-split and cache_start_id formula.
     const auto start_ids = compute_fill_cache_start_ids(operation_attributes, tensor_args);
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         const CoreCoord& core = cores.at(i);

@@ -369,11 +369,10 @@ ProgramDescriptor UpdateCacheMultiCoreProgramFactory::create_descriptor(
     // framework patches the (possibly reallocated) addresses directly on cache hits (fast path).
     // cache_start_id, tile_update_offset and batch_read_offset depend on operation_attributes
     // (update_idx, batch_offset) which UpdateKVCacheOperation::compute_program_hash deliberately
-    // excludes from the program-cache key, so they are NOT stable across cache hits: they are
-    // re-patched every dispatch by UpdateKVCacheOperation::get_dynamic_runtime_args.
-    // compute_update_cache_dynamic_args is the shared single source of truth for the work-split and
-    // formulas so the two paths agree. input_start_id and batch_start_id are shape-only (in the
-    // hash), so they stay computed inline here.
+    // excludes from the program-cache key, so they are NOT stable across cache hits: create_descriptor
+    // re-derives them here every dispatch (miss and, via override_runtime_arguments, hit).
+    // compute_update_cache_dynamic_args is the single source of truth for the work-split and formulas.
+    // input_start_id and batch_start_id are shape-only (in the hash), so they stay computed inline here.
     const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
     uint32_t input_start_id = 0;
     uint32_t batch_start_id = 0;
