@@ -521,6 +521,10 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
+    else if constexpr (OPERATION == SfpuType::gelu_derivative)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_derivative_polynomial_init<APPROX_MODE>);
+    }
     else if constexpr (OPERATION == SfpuType::softsign)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(init_softsign<APPROX_MODE>);
@@ -534,6 +538,10 @@ void call_unary_sfpu_operation_init()
         llk_math_eltwise_unary_sfpu_init<OPERATION>(hardsigmoid_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_log_<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::log_with_base)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_log_<APPROX_MODE>);
     }
@@ -773,6 +781,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
+    else if constexpr (OPERATION == SfpuType::gelu_derivative)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_derivative_polynomial, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
     else if constexpr (OPERATION == SfpuType::gelu_tanh)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
@@ -793,6 +806,18 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             vector_mode,
             ITERATIONS,
             0u /* log_base_scale_factor */);
+    }
+    else if constexpr (OPERATION == SfpuType::log_with_base)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _calculate_log_,
+            (APPROX_MODE, true, ITERATIONS),
+            dst_index,
+            vector_mode,
+            ITERATIONS,
+            0x3DC5u /* 1/ln(2) in fp16a -> log2(x) */);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
     {

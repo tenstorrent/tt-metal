@@ -182,12 +182,29 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.GeluTanh: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.GAUSSIAN, mean=0.0, std=3.0)
     ),
+    # gelu_derivative: d/dx gelu; Gaussian spread hits both saturating tails
+    # (->0 and ->1) and the transition region around 0.
+    MathOperation.GeluDerivative: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
+    ),
     # hardsigmoid: linear region between -3 and 3, clipped outside
     MathOperation.Hardsigmoid: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-4.0, high=4.0)
     ),
     # log: domain x > 0; log-uniform spans several decades
     MathOperation.Log: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
+        )
+    ),
+    # log_with_base (log2): same positive domain as natural log.
+    MathOperation.LogWithBase: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=1e3
         )

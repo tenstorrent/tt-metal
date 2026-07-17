@@ -449,6 +449,9 @@ DOMAIN_MATHOPS = [
     MathOperation.Sinh,
     MathOperation.Cosh,
     MathOperation.Round,
+    # gelu derivative and log-with-base (log2).
+    MathOperation.GeluDerivative,
+    MathOperation.LogWithBase,
 ]
 
 # Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
@@ -482,6 +485,17 @@ def test_eltwise_unary_sfpu_domain(
         # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
         if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
             pytest.skip(reason="This combination is not supported on BH architecture")
+
+    if TestConfig.WITH_COVERAGE and mathop in [
+        MathOperation.GeluDerivative,
+        MathOperation.LogWithBase,
+    ]:
+        # gelu/log-family `#pragma GCC unroll` loops compile to invalid assembly
+        # under coverage instrumentation (tt-metal#33268 / tt-llk#883), same as the
+        # float-sweep skips for Gelu/Log above.
+        pytest.skip(
+            reason="gelu/log-family ops fail to compile under coverage instrumentation"
+        )
 
     # Per-op input domain, clipped to where the op is defined (e.g. erfinv: |x| < 1).
     specs = for_op(mathop, formats.input_format)

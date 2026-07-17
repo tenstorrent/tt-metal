@@ -83,8 +83,11 @@ class MathOperation(Enum):
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
     GeluTanh = OpSpec("gelu_tanh", MathOpType.SFPU_UNARY)
+    GeluDerivative = OpSpec("gelu_derivative", MathOpType.SFPU_UNARY)
     Hardsigmoid = OpSpec("hardsigmoid", MathOpType.SFPU_UNARY)
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
+    # log_base(x); dispatched with base_scale = fp16a(1/ln 2) -> log2(x).
+    LogWithBase = OpSpec("log_with_base", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
