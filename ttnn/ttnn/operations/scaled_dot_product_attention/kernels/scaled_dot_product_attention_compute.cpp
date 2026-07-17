@@ -228,10 +228,12 @@ void kernel_main() {
     // keys are always in the future), so has_kv_pad's phase-3b add is disabled when
     // causal is set (below) to avoid a double mask.
     constexpr bool is_causal = get_compile_time_arg_val(12) != 0;
-    // R5 (perf): grow the PV matmul output-subblock height to fill the DEST budget (see
-    // decomp_h). Compile-gated so it can be A/B measured same-session (SDPA_PV_SB_H=0 on
-    // the host forces this to 0 => h=1, the pre-R5 baseline). decomp_h itself self-gates
-    // to the throughput regime, so this defaults on and is inert for fp32-DEST.
+    // R5 (perf): PV matmul output-subblock HEIGHT knob (see decomp_h). MEASURED flat on the
+    // flagged shape — filling the full half-sync DEST section per subblock defeats the
+    // intra-DEST math/pack pipeline that h=1 (4-tile subblocks) enables — so it is PARKED at
+    // its trivial default (0 => h=1, byte-identical to R4). The host sets this to 1 only when
+    // SDPA_PV_SB_H=1 (same-session A/B re-measurement); unset => 0 (parked). decomp_h also
+    // self-gates (h=1 for fp32-DEST), so even enabled it is inert outside the throughput regime.
     constexpr bool grow_subblock_h = get_compile_time_arg_val(13) != 0;
 
     const uint32_t num_wu = get_arg_val<uint32_t>(0);

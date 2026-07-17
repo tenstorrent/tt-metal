@@ -602,3 +602,72 @@
   all-ones determinism, causal+cross EXCLUSION, is_causal∧attn_mask ValueError) and
   `test_scaled_dot_product_attention_causal_perf.py` (block-skip vs full-mask device-ns
   A/B + correctness equivalence gate).
+
+## Refinement 5 — Speed up the perf-flagged profile (compute-side) (partial)
+- Date: 2026-07-17
+- What was done: Measured all three named compute-side levers on device against the
+  flagged `1×10×9472×128` profile (bf16, MHA, self-attn, fp32_dest_acc_en=False, HiFi2);
+  none produced a device-ns win — the shape's compute-bound cost is the serialized SFPU
+  softmax, not the block/subblock/reconfig fixed overhead this lever class touches.
+  * **`matmul_output_subblock` — the `out_subblock_h` instance (genuinely untried).** R3a
+    grew the matmul `out_subblock_w` toward the DEST budget but left `out_subblock_h=1`, so
+    the PV matmul (N=Dt=4, dest_limit=8 in the flagged fp32_dest_acc_en=False regime) used
+    only **half** the 8-tile bf16 DEST per subblock pass. Added **`decomp_h`** in the compute
+    kernel (mirrors R1b's on-device `decomp_n` — single source of truth): grows
+    `out_subblock_h` to `dest_limit / out_subblock_w` **only when the output is a single
+    N-subblock** (`out_subblock_w == N`, so SubblockMajor packs tile-row-major for any height
+    — which the downstream reduce / Col-broadcast steps require) and `h | M`. Self-gating:
+    the fp32-DEST regime (dest_limit=4, PV `out_subblock_w=4`=budget) yields `h=1`,
+    byte-identical. Flagged-shape PV grows to `h=2` (in0_num_subblocks 8→4). Threaded as a
+    compile-time knob `grow_subblock_h` (CT arg 13) with an env A/B toggle `SDPA_PV_SB_H=1`.
+  * **`compute_block_size`** — exhausted by R3a (`Sq_chunk_t` L1-capped at 8, `Skv_chunk_t`
+    divisor-capped at 8 for `Skv_t=296=8·37`). Confirmed no residual headroom.
+  * **reconfig-ablation** — implemented a throwaway CT-gated ablation that drops the
+    data-format reconfig on BOTH matmuls (the highest-frequency reconfig sites), measured it
+    same-session, then reverted it (never shippable — the mixed-format matmuls need reconfig
+    for correctness). Directly bounds the reconfig-ablation lever's headroom.
+- Perf measured (Blackhole p150b, 110 cores; device FW ns, warm median of 5, fresh cache;
+  **same-session back-to-back A/B via env toggles** to defeat the ~1.8× AICLK drift):
+  * **PV `out_subblock_h` (SDPA_PV_SB_H):** `h=2` (on) **5.461 ms** vs `h=1` (off, pre-R5)
+    **5.443 ms** = **FLAT / marginally negative**. Root cause (principled, not noise):
+    filling the full 8-tile **half-sync** DEST section per subblock **defeats the intra-DEST
+    math/pack pipeline** that `h=1` (4-tile subblocks, 4 tiles free) enables — the pack of
+    subblock N overlaps the math of subblock N+1 only when DEST has spare room. So `h=1` (the
+    R3a default) is optimal for half-sync DEST; "grow the subblock toward the DEST budget" is
+    NOT unconditionally a win.
+  * **reconfig-ablation (SDPA_MM_RECONFIG_OFF):** dropping both matmul reconfigs saves
+    **9.3 µs = 0.17%** (below the ~6 µs noise floor). Unlike master.md's all-bf16 tiny-kernel
+    `compute_block_size` example (1.19×), this kernel is **mixed-format** (bf16 scores/exp,
+    fp32 accumulators — only a few boundaries constant) with big Blackhole matmuls
+    (reconfig ≪ FMA), so the reconfig class has ~zero headroom.
+- Decision (per the perf-lever rules): the `decomp_h` PV `out_subblock_h` lever is **correct,
+  general, and self-gating** but measured flat, so it is **PARKED at its trivial default**
+  (`grow_subblock_h=0` → `h=1`, byte-identical to R4) and **kept as a live knob** (not
+  reverted) — `SDPA_PV_SB_H=1` re-enables it same-session for re-measurement under a future
+  full-sync-DEST or FPU∥SFPU-overlap scheme that would expose the pack overhead. The
+  throwaway reconfig ablation plumbing was reverted (measurement-only, never shippable).
+- Accuracy achieved: flagged-shape soft PCC≥0.997 held on both A/B variants (the h-grown
+  PV path is numerically correct — validated across h∈{1,2,3,4} by the fused-rowsum debug
+  suite). Golden `TOLERANCES` met across the suite (no numeric change — shipped runtime is
+  byte-identical to R4).
+- Golden test progress: **1685 passed / 584 xfailed / 0 failed** (identical to R4; no
+  SUPPORTED change — perf refinement; the shipped default parks the knob). Core unit suite
+  (acceptance + debug + nonaligned + coarse-chunk + fused-rowsum + causal + precision-baseline)
+  green; R3 guard set **8/8** (mask none/custom × small/medium × DRAM/L1); R5 A/B PCC≥0.997
+  both variants.
+- Issues encountered: none — no hang, no corruption (the h-grown PV subblock passed under
+  `--dev` on h∈{1,2,3,4}). The lever is simply flat on this shape, root-caused to the
+  half-sync intra-DEST math/pack pipeline (a genuine, reusable insight: don't fill the DEST
+  subblock to capacity when pack/math overlap matters).
+- Why **[~] partial**: R5's Done-when requires a **measured device-ns improvement**, and all
+  three named knob-turn levers measured flat/below-noise. The knob-turn lever class is now
+  **exhausted with direct measurement**; the residual gap to `expected_math_util=0.35` (0.14
+  measured) is **structural** (serialized SFPU softmax; FA-3 FPU∥SFPU overlap helper-infeasible
+  per R3c). Filed **Refinement 5a** (short-K PV matmul batching — raise effective K past the
+  operand-load floor, R3d's lever 2) as the exact next matmul-efficiency lever.
+- Tests added:
+  `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_r5_ab.py`
+  (same-session A/B perf harness for the PV `out_subblock_h` lever, `SDPA_PV_SB_H` toggle;
+  asserts soft PCC≥0.997 on both variants). The flagged-shape perf harness + R3 guard set
+  (R3) and the fused-rowsum debug suite (R3e, exercising h∈{1,2,3,4}) cover the lever's
+  correctness.

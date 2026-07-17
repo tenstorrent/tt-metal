@@ -647,7 +647,7 @@ win dilutes to ~1.11× because naive contiguous work assignment puts near-full h
 work units on the critical-path core; the full ~2× needs **causal load-balancing** —
 work-unit reassignment, a future perf refinement per FlashAttention.md.)
 
-### [ ] Refinement 5 — Speed up the perf-flagged profile (compute-side)
+### [~] Refinement 5 — Speed up the perf-flagged profile (compute-side)
 
 **Type**: perf
 
@@ -675,3 +675,72 @@ re-measure instead of shipping a no-op phase.
 **Done when**: measured device-ns improves further on the flagged shape beyond R3
 (toward the 0.35 util goal), soft `pcc_threshold=0.997` holds, golden green, and no
 regression across the config-spanning guard set.
+
+**Landed (R5, partial)**: all three named compute-side levers **measured on device**;
+none produced a win — the flagged shape's compute-bound cost is the serialized SFPU
+softmax, not the block/subblock/reconfig fixed overhead this lever class touches.
+- **`matmul_output_subblock` — `out_subblock_h` (the one genuinely-untried instance).**
+  R3a grew `out_subblock_w` toward the DEST budget but left `out_subblock_h=1`, so the PV
+  matmul (`N=Dt=4`, `dest_limit=8` in the flagged `fp32_dest_acc_en=False` regime) used
+  only **half** the 8-tile bf16 DEST per subblock pass. Added **`decomp_h`** (mirrors R1b's
+  `decomp_n`, single-source): grows `out_subblock_h` to `dest_limit/out_subblock_w` **only
+  when the output is single-N-subblock** (`out_subblock_w == N` ⇒ SubblockMajor is
+  tile-row-major for any height, which the downstream reduce/Col-bcast require) and `h | M`
+  — self-gating (fp32-DEST `dest_limit=4` → `h=1`, byte-identical). For the flagged shape
+  PV grows to `h=2`. **MEASURED same-session A/B** (steady AICLK, warm median of 5):
+  `h=2` **5.461 ms** vs `h=1` **5.443 ms** = **FLAT / marginally negative**. Root cause
+  (principled, not noise): filling the full 8-tile **half-sync** DEST section per subblock
+  **defeats the intra-DEST math/pack pipeline** that `h=1` (4-tile subblocks, 4 tiles free)
+  enables — `h=1` is optimal for half-sync DEST. Correct, general, self-gating lever
+  **PARKED at its trivial default** (`grow_subblock_h=0` → `h=1`, byte-identical to R4);
+  `decomp_h` retained as a **live knob** (`SDPA_PV_SB_H=1` re-enables same-session — worth
+  re-measuring under a future full-sync-DEST or FPU∥SFPU-overlap scheme that would expose
+  the pack overhead). `out_subblock_w` + block-size were exhausted by R3a (QKᵀ `w=8`=full,
+  PV `w=4`=N-capped, blocks L1/divisor-capped at 8) — confirmed still maxed.
+- **`compute_block_size`** — exhausted by R3a (`Sq_chunk_t` L1-capped at 8, `Skv_chunk_t`
+  divisor-capped at 8 for `Skv_t=296=8·37`). No further headroom.
+- **reconfig-ablation** — **directly measured** (throwaway ablation, reverted): dropping
+  **both** matmul reconfigs (the highest-frequency reconfig sites, input+output) saves
+  **9.3 µs = 0.17%**, below the ~6 µs noise floor. Unlike master.md's all-bf16 tiny-kernel
+  example (1.19×), this kernel is **mixed-format** (only a few boundaries constant) with
+  big Blackhole matmuls (reconfig ≪ FMA), so the reconfig class has ~zero headroom — not
+  worth the mixed-format silent-corruption risk. Not shipped.
+
+Golden **1685 passed / 584 xfailed / 0 failed** (identical to R4 — the shipped runtime is
+byte-identical, knob parked); core unit + guard set 8/8 green; R5 A/B PCC≥0.997 both
+variants. `[~]` because R5's Done-when requires a **measured device-ns win** and every
+named knob-turn lever measured flat — the residual gap to `util=0.35` (0.14 measured) is
+**structural** (the ~serialized SFPU softmax exp can't overlap the FPU matmul; FA-3
+FPU∥SFPU warp-specialization is helper-infeasible per R3c). The knob-turn lever class is
+now **exhausted with measurement**; the next lever is a matmul-efficiency scheme-change,
+filed as **R5a**.
+
+### [ ] Refinement 5a — Short-K PV matmul batching (raise effective K past the operand-load floor)
+
+**Type**: perf
+
+**Goal** (sharper follow-up from R5 — the exact next lever after the subblock knob-turns
+are exhausted): R5 measured that the PV matmul's per-subblock/pack overhead is **not** the
+bottleneck (growing `out_subblock_h` to fill DEST was flat), and R3d found the PV matmul is
+**short-K, operand-load-bound** (`K = Skv_chunk_t = 8`: the per-K-block operand load can't
+be hidden behind so few FMA steps). The untried lever is to **raise the effective K** of the
+PV matmul: batch several consecutive KV chunks' `P·V` into one matmul with a larger
+`in0_block_k`/`num_k_blocks` (e.g. accumulate `cb_exp`/`cb_v` for 2–4 chunks before the PV
+matmul fires, K=16–32), so each operand load amortizes over more FMA. This is R3d's lever 2
+(deprioritized then behind the V-ones trick, which R3d/R3e closed). It is a matmul-efficiency
+**scheme-change** (restructures the KV loop's PV phase + deepens `cb_exp`/`cb_v` — L1 budget
+must be re-fit), distinct from R5's block/subblock knob-turns.
+
+**Verifier notes**: no SUPPORTED change (perf). Gate on `/perf-measure` clock-invariant
+DeviceZoneScopedN cycles (or same-session A/B — the box's AICLK drifts ~1.8×) on the flagged
+`1×10×9472×128` shape, soft `pcc_threshold=0.997`, golden green, no guard-set regression.
+Watch the online-softmax recurrence: batching PV over multiple chunks means the running-max
+`α` rescale must still be applied per-chunk **before** each chunk's PV is folded in — either
+rescale `cb_exp` per chunk before the batched matmul, or keep the recurrence per-chunk and
+only widen the matmul's K within a chunk (the safer first cut). The remaining structural
+ceiling beyond this — true FPU∥SFPU overlap (softmax exp concurrent with the matmul) — is
+**helper-infeasible** (R3c: single MATH RISC + shared DST serialize consecutive helpers;
+needs raw-LLK FA-3 warp-specialization, which failed the gate twice) and is the last resort.
+
+**Done when**: measured device-ns improves on the flagged shape beyond R5's 5.44 ms via the
+wider-K PV matmul, soft `pcc_threshold=0.997` holds, golden green, no guard-set regression.
