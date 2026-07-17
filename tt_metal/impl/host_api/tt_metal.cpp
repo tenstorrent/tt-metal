@@ -884,6 +884,27 @@ void LaunchProgram(
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
+// Returns true iff the program has kernels and every core it targets is a DRAM programmable core.
+// Such programs (e.g. the persistent tensor-prefetcher DRISC senders) are disjoint from the FD
+// worker grid and dispatch column, so launching them via slow dispatch does not perturb an active
+// FD session. Used to scope the force-slow-dispatch guard in LaunchProgram.
+bool program_targets_only_dram_cores(const Program& program) {
+    const auto& logical_cores_used_in_program = program.impl().logical_cores();
+    const auto& hal = MetalContext::instance().hal();
+    bool has_any_core = false;
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        if (logical_cores_used_in_program[programmable_core_type_index].empty()) {
+            continue;
+        }
+        has_any_core = true;
+        if (hal.get_programmable_core_type(programmable_core_type_index) != HalProgrammableCoreType::DRAM) {
+            return false;
+        }
+    }
+    return has_any_core;
+}
+
 void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
@@ -900,8 +921,13 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             // Scope the service bypass to this device
             const bool service_active =
                 !tt::tt_metal::MetalContext::instance().get_service_core_manager().claimed_cores(device->id()).empty();
+            // DRAM-only programs (e.g. the persistent tensor-prefetcher DRISC senders) run on the DRAM
+            // programmable cores, which are disjoint from the FD worker grid and dispatch column. Launching
+            // them via slow dispatch does not touch FD-owned cores or the FD pipeline, so it is safe to mix
+            // with an active FD session regardless of profiler init state.
+            const bool dram_only = detail::program_targets_only_dram_cores(program);
             TT_ASSERT(
-                !(fd_active && rt_done) || service_active,
+                !(fd_active && rt_done) || service_active || dram_only,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
                 "completed on this device.");
         }
