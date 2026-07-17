@@ -85,6 +85,7 @@ jobs:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
           TIER: ${{ inputs.tier }}
           MODEL: ${{ inputs.model }}
+          SKUS: ${{ inputs.enabled-skus }}
         run: |
           # Filter by tier
           FILTERED=$(echo "$MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
@@ -111,7 +112,10 @@ jobs:
             fi
           }
           if [ "$SINGLE" = "[]" ] && [ "$MULTI" = "[]" ]; then
-            echo "::warning::No tests found for tier=${TIER}, model=${MODEL}. Pipeline will be skipped."
+            # No leg matched the requested SKU(s). Common when a dispatch picks an exabox SKU
+            # (e.g. bh_sc4/bh_sc16) that no test entry defines yet: both jobs skip silently
+            # otherwise, so name the SKUs to make the empty dispatch actionable.
+            echo "::warning::No tests found for tier=${TIER}, model=${MODEL}, skus=[${SKUS}]. No test entry declares any of these SKUs; both single-host and multihost jobs will be skipped."
           fi
           emit matrix "$SINGLE"
           emit matrix_multihost "$MULTI"

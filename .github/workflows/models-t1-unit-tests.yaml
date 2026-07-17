@@ -50,6 +50,7 @@ on:
           - "bh_sc1 (BH Single Galaxy)"
           - "bh_sc4 (BH Supercluster 4)"
           - "bh_sc4-blitz (BH Supercluster 4 / Blitz)"
+          - "bh_sc4-mgd (BH Supercluster 4 / MGD)"
           - "bh_sc16 (BH Supercluster 16)"
       platform:
         required: false
