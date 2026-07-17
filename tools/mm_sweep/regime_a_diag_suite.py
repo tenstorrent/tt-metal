@@ -135,7 +135,10 @@ def run_one(M, K, N, cfg, mask, iters=8, timeout=150):
                 ringcost.append(g)
     # masks 0 (public path) and the correct in0-delivery variants (32=scatter, 64=repl2, 128=repl4) are
     # correctness-checked by the gtest -> require the PASS; the pure ablations produce garbage, not checked.
-    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576, 2097152)
+    _in1preserve = (1 << 22) | (1 << 23) | (1 << 24) | (1 << 25)  # in1-delivery diagnostics (corr-preserving)
+    checked = mask in (0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 16384, 65536, 262144, 524288, 1048576, 2097152) or (
+        mask != 0 and (mask & ~_in1preserve) == 0
+    )
     return {
         "cfg": list(cfg),
         "mask": mask,
@@ -823,6 +826,98 @@ def pickerresweep(relaunches=3):
     print("PICKER RESWEEP DONE", flush=True)
 
 
+# in1-delivery experiment: forward-order (write->signal->flush) + CB1 depth 2/8 + coalesced read, each vs
+# the mask-0 default, on the shapes' NEW picker-winning configs. Then the winning combination.
+# After adoption, mask 0 = new fast default (fwd-signal-first + coalesce). The 1<<22 / 1<<25 flags now select
+# the OLD behaviour (A/B baselines), so they read as POSITIVE % (reverting costs that much). CB1 depth stays
+# a rejected diagnostic.
+IN1EXP_MASKS = [
+    ("base", 0),
+    ("old_fwd_flush_first", 1 << 22),  # Sm>1 only (no-op at Sm=1)
+    ("cb1_d2", 1 << 23),
+    ("cb1_d8", 1 << 24),
+    ("old_no_coalesce", 1 << 25),
+]
+IN1EXP_SHAPES = [
+    ("primary", 128, 2048, 512),
+    ("primary", 256, 2048, 512),
+    ("primary", 256, 2048, 1536),
+    ("primary", 256, 2048, 1024),
+    ("ctl_bw", 32, 15360, 768),  # bandwidth-bound negative control (in1 read -70%)
+    ("ctl_wideN", 128, 2304, 6144),  # wide-N Sm=1
+    ("ctl_wideN", 256, 6144, 4608),  # wide-N (Sm2)
+    ("ctl_in0fwd", 64, 6144, 9216),  # deep-K, in0-ring-forward heavy
+]
+
+
+def _in1exp_run(M, K, N, cfg, masks, relaunches):
+    runs = {n: [] for n, _ in masks}
+    for _r in range(relaunches):
+        for n, mask in masks:
+            runs[n].append(run_one(M, K, N, cfg, mask))
+    per = {}
+    for n, mask in masks:
+        oks = [x for x in runs[n] if x.get("ok") and x["wall_us"]]
+        walls = sorted(x["wall_us"] for x in oks)
+        per[n] = {
+            "mask": mask,
+            "med_us": (statistics.median(walls) if walls else None),
+            "walls": walls,
+            "n_ok": len(oks),
+            "max_rel_err": max(
+                (x.get("max_rel_err") for x in runs[n] if x.get("max_rel_err") is not None), default=None
+            ),
+        }
+    bm = per["base"]["med_us"]
+    for n, _ in masks:
+        m = per[n]["med_us"]
+        per[n]["vs_base_pct"] = ((m / bm - 1) * 100) if (bm and m) else None
+    return per
+
+
+def in1exp(relaunches=3):
+    # Phase 1: each in1 diagnostic independently vs mask-0 on the NEW winning config. Phase 2: the winning
+    # combination (per-shape best-improving individuals). Reports median wall, %vs base, PCC max_rel_err.
+    out = []
+    for grp, M, K, N in IN1EXP_SHAPES:
+        cfg = tuple(rb.auto_config(M, K, N))
+        Sm = cfg[2]
+        masks = [(n, m) for n, m in IN1EXP_MASKS if not (n == "fwd_sig_first" and Sm == 1)]
+        per = _in1exp_run(M, K, N, cfg, masks, relaunches)
+        # winning combination = all individually-improving (>1%, PCC-ok) correctness-preserving diagnostics
+        combo_bits, combo_names = 0, []
+        for n, _ in masks:
+            if n == "base":
+                continue
+            v = per[n]["vs_base_pct"]
+            mre = per[n]["max_rel_err"]
+            if v is not None and v < -1.0 and (mre is None or mre < 0.02):
+                # cb1_d2 and cb1_d8 are mutually exclusive: keep only the better one
+                if n in ("cb1_d2", "cb1_d8"):
+                    other = "cb1_d8" if n == "cb1_d2" else "cb1_d2"
+                    if (
+                        per.get(other, {}).get("vs_base_pct") is not None
+                        and per[other]["vs_base_pct"] < per[n]["vs_base_pct"]
+                    ):
+                        continue
+                combo_bits |= per[n]["mask"]
+                combo_names.append(n)
+        if combo_bits and len(combo_names) >= 2:
+            cr = _in1exp_run(M, K, N, cfg, [("base", 0), ("combo", combo_bits)], relaunches)
+            per["combo"] = cr["combo"]
+            per["combo"]["names"] = combo_names
+        rec = {"group": grp, "M": M, "K": K, "N": N, "cfg": list(cfg), "Sm": Sm, "per": per}
+        out.append(rec)
+        json.dump(out, open(f"{HERE}/regime_a_in1exp.json", "w"), indent=2)
+        summ = " ".join(
+            f"{n}={per[n]['med_us'] and round(per[n]['med_us'],1)}({per[n]['vs_base_pct'] and round(per[n]['vs_base_pct'],1)}%"
+            f"{',pcc!' if (per[n].get('max_rel_err') or 0) >= 0.02 else ''})"
+            for n in per
+        )
+        print(f"[in1exp/{grp}] {M}x{K}x{N} cfg={list(cfg)} {summ}", flush=True)
+    print("IN1EXP DONE", flush=True)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "smoke"
     {
@@ -836,4 +931,5 @@ if __name__ == "__main__":
         "ringorder": ringorder,
         "placement": placement,
         "pickerresweep": pickerresweep,
+        "in1exp": in1exp,
     }[mode]()

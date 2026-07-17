@@ -70,3 +70,28 @@ costs that much) and **PARETO ring** (`bank_ring` +5…+17%) — keep both.
 ## Still outstanding (pinned M-split follow-ups)
 write→signal→flush vs write→flush→signal A/B; a proper bounded Sm>1 search for 256×2048×1024; stale-comment
 cleanup. Not addressed here.
+
+## Follow-up experiment — in1 delivery (acted on the "next optimization"), committed c0d5257e21e
+
+Combined the pinned M-split forwarding follow-up with optimization #5 (in1 backpressure) as three
+compile-gated diagnostics (`regime_a_diag_suite.py in1exp`), measured independently then in combination on
+the new picker-winning configs. Primaries: 128×2048×512, 256×2048×512, 256×2048×1536, 256×2048×1024.
+Controls: 32×15360×768 (bandwidth-bound negative control), two wide-N Sm=1/Sm=2, one deep-K in0-forward-heavy.
+
+| lever | Sm>1 primaries | controls | verdict |
+|---|---|---|---|
+| forward-signal-first (write→signal→flush) | −1.6…−5.9% | wide-N Sm2 −0.2%, Sm1 no-op | **adopted** |
+| coalesced contiguous read | −0.5…−3.1% | all −0.6…+0.2% | **adopted** |
+| CB1 depth 2 / 8 | neutral (−0.4…+0.7%) | +1.3…+1.5% (slight hurt) | **rejected** (keep depth 4) |
+| combination (fwd + coalesce) | **−3.3…−7.0%** | — | **adopted** |
+
+All PCC-exact (max_rel_err=0; public 20/20 random-operand + 6 diag gtests pass). The bandwidth-bound
+negative control (32×15360×768) shows ~0 across every lever — confirming the wins are genuine in1-delivery
+gains, not noise, and that the deep-K read-*volume*-bound shape is (as predicted) not helped by buffering or
+flush-ordering. **CB1 depth is decisively not a lever** — in1 backpressure is not the bottleneck; the wins
+come from removing the per-block flush from the critical path and from coalescing the physically-contiguous
+block read. After adoption (mask 0 = new fast path), a confirmation re-run measured the new default −1.5…
+−6.3% vs the pre-change default with zero control regression. Old behaviour retained as A/B diagnostics
+(`DIAG_FWD_FLUSH_FIRST`, `DIAG_NO_COALESCE`, `DIAG_CB1_D2/D8`). This closes the pinned M-split
+forwarding-order follow-up. Remaining M-split follow-ups: bounded Sm>1 search for 256×2048×1024; stale-comment
+cleanup.
