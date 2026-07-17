@@ -261,6 +261,11 @@ def _emit_run_report_impl(
     lines.append(f"- **PENDING** ({len(cat_report.pending)}): retry next run")
     if cat_report.pending:
         lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.pending))}")
+    lines.append(
+        f"- **CPU_REUSE** ({len(cat_report.cpu_reuse)}): REUSE/ADAPT tag NOT wired to a ttnn module — runs on CPU (eager runner), not verified on device"
+    )
+    if cat_report.cpu_reuse:
+        lines.append(f"  - {', '.join(f'`{c}`' for c in sorted(cat_report.cpu_reuse))}")
     lines.append("")
 
     # --- Module-by-module table (every component: placement + why + its pytest) ---
@@ -273,6 +278,8 @@ def _emit_run_report_impl(
     def _reason_for(comp: str, placement: str) -> str:
         if placement == "ON_DEVICE":
             return "graduated — native ttnn, PCC-verified"
+        if placement == "CPU_REUSE":
+            return "REUSE/ADAPT tag not wired to a ttnn module — runs on CPU (eager runner)"
         entry = skips.get(comp) or {}
         r = (entry.get("reason") or "").replace("\n", " ").replace("|", "\\|").strip()
         if r:
@@ -283,12 +290,13 @@ def _emit_run_report_impl(
         [(c, "ON_DEVICE") for c in sorted(cat_report.on_device)]
         + [(c, "KERNEL_MISSING") for c in sorted(cat_report.kernel_missing)]
         + [(c, "PENDING") for c in sorted(cat_report.pending)]
+        + [(c, "CPU_REUSE") for c in sorted(cat_report.cpu_reuse)]
     )
     lines.append("## Module placement (all components)")
     lines.append("")
     lines.append("| Module | Status | Placement | Detail | Per-module PCC test |")
     lines.append("|---|---|---|---|---|")
-    _status_glyph = {"ON_DEVICE": "[ ok ]", "KERNEL_MISSING": "[ cpu ]", "PENDING": "[wait]"}
+    _status_glyph = {"ON_DEVICE": "[ ok ]", "KERNEL_MISSING": "[ cpu ]", "PENDING": "[wait]", "CPU_REUSE": "[ cpu ]"}
     for comp, placement in _rows:
         safe = safe_identifier(comp)
         glyph = _status_glyph.get(placement, "[ -- ]")
@@ -369,7 +377,13 @@ def _emit_run_report_impl(
         )
         lines.append(f"  - `python -m scripts.tt_hw_planner promote {model_id} --box <BOX> --mesh <MESH>`")
     elif cat_report.on_device:
-        lines.append("- **All components graduated** — wire the end-to-end pipeline:")
+        if cat_report.cpu_reuse:
+            lines.append(
+                f"- **All NEW components graduated** — {len(cat_report.cpu_reuse)} REUSE/ADAPT component(s) "
+                f"run on CPU (not wired to a ttnn module). Wire the end-to-end pipeline:"
+            )
+        else:
+            lines.append("- **All components graduated** — wire the end-to-end pipeline:")
         lines.append(f"  - `python -m scripts.tt_hw_planner emit-e2e {model_id}`")
     lines.append("")
 
@@ -381,10 +395,14 @@ def _emit_run_report_impl(
         print(f"  BRING-UP REPORT — {model_id}")
         if stop_reason:
             print(f"  RUN ENDED: {stop_reason}")
-        print(
+        _cpu_reuse_n = len(cat_report.cpu_reuse)
+        _line = (
             f"  on device: {len(cat_report.on_device)}   kernel-missing: {len(cat_report.kernel_missing)}   "
             f"pending: {len(cat_report.pending)}"
         )
+        if _cpu_reuse_n:
+            _line += f"   cpu-reuse(not-wired): {_cpu_reuse_n}"
+        print(_line)
         if blocker_text:
             print("  " + "-" * 74)
             for bl in blocker_text.splitlines():

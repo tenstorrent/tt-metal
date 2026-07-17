@@ -30,6 +30,7 @@ every NEW component lands in exactly one of the three placement buckets.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -38,29 +39,42 @@ from typing import Dict, List, Optional, Set
 _ON_DEVICE = "ON_DEVICE"
 _KERNEL_MISSING = "KERNEL_MISSING"
 _PENDING = "PENDING"
+_CPU_REUSE = "CPU_REUSE"
 
 
 @dataclass
 class CategorizationReport:
-    """Structured output: every NEW component lands in exactly one of
-    three buckets — ON_DEVICE / KERNEL_MISSING / PENDING."""
+    """Structured output: every component lands in exactly one bucket.
+
+    ON_DEVICE      — NEW graduated to native ttnn (PCC + native-body verified),
+                     or a REUSE/ADAPT whose target is genuinely wired into this
+                     demo's device tree.
+    KERNEL_MISSING — verified missing TTNN op → on CPU (temporary).
+    PENDING        — NEW not yet graduated, no kernel-missing verdict.
+    CPU_REUSE      — a REUSE/ADAPT tag that is NOT verified on device (no
+                     graduated stub AND its reuse target is not wired into the
+                     demo). It runs on CPU via the eager runner. This bucket
+                     exists so such components are reported honestly instead of
+                     being counted on-device on a tag alone, or dropped."""
 
     on_device: List[str] = field(default_factory=list)
     kernel_missing: List[str] = field(default_factory=list)
     pending: List[str] = field(default_factory=list)
+    cpu_reuse: List[str] = field(default_factory=list)
 
     @property
     def total_categorized(self) -> int:
-        return len(self.on_device) + len(self.kernel_missing) + len(self.pending)
+        return len(self.on_device) + len(self.kernel_missing) + len(self.pending) + len(self.cpu_reuse)
 
     def runtime_target(self, comp: str) -> Optional[str]:
         """Return the runtime placement for ``comp``:
         ``'device'`` for ON_DEVICE, ``'cpu'`` for KERNEL_MISSING (temporary
-        fallback while the kernel gap is open), ``None`` for PENDING and
-        uncategorized (the loop hasn't decided yet)."""
+        fallback while the kernel gap is open) or CPU_REUSE (unverified reuse
+        running on the eager runner), ``None`` for PENDING and uncategorized
+        (the loop hasn't decided yet)."""
         if comp in self.on_device:
             return "device"
-        if comp in self.kernel_missing:
+        if comp in self.kernel_missing or comp in self.cpu_reuse:
             return "cpu"
         return None
 
@@ -69,7 +83,71 @@ class CategorizationReport:
             _ON_DEVICE: sorted(self.on_device),
             _KERNEL_MISSING: sorted(self.kernel_missing),
             _PENDING: sorted(self.pending),
+            _CPU_REUSE: sorted(self.cpu_reuse),
         }
+
+
+def _reuse_target_wired(demo_dir: Path, reuse_target: Optional[str]) -> bool:
+    """True when a REUSE/ADAPT component's tt reuse target is genuinely wired
+    into THIS demo — i.e. the sibling ttnn module was copied into the demo's own
+    device tree (``tt/`` or ``ttnn/``, the template-scaffold signal) OR is
+    explicitly imported by a non-stub, non-test demo file.
+
+    A plain REUSE tag is NOT enough: on the generic hf_eager (CPU-eager) path no
+    sibling module is copied or imported, so the component actually runs the HF
+    reference on CPU. This check is what distinguishes a real on-device reuse
+    from a tag that silently falls to torch-on-CPU. Never raises."""
+    if not reuse_target:
+        return False
+    tok = str(reuse_target).strip().split(" ")[0].rstrip("/")
+    if not tok.endswith(".py") or "/" not in tok:
+        return False
+    stem = Path(tok).name
+    dotted = tok[:-3].replace("/", ".")
+    modname = dotted.rsplit(".", 1)[-1]
+    try:
+        for sub in ("tt", "ttnn"):
+            d = demo_dir / sub
+            if d.is_dir():
+                for f in d.rglob(stem):
+                    if f.is_file():
+                        return True
+        import_re = re.compile(rf"(?:^|\s)import\s+{re.escape(modname)}\b|from\s+\S*{re.escape(modname)}\s+import")
+        for py in demo_dir.rglob("*.py"):
+            parts = set(py.parts)
+            if "_stubs" in parts or "tests" in parts:
+                continue
+            try:
+                txt = py.read_text(errors="replace")
+            except Exception:
+                continue
+            if dotted in txt or import_re.search(txt):
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def reuse_adapt_on_device(demo_dir: Path, components_list: List[dict]) -> Set[str]:
+    """Set of REUSE/ADAPT component names that are VERIFIED on device — either a
+    graduated native stub exists (rare for REUSE) or the reuse target is wired
+    (:func:`_reuse_target_wired`). Shared by both the terminal compute-split and
+    the RUN_REPORT categorization so the two surfaces cannot disagree."""
+    from .bringup_loop import _safe_id, _stub_has_graduated_from_autofill
+
+    out: Set[str] = set()
+    for c in components_list:
+        name = c.get("name")
+        if not name or c.get("status") not in ("REUSE", "ADAPT"):
+            continue
+        stub = demo_dir / "_stubs" / f"{_safe_id(name)}.py"
+        try:
+            graduated = _stub_has_graduated_from_autofill(stub)
+        except Exception:
+            graduated = False
+        if graduated or _reuse_target_wired(demo_dir, c.get("tt_reuse_target")):
+            out.add(name)
+    return out
 
 
 def build_final_categorization(
@@ -105,7 +183,8 @@ def build_final_categorization(
 
     components_list = status.get("components", []) or []
     new_components = [c.get("name") for c in components_list if c.get("status") == "NEW" and c.get("name")]
-    if not new_components:
+    reuse_adapt = [c.get("name") for c in components_list if c.get("status") in ("REUSE", "ADAPT") and c.get("name")]
+    if not new_components and not reuse_adapt:
         return CategorizationReport()
 
     sp_of: Dict[str, str] = {c["name"]: (c.get("submodule_path") or "") for c in components_list if c.get("name")}
@@ -138,6 +217,13 @@ def build_final_categorization(
             report.kernel_missing.append(comp)
             continue
         report.pending.append(comp)
+
+    verified_reuse = reuse_adapt_on_device(demo_dir, components_list)
+    for comp in reuse_adapt:
+        if comp in verified_reuse:
+            report.on_device.append(comp)
+        else:
+            report.cpu_reuse.append(comp)
     return report
 
 
@@ -306,6 +392,11 @@ def format_categorization_summary(report: CategorizationReport) -> str:
         f"  PENDING        ({len(report.pending):2}) retry next run:       "
         f"{', '.join(sorted(report.pending)) or '(none)'}"
     )
+    if report.cpu_reuse:
+        lines.append(
+            f"  CPU_REUSE      ({len(report.cpu_reuse):2}) reuse tag NOT wired:  "
+            f"{', '.join(sorted(report.cpu_reuse))}"
+        )
     return "\n".join(lines)
 
 

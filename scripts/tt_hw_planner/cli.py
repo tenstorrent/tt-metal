@@ -943,6 +943,25 @@ def _partial_cpu_components(model_id: str) -> List[str]:
 def _compute_split(model_id: str) -> Dict[str, int]:
     cats = _classify_components(model_id)
 
+    from .bringup_loop import find_demo_dir
+    from .final_categorization import reuse_adapt_on_device
+
+    _demo = find_demo_dir(model_id)
+    verified_reuse: set = set()
+    if _demo is not None:
+        _status_path = _demo / "bringup_status.json"
+        if _status_path.is_file():
+            try:
+                _clist = json.loads(_status_path.read_text()).get("components", []) or []
+                verified_reuse = reuse_adapt_on_device(_demo, _clist)
+            except Exception:
+                verified_reuse = set()
+
+    reuse_dev = [n for n in cats["reuse"] if n in verified_reuse]
+    reuse_cpu = [n for n in cats["reuse"] if n not in verified_reuse]
+    adapt_dev = [n for n in cats["adapt"] if n in verified_reuse]
+    adapt_cpu = [n for n in cats["adapt"] if n not in verified_reuse]
+
     rt_partial: List[str] = []
     clean_native: List[str] = []
     for n in cats["new_native"]:
@@ -950,21 +969,20 @@ def _compute_split(model_id: str) -> Dict[str, int]:
             rt_partial.append(n)
         else:
             clean_native.append(n)
-    on_device = len(cats["reuse"]) + len(cats["adapt"]) + len(clean_native) + len(rt_partial)
-    on_cpu = len(cats["new_fallback"])
+    on_device = len(reuse_dev) + len(adapt_dev) + len(clean_native) + len(rt_partial)
+    on_cpu = len(cats["new_fallback"]) + len(reuse_cpu) + len(adapt_cpu)
     total = on_device + on_cpu
 
-    from .bringup_loop import find_demo_dir
-
     graduated = len(cats["new_native"])
-    _demo = find_demo_dir(model_id)
     if _demo is not None:
         for _n in cats["adapt"]:
             if _stub_has_graduated_from_autofill(_demo / "_stubs" / f"{_safe_id(_n)}.py"):
                 graduated += 1
     return {
-        "reuse": len(cats["reuse"]),
-        "adapt": len(cats["adapt"]),
+        "reuse": len(reuse_dev),
+        "adapt": len(adapt_dev),
+        "reuse_cpu": len(reuse_cpu) + len(adapt_cpu),
+        "reuse_cpu_names": sorted(reuse_cpu + adapt_cpu),
         "new_native": len(clean_native),
         "new_native_partial_cpu": len(rt_partial),
         "new_native_partial_cpu_names": rt_partial,
@@ -990,14 +1008,20 @@ def _format_compute_split(model_id: str, *, label: str = "compute split", indent
         f"{s['on_cpu']}/{total} on CPU ({pct(s['on_cpu'])})",
         f"{indent}  Graduated (ON_DEVICE) : {s.get('graduated', 0)}/{total} "
         f"({pct(s.get('graduated', 0))}) actually graduated (native stub, PCC-verified)",
-        f"{indent}  on device : REUSE={s['reuse']}  ADAPT={s['adapt']}  "
+        f"{indent}  on device : REUSE-wired={s['reuse']}  ADAPT-wired={s['adapt']}  "
         f"NEW-native={s['new_native']}  NEW-partial-CPU={s['new_native_partial_cpu']}",
-        f"{indent}  on CPU    : NEW-fallback={s['new_fallback']}",
+        f"{indent}  on CPU    : NEW-fallback={s['new_fallback']}  REUSE/ADAPT-not-wired={s.get('reuse_cpu', 0)}",
     ]
     if s.get("new_native_partial_cpu", 0) > 0:
         names = ", ".join(s.get("new_native_partial_cpu_names", []))
         lines.append(
             f"{indent}  partial-CPU components (TTNN path exists but >=1 helper ran on CPU " f"at runtime): {names}"
+        )
+    if s.get("reuse_cpu", 0) > 0:
+        names = ", ".join(s.get("reuse_cpu_names", []))
+        lines.append(
+            f"{indent}  REUSE/ADAPT tagged but NOT wired to a ttnn module in this demo "
+            f"(runs on CPU via eager runner): {names}"
         )
     return lines
 
