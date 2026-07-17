@@ -1,10 +1,18 @@
-# For bigger systems we may need to increase the number of configs per core
-allocation_policies:
-    receiver:
-      max_configs_per_core: 1
-
+# Fabric stability suite (system-agnostic).
+#
+# Each logical test has a `_short` and a `_long` variant. `_short` vs `_long` is a CI
+# time-budget choice only, not an arch/platform split -- any system can run either (or both):
+#   - short time budget:  --filter 'name.*_short'
+#   - long time budget:   run the whole file with no filter (short + long)
+#
+# Notes:
+#   - No `allocation_policies` block on purpose: dynamic allocation is on by default in
+#     test_tt_fabric and any `allocation_policies:` here would disable it. Let it size dynamically.
+#   - Deterministic all_to_all stability uses a single loop dimension (top_level_iterations).
+#     Pattern-level `iterations` is for randomized patterns and would double-loop here, so it is
+#     omitted.
 Tests:
-  - name: "LinearLooped"
+  - name: "LinearLooped_short"
     fabric_setup:
       topology: Linear
 
@@ -21,9 +29,43 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 100
 
-  - name: "FlowControlLinear"
+  - name: "LinearLooped_long"
+    fabric_setup:
+      topology: Linear
+
+    top_level_iterations: 100
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlLinear_short"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlLinear_long"
     enable_flow_control: true
     fabric_setup:
       topology: Linear
@@ -40,7 +82,7 @@ Tests:
     patterns:
       - type: all_to_all
 
-  - name: "MeshLowLatencyLooped"
+  - name: "MeshLooped_short"
     fabric_setup:
       topology: Mesh
 
@@ -57,9 +99,43 @@ Tests:
 
     patterns:
       - type: all_to_all
-        iterations: 100
 
-  - name: "FlowControlMeshLowLatency"
+  - name: "MeshLooped_long"
+    fabric_setup:
+      topology: Mesh
+
+    top_level_iterations: 100
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlMesh_short"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "FlowControlMesh_long"
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
