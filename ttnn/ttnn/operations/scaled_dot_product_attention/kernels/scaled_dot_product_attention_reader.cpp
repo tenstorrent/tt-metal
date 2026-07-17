@@ -30,6 +30,17 @@ constexpr uint32_t cb_kv_mask = 8;
 // per face, 512 words per tile. -inf(bf16) = 0xFF80, packed pair = 0xFF80FF80.
 constexpr uint32_t NEGINF_PAIR = 0xFF80FF80u;
 
+// R4 (causal): additive mask sentinel — a LARGE FINITE negative, NOT true −∞. The
+// reference (and production) mask with `-1e9`, not −∞: exp(score + (-1e9) − max)
+// underflows to 0 just like −∞, but a *finite* value avoids the −∞ − (−∞) = NaN and
+// the bf8b corruption a true −∞ tile inflicts on the additive-mask path. (Empirically:
+// bf8b + true-−∞ causal missed tolerance catastrophically — the last valid row of a
+// tile adjacent to a fully-masked tile-col — while bf8b + custom, whose streamed mask
+// converts −∞ to a large finite value, passed. bf16/fp32 pass either way; −1e9 keeps
+// them exact.) bf16(-1e9) ≈ 0xCE6E; packed pair = 0xCE6ECE6E.
+constexpr uint32_t NEG_MASK_HALF = 0xCE6Eu;
+constexpr uint32_t NEG_MASK_PAIR = 0xCE6ECE6Eu;
+
 FORCE_INLINE void fill_zeros_tile(uint32_t wptr, uint32_t words) {
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
     for (uint32_t i = 0; i < words; ++i) {
@@ -37,20 +48,21 @@ FORCE_INLINE void fill_zeros_tile(uint32_t wptr, uint32_t words) {
     }
 }
 
-// R4 (causal): fully-masked tile — every element −∞ (a KV tile strictly above the
-// causal diagonal relative to the Q tile; every key is in the future of every query).
-FORCE_INLINE void fill_neginf_tile(uint32_t wptr, uint32_t words) {
+// R4 (causal): fully-masked tile — every element the large-negative sentinel (a KV
+// tile strictly above the causal diagonal relative to the Q tile; every key is in the
+// future of every query).
+FORCE_INLINE void fill_neg_mask_tile(uint32_t wptr, uint32_t words) {
     volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
     for (uint32_t i = 0; i < words; ++i) {
-        p[i] = NEGINF_PAIR;
+        p[i] = NEG_MASK_PAIR;
     }
 }
 
-// R4 (causal): diagonal tile — element (r, c) is −∞ iff key column c is in the
-// future of query row r (c > r), else 0. This is the strict upper-triangular
-// additive causal bias for a tile sitting ON the diagonal (global query tile-row ==
-// global key tile-col). Face-aware bf16 layout (4 faces of 16x16, row-major, two
-// bf16 packed per uint32: low16 = even col, high16 = odd col).
+// R4 (causal): diagonal tile — element (r, c) is the large-negative sentinel iff key
+// column c is in the future of query row r (c > r), else 0. This is the strict
+// upper-triangular additive causal bias for a tile sitting ON the diagonal (global
+// query tile-row == global key tile-col). Face-aware bf16 layout (4 faces of 16x16,
+// row-major, two bf16 packed per uint32: low16 = even col, high16 = odd col).
 FORCE_INLINE void fill_causal_diag_tile(uint32_t wptr) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
     constexpr uint32_t FACE_H = 16;
@@ -68,8 +80,8 @@ FORCE_INLINE void fill_causal_diag_tile(uint32_t wptr) {
             for (uint32_t w = 0; w < words_per_face_row; ++w) {
                 const uint32_t c_lo = fcol + 2u * w;  // even column (low16)
                 const uint32_t c_hi = c_lo + 1u;      // odd column  (high16)
-                const uint32_t lo = (c_lo > r) ? 0xFF80u : 0x0000u;
-                const uint32_t hi = (c_hi > r) ? 0xFF80u : 0x0000u;
+                const uint32_t lo = (c_lo > r) ? NEG_MASK_HALF : 0x0000u;
+                const uint32_t hi = (c_hi > r) ? NEG_MASK_HALF : 0x0000u;
                 ptr[row_base + w] = (hi << 16) | lo;
             }
         }
@@ -326,7 +338,13 @@ void kernel_main() {
             // with compute's identical predicate.
             if constexpr (is_causal) {
                 if (skv_off + skv_valid > sq_off) {
-                    const uint32_t mask_words = tile_bytes / 4;
+                    // Fill word-count MUST follow cb_kv_mask's OWN tile size (always bf16 =
+                    // 512 words), NOT the input tile_bytes: for bf8b inputs tile_bytes is
+                    // smaller (1088B/272w) than the bf16 mask tile (2048B/512w), so sizing
+                    // the count-parameterized fills from tile_bytes under-fills each bf16
+                    // mask tile and leaves stale L1 in its tail rows (leaking attention
+                    // across masked columns); for fp32 it over-fills past the tile (OOB).
+                    const uint32_t mask_words = get_tile_size(cb_kv_mask) / 4;
                     for (uint32_t si = 0; si < sq_valid; ++si) {
                         const uint32_t q_tile = sq_off + si;  // global query tile-row
                         for (uint32_t sj = 0; sj < skv_valid; ++sj) {
@@ -336,7 +354,7 @@ void kernel_main() {
                             if (q_tile > k_tile) {
                                 fill_zeros_tile(wptr, mask_words);  // below diagonal: unmasked
                             } else if (q_tile < k_tile) {
-                                fill_neginf_tile(wptr, mask_words);  // above diagonal: masked
+                                fill_neg_mask_tile(wptr, mask_words);  // above diagonal: masked
                             } else {
                                 fill_causal_diag_tile(wptr);  // on diagonal: triangular c>r
                             }
@@ -352,7 +370,11 @@ void kernel_main() {
                 // row-max/exp/row-sum. The boundary tile is the last VALID tile of the
                 // (possibly partial R1b) last chunk, at local index skv_valid - 1.
                 if (j == n_kv_chunks - 1) {
-                    const uint32_t mask_words = tile_bytes / 4;
+                    // Size from cb_kv_mask (bf16, 512 words), not tile_bytes — see the
+                    // causal branch above. (R1's supported cells are bf16/fp32 where
+                    // tile_bytes >= the bf16 tile, so this was benign before, but fp32
+                    // over-filled past the tile; bf8b+non_aligned is an R2 EXCLUSION.)
+                    const uint32_t mask_words = get_tile_size(cb_kv_mask) / 4;
                     for (uint32_t sq = 0; sq < sq_valid; ++sq) {
                         for (uint32_t skv = 0; skv < skv_valid; ++skv) {
                             cb_reserve_back(cb_kv_mask, 1);

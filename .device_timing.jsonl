@@ -125,3 +125,10 @@
 {"source":"run_safe_pytest","pid":1496214,"started_at_ms":1784257633820,"wait_ms":3,"run_ms":35723,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1497244,"started_at_ms":1784257674660,"wait_ms":3,"run_ms":17983,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1498596,"started_at_ms":1784257736353,"wait_ms":3,"run_ms":15094,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_causal.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1506506,"started_at_ms":1784257893571,"wait_ms":3,"run_ms":196458,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"tt-probe","pid":1508068,"started_at_ms":1784258185505,"wait_ms":222,"run_ms":47807,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"tt-probe","pid":1508920,"started_at_ms":1784258408113,"wait_ms":222,"run_ms":52610,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"tt-probe","pid":1510089,"started_at_ms":1784258653613,"wait_ms":223,"run_ms":49828,"test_path":"scaled_dot_product_attention","exit_code":1}
+{"source":"tt-probe","pid":1512985,"started_at_ms":1784259518504,"wait_ms":225,"run_ms":49773,"test_path":"scaled_dot_product_attention","exit_code":1}
+{"source":"tt-probe","pid":1513416,"started_at_ms":1784259580314,"wait_ms":200,"run_ms":51445,"test_path":"scaled_dot_product_attention","exit_code":0}
+{"source":"run_safe_pytest","pid":1513914,"started_at_ms":1784259646612,"wait_ms":3,"run_ms":18744,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_causal.py","exit_code":0}
