@@ -8,7 +8,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {

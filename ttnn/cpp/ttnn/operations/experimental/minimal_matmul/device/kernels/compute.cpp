@@ -184,8 +184,6 @@ void add_bias_and_addcmul_block(
     }
 
     // Pop input and push output ONCE at the end
-    // cb_wait_front(intermediate_cb, out_block_num_tiles); // Unpacker-Packer sync
-    // cb_pop_front(intermediate_cb, out_block_num_tiles);
     cb_bias.pop_front(N_block_tiles);
 
     cb_intermediate.pop_front(out_block_num_tiles);
