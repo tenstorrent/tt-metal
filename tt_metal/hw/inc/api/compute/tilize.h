@@ -431,10 +431,14 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
 #if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
-    // No DEST-dvalid teardown needed: the direct UNPACK<->PACK semaphore (UNPACK_MATH) drains to 0 at loop exit,
-    // and a following op (the fused conv's matmul) re-SEMINITs its own MATH_PACK semaphore and resets its own DEST
-    // section bases via its own init (llk_math_pack_sync_init / llk_pack_init), so the tilize->matmul transition is
-    // clean. (The old dvalid scheme needed a CTRL-register teardown here; that scheme is gone.)
+    // Clean the DEST dvalid ring + reset both banks to 0 for a FOLLOWING matmul in the same kernel. The semaphore
+    // tilize above orders UNPACK<->PACK via the UNPACK_MATH count but does NOT touch the HW dvalid bits, whereas
+    // the OLD dvalid section_done cleared them as a side effect — and the fused conv's matmul (utd1) relied on
+    // inheriting that clean dvalid ring. The fused kernel's llk_math_pack_sync_init/llk_pack_dest_init reset the
+    // semaphore + bank id but not the raw dvalid bits, so without this the matmul hangs at its first partials op
+    // (dprint_utd10/11). The SyncFull section_done variant issues CLEARDVALID for BOTH banks and resets SEC->0.
+    UNPACK((llk_unpack_dest_dvalid_section_done<DstSync::SyncFull>()));
+    PACK((llk_pack_dest_dvalid_section_done<DstSync::SyncFull, DST_ACCUM_MODE>()));
 #endif
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<PackMode::Default>(ocb)));
