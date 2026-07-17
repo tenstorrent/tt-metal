@@ -1,0 +1,1151 @@
+No validation is done, loading runtime model spec from JSON: ../autoport_release_spec.json
+2026-07-16 20:46:55,960 - run.py:810 - INFO: TT-Inference version: 0.18.0
+2026-07-16 20:46:55,960 - run.py:811 - INFO: TT-Inference SHA: fdc353375c99
+2026-07-16 20:46:55,960 - run.py:812 - INFO:
+============================================================
+tt-inference-server run.py CLI args summary
+============================================================
+
+Model Options:
+  model:                      gemma-4-31B-it
+  device:                     p150x4
+  impl:                       None
+  engine:                     None
+  workflow:                   release
+  tools:                      vllm
+
+Optional args:
+  dev_mode:                   False
+  docker_server:              False
+  local_server:               False
+  no_auth:                    True
+  tt_metal_python_venv_dir:   None
+  tt_metal_home:              None
+  vllm_dir:                   None
+  service_port:               8000
+  bind_host:                  0.0.0.0
+  docker_override_image:      None
+  docker_interactive:         False
+  device_id:                  None
+  disable_trace_capture:      False
+  override_tt_config:         None
+  vllm_override_args:         None
+  workflow_args:              None
+  limit_samples_mode:         None
+  eval_samples:               None
+  skip_system_sw_validation:  True
+
+Host Storage Options:
+  host_volume:                None
+  host_hf_cache:              None
+  host_weights_dir:           None
+  image_user:                 1000
+
+============================================================
+2026-07-16 20:46:55,962 - run.py:818 - INFO: Runtime model spec saved to: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/runtime_model_specs/runtime_model_spec_2026-07-16_20-46-55_id_autoport_google_gemma_4_31b_p150x4_release_XoOYIVRt.json
+2026-07-16 20:46:55,962 - validate_setup.py:283 - INFO: Starting local setup validation
+2026-07-16 20:46:55,962 - validate_setup.py:319 - INFO: ✅ validating local setup completed
+2026-07-16 20:46:55,962 - run.py:904 - INFO: Model gemma-4-31B (model_type=LLM) routes through v2 engine.
+2026-07-16 20:46:55,963 - utils.py:272 - INFO: Running command: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_run_script/bin/python --index-strategy unsafe-best-match -r /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/requirements/v2-run-script.txt
+Using Python 3.10.20 environment at: .workflow_venvs/.venv_v2_run_script
+Checked 15 packages in 11ms
+2026-07-16 20:46:56,013 - v2_bridge.py:553 - INFO: Provisioning v2 dependency venv: EVALS_META
+2026-07-16 20:46:56,013 - workflow_venvs.py:480 - INFO: The directory /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/llama-cookbook exists.
+2026-07-16 20:46:56,558 - workflow_venvs.py:548 - INFO: Meta eval datasets are complete: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/llama-cookbook/end-to-end-use-cases/benchmarks/llm_eval_harness/meta_eval/work_dir_gemma-4-31B
+2026-07-16 20:46:56,558 - v2_bridge.py:553 - INFO: Provisioning v2 dependency venv: V2_LLM_VLLM
+2026-07-16 20:46:56,558 - workflow_venvs.py:356 - INFO: sub-dir already exists for v2_llm_vllm: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/artifacts
+2026-07-16 20:46:56,558 - utils.py:272 - INFO: Running command: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_bootstrap_uv/bin/uv pip install --managed-python --python /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/python --index-strategy unsafe-best-match --override /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/requirements/v2-llm-vllm-overrides.txt -r /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/requirements/v2-llm-vllm.txt
+Using Python 3.11.15 environment at: .workflow_venvs/.venv_v2_llm_vllm
+Checked 7 packages in 19ms
+2026-07-16 20:46:56,610 - v2_bridge.py:240 - INFO: Delegating workflow 'release' to v2 engine via run.py.
+2026-07-16 20:46:56,610 - utils.py:272 - INFO: Running command: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_run_script/bin/python /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/tt-inference-server-v2/run.py --model gemma-4-31B --workflow release --device p150x4 --service-port 8000 --runtime-model-spec-json /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/runtime_model_specs/runtime_model_spec_2026-07-16_20-46-55_id_autoport_google_gemma_4_31b_p150x4_release_XoOYIVRt.json --output-dir /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release --server-url http://127.0.0.1
+2026-07-16 20:46:56,994 [INFO] tt_v2_runner: → command=workflow
+2026-07-16 20:46:56,994 [INFO] workflow.release: === Workflow start: release | model=gemma-4-31B device=P150X4 port=8000 output=/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release ===
+2026-07-16 20:46:56,995 [INFO] workflow.release: --- release: evals ---
+2026-07-16 20:46:57,015 [INFO] workflow.evals: → task=llm_eval
+2026-07-16 20:46:57,018 [INFO] utils.remote_readiness: ✅ Remote OpenAI endpoint ready at http://127.0.0.1:8000/v1/models
+2026-07-16 20:46:57,020 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=meta_ifeval
+2026-07-16 20:46:57,020 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/bin/lm_eval --tasks meta_ifeval --model local-completions --model_args model=google/gemma-4-31B,base_url=http://127.0.0.1:8000/v1/completions,tokenizer_backend=huggingface,add_bos_token=True,max_length=113280 --gen_kwargs stream=False,seed=42 --output_path /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/eval_id_autoport_google_gemma_4_31b_p150x4_release --seed 42 --num_fewshot 0 --batch_size 32 --log_samples --show_config --include_path /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/meta_eval_gemma-4-31B_1ji82dgy/work_dir
+2026-07-16 20:47:01,852 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:01,852 INFO     [__main__.py:279] Verbosity set to INFO
+2026-07-16 20:47:01,852 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:01,852 INFO     [__main__.py:303] Including path: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/meta_eval_gemma-4-31B_1ji82dgy/work_dir
+2026-07-16 20:47:01,856 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:01,856 INFO     [__init__.py:491] `group` and `group_alias` keys in TaskConfigs are deprecated and will be removed in v0.4.5 of lm_eval. The new `tag` field will be used to allow for a shortcut to a group of tasks one does not wish to aggregate metrics across. `group`s which aggregate across subtasks must be only defined in a separate group config file, which will be the official way to create groups that support cross-task aggregation as in `mmlu`. Please see the v0.4.4 patch notes and our documentation: https://github.com/EleutherAI/lm-evaluation-harness/blob/main/docs/new_task_guide.md#advanced-group-configs for more information.
+2026-07-16 20:47:07,652 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:07,652 INFO     [__main__.py:376] Selected Tasks: ['meta_ifeval']
+2026-07-16 20:47:07,654 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:07,654 INFO     [evaluator.py:161] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42
+2026-07-16 20:47:07,654 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:07,654 WARNING  [evaluator.py:172] generation_kwargs specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-07-16 20:47:07,654 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:07,654 INFO     [evaluator.py:198] Initializing local-completions model, with arguments: {'model': 'google/gemma-4-31B', 'base_url': 'http://127.0.0.1:8000/v1/completions', 'tokenizer_backend': 'huggingface', 'add_bos_token': True, 'max_length': 113280}
+2026-07-16 20:47:07,654 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:07,654 WARNING  [api_models.py:100] Batch size > 1 detected. Ensure your API supports batched requests with varying total sequence lengths.
+2026-07-16 20:47:07,654 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:07,654 INFO     [api_models.py:108] Using max length 113280 - 1
+2026-07-16 20:47:07,654 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:07,654 INFO     [api_models.py:111] Concurrent requests are disabled. To enable concurrent requests, set `num_concurrent` > 1.
+2026-07-16 20:47:07,654 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:07,654 INFO     [api_models.py:121] Using tokenizer huggingface
+2026-07-16 20:47:10,677 [INFO] test_module.llm_tests.llm_eval_tests: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/lib/python3.10/site-packages/lm_eval/tasks/ifeval/instructions_util.py:23: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+2026-07-16 20:47:10,677 [INFO] test_module.llm_tests.llm_eval_tests: import pkg_resources
+2026-07-16 20:47:10,758 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-07-16 20:47:11,102 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split: 0 examples [00:00, ? examples/s]
+2026-07-16 20:47:11,119 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split: 541 examples [00:00, 1572.76 examples/s]
+2026-07-16 20:47:11,119 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split: 541 examples [00:00, 1496.57 examples/s]
+2026-07-16 20:47:11,142 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:11,142 WARNING  [task.py:337] [Task: meta_ifeval] has_training_docs and has_validation_docs are False, using test_docs as fewshot_docs but this is not recommended.
+2026-07-16 20:47:11,142 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:11,142 WARNING  [task.py:337] [Task: meta_ifeval] has_training_docs and has_validation_docs are False, using test_docs as fewshot_docs but this is not recommended.
+2026-07-16 20:47:11,186 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:11,186 INFO     [evaluator.py:263] num_fewshot has been set to 0 for meta_ifeval in its config. Manual configuration will be ignored.
+2026-07-16 20:47:11,186 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:11,186 INFO     [evaluator.py:279] Setting fewshot random generator seed to 42
+2026-07-16 20:47:11,186 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:11,186 WARNING  [model.py:422] model.chat_template was called with the chat_template set to False or None. Therefore no chat template will be applied. Make sure this is an intended behavior.
+2026-07-16 20:47:11,188 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:11,188 INFO     [task.py:423] Building contexts for meta_ifeval on rank 0...
+2026-07-16 20:47:11,228 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-07-16 20:47:11,236 [INFO] test_module.llm_tests.llm_eval_tests: 0%|          | 0/541 [00:00<?, ?it/s]
+2026-07-16 20:47:11,236 [INFO] test_module.llm_tests.llm_eval_tests: 100%|██████████| 541/541 [00:00<00:00, 68102.84it/s]
+2026-07-16 20:47:11,236 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:20:47:11,236 INFO     [evaluator.py:465] Running generate_until requests
+2026-07-16 20:47:11,285 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-07-16 20:48:36,038 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 0/541 [00:00<?, ?it/s]
+2026-07-16 20:49:58,809 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 1/541 [01:24<12:42:46, 84.75s/it]
+2026-07-16 20:51:26,343 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   6%|▌         | 33/541 [02:47<36:47,  4.35s/it]
+2026-07-16 20:53:06,244 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  12%|█▏        | 65/541 [04:15<27:01,  3.41s/it]
+2026-07-16 20:54:52,936 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  18%|█▊        | 97/541 [05:54<24:15,  3.28s/it]
+2026-07-16 20:56:37,096 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  24%|██▍       | 129/541 [07:41<22:39,  3.30s/it]
+2026-07-16 20:58:22,051 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  30%|██▉       | 161/541 [09:25<20:47,  3.28s/it]
+2026-07-16 21:00:03,683 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▌      | 193/541 [11:10<19:02,  3.28s/it]
+2026-07-16 21:01:46,445 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  42%|████▏     | 225/541 [12:52<17:06,  3.25s/it]
+2026-07-16 21:03:27,472 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  48%|████▊     | 257/541 [14:35<15:19,  3.24s/it]
+2026-07-16 21:05:05,876 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  53%|█████▎    | 289/541 [16:16<13:29,  3.21s/it]
+2026-07-16 21:06:53,479 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  59%|█████▉    | 321/541 [17:54<11:37,  3.17s/it]
+2026-07-16 21:08:30,729 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  65%|██████▌   | 353/541 [19:42<10:06,  3.23s/it]
+2026-07-16 21:10:22,070 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  71%|███████   | 385/541 [21:19<08:14,  3.17s/it]
+2026-07-16 21:12:16,611 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  77%|███████▋  | 417/541 [23:10<06:44,  3.26s/it]
+2026-07-16 21:14:01,981 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  83%|████████▎ | 449/541 [25:05<05:09,  3.36s/it]
+2026-07-16 21:15:44,632 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  89%|████████▉ | 481/541 [26:50<03:20,  3.34s/it]
+2026-07-16 21:15:44,633 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  95%|█████████▍| 513/541 [28:33<01:32,  3.30s/it]
+2026-07-16 21:15:44,633 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 541/541 [28:33<00:00,  3.17s/it]
+2026-07-16 21:15:46,839 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:15:46,839 ERROR    [instructions.py:178] Unable to detect language for text *** due to No features in text.
+2026-07-16 21:15:49,180 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:15:49,180 INFO     [evaluation_tracker.py:206] Saving results aggregated
+2026-07-16 21:15:49,181 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:15:49,181 INFO     [evaluation_tracker.py:287] Saving per-sample results for: meta_ifeval
+2026-07-16 21:15:50,718 [INFO] test_module.llm_tests.llm_eval_tests: Running eval task=meta_gpqa_cot
+2026-07-16 21:15:50,718 [INFO] test_module.llm_tests.llm_eval_tests: Running command: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/bin/lm_eval --tasks meta_gpqa_cot --model local-completions --model_args model=google/gemma-4-31B,base_url=http://127.0.0.1:8000/v1/completions,tokenizer_backend=huggingface,add_bos_token=True,max_length=113280 --gen_kwargs stream=False,seed=42 --output_path /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/eval_id_autoport_google_gemma_4_31b_p150x4_release --seed 42 --num_fewshot 0 --batch_size 32 --log_samples --show_config --include_path /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/meta_eval_gemma-4-31B_9ktiwr23/work_dir
+2026-07-16 21:15:55,567 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:15:55,567 INFO     [__main__.py:279] Verbosity set to INFO
+2026-07-16 21:15:55,567 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:15:55,567 INFO     [__main__.py:303] Including path: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_evals_meta/meta_eval_gemma-4-31B_9ktiwr23/work_dir
+2026-07-16 21:15:55,570 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:15:55,570 INFO     [__init__.py:491] `group` and `group_alias` keys in TaskConfigs are deprecated and will be removed in v0.4.5 of lm_eval. The new `tag` field will be used to allow for a shortcut to a group of tasks one does not wish to aggregate metrics across. `group`s which aggregate across subtasks must be only defined in a separate group config file, which will be the official way to create groups that support cross-task aggregation as in `mmlu`. Please see the v0.4.4 patch notes and our documentation: https://github.com/EleutherAI/lm-evaluation-harness/blob/main/docs/new_task_guide.md#advanced-group-configs for more information.
+2026-07-16 21:16:01,398 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:01,397 INFO     [__main__.py:376] Selected Tasks: ['meta_gpqa_cot']
+2026-07-16 21:16:01,399 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:01,399 INFO     [evaluator.py:161] Setting random seed to 42 | Setting numpy seed to 42 | Setting torch manual seed to 42
+2026-07-16 21:16:01,399 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:01,399 WARNING  [evaluator.py:172] generation_kwargs specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+2026-07-16 21:16:01,399 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:01,399 INFO     [evaluator.py:198] Initializing local-completions model, with arguments: {'model': 'google/gemma-4-31B', 'base_url': 'http://127.0.0.1:8000/v1/completions', 'tokenizer_backend': 'huggingface', 'add_bos_token': True, 'max_length': 113280}
+2026-07-16 21:16:01,399 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:01,399 WARNING  [api_models.py:100] Batch size > 1 detected. Ensure your API supports batched requests with varying total sequence lengths.
+2026-07-16 21:16:01,400 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:01,399 INFO     [api_models.py:108] Using max length 113280 - 1
+2026-07-16 21:16:01,400 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:01,400 INFO     [api_models.py:111] Concurrent requests are disabled. To enable concurrent requests, set `num_concurrent` > 1.
+2026-07-16 21:16:01,400 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:01,400 INFO     [api_models.py:121] Using tokenizer huggingface
+2026-07-16 21:16:04,331 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-07-16 21:16:04,438 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split: 0 examples [00:00, ? examples/s]
+2026-07-16 21:16:04,449 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split: 448 examples [00:00, 4190.22 examples/s]
+2026-07-16 21:16:04,449 [INFO] test_module.llm_tests.llm_eval_tests: Generating train split: 448 examples [00:00, 3786.37 examples/s]
+2026-07-16 21:16:04,466 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:04,466 WARNING  [task.py:337] [Task: meta_gpqa_cot] has_training_docs and has_validation_docs are False, using test_docs as fewshot_docs but this is not recommended.
+2026-07-16 21:16:04,466 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:04,466 WARNING  [task.py:337] [Task: meta_gpqa_cot] has_training_docs and has_validation_docs are False, using test_docs as fewshot_docs but this is not recommended.
+2026-07-16 21:16:04,481 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:04,480 INFO     [evaluator.py:263] num_fewshot has been set to 0 for meta_gpqa_cot in its config. Manual configuration will be ignored.
+2026-07-16 21:16:04,481 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:04,481 INFO     [evaluator.py:279] Setting fewshot random generator seed to 42
+2026-07-16 21:16:04,481 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:04,481 WARNING  [model.py:422] model.chat_template was called with the chat_template set to False or None. Therefore no chat template will be applied. Make sure this is an intended behavior.
+2026-07-16 21:16:04,481 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:04,481 INFO     [task.py:423] Building contexts for meta_gpqa_cot on rank 0...
+2026-07-16 21:16:04,495 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-07-16 21:16:04,501 [INFO] test_module.llm_tests.llm_eval_tests: 0%|          | 0/448 [00:00<?, ?it/s]
+2026-07-16 21:16:04,501 [INFO] test_module.llm_tests.llm_eval_tests: 100%|██████████| 448/448 [00:00<00:00, 69842.71it/s]
+2026-07-16 21:16:04,502 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:16:04,502 INFO     [evaluator.py:465] Running generate_until requests
+2026-07-16 21:16:04,646 [INFO] test_module.llm_tests.llm_eval_tests:
+2026-07-16 21:18:45,420 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 0/448 [00:00<?, ?it/s]
+2026-07-16 21:21:20,534 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   0%|          | 1/448 [02:40<19:57:46, 160.77s/it]
+2026-07-16 21:23:57,998 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:   7%|▋         | 33/448 [05:15<56:36,  8.19s/it]
+2026-07-16 21:26:36,129 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  15%|█▍        | 65/448 [07:53<40:06,  6.28s/it]
+2026-07-16 21:29:08,812 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  22%|██▏       | 97/448 [10:31<33:11,  5.67s/it]
+2026-07-16 21:31:43,529 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  29%|██▉       | 129/448 [13:04<28:16,  5.32s/it]
+2026-07-16 21:34:17,794 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  36%|███▌      | 161/448 [15:38<24:36,  5.14s/it]
+2026-07-16 21:36:50,912 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  43%|████▎     | 193/448 [18:13<21:23,  5.03s/it]
+2026-07-16 21:39:25,781 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  50%|█████     | 225/448 [20:46<18:24,  4.95s/it]
+2026-07-16 21:41:59,911 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  57%|█████▋    | 257/448 [23:21<15:39,  4.92s/it]
+2026-07-16 21:44:35,616 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  65%|██████▍   | 289/448 [25:55<12:56,  4.89s/it]
+2026-07-16 21:47:11,763 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  72%|███████▏  | 321/448 [28:30<10:19,  4.88s/it]
+2026-07-16 21:49:47,831 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  79%|███████▉  | 353/448 [31:07<07:43,  4.88s/it]
+2026-07-16 21:52:24,466 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  86%|████████▌ | 385/448 [33:43<05:07,  4.88s/it]
+2026-07-16 21:52:24,467 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API:  93%|█████████▎| 417/448 [36:19<02:31,  4.88s/it]
+2026-07-16 21:52:24,467 [INFO] test_module.llm_tests.llm_eval_tests: Requesting API: 100%|██████████| 448/448 [36:19<00:00,  4.87s/it]
+2026-07-16 21:52:25,150 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:52:25,150 INFO     [evaluation_tracker.py:206] Saving results aggregated
+2026-07-16 21:52:25,151 [INFO] test_module.llm_tests.llm_eval_tests: 2026-07-16:21:52:25,150 INFO     [evaluation_tracker.py:287] Saving per-sample results for: meta_gpqa_cot
+2026-07-16 21:52:26,331 [INFO] workflow_module.blocks_sink: BlockAccumulator: +2 block(s), total=2
+2026-07-16 21:52:26,331 [INFO] workflow_module.blocks_sink:   - kind=evals id=gemma-4-31B_P150X4 targets={'task_name': 'meta_ifeval', 'tolerance': 0.05, 'published_score': None, 'published_score_ref': 'https://huggingface.co/google/gemma-4-31B'}
+2026-07-16 21:52:26,331 [INFO] workflow_module.blocks_sink:   - kind=evals id=gemma-4-31B_P150X4 targets={'task_name': 'meta_gpqa_cot', 'tolerance': 0.05, 'published_score': None, 'published_score_ref': 'https://huggingface.co/google/gemma-4-31B'}
+2026-07-16 21:52:26,332 [INFO] workflow.evals: ✅ llm_eval blocks=2 kind=evals (3929.3s)
+2026-07-16 21:52:26,332 [INFO] workflow.release: --- release: benchmarks ---
+2026-07-16 21:52:26,332 [INFO] workflow.benchmarks: → task=llm_benchmark tools=vllm
+2026-07-16 21:52:26,337 [INFO] test_module.llm_tests.llm_benchmark_tests: Running LLM benchmark: tool=vllm over 17 sweep point(s)
+2026-07-16 21:52:26,340 [INFO] utils.remote_readiness: ✅ Remote OpenAI endpoint ready at http://127.0.0.1:8000/v1/models
+2026-07-16 21:52:26,341 [INFO] llm_module.runner: Running vllm sweep point 1/17  isl=128 osl=128 max_conc=1 n=8
+2026-07-16 21:52:26,342 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 8 --random-input-len 128 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_21-52-26_isl-128_osl-128_maxcon-1_n-8.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 21:52:31 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 21:52:31 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 21:52:31 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 21:52:33 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7fe098e994e0>, seed=0, num_prompts=8, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_21-52-26_isl-128_osl-128_maxcon-1_n-8.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-dc9f050f-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 21:52:37 [datasets.py:612] Sampling input_len from [127, 127] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/8 [00:00<?, ?it/s]
+12%|█▎        | 1/8 [00:05<00:35,  5.10s/it]
+25%|██▌       | 2/8 [00:10<00:30,  5.05s/it]
+38%|███▊      | 3/8 [00:15<00:25,  5.04s/it]
+50%|█████     | 4/8 [00:20<00:20,  5.04s/it]
+62%|██████▎   | 5/8 [00:25<00:15,  5.04s/it]
+75%|███████▌  | 6/8 [00:30<00:10,  5.03s/it]
+88%|████████▊ | 7/8 [00:35<00:05,  5.05s/it]
+100%|██████████| 8/8 [00:40<00:00,  5.04s/it]
+100%|██████████| 8/8 [00:40<00:00,  5.04s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     8
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  40.35
+Total input tokens:                      1016
+Total generated tokens:                  1024
+Request throughput (req/s):              0.20
+Output token throughput (tok/s):         25.38
+Peak output token throughput (tok/s):    34.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          50.56
+---------------Time to First Token----------------
+Mean TTFT (ms):                          197.27
+Median TTFT (ms):                        191.19
+P99 TTFT (ms):                           228.48
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          38.16
+Median TPOT (ms):                        38.11
+P99 TPOT (ms):                           38.42
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           37.86
+Median ITL (ms):                         29.32
+P99 ITL (ms):                            33.32
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          5043.34
+Median E2EL (ms):                        5030.18
+P99 E2EL (ms):                           5094.94
+==================================================
+2026-07-16 21:53:18,467 [INFO] llm_module.runner: Running vllm sweep point 2/17  isl=128 osl=128 max_conc=32 n=256
+2026-07-16 21:53:20,469 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 32 --num-prompts 256 --random-input-len 128 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_21-53-20_isl-128_osl-128_maxcon-32_n-256.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 21:53:25 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 21:53:25 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 21:53:26 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 21:53:28 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f13b989d4e0>, seed=0, num_prompts=256, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=32, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_21-53-20_isl-128_osl-128_maxcon-32_n-256.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-8b5e19ea-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 21:53:31 [datasets.py:612] Sampling input_len from [127, 127] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 32
+0%|          | 0/256 [00:00<?, ?it/s]
+0%|          | 1/256 [00:14<59:56, 14.10s/it]
+13%|█▎        | 33/256 [00:28<02:43,  1.36it/s]
+25%|██▌       | 65/256 [00:42<01:49,  1.75it/s]
+38%|███▊      | 97/256 [00:56<01:20,  1.97it/s]
+50%|█████     | 129/256 [01:10<01:01,  2.07it/s]
+63%|██████▎   | 161/256 [01:25<00:44,  2.12it/s]
+75%|███████▌  | 193/256 [01:39<00:29,  2.16it/s]
+88%|████████▊ | 225/256 [01:53<00:14,  2.20it/s]
+100%|██████████| 256/256 [01:53<00:00,  2.25it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     256
+Failed requests:                         0
+Maximum request concurrency:             32
+Benchmark duration (s):                  113.58
+Total input tokens:                      32512
+Total generated tokens:                  32768
+Request throughput (req/s):              2.25
+Output token throughput (tok/s):         288.51
+Peak output token throughput (tok/s):    576.00
+Peak concurrent requests:                64.00
+Total token throughput (tok/s):          574.77
+---------------Time to First Token----------------
+Mean TTFT (ms):                          4950.89
+Median TTFT (ms):                        5109.39
+P99 TTFT (ms):                           5390.18
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          72.79
+Median TPOT (ms):                        71.47
+P99 TPOT (ms):                           110.53
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           72.22
+Median ITL (ms):                         56.13
+P99 ITL (ms):                            64.39
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          14194.91
+Median E2EL (ms):                        14212.82
+P99 E2EL (ms):                           14507.90
+==================================================
+2026-07-16 21:55:26,015 [INFO] llm_module.runner: Running vllm sweep point 3/17  isl=128 osl=1024 max_conc=1 n=4
+2026-07-16 21:55:28,018 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 128 --random-output-len 1024 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_21-55-28_isl-128_osl-1024_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 21:55:33 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 21:55:33 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 21:55:33 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 21:55:35 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f8f0bd914e0>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=1024, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_21-55-28_isl-128_osl-1024_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-d304c8ce-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 21:55:39 [datasets.py:612] Sampling input_len from [127, 127] and output_len from [1024, 1024]
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:32<01:36, 32.03s/it]
+50%|█████     | 2/4 [01:04<01:04, 32.01s/it]
+75%|███████▌  | 3/4 [01:35<00:31, 31.99s/it]
+100%|██████████| 4/4 [02:08<00:00, 32.01s/it]
+100%|██████████| 4/4 [02:08<00:00, 32.01s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  128.03
+Total input tokens:                      508
+Total generated tokens:                  4096
+Request throughput (req/s):              0.03
+Output token throughput (tok/s):         31.99
+Peak output token throughput (tok/s):    35.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          35.96
+---------------Time to First Token----------------
+Mean TTFT (ms):                          205.83
+Median TTFT (ms):                        207.48
+P99 TTFT (ms):                           220.28
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          31.09
+Median TPOT (ms):                        31.09
+P99 TPOT (ms):                           31.10
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           31.06
+Median ITL (ms):                         29.96
+P99 ITL (ms):                            33.83
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          32006.61
+Median E2EL (ms):                        32011.77
+P99 E2EL (ms):                           32034.47
+==================================================
+2026-07-16 21:57:47,836 [INFO] llm_module.runner: Running vllm sweep point 4/17  isl=128 osl=1024 max_conc=32 n=128
+2026-07-16 21:57:49,838 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 32 --num-prompts 128 --random-input-len 128 --random-output-len 1024 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_21-57-49_isl-128_osl-1024_maxcon-32_n-128.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 21:57:55 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 21:57:55 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 21:57:55 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 21:57:57 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7fe1539854e0>, seed=0, num_prompts=128, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=128, random_output_len=1024, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=32, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_21-57-49_isl-128_osl-1024_maxcon-32_n-128.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-836e25fc-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 21:58:00 [datasets.py:612] Sampling input_len from [127, 127] and output_len from [1024, 1024]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 32
+0%|          | 0/128 [00:00<?, ?it/s]
+1%|          | 1/128 [01:09<2:27:06, 69.50s/it]
+26%|██▌       | 33/128 [02:18<05:43,  3.61s/it]
+51%|█████     | 65/128 [03:27<02:54,  2.76s/it]
+76%|███████▌  | 97/128 [04:36<01:17,  2.49s/it]
+100%|██████████| 128/128 [04:36<00:00,  2.16s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     128
+Failed requests:                         0
+Maximum request concurrency:             32
+Benchmark duration (s):                  276.96
+Total input tokens:                      16256
+Total generated tokens:                  131072
+Request throughput (req/s):              0.46
+Output token throughput (tok/s):         473.26
+Peak output token throughput (tok/s):    576.00
+Peak concurrent requests:                64.00
+Total token throughput (tok/s):          531.96
+---------------Time to First Token----------------
+Mean TTFT (ms):                          4944.46
+Median TTFT (ms):                        4908.29
+P99 TTFT (ms):                           5366.31
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          62.85
+Median TPOT (ms):                        62.68
+P99 TPOT (ms):                           67.54
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           62.78
+Median ITL (ms):                         60.93
+P99 ITL (ms):                            66.97
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          69236.25
+Median E2EL (ms):                        69245.10
+P99 E2EL (ms):                           69498.47
+==================================================
+2026-07-16 22:02:38,795 [INFO] llm_module.runner: Running vllm sweep point 5/17  isl=1024 osl=128 max_conc=1 n=4
+2026-07-16 22:02:40,798 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 1024 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-02-40_isl-1024_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:02:46 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:02:46 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:02:46 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:02:48 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7fbff8c914e0>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=1024, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-02-40_isl-1024_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-2e7aeb3c-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:02:51 [datasets.py:612] Sampling input_len from [1023, 1023] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:05<00:15,  5.31s/it]
+50%|█████     | 2/4 [00:10<00:10,  5.30s/it]
+75%|███████▌  | 3/4 [00:15<00:05,  5.32s/it]
+100%|██████████| 4/4 [00:21<00:00,  5.31s/it]
+100%|██████████| 4/4 [00:21<00:00,  5.31s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  21.24
+Total input tokens:                      4092
+Total generated tokens:                  512
+Request throughput (req/s):              0.19
+Output token throughput (tok/s):         24.11
+Peak output token throughput (tok/s):    33.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          216.81
+---------------Time to First Token----------------
+Mean TTFT (ms):                          323.96
+Median TTFT (ms):                        318.35
+P99 TTFT (ms):                           342.22
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          39.25
+Median TPOT (ms):                        39.16
+P99 TPOT (ms):                           39.57
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           38.94
+Median ITL (ms):                         30.48
+P99 ITL (ms):                            34.49
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          5308.53
+Median E2EL (ms):                        5299.45
+P99 E2EL (ms):                           5343.22
+==================================================
+2026-07-16 22:03:13,821 [INFO] llm_module.runner: Running vllm sweep point 6/17  isl=1024 osl=128 max_conc=32 n=128
+2026-07-16 22:03:15,823 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 32 --num-prompts 128 --random-input-len 1024 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-03-15_isl-1024_osl-128_maxcon-32_n-128.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:03:21 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:03:21 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:03:21 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:03:23 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f3f43c914e0>, seed=0, num_prompts=128, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=1024, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=32, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-03-15_isl-1024_osl-128_maxcon-32_n-128.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-f7beeee7-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:03:26 [datasets.py:612] Sampling input_len from [1023, 1023] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 32
+0%|          | 0/128 [00:00<?, ?it/s]
+1%|          | 1/128 [00:19<40:37, 19.19s/it]
+26%|██▌       | 33/128 [00:38<01:34,  1.01it/s]
+51%|█████     | 65/128 [00:57<00:47,  1.32it/s]
+76%|███████▌  | 97/128 [01:16<00:21,  1.46it/s]
+100%|██████████| 128/128 [01:16<00:00,  1.68it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     128
+Failed requests:                         0
+Maximum request concurrency:             32
+Benchmark duration (s):                  76.16
+Total input tokens:                      130944
+Total generated tokens:                  16384
+Request throughput (req/s):              1.68
+Output token throughput (tok/s):         215.12
+Peak output token throughput (tok/s):    512.00
+Peak concurrent requests:                64.00
+Total token throughput (tok/s):          1934.38
+---------------Time to First Token----------------
+Mean TTFT (ms):                          8652.70
+Median TTFT (ms):                        8879.63
+P99 TTFT (ms):                           8978.86
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          81.77
+Median TPOT (ms):                        79.70
+P99 TPOT (ms):                           146.73
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           81.13
+Median ITL (ms):                         64.81
+P99 ITL (ms):                            72.08
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          19037.63
+Median E2EL (ms):                        19012.57
+P99 E2EL (ms):                           19196.38
+==================================================
+2026-07-16 22:04:44,388 [INFO] llm_module.runner: Running vllm sweep point 7/17  isl=2048 osl=128 max_conc=1 n=4
+2026-07-16 22:04:46,390 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 2048 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-04-46_isl-2048_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:04:51 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:04:51 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:04:51 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:04:53 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f857f5914e0>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=2048, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-04-46_isl-2048_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-9c25a14d-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:04:57 [datasets.py:612] Sampling input_len from [2047, 2047] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:05<00:16,  5.55s/it]
+50%|█████     | 2/4 [00:11<00:11,  5.52s/it]
+75%|███████▌  | 3/4 [00:16<00:05,  5.52s/it]
+100%|██████████| 4/4 [00:22<00:00,  5.53s/it]
+100%|██████████| 4/4 [00:22<00:00,  5.53s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  22.11
+Total input tokens:                      8188
+Total generated tokens:                  512
+Request throughput (req/s):              0.18
+Output token throughput (tok/s):         23.15
+Peak output token throughput (tok/s):    33.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          393.41
+---------------Time to First Token----------------
+Mean TTFT (ms):                          527.34
+Median TTFT (ms):                        520.11
+P99 TTFT (ms):                           549.53
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          39.38
+Median TPOT (ms):                        39.34
+P99 TPOT (ms):                           39.64
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           39.07
+Median ITL (ms):                         30.54
+P99 ITL (ms):                            34.54
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          5528.24
+Median E2EL (ms):                        5531.29
+P99 E2EL (ms):                           5554.78
+==================================================
+2026-07-16 22:05:20,284 [INFO] llm_module.runner: Running vllm sweep point 8/17  isl=2048 osl=128 max_conc=32 n=128
+2026-07-16 22:05:22,286 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 32 --num-prompts 128 --random-input-len 2048 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-05-22_isl-2048_osl-128_maxcon-32_n-128.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:05:27 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:05:27 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:05:27 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:05:29 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f221da954e0>, seed=0, num_prompts=128, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=2048, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=32, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-05-22_isl-2048_osl-128_maxcon-32_n-128.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-8daae15d-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:05:33 [datasets.py:612] Sampling input_len from [2047, 2047] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 32
+0%|          | 0/128 [00:00<?, ?it/s]
+1%|          | 1/128 [00:25<54:21, 25.68s/it]
+26%|██▌       | 33/128 [00:51<02:06,  1.33s/it]
+51%|█████     | 65/128 [01:16<01:04,  1.02s/it]
+76%|███████▌  | 97/128 [01:42<00:28,  1.09it/s]
+100%|██████████| 128/128 [01:42<00:00,  1.25it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     128
+Failed requests:                         0
+Maximum request concurrency:             32
+Benchmark duration (s):                  102.43
+Total input tokens:                      262016
+Total generated tokens:                  16384
+Request throughput (req/s):              1.25
+Output token throughput (tok/s):         159.96
+Peak output token throughput (tok/s):    512.00
+Peak concurrent requests:                64.00
+Total token throughput (tok/s):          2718.03
+---------------Time to First Token----------------
+Mean TTFT (ms):                          14830.78
+Median TTFT (ms):                        15329.09
+P99 TTFT (ms):                           15487.82
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          84.82
+Median TPOT (ms):                        80.37
+P99 TPOT (ms):                           196.53
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           84.16
+Median ITL (ms):                         65.81
+P99 ITL (ms):                            73.45
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          25603.27
+Median E2EL (ms):                        25603.99
+P99 E2EL (ms):                           25704.39
+==================================================
+2026-07-16 22:07:17,978 [INFO] llm_module.runner: Running vllm sweep point 9/17  isl=4096 osl=128 max_conc=1 n=4
+2026-07-16 22:07:19,980 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 4 --random-input-len 4096 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-07-19_isl-4096_osl-128_maxcon-1_n-4.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:07:25 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:07:25 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:07:25 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:07:27 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f0bfc0794e0>, seed=0, num_prompts=4, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-07-19_isl-4096_osl-128_maxcon-1_n-4.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-c60f9686-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:07:31 [datasets.py:612] Sampling input_len from [4095, 4095] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/4 [00:00<?, ?it/s]
+25%|██▌       | 1/4 [00:05<00:17,  5.97s/it]
+50%|█████     | 2/4 [00:11<00:11,  5.95s/it]
+75%|███████▌  | 3/4 [00:17<00:05,  5.97s/it]
+100%|██████████| 4/4 [00:23<00:00,  5.98s/it]
+100%|██████████| 4/4 [00:23<00:00,  5.98s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     4
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  23.90
+Total input tokens:                      16380
+Total generated tokens:                  512
+Request throughput (req/s):              0.17
+Output token throughput (tok/s):         21.42
+Peak output token throughput (tok/s):    33.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          706.70
+---------------Time to First Token----------------
+Mean TTFT (ms):                          953.81
+Median TTFT (ms):                        952.20
+P99 TTFT (ms):                           959.14
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          39.54
+Median TPOT (ms):                        39.57
+P99 TPOT (ms):                           39.71
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           39.23
+Median ITL (ms):                         30.64
+P99 ITL (ms):                            34.86
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          5975.38
+Median E2EL (ms):                        5981.11
+P99 E2EL (ms):                           5994.84
+==================================================
+2026-07-16 22:07:55,732 [INFO] llm_module.runner: Running vllm sweep point 10/17  isl=4096 osl=128 max_conc=26 n=104
+2026-07-16 22:07:57,734 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 26 --num-prompts 104 --random-input-len 4096 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-07-57_isl-4096_osl-128_maxcon-26_n-104.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:08:03 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:08:03 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:08:03 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:08:05 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f476ef794e0>, seed=0, num_prompts=104, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=4096, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=26, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-07-57_isl-4096_osl-128_maxcon-26_n-104.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-dd84ece9-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:08:08 [datasets.py:612] Sampling input_len from [4095, 4095] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 26
+0%|          | 0/104 [00:00<?, ?it/s]
+1%|          | 1/104 [00:33<57:58, 33.77s/it]
+26%|██▌       | 27/104 [01:07<02:45,  2.15s/it]
+51%|█████     | 53/104 [01:41<01:24,  1.65s/it]
+76%|███████▌  | 79/104 [02:14<00:37,  1.49s/it]
+100%|██████████| 104/104 [02:14<00:00,  1.30s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     104
+Failed requests:                         0
+Maximum request concurrency:             26
+Benchmark duration (s):                  134.77
+Total input tokens:                      425880
+Total generated tokens:                  13312
+Request throughput (req/s):              0.77
+Output token throughput (tok/s):         98.78
+Peak output token throughput (tok/s):    416.00
+Peak concurrent requests:                52.00
+Total token throughput (tok/s):          3258.87
+---------------Time to First Token----------------
+Mean TTFT (ms):                          22905.64
+Median TTFT (ms):                        23838.86
+P99 TTFT (ms):                           23849.33
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          84.90
+Median TPOT (ms):                        78.12
+P99 TPOT (ms):                           255.79
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           84.24
+Median ITL (ms):                         62.90
+P99 ITL (ms):                            70.58
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          33688.56
+Median E2EL (ms):                        33733.34
+P99 E2EL (ms):                           33770.27
+==================================================
+2026-07-16 22:10:26,889 [INFO] llm_module.runner: Running vllm sweep point 11/17  isl=8192 osl=128 max_conc=1 n=2
+2026-07-16 22:10:28,891 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 2 --random-input-len 8192 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-10-28_isl-8192_osl-128_maxcon-1_n-2.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:10:34 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:10:34 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:10:34 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:10:36 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f3832e994e0>, seed=0, num_prompts=2, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=8192, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-10-28_isl-8192_osl-128_maxcon-1_n-2.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-8a5da3f5-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:10:39 [datasets.py:612] Sampling input_len from [8191, 8191] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/2 [00:00<?, ?it/s]
+50%|█████     | 1/2 [00:06<00:06,  7.00s/it]
+100%|██████████| 2/2 [00:14<00:00,  7.02s/it]
+100%|██████████| 2/2 [00:14<00:00,  7.02s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     2
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  14.04
+Total input tokens:                      16382
+Total generated tokens:                  256
+Request throughput (req/s):              0.14
+Output token throughput (tok/s):         18.23
+Peak output token throughput (tok/s):    33.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          1185.05
+---------------Time to First Token----------------
+Mean TTFT (ms):                          1989.27
+Median TTFT (ms):                        1989.27
+P99 TTFT (ms):                           1994.96
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          39.61
+Median TPOT (ms):                        39.61
+P99 TPOT (ms):                           39.82
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           39.30
+Median ITL (ms):                         30.83
+P99 ITL (ms):                            34.70
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          7019.60
+Median E2EL (ms):                        7019.60
+P99 E2EL (ms):                           7040.30
+==================================================
+2026-07-16 22:10:54,811 [INFO] llm_module.runner: Running vllm sweep point 12/17  isl=8192 osl=128 max_conc=13 n=26
+2026-07-16 22:10:56,813 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 13 --num-prompts 26 --random-input-len 8192 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-10-56_isl-8192_osl-128_maxcon-13_n-26.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:11:02 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:11:02 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:11:02 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:11:04 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f06cc98d4e0>, seed=0, num_prompts=26, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=8192, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=13, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-10-56_isl-8192_osl-128_maxcon-13_n-26.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-e0a801ad-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:11:07 [datasets.py:612] Sampling input_len from [8191, 8191] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 13
+0%|          | 0/26 [00:00<?, ?it/s]
+4%|▍         | 1/26 [00:33<13:55, 33.43s/it]
+54%|█████▍    | 14/26 [01:06<00:49,  4.15s/it]
+100%|██████████| 26/26 [01:06<00:00,  2.57s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     26
+Failed requests:                         0
+Maximum request concurrency:             13
+Benchmark duration (s):                  66.85
+Total input tokens:                      212966
+Total generated tokens:                  3328
+Request throughput (req/s):              0.39
+Output token throughput (tok/s):         49.79
+Peak output token throughput (tok/s):    260.00
+Peak concurrent requests:                26.00
+Total token throughput (tok/s):          3235.70
+---------------Time to First Token----------------
+Mean TTFT (ms):                          23450.88
+Median TTFT (ms):                        25212.90
+P99 TTFT (ms):                           25223.78
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          78.50
+Median TPOT (ms):                        64.67
+P99 TPOT (ms):                           245.31
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           77.88
+Median ITL (ms):                         51.02
+P99 ITL (ms):                            56.99
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          33419.98
+Median E2EL (ms):                        33419.83
+P99 E2EL (ms):                           33427.20
+==================================================
+2026-07-16 22:12:16,785 [INFO] llm_module.runner: Running vllm sweep point 13/17  isl=16384 osl=128 max_conc=1 n=2
+2026-07-16 22:12:18,787 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 2 --random-input-len 16384 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-12-18_isl-16384_osl-128_maxcon-1_n-2.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:12:24 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:12:24 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:12:24 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:12:26 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7f729089d4e0>, seed=0, num_prompts=2, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=16384, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-12-18_isl-16384_osl-128_maxcon-1_n-2.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-f32164ed-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:12:29 [datasets.py:612] Sampling input_len from [16383, 16383] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/2 [00:00<?, ?it/s]
+50%|█████     | 1/2 [00:09<00:09,  9.26s/it]
+100%|██████████| 2/2 [00:18<00:00,  9.29s/it]
+100%|██████████| 2/2 [00:18<00:00,  9.28s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     2
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  18.57
+Total input tokens:                      32766
+Total generated tokens:                  256
+Request throughput (req/s):              0.11
+Output token throughput (tok/s):         13.79
+Peak output token throughput (tok/s):    32.00
+Peak concurrent requests:                2.00
+Total token throughput (tok/s):          1778.65
+---------------Time to First Token----------------
+Mean TTFT (ms):                          4239.80
+Median TTFT (ms):                        4239.80
+P99 TTFT (ms):                           4240.50
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          39.71
+Median TPOT (ms):                        39.71
+P99 TPOT (ms):                           39.86
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           39.40
+Median ITL (ms):                         31.21
+P99 ITL (ms):                            35.11
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          9282.51
+Median E2EL (ms):                        9282.51
+P99 E2EL (ms):                           9302.29
+==================================================
+2026-07-16 22:12:49,401 [INFO] llm_module.runner: Running vllm sweep point 14/17  isl=16384 osl=128 max_conc=6 n=12
+2026-07-16 22:12:51,402 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 6 --num-prompts 12 --random-input-len 16384 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-12-51_isl-16384_osl-128_maxcon-6_n-12.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:12:56 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:12:56 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:12:56 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:12:58 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7eff2869d4e0>, seed=0, num_prompts=12, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=16384, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=6, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-12-51_isl-16384_osl-128_maxcon-6_n-12.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-e33ab80a-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:13:02 [datasets.py:612] Sampling input_len from [16383, 16383] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 6
+0%|          | 0/12 [00:00<?, ?it/s]
+8%|▊         | 1/12 [00:32<05:55, 32.34s/it]
+58%|█████▊    | 7/12 [01:04<00:41,  8.22s/it]
+100%|██████████| 12/12 [01:04<00:00,  5.40s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     12
+Failed requests:                         0
+Maximum request concurrency:             6
+Benchmark duration (s):                  64.75
+Total input tokens:                      196596
+Total generated tokens:                  1536
+Request throughput (req/s):              0.19
+Output token throughput (tok/s):         23.72
+Peak output token throughput (tok/s):    138.00
+Peak concurrent requests:                12.00
+Total token throughput (tok/s):          3059.93
+---------------Time to First Token----------------
+Mean TTFT (ms):                          21742.10
+Median TTFT (ms):                        25186.91
+P99 TTFT (ms):                           25204.57
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          83.71
+Median TPOT (ms):                        56.84
+P99 TPOT (ms):                           219.92
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           83.06
+Median ITL (ms):                         44.04
+P99 ITL (ms):                            49.24
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          32373.15
+Median E2EL (ms):                        32373.82
+P99 E2EL (ms):                           32406.51
+==================================================
+2026-07-16 22:14:09,143 [INFO] llm_module.runner: Running vllm sweep point 15/17  isl=32768 osl=128 max_conc=1 n=1
+2026-07-16 22:14:11,145 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 1 --random-input-len 32768 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-14-11_isl-32768_osl-128_maxcon-1_n-1.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:14:16 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:14:16 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:14:16 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:14:18 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7ff8bf49d4e0>, seed=0, num_prompts=1, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=32768, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-14-11_isl-32768_osl-128_maxcon-1_n-1.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-1dd952dd-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:14:22 [datasets.py:612] Sampling input_len from [32767, 32767] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/1 [00:00<?, ?it/s]
+100%|██████████| 1/1 [00:15<00:00, 15.78s/it]
+100%|██████████| 1/1 [00:15<00:00, 15.78s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     1
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  15.78
+Total input tokens:                      32767
+Total generated tokens:                  128
+Request throughput (req/s):              0.06
+Output token throughput (tok/s):         8.11
+Peak output token throughput (tok/s):    32.00
+Peak concurrent requests:                1.00
+Total token throughput (tok/s):          2084.15
+---------------Time to First Token----------------
+Mean TTFT (ms):                          10602.40
+Median TTFT (ms):                        10602.40
+P99 TTFT (ms):                           10602.40
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          40.79
+Median TPOT (ms):                        40.79
+P99 TPOT (ms):                           40.79
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           40.47
+Median ITL (ms):                         31.98
+P99 ITL (ms):                            35.28
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          15782.94
+Median E2EL (ms):                        15782.94
+P99 E2EL (ms):                           15782.94
+==================================================
+2026-07-16 22:14:38,856 [INFO] llm_module.runner: Running vllm sweep point 16/17  isl=32768 osl=128 max_conc=3 n=3
+2026-07-16 22:14:40,859 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 3 --num-prompts 3 --random-input-len 32768 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-14-40_isl-32768_osl-128_maxcon-3_n-3.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:14:46 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:14:46 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:14:46 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:14:48 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7fee9dc9d4e0>, seed=0, num_prompts=3, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=32768, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=3, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-14-40_isl-32768_osl-128_maxcon-3_n-3.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-baac5916-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:14:52 [datasets.py:612] Sampling input_len from [32767, 32767] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 3
+0%|          | 0/3 [00:00<?, ?it/s]
+33%|███▎      | 1/3 [00:38<01:17, 38.69s/it]
+100%|██████████| 3/3 [00:38<00:00, 12.90s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     3
+Failed requests:                         0
+Maximum request concurrency:             3
+Benchmark duration (s):                  38.69
+Total input tokens:                      98301
+Total generated tokens:                  384
+Request throughput (req/s):              0.08
+Output token throughput (tok/s):         9.93
+Peak output token throughput (tok/s):    72.00
+Peak concurrent requests:                3.00
+Total token throughput (tok/s):          2550.93
+---------------Time to First Token----------------
+Mean TTFT (ms):                          24841.48
+Median TTFT (ms):                        31842.32
+P99 TTFT (ms):                           31844.19
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          109.00
+Median TPOT (ms):                        53.86
+P99 TPOT (ms):                           215.96
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           108.14
+Median ITL (ms):                         41.54
+P99 ITL (ms):                            46.45
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          38684.03
+Median E2EL (ms):                        38684.34
+P99 E2EL (ms):                           38685.54
+==================================================
+2026-07-16 22:15:32,092 [INFO] llm_module.runner: Running vllm sweep point 17/17  isl=65536 osl=128 max_conc=1 n=1
+2026-07-16 22:15:34,095 [INFO] llm_module.drivers._subprocess: Executing: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_llm_vllm/bin/vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --model google/gemma-4-31B --dataset-name random --max-concurrency 1 --num-prompts 1 --random-input-len 65536 --random-output-len 128 --percentile-metrics ttft,tpot,itl,e2el --save-result --save-detailed --result-filename /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-15-34_isl-65536_osl-128_maxcon-1_n-1.json --base-url http://127.0.0.1:8000 --ready-check-timeout-sec 0 --trust-remote-code --header Accept-Encoding=identity
+INFO 07-16 22:15:39 [importing.py:44] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 07-16 22:15:39 [importing.py:68] Triton not installed or not compatible; certain GPU-related functions will not be available.
+WARNING 07-16 22:15:39 [interface.py:221] Failed to import from vllm._C: ImportError('libcuda.so.1: cannot open shared object file: No such file or directory')
+INFO 07-16 22:15:41 [main.py:47] Unspecified platform detected, switching to CPU Platform instead.
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x7ef9bd4954e0>, seed=0, num_prompts=1, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, disable_shuffle=False, custom_output_len=256, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, blazedit_min_distance=0.0, blazedit_max_distance=1.0, random_input_len=65536, random_output_len=128, random_range_ratio=0.0, random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, label=None, backend='openai-chat', base_url='http://127.0.0.1:8000', host='127.0.0.1', port=8000, endpoint='/v1/chat/completions', header=['Accept-Encoding=identity'], max_concurrency=1, model='google/gemma-4-31B', tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, trust_remote_code=True, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=True, append_result=False, metadata=None, result_dir=None, result_filename='/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/gemma-4-31B_p150x4_release/llm/benchmark_google__gemma-4-31B_2026-07-16_22-15-34_isl-65536_osl-128_maxcon-1_n-1.json', ignore_eos=False, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-91c4a094-', top_p=None, top_k=None, min_p=None, temperature=None, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, common_prefix_len=None, served_model_name=None, lora_modules=None, ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, extra_body=None)
+INFO 07-16 22:15:45 [datasets.py:612] Sampling input_len from [65535, 65535] and output_len from [128, 128]
+Starting initial single prompt test run...
+
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: 1
+0%|          | 0/1 [00:00<?, ?it/s]
+100%|██████████| 1/1 [00:32<00:00, 32.11s/it]
+100%|██████████| 1/1 [00:32<00:00, 32.11s/it]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     1
+Failed requests:                         0
+Maximum request concurrency:             1
+Benchmark duration (s):                  32.11
+Total input tokens:                      65535
+Total generated tokens:                  128
+Request throughput (req/s):              0.03
+Output token throughput (tok/s):         3.99
+Peak output token throughput (tok/s):    30.00
+Peak concurrent requests:                1.00
+Total token throughput (tok/s):          2045.15
+---------------Time to First Token----------------
+Mean TTFT (ms):                          26812.25
+Median TTFT (ms):                        26812.25
+P99 TTFT (ms):                           26812.25
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          41.69
+Median TPOT (ms):                        41.69
+P99 TPOT (ms):                           41.69
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           41.36
+Median ITL (ms):                         33.51
+P99 ITL (ms):                            36.73
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          32106.28
+Median E2EL (ms):                        32106.28
+P99 E2EL (ms):                           32106.28
+==================================================
+2026-07-16 22:16:18,257 [INFO] test_module.llm_tests.llm_performance_tests: LLM sweep produced 17 Block(s) over 17 sweep point(s)
+2026-07-16 22:16:18,257 [INFO] workflow_module.blocks_sink: BlockAccumulator: +17 block(s), total=19
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=benchmarks id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 21:53:18', 'performance_targets': {'customer_functional': {'ttft_ms': 1000.0, 'tput_user': 20.0, 'tput': None, 'tolerance': 0.05}, 'customer_complete': {'ttft_ms': 700.0, 'tput_user': 24.0, 'tput': None, 'tolerance': 0.05}, 'customer_sellable': {'ttft_ms': 600.0, 'tput_user': 25.0, 'tput': None, 'tolerance': 0.05}}, 'reference_point': {'isl': 128, 'osl': 128, 'max_concurrency': 1, 'num_prompts': 8}}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 21:55:25'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 21:57:47'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:02:38'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:03:13'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:04:44'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:05:19'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:07:17'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:07:55'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:10:26'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:10:54'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:12:16'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:12:49'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:14:08'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:14:38'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:15:31'}
+2026-07-16 22:16:18,258 [INFO] workflow_module.blocks_sink:   - kind=vllm id=google__gemma-4-31B_P150X4 targets={'model': 'google/gemma-4-31B', 'device': 'P150X4', 'timestamp': '2026-07-16 22:16:17'}
+2026-07-16 22:16:18,258 [INFO] workflow.benchmarks: ✅ task=llm_benchmark blocks=17 kind=benchmarks (1431.9s)
+2026-07-16 22:16:18,258 [INFO] workflow.release: --- release: spec_tests ---
+2026-07-16 22:16:18,336 [INFO] workflow.spec_tests: → task=spec_tests
+2026-07-16 22:16:18,336 [INFO] test_module.dispatch: Running spec_tests for model=gemma-4-31B, device=P150X4
+2026-07-16 22:16:18,337 [INFO] test_module.test_categorization_system.test_filter: Loading server tests configuration
+2026-07-16 22:16:18,337 [INFO] test_module.test_categorization_system.suite_loader: Loading server tests configuration from server_tests_config.json
+2026-07-16 22:16:18,337 [INFO] test_module.test_categorization_system.test_filter: Loading test suites from discovery
+2026-07-16 22:16:18,338 [INFO] test_module.test_categorization_system.suite_loader: Loading suite files from /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/tt-inference-server-v2/test_module/test_suites
+2026-07-16 22:16:18,338 [INFO] test_module.test_categorization_system.suite_loader: Loading server tests configuration from server_tests_config.json
+2026-07-16 22:16:18,339 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 5 suites
+2026-07-16 22:16:18,339 [INFO] test_module.test_categorization_system.suite_loader: Loaded 8 suites from audio.json (AUDIO)
+2026-07-16 22:16:18,339 [WARNING] test_module.test_categorization_system.suite_loader: Skipping efficientnet on n300: not in compatible_devices ['n150']
+2026-07-16 22:16:18,339 [WARNING] test_module.test_categorization_system.suite_loader: Skipping segformer on n300: not in compatible_devices ['n150']
+2026-07-16 22:16:18,339 [WARNING] test_module.test_categorization_system.suite_loader: Skipping unet on n300: not in compatible_devices ['n150']
+2026-07-16 22:16:18,339 [WARNING] test_module.test_categorization_system.suite_loader: Skipping vit on n300: not in compatible_devices ['n150']
+2026-07-16 22:16:18,339 [WARNING] test_module.test_categorization_system.suite_loader: Skipping vovnet on n300: not in compatible_devices ['n150']
+2026-07-16 22:16:18,339 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 9 suites
+2026-07-16 22:16:18,340 [INFO] test_module.test_categorization_system.suite_loader: Loaded 9 suites from cnn.json (CNN)
+2026-07-16 22:16:18,340 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 6 suites
+2026-07-16 22:16:18,340 [INFO] test_module.test_categorization_system.suite_loader: Loaded 6 suites from embedding.json (EMBEDDING)
+2026-07-16 22:16:18,342 [WARNING] test_module.test_categorization_system.suite_loader: Skipping motif on p300: not in compatible_devices ['t3k', 'galaxy', 'p150x4', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,342 [INFO] test_module.test_categorization_system.suite_loader: Expanded 6 test matrices into 29 suites
+2026-07-16 22:16:18,342 [INFO] test_module.test_categorization_system.suite_loader: Loaded 32 suites from image.json (IMAGE)
+2026-07-16 22:16:18,342 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on n150: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,342 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on n300: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,342 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on t3k: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,342 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on galaxy: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on galaxy_t3k: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on gpu: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on p100: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on p150: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on p150x8: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on p300: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gemma_4_31b on p300x2: not in compatible_devices ['p150x4']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on n150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on n300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on gpu: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p100: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p150x4: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,343 [WARNING] test_module.test_categorization_system.suite_loader: Skipping qwen3_32b on p300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on n150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on n300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on gpu: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p100: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p150: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping llama_70b_family on p300: not in compatible_devices ['galaxy', 't3k', 'galaxy_t3k', 'p150x4', 'p150x8', 'p300x2']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on n150: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on n300: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on gpu: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p100: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150x4: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p150x8: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,344 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p300: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,345 [WARNING] test_module.test_categorization_system.suite_loader: Skipping gpt_oss_20b on p300x2: not in compatible_devices ['t3k', 'galaxy_t3k', 'galaxy']
+2026-07-16 22:16:18,345 [INFO] test_module.test_categorization_system.suite_loader: Expanded 2 test matrices into 30 suites
+2026-07-16 22:16:18,345 [INFO] test_module.test_categorization_system.suite_loader: Loaded 30 suites from llm.json (LLM)
+2026-07-16 22:16:18,345 [INFO] test_module.test_categorization_system.suite_loader: Expanded 1 test matrices into 2 suites
+2026-07-16 22:16:18,345 [INFO] test_module.test_categorization_system.suite_loader: Loaded 2 suites from tts.json (TTS)
+2026-07-16 22:16:18,346 [INFO] test_module.test_categorization_system.suite_loader: Expanded 3 test matrices into 15 suites
+2026-07-16 22:16:18,346 [INFO] test_module.test_categorization_system.suite_loader: Loaded 15 suites from video.json (VIDEO)
+2026-07-16 22:16:18,346 [INFO] test_module.test_categorization_system.test_filter: Building reverse mapping: model -> category
+2026-07-16 22:16:18,346 [INFO] test_module.test_categorization_system.test_filter: Expanding 102 test suites
+2026-07-16 22:16:18,348 [INFO] test_module.test_categorization_system.test_filter: Including prerequisites by default
+2026-07-16 22:16:18,348 [INFO] test_module.test_categorization_system.test_filter: Getting filtered tests
+2026-07-16 22:16:18,348 [INFO] test_module.test_categorization_system.test_filter: Getting prerequisite tests for suite: gemma-4-31B-p150x4
+2026-07-16 22:16:18,349 [INFO] test_module.test_categorization_system.test_filter: Skipping prerequisite DeviceLivenessTest for engine vLLM (allowed: ['media', 'forge'])
+2026-07-16 22:16:18,349 [INFO] test_module.test_categorization_system.test_filter: Expanding prerequisite test: LoggerForkSafetyTest
+2026-07-16 22:16:18,349 [INFO] test_module.dispatch: [gemma-4-31B-p150x4] 2 test case(s)
+2026-07-16 22:16:18,349 [INFO] test_module.dispatch:   -> LoggerForkSafetyTest (test_module.unit_tests.logger_fork_safety_test)
+2026-07-16 22:16:18,352 [WARNING] test_module._test_common.base_test: Hardware-readiness probe got HTTP 404; skipping gate.
+2026-07-16 22:16:18,353 [INFO] test_module._test_common.base_test: Running tests (attempt 1/121)
+2026-07-16 22:16:18,353 [INFO] test_module.unit_tests.logger_fork_safety_test: Testing logger fork safety with held lock...
+2026-07-16 22:16:18,353 [INFO] test_module.unit_tests.logger_fork_safety_test: Handler lock held by background thread, forking...
+2026-07-16 22:16:18,359 [INFO] test_module.unit_tests.logger_fork_safety_test: Child logged without deadlock
+2026-07-16 22:16:18,360 [INFO] test_module._test_common.base_test: Tests completed successfully
+2026-07-16 22:16:18,360 [INFO] test_module.dispatch:   -> VLLMParamConformanceTest (test_module.llm_tests.vllm_param_conformance_test)
+2026-07-16 22:16:18,363 [WARNING] test_module._test_common.base_test: Hardware-readiness probe got HTTP 404; skipping gate.
+2026-07-16 22:16:18,363 [INFO] test_module._test_common.base_test: Running tests (attempt 1/1)
+2026-07-16 22:16:18,364 [INFO] test_module.llm_tests.vllm_param_conformance_test: Running vLLM parameter suite: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_run_script/bin/python -m pytest -c /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/pyproject.toml --rootdir /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server --confcutdir /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/tt-inference-server-v2/llm_module/test_vllm_chat_completions.py --output-path /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/client_cache/tmp/vllm_param_0cm9rhw2 --task-name vllm_chat_completions --endpoint-url http://127.0.0.1:8000/v1/chat/completions --model-name google/gemma-4-31B -q
+2026-07-16 23:53:05,780 [INFO] test_module.llm_tests.vllm_param_conformance_test: vLLM parameter suite exited with code 0
+2026-07-16 23:53:05,781 [INFO] test_module._test_common.base_test: Tests completed successfully
+2026-07-16 23:53:05,781 [INFO] workflow_module.blocks_sink: BlockAccumulator: +2 block(s), total=21
+2026-07-16 23:53:05,782 [INFO] workflow_module.blocks_sink:   - kind=spec_tests id=gemma-4-31B_P150X4 targets={'num_of_devices': 4}
+2026-07-16 23:53:05,782 [INFO] workflow_module.blocks_sink:   - kind=spec_tests id=gemma-4-31B_P150X4 targets={'num_of_devices': 4, 'num_concurrent_requests': 4}
+2026-07-16 23:53:05,782 [INFO] test_module.dispatch: spec_tests done: 2 block(s), 0 failure(s) -> exit=0
+2026-07-16 23:53:05,782 [INFO] workflow.spec_tests: ✅ task=spec_tests block=spec_tests (5807.4s)
+2026-07-16 23:53:05,782 [INFO] workflow.release: Acceptance: PASS (0 blocker(s))
+2026-07-16 23:53:05,787 [INFO] report_module.report_file_saver: Saved markdown to: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/report_id_autoport_google_gemma_4_31b_p150x4_release_2026-07-16_23-53-05.md
+2026-07-16 23:53:05,788 [INFO] report_module.report_file_saver: Saved JSON to: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/data/report_data_id_autoport_google_gemma_4_31b_p150x4_release_2026-07-16_23-53-05.json
+2026-07-16 23:53:05,789 [INFO] report_module.report_file_saver: Saved JSON to: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/data/report_data_id_autoport_google_gemma_4_31b_p150x4_release_2026-07-16_23-53-05.json
+2026-07-16 23:53:05,789 [INFO] report_module.generator: Generated report: md=/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/report_id_autoport_google_gemma_4_31b_p150x4_release_2026-07-16_23-53-05.md, json=/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/data/report_data_id_autoport_google_gemma_4_31b_p150x4_release_2026-07-16_23-53-05.json
+2026-07-16 23:53:05,789 [INFO] workflow.release: Wrote markdown: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/report_id_autoport_google_gemma_4_31b_p150x4_release_2026-07-16_23-53-05.md
+2026-07-16 23:53:05,789 [INFO] workflow.release: Wrote json:     /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/reports_output/release/data/report_data_id_autoport_google_gemma_4_31b_p150x4_release_2026-07-16_23-53-05.json
+2026-07-16 23:53:05,789 [INFO] workflow.release: === Workflow done: release (rc=0) ===
+2026-07-16 23:53:05,789 [INFO] tt_v2_runner: ✅ command=workflow rc=0
+2026-07-16 23:53:05,858 - v2_bridge.py:249 - INFO: ✅ Completed v2 workflow: release
+2026-07-16 23:53:05,858 - run.py:913 - INFO: Completed run.py.
+2026-07-16 23:53:05,858 - run.py:930 - INFO: The output of the workflows is not checked and any errors will be in the logs above and in the saved log file.
+2026-07-16 23:53:05,858 - run.py:934 - INFO: If you encounter any issues please share the log file in a GitHub issue and server log if available.
+2026-07-16 23:53:05,858 - run.py:938 - INFO: This log file is saved on local machine at: /localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/run_logs/run_2026-07-16_20-46-55_id_autoport_google_gemma_4_31b_p150x4_release_release_c9HBZOmI.log

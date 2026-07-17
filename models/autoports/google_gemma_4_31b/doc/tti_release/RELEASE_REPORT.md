@@ -15,7 +15,7 @@
     "model_id": "id_autoport_google_gemma_4_31b_p150x4_release",
     "model_repo": "google/gemma-4-31B",
     "inference_engine": "vLLM",
-    "tt_metal_commit": "2be0f245e20",
+    "tt_metal_commit": "97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f",
     "vllm_commit": "44b7853",
     "model_impl": "autoport-google-gemma-4-31b"
 }
@@ -23,12 +23,16 @@
 
 ### Acceptance Criteria
 
-- Acceptance status: `PASS`
-- Model status: `EXPERIMENTAL`
+- Acceptance status: `FAIL`
 - Benchmarks: `PASS` (1/1 passed)
-- Evals: `PASS` (0/2 passed, 2 waived)
+- Evals: `FAIL` (0/2 passed, 2 failed)
 - Spec Tests: `PASS` (1/1 passed)
-- All acceptance criteria passed.
+
+#### Blockers
+
+- Mandatory eval has no published or GPU reference for this exact task/prompt contract. (2 blocks)
+  - `evals:LLM Eval — meta_ifeval`
+  - `evals:LLM Eval — meta_gpqa_cot`
 
 ---
 
@@ -37,7 +41,7 @@
 |     Task      | Tolerance |            Published Score Ref            | Score | Ratio to Published | Ratio to Reference | Accuracy Check |
 |---------------|-----------|-------------------------------------------|-------|--------------------|--------------------|----------------|
 | meta_ifeval   |      0.05 | https://huggingface.co/google/gemma-4-31B | 25.18 | N/A                | N/A                | NA             |
-| meta_gpqa_cot |      0.05 | https://huggingface.co/google/gemma-4-31B | 20.98 | N/A                | N/A                | NA             |
+| meta_gpqa_cot |      0.05 | https://huggingface.co/google/gemma-4-31B | 26.34 | N/A                | N/A                | NA             |
 
 Note: The ratio to published scores defines if eval ran roughly correctly, as the exact methodology of the model publisher cannot always be reproduced. For this reason the accuracy check is based first on being equivalent to the GPU reference within a +/- tolerance. If a value GPU reference is not available, the accuracy check is based on the direct ratio to the published score.
 

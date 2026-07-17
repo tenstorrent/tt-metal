@@ -11,7 +11,7 @@
         "model_id": "id_autoport_google_gemma_4_31b_p150x4_release",
         "model_repo": "google/gemma-4-31B",
         "inference_engine": "vLLM",
-        "tt_metal_commit": "2be0f245e20",
+        "tt_metal_commit": "97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f",
         "vllm_commit": "44b7853",
         "model_impl": "autoport-google-gemma-4-31b"
     },
@@ -47,7 +47,7 @@
                 "published_score": null,
                 "published_score_ref": "https://huggingface.co/google/gemma-4-31B",
                 "gpu_reference_score": null,
-                "score": 20.982142857142858,
+                "score": 26.339285714285715,
                 "ratio_to_published": "N/A",
                 "ratio_to_reference": "N/A",
                 "accuracy_check": 1
@@ -729,11 +729,14 @@
             }
         }
     ],
-    "acceptance_criteria": true,
-    "acceptance_blockers": {},
+    "acceptance_criteria": false,
+    "acceptance_blockers": {
+        "evals:LLM Eval \u2014 meta_ifeval": "Mandatory eval has no published or GPU reference for this exact task/prompt contract.",
+        "evals:LLM Eval \u2014 meta_gpqa_cot": "Mandatory eval has no published or GPU reference for this exact task/prompt contract."
+    },
     "acceptance_criteria_metadata": {
-        "enforcement_result": "PASS",
-        "model_status": "EXPERIMENTAL",
+        "enforcement_result": "FAIL",
+        "model_status": "",
         "categories": [
             {
                 "name": "Benchmarks",
@@ -748,17 +751,17 @@
             },
             {
                 "name": "Evals",
-                "status": "PASS",
+                "status": "FAIL",
                 "total": 2,
                 "passed": 0,
-                "failed": 0,
+                "failed": 2,
                 "na": 0,
                 "skipped": 0,
-                "blockers": {},
-                "waived": {
-                    "evals:LLM Eval \u2014 meta_ifeval": "Mandatory eval has no published or GPU reference for this exact task/prompt contract. (waived: No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base IFEval prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed.)",
-                    "evals:LLM Eval \u2014 meta_gpqa_cot": "Mandatory eval has no published or GPU reference for this exact task/prompt contract. (waived: No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base GPQA-CoT prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed.)"
-                }
+                "blockers": {
+                    "evals:LLM Eval \u2014 meta_ifeval": "Mandatory eval has no published or GPU reference for this exact task/prompt contract.",
+                    "evals:LLM Eval \u2014 meta_gpqa_cot": "Mandatory eval has no published or GPU reference for this exact task/prompt contract."
+                },
+                "waived": {}
             },
             {
                 "name": "Spec Tests",
@@ -773,5 +776,5 @@
             }
         ]
     },
-    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: `PASS` (1/1 passed)\n- Evals: `PASS` (0/2 passed, 2 waived)\n- Spec Tests: `PASS` (1/1 passed)\n- All acceptance criteria passed."
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: `FAIL`\n- Benchmarks: `PASS` (1/1 passed)\n- Evals: `FAIL` (0/2 passed, 2 failed)\n- Spec Tests: `PASS` (1/1 passed)\n\n#### Blockers\n\n- Mandatory eval has no published or GPU reference for this exact task/prompt contract. (2 blocks)\n  - `evals:LLM Eval \u2014 meta_ifeval`\n  - `evals:LLM Eval \u2014 meta_gpqa_cot`"
 }

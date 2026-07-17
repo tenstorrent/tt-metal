@@ -59,18 +59,7 @@
     },
     "tensor_cache_timeout": 3600.0,
     "system_requirements": null,
-    "known_issues": [
-      {
-        "workflow_type": "EVALS",
-        "task_name": "meta_ifeval",
-        "reason": "No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base IFEval prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed."
-      },
-      {
-        "workflow_type": "EVALS",
-        "task_name": "meta_gpqa_cot",
-        "reason": "No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base GPQA-CoT prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed."
-      }
-    ],
+    "known_issues": [],
     "eval_max_retries": 1
   },
   "system_requirements": null,

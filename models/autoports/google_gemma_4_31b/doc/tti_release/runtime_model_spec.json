@@ -85,18 +85,7 @@
       },
       "tensor_cache_timeout": 3600.0,
       "system_requirements": null,
-      "known_issues": [
-        {
-          "workflow_type": "EVALS",
-          "reason": "No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base IFEval prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed.",
-          "task_name": "meta_ifeval"
-        },
-        {
-          "workflow_type": "EVALS",
-          "reason": "No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base GPQA-CoT prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed.",
-          "task_name": "meta_gpqa_cot"
-        }
-      ],
+      "known_issues": [],
       "eval_max_retries": 1
     },
     "system_requirements": null,
@@ -112,7 +101,7 @@
       "GEMMA4_PAGE_BLOCK_SIZE": "64",
       "GEMMA4_31B_VLLM_HOST_SAMPLING_COMPAT": "1"
     },
-    "tt_metal_commit": "2be0f245e20",
+    "tt_metal_commit": "97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f",
     "vllm_commit": "44b7853",
     "hf_weights_repo": "google/gemma-4-31B",
     "param_count": 31,
@@ -123,7 +112,7 @@
     "version": "0.18.0",
     "docker_image": "ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-release-ubuntu-22.04-amd64:0.18.0-c49bb76-6b4a3a7",
     "status": "EXPERIMENTAL",
-    "code_link": "https://github.com/tenstorrent/tt-metal/tree/2be0f245e20/models/autoports/google_gemma_4_31b",
+    "code_link": "https://github.com/tenstorrent/tt-metal/tree/97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f/models/autoports/google_gemma_4_31b",
     "override_tt_config": {
       "fabric_config": "FABRIC_1D",
       "trace_region_size": 268435456,
