@@ -113,4 +113,7 @@ The inspector permission warning and `/dev/shm` warning are machine-environment 
 
 The first independent review returned `more-work-needed`; all five findings were repaired through AutoFix. A rereview then found the missing exact `(1,4)` mesh-shape guard; the constructor and two wrong-shape regressions were added. The next fresh independent rereview returned `clean-pass` with no required work. `evidence/stage_review.md` records the sequence and final verification scope.
 
-Stage-owned local commit SHA(s) are recorded below after commit creation. No push is performed. The unrelated dirty `.agents/skills/forge-functional-decoder-from-ir/SKILL.md` is explicitly excluded.
+Implementation, tests, documentation, and retained evidence were committed locally as
+`f26e3ae24e68b3e3e1517f4b8bb9da31f8f5b58f`. This work-log checkpoint is committed as
+its immediate successor at the final stage `HEAD`; neither commit is pushed. The unrelated
+dirty `.agents/skills/forge-functional-decoder-from-ir/SKILL.md` remains explicitly excluded.
