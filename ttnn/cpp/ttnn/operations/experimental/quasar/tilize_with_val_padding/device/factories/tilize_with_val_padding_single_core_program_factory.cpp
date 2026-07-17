@@ -181,9 +181,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingSingleCoreFactory::
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(a.device()->arch(), compute_config);
     if (fp32_llk_acc) {
-        std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+        std::visit([&](auto& c) { c.unpack_modes.emplace(IN, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
     }
     KernelSpec compute{
         .unique_id = COMPUTE,
