@@ -607,22 +607,6 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
     num_tile_rows = tile_shape.total_row_dim()
     num_tile_cols = tile_shape.total_col_dim()
 
-    # # Number of full 32x32 tiles (1024 datums each) that fit in the selected dest bank(s).
-    # base_max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
-
-    # if tile_shape.face_r_dim < 8:
-    #     # Tiny tiles use the sparse dest layout: dest is 1024 rows x 16-wide, but one
-    #     # data row is written every 8 dest rows, so the usable datum budget is 1/8 of
-    #     # the dense capacity. Convert that datum budget into a tile-count budget for
-    #     # this tile shape instead of assuming every tile is a full 32x32 tile.
-    #     # e.g. 16-bit / SyncFull: 16 * 1024 / 8 = 2048 datums -> 64x (1x32) or 32x (2x32).
-    #     DATUMS_PER_DENSE_TILE = 1024
-    #     sparse_datum_budget = base_max_tiles * DATUMS_PER_DENSE_TILE // 8
-    #     datums_per_tile = num_tile_rows * num_tile_cols
-    #     max_tiles_in_dest = sparse_datum_budget // datums_per_tile
-    # else:
-    #     max_tiles_in_dest = base_max_tiles
-
     return [
         [row * num_tile_rows, column * num_tile_cols]
         for row in range(1, max_tiles_in_dest + 1)

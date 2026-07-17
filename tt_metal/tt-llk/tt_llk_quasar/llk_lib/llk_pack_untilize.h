@@ -213,8 +213,24 @@ inline void _llk_pack_untilize_strided_sparse_mop_config_(const std::uint8_t buf
     load_replay_buf<0, replay_buf_len>(
         [buf_desc_id]
         {
-            TT_PACR_STRIDE(2, 1, 0, 1, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
-            TT_PACR_STRIDE(2, 1, 0, 1, 0, buf_desc_id, 0 /*pck0 sel*/, 0 /*dvalid*/);
+            TT_PACR_STRIDE(
+                2 /*src idx inc x4*/,
+                1 /*src inc mode*/,
+                0 /*src idx inc*/,
+                1 /*L1 tile idx inc*/,
+                0 /*cols 0-15 or 16-31*/,
+                buf_desc_id,
+                0 /*pck0 sel*/,
+                0 /*dvalid*/);
+            TT_PACR_STRIDE(
+                2 /*src idx inc x4*/,
+                1 /*src inc mode*/,
+                0 /*src idx inc*/,
+                1 /*L1 tile idx inc*/,
+                0 /*cols 0-15 or 16-31*/,
+                buf_desc_id,
+                0 /*pck0 sel*/,
+                0 /*dvalid*/);
         });
 
     constexpr std::uint32_t reset_src_row = TT_OP_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::ROW_SEL, p_pacr::PACK0, 0);
