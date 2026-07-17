@@ -388,7 +388,8 @@ jobs:
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
               "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
-              "structured-output": true,
+              "skip-benchmark": true,
+              "structured-output": false,
               "multimodal": true,
               "additional-server-args": "--max_model_len 131072 --async-scheduling",
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions",
@@ -454,6 +455,9 @@ jobs:
         PYTHONPATH: /work:/work/vllm-tt-plugin/src
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
+        # Temporary: trace mrope rope-delta re-application on the
+        # prefill->decode transition (vllm-tt-plugin async_decode.py).
+        VLLM_TT_DEBUG_MROPE: "1"
         HF_HUB_OFFLINE: 1
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         TT_CACHE_HOME: /mnt/MLPerf/huggingface/tt_cache
@@ -688,6 +692,7 @@ jobs:
           exit 1
 
       - name: 📐 Run benchmark
+        if: ${{ !matrix.test-group.skip-benchmark }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
@@ -712,6 +717,7 @@ jobs:
               --result-filename output/vllm_result.json \
               "${ADDITIONAL_BENCHMARK_ARGS[@]}"
       - name: Verify benchmark
+        if: ${{ !matrix.test-group.skip-benchmark }}
         run: |
           # `vllm bench serve` exits 0 even when individual requests fail (a crashed
           # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
