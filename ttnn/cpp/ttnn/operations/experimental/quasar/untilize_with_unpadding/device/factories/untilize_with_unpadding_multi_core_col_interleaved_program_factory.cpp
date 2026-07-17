@@ -118,7 +118,8 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"third_dim", third_dim},
              {"number_blocks_per_core", nblocks_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_number", "tiles_per_row", "num_blocks"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Writer kernel ----
@@ -138,7 +139,8 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
              {"unpadded_X_size", unpadded_row_size_bytes}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"core_number", "size_per_row_per_block", "blocks_per_core", "width_size"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ---- Compute kernel (full + cliff) ----
