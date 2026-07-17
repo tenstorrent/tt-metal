@@ -389,27 +389,70 @@ def test_eltwise_unary_sfpu_int(
 
 # Unary SFPU ops that require per-op input domains
 DOMAIN_MATHOPS = [
+    MathOperation.Add1,
+    MathOperation.CastFp32ToFp16a,
+    MathOperation.Cbrt,
+    MathOperation.Clamp,
+    MathOperation.Digamma,
+    MathOperation.EqualZero,
+    MathOperation.Erf,
+    MathOperation.Erfc,
     MathOperation.Erfinv,
+    MathOperation.Expm1,
+    MathOperation.Expm1Cw,
+    MathOperation.Fmod,
+    MathOperation.GreaterThanEqualZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.Hardmish,
+    MathOperation.Hardshrink,
+    MathOperation.Hardtanh,
     MathOperation.Heaviside,
+    MathOperation.I0,
+    MathOperation.I1,
+    MathOperation.Identity,
+    MathOperation.LessThanEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.Lgamma,
+    MathOperation.Lrelu,
+    MathOperation.Mish,
+    MathOperation.NotEqualZero,
+    MathOperation.Polygamma,
+    MathOperation.Prelu,
+    MathOperation.Rdiv,
+    MathOperation.Remainder,
+    MathOperation.Rpow,
+    MathOperation.RsqrtCompat,
+    MathOperation.Selu,
+    MathOperation.Sigmoid,
+    MathOperation.SigmoidAppx,
+    MathOperation.Sign,
+    MathOperation.Signbit,
+    MathOperation.Softplus,
     MathOperation.Softshrink,
     MathOperation.Softsign,
-    MathOperation.Sigmoid,
-    MathOperation.Mish,
-    MathOperation.Selu,
-    MathOperation.I0,
-    MathOperation.EqualZero,
-    MathOperation.NotEqualZero,
-    MathOperation.LessThanZero,
-    MathOperation.GreaterThanZero,
-    MathOperation.LessThanEqualZero,
-    MathOperation.GreaterThanEqualZero,
-    MathOperation.Rdiv,
-    MathOperation.Clamp,
-    MathOperation.Hardtanh,
-    MathOperation.Lrelu,
+    MathOperation.SqrtCustom,
+    MathOperation.TanhDerivative,
+    MathOperation.TanhDerivativeLut,
+    MathOperation.UnaryGe,
+    MathOperation.UnaryGt,
+    MathOperation.UnaryLe,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryMax,
+    MathOperation.UnaryMin,
+    MathOperation.UnaryPower,
+    MathOperation.Xielu,
 ]
 
+# Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
+# per-format default in passed_test.
+DOMAIN_CUSTOM_TOLERANCES = {
+    # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
+    MathOperation.SigmoidAppx: (0.13, 0.05),
+}
 
+
+# Large matrix (2 formats x ~52 ops x 2 dest_acc); nightly-gated to keep presubmit fast.
+@pytest.mark.nightly
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -432,10 +475,11 @@ def test_eltwise_unary_sfpu_domain(
         if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
             pytest.skip(reason="This combination is not supported on BH architecture")
 
-    # Pull the safe per-op input domain and clip it to where the op is defined
-    # (erfinv: |x| < 1). Other ops have no undefined holes, so this is a no-op.
+    # Per-op input domain, clipped to where the op is defined (e.g. erfinv: |x| < 1).
     specs = for_op(mathop, formats.input_format)
     spec_A = exclude_undefined(mathop, specs.spec_A)
+
+    custom_atol, custom_rtol = DOMAIN_CUSTOM_TOLERANCES.get(mathop, (None, None))
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -446,6 +490,8 @@ def test_eltwise_unary_sfpu_domain(
         FastMode.No,
         input_dimensions,
         spec_A=spec_A,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
     )
 
 
@@ -469,8 +515,7 @@ def test_eltwise_unary_sfpu_signbit(
         if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
             pytest.skip(reason="This combination is not supported on BH architecture")
 
-    # signbit depends purely on the sign bit, so sample a symmetric range spanning
-    # both signs (staying away from 0 to sidestep -0.0 / rounding ambiguity).
+    # Sample both signs, avoiding 0 to sidestep -0.0 / rounding ambiguity.
     spec_A = StimuliSpec.uniform(intervals=[(-100.0, -0.5), (0.5, 100.0)])
 
     eltwise_unary_sfpu(
@@ -485,6 +530,121 @@ def test_eltwise_unary_sfpu_signbit(
     )
 
 
+# Predicate ops (write 1.0/0.0). Finite-only stimuli give constant output (PCC
+# undefined), so drive them with a spec interleaving +inf / -inf / nan and finite values.
+ISINF_ISNAN_MATHOPS = [
+    MathOperation.Isinf,
+    MathOperation.Isposinf,
+    MathOperation.Isneginf,
+    MathOperation.Isnan,
+    MathOperation.Isfinite,
+]
+
+
+def _isinf_isnan_stimuli_spec():
+    def dist(size, dtype, generator):
+        # Finite ramp in [-5, 5] with regular +inf / -inf / nan injected so every
+        # face carries all special classes plus finite values.
+        idx = torch.arange(size, dtype=torch.float32)
+        x = (idx % 11) - 5.0
+        x[0::7] = float("inf")
+        x[1::7] = float("-inf")
+        x[2::7] = float("nan")
+        return x.to(dtype)
+
+    return StimuliSpec(distribution=dist, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    approx_mode=[ApproximationMode.No],
+    mathop=ISINF_ISNAN_MATHOPS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_isinf_isnan(
+    formats: list[InputOutputFormat],
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
+        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
+            pytest.skip(reason="This combination is not supported on BH architecture")
+
+    # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) doesn't preserve
+    # -inf/nan, mangling is_neg/is_nan; skip — covered by the other input cases.
+    if (
+        formats.input_format == DataFormat.Float16_b
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip(
+            reason="bf16->fp32 dest unpack does not preserve -inf/nan special values"
+        )
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_isinf_isnan_stimuli_spec(),
+    )
+
+
+def _logical_not_stimuli_spec():
+    # logical_not(x) = (x == 0) ? 1 : 0. Random floats never hit 0, so force a
+    # regular subset to exactly 0.0 so both branches fire and output is non-constant.
+    def dist(size, dtype, generator):
+        idx = torch.arange(size, dtype=torch.float32)
+        x = (idx % 7) - 3.0  # spans [-3, 3], hits 0 once per 7 elements
+        x[0::3] = 0.0  # additional guaranteed zeros
+        return x.to(dtype)
+
+    return StimuliSpec(distribution=dist, seed=0)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    approx_mode=[ApproximationMode.No],
+    mathop=[MathOperation.LogicalNotUnary],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_logical_not(
+    formats: list[InputOutputFormat],
+    approx_mode: ApproximationMode,
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
+        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
+            pytest.skip(reason="This combination is not supported on BH architecture")
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        approx_mode,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=_logical_not_stimuli_spec(),
+    )
+
+
 def eltwise_unary_sfpu(
     test_name,
     formats: list[InputOutputFormat],
@@ -494,6 +654,8 @@ def eltwise_unary_sfpu(
     fast_mode: FastMode,
     input_dimensions: list[int],
     spec_A=None,
+    custom_atol=None,
+    custom_rtol=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -551,7 +713,7 @@ def eltwise_unary_sfpu(
             tile_count_res=tile_cnt_A,
         ),
         dest_acc=dest_acc,
-        # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
+        # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)
         unpack_to_dest=(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
@@ -569,7 +731,11 @@ def eltwise_unary_sfpu(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor,
+        res_tensor,
+        formats.output_format,
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
     ), "Assert against golden failed"
 
 
@@ -652,8 +818,8 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # When clamp_negative = False require inputs < -88 to be negative (but not necessarily correct),
-    # and don't include them in the resulting isclose check.
+    # clamp_negative=False: require inputs < -88 to be negative (not necessarily
+    # correct) and exclude them from the isclose check.
     if not clamp_negative:
         assert torch.all(
             res_tensor[:5] <= 0

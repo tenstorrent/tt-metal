@@ -136,11 +136,62 @@ class MathOperation(Enum):
     ReluMax = OpSpec("relu_max", MathOpType.SFPU_UNARY)
     ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)
     Lrelu = OpSpec("lrelu", MathOpType.SFPU_UNARY)
+    Erf = OpSpec("erf", MathOpType.SFPU_UNARY)
+    Erfc = OpSpec("erfc", MathOpType.SFPU_UNARY)
+    Expm1 = OpSpec("expm1", MathOpType.SFPU_UNARY)
+    Cbrt = OpSpec("cbrt", MathOpType.SFPU_UNARY)
+    I1 = OpSpec("i1", MathOpType.SFPU_UNARY)
+    Sign = OpSpec("sign", MathOpType.SFPU_UNARY)
+    TanhDerivative = OpSpec("tanh_derivative", MathOpType.SFPU_UNARY)
+    # Legacy LUT variant of tanh'(x): 1 - tanh(x)^2 with tanh from the piecewise
+    # LUT (distinct kernel path from the accurate sech2 TanhDerivative above).
+    TanhDerivativeLut = OpSpec("tanh_derivative_lut", MathOpType.SFPU_UNARY)
+    # Legacy-compat rsqrt (reciprocal-root method); distinct kernel path from the
+    # accurate Rsqrt (which uses legacy_compat=false).
+    RsqrtCompat = OpSpec("rsqrt_compat", MathOpType.SFPU_UNARY)
+    # Component-wise expm1 shared helper (used by ELU/CELU/SELU); distinct from the
+    # standalone Expm1 kernel.
+    Expm1Cw = OpSpec("expm1_cw", MathOpType.SFPU_UNARY)
+    Hardmish = OpSpec("hardmish", MathOpType.SFPU_UNARY)
+    Lgamma = OpSpec("lgamma", MathOpType.SFPU_UNARY)
+    Digamma = OpSpec("digamma", MathOpType.SFPU_UNARY)
+    Identity = OpSpec("identity", MathOpType.SFPU_UNARY)
+    Prelu = OpSpec("prelu", MathOpType.SFPU_UNARY)
+    Rpow = OpSpec("rpow", MathOpType.SFPU_UNARY)
+    UnaryPower = OpSpec("power", MathOpType.SFPU_UNARY)
+    Fmod = OpSpec("fmod", MathOpType.SFPU_UNARY)
+    Remainder = OpSpec("remainder", MathOpType.SFPU_UNARY)
+    UnaryGt = OpSpec("unary_gt", MathOpType.SFPU_UNARY)
+    UnaryLt = OpSpec("unary_lt", MathOpType.SFPU_UNARY)
+    UnaryGe = OpSpec("unary_ge", MathOpType.SFPU_UNARY)
+    UnaryLe = OpSpec("unary_le", MathOpType.SFPU_UNARY)
+    UnaryMax = OpSpec("unary_max", MathOpType.SFPU_UNARY)
+    UnaryMin = OpSpec("unary_min", MathOpType.SFPU_UNARY)
+    Polygamma = OpSpec("polygamma", MathOpType.SFPU_UNARY)
+    Xielu = OpSpec("xielu", MathOpType.SFPU_UNARY)
+    Hardshrink = OpSpec("hardshrink", MathOpType.SFPU_UNARY)
+    Softplus = OpSpec("softplus", MathOpType.SFPU_UNARY)
+    SigmoidAppx = OpSpec("sigmoid_appx", MathOpType.SFPU_UNARY)
+    SqrtCustom = OpSpec("sqrt_custom", MathOpType.SFPU_UNARY)
+    Add1 = OpSpec("add1", MathOpType.SFPU_UNARY)
+    CastFp32ToFp16a = OpSpec("cast_fp32_to_fp16a", MathOpType.SFPU_UNARY)
+    # isinf/isnan family: cpp_enum_value must match the SfpuType enumerator name
+    # so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
+    Isinf = OpSpec("isinf", MathOpType.SFPU_UNARY)
+    Isposinf = OpSpec("isposinf", MathOpType.SFPU_UNARY)
+    Isneginf = OpSpec("isneginf", MathOpType.SFPU_UNARY)
+    Isnan = OpSpec("isnan", MathOpType.SFPU_UNARY)
+    Isfinite = OpSpec("isfinite", MathOpType.SFPU_UNARY)
     AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
     SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     AbsInt32 = OpSpec("abs_int32", MathOpType.SFPU_UNARY)
     BitwiseNot = OpSpec("bitwise_not", MathOpType.SFPU_UNARY)
+    # logical_not(x) = (x == 0) ? 1 : 0, exercised on the float (DEFAULT-layout)
+    # path. cpp_enum_value must match the SfpuType enumerator name.
+    # NOTE: main added `LogicalNot` with the same cpp value; keep both so
+    # references to either name resolve (equal values alias in Python enums).
     LogicalNot = OpSpec("logical_not_unary", MathOpType.SFPU_UNARY)
+    LogicalNotUnary = OpSpec("logical_not_unary", MathOpType.SFPU_UNARY)
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
@@ -169,6 +220,25 @@ class MathOperation(Enum):
     SfpuElwGe = OpSpec("GE", MathOpType.SFPU_BINARY)
     SfpuElwEq = OpSpec("EQ", MathOpType.SFPU_BINARY)
     SfpuElwNe = OpSpec("NE", MathOpType.SFPU_BINARY)
+    # Binary SFPU kernels wired up for functional coverage (no dedicated production
+    # BinaryOp; the enum values live at the end of ckernel::BinaryOp).
+    SfpuBinaryMax = OpSpec("MAX", MathOpType.SFPU_BINARY)
+    SfpuBinaryMin = OpSpec("MIN", MathOpType.SFPU_BINARY)
+    SfpuBinaryFmod = OpSpec("FMOD", MathOpType.SFPU_BINARY)
+    SfpuBinaryRemainder = OpSpec("REMAINDER", MathOpType.SFPU_BINARY)
+    SfpuBitwiseAnd = OpSpec("BITWISE_AND", MathOpType.SFPU_BINARY)
+    SfpuBitwiseOr = OpSpec("BITWISE_OR", MathOpType.SFPU_BINARY)
+    SfpuBitwiseXor = OpSpec("BITWISE_XOR", MathOpType.SFPU_BINARY)
+    SfpuDivInt32 = OpSpec("DIV_INT32", MathOpType.SFPU_BINARY)
+    SfpuDivInt32Floor = OpSpec("DIV_INT32_FLOOR", MathOpType.SFPU_BINARY)
+    SfpuGcd = OpSpec("GCD", MathOpType.SFPU_BINARY)
+    SfpuLcm = OpSpec("LCM", MathOpType.SFPU_BINARY)
+    SfpuRsubInt32 = OpSpec("RSUB_INT32", MathOpType.SFPU_BINARY)
+    SfpuMask = OpSpec("MASK", MathOpType.SFPU_BINARY)
+    SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
+    SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
+    SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
+    SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS

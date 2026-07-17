@@ -26,12 +26,15 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
+    INPUT_DIMENSIONS,
     MATH_FIDELITY,
     MATH_OP,
+    NUM_FACES,
+    TEST_FACE_DIMS,
     TILE_COUNT,
     TemplateParameter,
-    generate_input_dim,
 )
+from helpers.tile_constants import get_tile_params
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -44,6 +47,11 @@ class CT_DIM(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr std::uint32_t CT_DIM = {self.ct_dim};"
+
+
+# Row height of the srcA operand. 32 -> full 32x32 tiles (num_faces=4);
+# 16 -> 16x32 "tiny tiles" (one face-row, num_faces=2).
+_TILE_ROWS = [32, 16]
 
 
 @parametrize(
@@ -64,8 +72,8 @@ class CT_DIM(TemplateParameter):
         MathFidelity.HiFi4,
     ],
     broadcast_type=[BroadcastType.Column],
-    input_dimensions_A=[[32, w] for w in range(32, 257, 32)],
-    input_dimensions_B=[[32, 32]],
+    tile_rows=_TILE_ROWS,
+    input_width=list(range(32, 257, 32)),
 )
 def test_eltwise_bcast_col_custom(
     cpp_source,
@@ -74,8 +82,8 @@ def test_eltwise_bcast_col_custom(
     dest_acc,
     math_fidelity,
     broadcast_type,
-    input_dimensions_A,
-    input_dimensions_B,
+    tile_rows,
+    input_width,
 ):
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
@@ -87,12 +95,24 @@ def test_eltwise_bcast_col_custom(
     ):
         pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
 
+    input_dimensions_A = [tile_rows, input_width]
+    input_dimensions_B = [tile_rows, 32]
+
+    # 32x32 tile => num_faces=4, 16x32 tiny tile => num_faces=2.
+    tile_dims = [tile_rows, 32]
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
+    num_faces = num_faces_r_dim * num_faces_c_dim
+
     ct_dim = input_dimensions_A[1] // 32
+    # Each column tile is tile_rows x 32; the operand is a single row of ct_dim tiles.
+    rt_dim = 1
     logger.info(
-        "Running ct_dim=%d  srcA=%s  srcB=%s",
+        "Running ct_dim=%d  srcA=%s  srcB=%s  num_faces=%d  face_r_dim=%d",
         ct_dim,
         input_dimensions_A,
         input_dimensions_B,
+        num_faces,
+        face_r_dim,
     )
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -100,13 +120,24 @@ def test_eltwise_bcast_col_custom(
         input_dimensions_A=input_dimensions_A,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions_B,
+        tile_dimensions=tile_dims,
     )
 
     src_A_tilized = tilize_block(
-        src_A, input_dimensions_A, formats.input_format
+        src_A,
+        input_dimensions_A,
+        formats.input_format,
+        num_faces=num_faces,
+        tile_dimensions=tile_dims,
+        face_r_dim=face_r_dim,
     ).flatten()
     src_B_tilized = tilize_block(
-        src_B, input_dimensions_B, formats.input_format
+        src_B,
+        input_dimensions_B,
+        formats.input_format,
+        num_faces=num_faces,
+        tile_dimensions=tile_dims,
+        face_r_dim=face_r_dim,
     ).flatten()
 
     broadcast_golden = get_golden_generator(BroadcastGolden)
@@ -114,13 +145,18 @@ def test_eltwise_bcast_col_custom(
         broadcast_type,
         src_B_tilized,
         formats.input_format,
-        num_faces=4,
+        num_faces=num_faces,
         tile_cnt=tile_cnt_B,
-        face_r_dim=16,
+        face_r_dim=face_r_dim,
     )
 
     src_B_golden = untilize_block(
-        src_B_broadcasted_tilized, formats.input_format, input_dimensions_B
+        src_B_broadcasted_tilized,
+        formats.input_format,
+        input_dimensions_B,
+        num_faces=num_faces,
+        tile_dimensions=tile_dims,
+        face_r_dim=face_r_dim,
     ).flatten()
 
     src_B_2d = src_B_golden.view(input_dimensions_B[0], input_dimensions_B[1])
@@ -137,12 +173,21 @@ def test_eltwise_bcast_col_custom(
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            generate_input_dim(input_dimensions_A, input_dimensions_A),
+            INPUT_DIMENSIONS(
+                full_rt_dim=rt_dim,
+                full_ct_dim=ct_dim,
+                block_ct_dim=ct_dim,
+                block_rt_dim=rt_dim,
+            ),
             MATH_OP(mathop=mathop),
             BROADCAST_TYPE(broadcast_type),
             CT_DIM(ct_dim),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            TILE_COUNT(tile_cnt_A),
+            NUM_FACES(num_faces, num_faces, num_faces),
+            TEST_FACE_DIMS(face_r_dim),
+        ],
         variant_stimuli=StimuliConfig(
             src_A_tilized,
             formats.input_format,
@@ -152,13 +197,22 @@ def test_eltwise_bcast_col_custom(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dims,
+            use_dense_tile_dimensions=True,
         ),
         dest_acc=dest_acc,
     )
     res_from_L1 = configuration.run().result
 
     res_from_L1 = untilize_block(
-        res_from_L1, formats.output_format, input_dimensions_A
+        res_from_L1,
+        formats.output_format,
+        input_dimensions_A,
+        num_faces=num_faces,
+        tile_dimensions=tile_dims,
+        face_r_dim=face_r_dim,
     ).flatten()
 
     assert len(res_from_L1) == len(
@@ -169,8 +223,9 @@ def test_eltwise_bcast_col_custom(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     # Spot-check: log a few elements per tile to verify srcA <op> bcast(srcB)
+    tile_elems = tile_rows * 32
     for t in range(ct_dim):
-        tile_start = t * 32 * 32
+        tile_start = t * tile_elems
         a_sample = src_A[tile_start : tile_start + 4].tolist()
         b_sample = src_B_golden_expanded[tile_start : tile_start + 4].tolist()
         g_sample = golden_tensor[tile_start : tile_start + 4].tolist()
