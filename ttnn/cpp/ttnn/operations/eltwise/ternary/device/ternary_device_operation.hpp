@@ -60,8 +60,10 @@ struct TernaryDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
-    // scalar_input_a/b are excluded from the hash; re-applied each dispatch. Mirrors the factory.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses),
+    // since the hash excludes scalars/volume. See the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output,

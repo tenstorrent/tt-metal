@@ -1391,41 +1391,16 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> TernaryDeviceOperation::get_dynamic_runtime_args(
+void TernaryDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // scalar_input_a / scalar_input_b are EXCLUDED from compute_program_hash (so calls differing
-    // only in a scalar cache-hit instead of recompiling).  On a cache hit the descriptor is never
-    // rebuilt, so the scalar baked at first miss would otherwise stay frozen.  Re-apply it here.
-    //
-    // MUST mirror create_descriptor()/populate_runtime_arguments() exactly:
-    //   - kernels are pushed reader(0), writer(1), compute(2)  -> scalar lives in kernel 2.
-    //   - compute per-core runtime args are {num_tiles_per_core, freq, counter, scalar_arg}
-    //     -> scalar is arg_idx 3.
-    //   - the scalar is written only to WORK cores (core_group_1/core_group_2); noop cores get
-    //     all-zero compute args and do no work, so they are left untouched.
-    // The packed value and the (cores, work-group) partition both come from the same helpers used
-    // by populate_runtime_arguments(), so this stays a by-construction exact mirror.
-    constexpr uint32_t kComputeKernelIdx = 2;
-    constexpr uint32_t kScalarArgIdx = 3;
-
-    const uint32_t scalar_arg = CMAKE_UNIQUE_NAMESPACE::pack_compute_scalar_arg(operation_attributes, output.dtype());
-
-    auto partition = CMAKE_UNIQUE_NAMESPACE::compute_core_partition(operation_attributes, tensor_args, output);
-
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(partition.cores.size());
-    for (uint32_t i = 0; i < partition.num_cores_total; ++i) {
-        const auto& core = partition.cores[i];
-        const bool is_work_core = partition.core_group_1.contains(core) || partition.core_group_2.contains(core);
-        if (!is_work_core) {
-            continue;  // noop core: compute arg[3] stays 0, mirrors create_descriptor()
-        }
-        dynamic_args.push_back({kComputeKernelIdx, core, kScalarArgIdx, scalar_arg});
-    }
-    return dynamic_args;
+    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
+    // args + tensor-backed CB addresses to the cached program. No rebuild; supersedes get_dynamic/resolve_bindings.
+    auto desc = TernaryProgramFactory::create_descriptor(operation_attributes, tensor_args, output);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::operations::ternary
