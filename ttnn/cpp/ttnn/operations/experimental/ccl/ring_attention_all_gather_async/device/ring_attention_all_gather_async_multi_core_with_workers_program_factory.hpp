@@ -32,6 +32,14 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
 
 namespace ttnn {
 
+// Sparse cyclic predecessor exchange used by chunked GPT-OSS sliding attention.
+// Each device sends one local tile-row range to its logical next device and
+// receives the predecessor's corresponding range into compact output slot 0.
+struct RingAttentionNeighborHaloConfig {
+    uint32_t send_to_next_start_Ht;
+    uint32_t send_to_next_count_Ht;
+};
+
 namespace ring_attention_all_gather_async_detail {
 
 // All-gather reader runtime-arg layout: [0]=dim, [1]=ring_size, [2]=out_ready_sem,
@@ -46,11 +54,17 @@ constexpr uint32_t kInputBatchBaseFieldOffset = 7;
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
 // slab prefix so the gather moves only kv_actual-sized data, not the whole oversized cache.
 constexpr uint32_t kValidPagesFieldOffset = 8;
+constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
+constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
+constexpr uint32_t kNeighborReaderInputTileEndFieldOffset = 3;
+constexpr uint32_t kNeighborReaderInputBatchBaseFieldOffset = 4;
 
-inline uint32_t input_batch_base_pages(
-    uint32_t batch_idx, uint32_t num_heads, uint32_t tensor_height_tiles, uint32_t tensor_width_tiles) {
-    return batch_idx * num_heads * tensor_height_tiles * tensor_width_tiles;
-}
+constexpr uint32_t kNeighborWriterRuntimeArgHeaderCount = 3;
+constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
+constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
+constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
 
 }  // namespace ring_attention_all_gather_async_detail
 
@@ -89,5 +103,24 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // std::nullopt => gather the full input (default). The fused ring_joint_sdpa path also re-patches
     // this per dispatch on cache hits (see apply_ring_joint_scalar_runtime_args).
     std::optional<uint32_t> gather_valid_Ht = std::nullopt);
+
+void ring_attention_neighbor_halo_exchange_helper(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const std::vector<Tensor>& input_tensors,
+    const MeshCoordinate& target_device_coord,
+    const MeshCoordinate& forward_device_coord,
+    std::vector<Tensor>& output_tensors,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphores,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const ttnn::experimental::ccl::AllGatherFusedOpSignaler& fused_op_signaler,
+    CoreCoord core_grid_offset,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    std::optional<uint32_t> input_batch_slice_idx,
+    std::optional<uint32_t> gather_valid_Ht,
+    const RingAttentionNeighborHaloConfig& halo);
 
 }  // namespace ttnn

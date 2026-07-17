@@ -93,7 +93,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_actual_isl = std::nullopt);
+    std::optional<uint32_t> kv_actual_isl = std::nullopt,
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
+    std::optional<uint32_t> sliding_window_size = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

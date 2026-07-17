@@ -398,8 +398,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;                               // Single column of values in each iteration
-    uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
+    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    // Streaming compute broadcasts the per-head scalar directly; legacy compute consumes one
+    // expanded first-column tile per Q row.
+    uint32_t attention_sink_tiles = use_attention_sink ? (use_streaming_compute ? 1 : Sq_chunk_t) : 0;
 
     // log all values
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);

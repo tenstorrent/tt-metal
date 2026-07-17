@@ -52,7 +52,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<uint32_t> sliding_window_size) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -83,7 +85,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        attention_sink,
+        sliding_window_size);
     return outputs;
 }
 
@@ -578,6 +582,14 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            attention_sink (ttnn.Tensor, optional): Per-query-head attention sink with logical shape
+                [1 x nqh x 1 x 1], sharded across the tensor-parallel head axis and replicated across
+                the sequence-parallel ring. The ring-attention sink path requires BF16 and
+                the GPT-OSS sliding-window specialization described below. Defaults to None.
+            sliding_window_size (int, optional): Causal attention window in tokens. The ring reader and
+                compute kernels prune K chunks outside the window. Ring attention currently supports the
+                GPT-OSS specialization: a 128-token window, local 8Q:1K:1V heads with D64, BF16 Q,
+                BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -628,7 +640,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

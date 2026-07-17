@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
@@ -29,6 +30,12 @@ using namespace experimental::ccl;
 namespace {
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
+uint32_t sliding_halo_token_count(uint32_t sliding_window_size, uint32_t k_chunk_size) {
+    return ring_joint::chunked_sliding_halo_tile_rows(
+               sliding_window_size, tt::constants::TILE_HEIGHT, k_chunk_size / tt::constants::TILE_HEIGHT) *
+           tt::constants::TILE_HEIGHT;
+}
 
 // Chunked causal prefill does not have the same valid-pair geometry as a full causal
 // Sq x Sk attention window. A new Q chunk attends to all prior K/V tokens as a full
@@ -61,11 +68,41 @@ int compute_chunked_causal_sdpa_ideal_cycles(
         batch_size, num_heads_q, valid_pairs_per_device, DH, DV, math_fidelity, num_cores);
 }
 
+int compute_sliding_window_sdpa_ideal_cycles(
+    uint32_t batch_size,
+    uint32_t num_heads_q,
+    uint32_t q_rows_per_device,
+    uint32_t ring_size,
+    uint32_t q_global_start,
+    uint32_t window_size,
+    uint32_t DH,
+    uint32_t DV,
+    tt::tt_metal::MathFidelity math_fidelity,
+    int num_cores) {
+    if (ring_size == 0 || num_cores <= 0 || q_rows_per_device == 0 || window_size == 0) {
+        return 0;
+    }
+
+    const uint64_t global_q_rows = static_cast<uint64_t>(q_rows_per_device) * ring_size;
+    const auto valid_pair_prefix = [window_size](uint64_t q_end) -> double {
+        const uint64_t ramp_rows = std::min<uint64_t>(q_end, window_size);
+        const double ramp_pairs = static_cast<double>(ramp_rows) * static_cast<double>(ramp_rows + 1) / 2.0;
+        const double steady_pairs = static_cast<double>(q_end - ramp_rows) * static_cast<double>(window_size);
+        return ramp_pairs + steady_pairs;
+    };
+    const double valid_pairs_global =
+        valid_pair_prefix(static_cast<uint64_t>(q_global_start) + global_q_rows) - valid_pair_prefix(q_global_start);
+    const double valid_pairs_per_device = valid_pairs_global / static_cast<double>(ring_size);
+    return operations::transformer::sdpa::compute_sdpa_ideal_cycles_for_valid_pairs(
+        batch_size, num_heads_q, valid_pairs_per_device, DH, DV, math_fidelity, num_cores);
+}
+
 void validate_ring_joint_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& operation_attributes,
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args,
     // Single-slot gather writes one cache slot to gathered slot 0, so allow a batch-1 output.
-    bool allow_single_slot_output) {
+    bool allow_single_slot_output,
+    std::optional<uint32_t> compact_gather_dim_minimum) {
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
@@ -133,15 +170,15 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
             expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
             for (int d = 0; d < static_cast<int>(output_shape.rank()); ++d) {
                 if (d == operation_attributes.dim) {
+                    const uint32_t minimum =
+                        compact_gather_dim_minimum.value_or(static_cast<uint32_t>(expected_output_shape[d]));
                     TT_FATAL(
-                        output_shape[d] >= expected_output_shape[d],
-                        "Output tensor {} gather dim {} too small: got {}, expected >= {} "
-                        "(= input_dim * ring_size {})",
+                        output_shape[d] >= minimum,
+                        "Output tensor {} gather dim {} too small: got {}, expected >= {}",
                         i,
                         d,
                         output_shape[d],
-                        expected_output_shape[d],
-                        operation_attributes.ring_size);
+                        minimum);
                 } else if (allow_single_slot_output && d == 0) {
                     // Single-slot gather targets gathered slot 0: batch-1 expected, full-batch also ok.
                     TT_FATAL(
@@ -223,6 +260,24 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             new_actual_isl,
             chunk_capacity);
     }
+
+    if (args.has_sliding_window() && tensor_args.is_chunked()) {
+        const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
+        TT_FATAL(
+            args.logical_n >= 2 * q_group_size,
+            "Chunked sliding attention requires a complete predecessor and current Q group");
+        TT_FATAL(
+            args.logical_n % q_group_size == 0,
+            "Chunked sliding attention requires logical_n to end on a complete ring-group boundary. Got "
+            "logical_n={}, group size={}",
+            args.logical_n,
+            q_group_size);
+        if (args.has_kv_pad_rotation()) {
+            TT_FATAL(
+                args.logical_n - args.kv_actual_isl.value() == q_group_size,
+                "Chunked sliding KV-pad rotation requires the new Q chunk to fill exactly one ring group");
+        }
+    }
 }
 
 }  // namespace
@@ -231,6 +286,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
+
+    TT_FATAL(
+        !args.sliding_window_size.has_value() || args.has_sliding_window(),
+        "RingJointSDPA sliding_window_size must be greater than zero when provided");
 
     const bool has_input_v = tensor_args.input_v.has_value();
     const bool has_gathered_v = tensor_args.gathered_v.has_value();
@@ -242,6 +301,37 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             tensor_args.joint_v.has_value() == has_joint_tensors,
         "Joint tensors must be provided all together or omitted altogether");
 
+    if (tensor_args.attention_sink.has_value()) {
+        const auto& attention_sink = tensor_args.attention_sink.value();
+        TT_FATAL(
+            args.has_sliding_window(),
+            "RingJointSDPA attention_sink is supported only by the GPT-OSS sliding-window specialization");
+        TT_FATAL(attention_sink.storage_type() == StorageType::DEVICE, "Attention sink tensor must be on device");
+        TT_FATAL(attention_sink.buffer() != nullptr, "Attention sink tensor must be allocated on device");
+        TT_FATAL(
+            input_tensor_q.device() == attention_sink.device(),
+            "Attention sink must be on the same mesh device as Q/K/V");
+        TT_FATAL(attention_sink.layout() == Layout::TILE, "Attention sink must be tilized");
+        TT_FATAL(attention_sink.dtype() == DataType::BFLOAT16, "GPT-OSS attention sink must be BF16");
+        TT_FATAL(
+            attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Attention sink must be in DRAM");
+
+        const auto& sink_shape = attention_sink.logical_shape();
+        const auto& q_shape = input_tensor_q.logical_shape();
+        TT_FATAL(sink_shape.rank() == 4, "Attention sink must have rank 4, got rank {}", sink_shape.rank());
+        TT_FATAL(sink_shape[0] == 1, "Attention sink batch dimension must be 1, got {}", sink_shape[0]);
+        TT_FATAL(
+            sink_shape[1] == q_shape[1],
+            "Attention sink local num_heads must match Q. Got sink: {}, Q: {}",
+            sink_shape[1],
+            q_shape[1]);
+        TT_FATAL(sink_shape[2] == 1, "Attention sink sequence dimension must be 1, got {}", sink_shape[2]);
+        TT_FATAL(sink_shape[3] == 1, "Attention sink hidden dimension must be 1, got {}", sink_shape[3]);
+        TT_FATAL(
+            !get_fp32_dest_acc_en(args.compute_kernel_config),
+            "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
+    }
+
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};
     if (has_gathered_v) {
         sdpa_input_tensors.push_back(tensor_args.gathered_v.value());
@@ -252,8 +342,16 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         sdpa_input_tensors.push_back(tensor_args.joint_v.value());
     }
 
+    std::optional<uint32_t> compact_gather_dim_minimum;
+    if (args.has_sliding_window()) {
+        compact_gather_dim_minimum =
+            sliding_halo_token_count(args.sliding_window_size.value(), args.get_k_chunk_size());
+    }
     validate_ring_joint_all_gather_on_program_cache_miss(
-        args.all_gather_operation_attributes, args.all_gather_tensor_args, args.has_indexed_kv_cache());
+        args.all_gather_operation_attributes,
+        args.all_gather_tensor_args,
+        args.has_indexed_kv_cache(),
+        compact_gather_dim_minimum);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -318,7 +416,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NKH = k_shape[1];
     const auto N_local_q = q_shape[2];
     const auto N_local_kv = tensor_args.local_kv_seq_len();
-    const auto N_global = k_shape[2];
+    const auto gathered_buffer_n = k_shape[2];
+    const auto N_global = args.has_sliding_window() ? N_local_kv * args.ring_size : gathered_buffer_n;
     const auto L = has_joint_tensors ? joint_q_shape[2] : 0;
     const auto DH = q_shape[3];
     const uint32_t v_local_seq =
@@ -327,6 +426,77 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     auto q_chunk_size = args.get_q_chunk_size();
     auto k_chunk_size = args.get_k_chunk_size();
     const bool has_kv_pad_rotation = args.has_kv_pad_rotation();
+
+    if (args.has_sliding_window()) {
+        constexpr uint32_t gpt_oss_window_size = 128;
+        constexpr uint32_t gpt_oss_local_q_heads = 8;
+        constexpr uint32_t gpt_oss_local_kv_heads = 1;
+        constexpr uint32_t gpt_oss_head_dim = 64;
+        const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
+        const bool supported_k_chunk = k_chunk_size == 128;
+        TT_FATAL(
+            args.sliding_window_size.value() == gpt_oss_window_size,
+            "Ring sliding-window attention supports the GPT-OSS {}-token window, got {}",
+            gpt_oss_window_size,
+            args.sliding_window_size.value());
+        TT_FATAL(
+            args.ring_size == 4 || args.ring_size == 8,
+            "GPT-OSS sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
+            args.ring_size);
+        TT_FATAL(
+            B == 1 || (B == 2 && args.ring_size == 8),
+            "GPT-OSS sliding attention supports batch 1 or the SP8 batch-2 surrogate, got B={} SP{}",
+            B,
+            args.ring_size);
+        TT_FATAL(
+            NQH == gpt_oss_local_q_heads && NKH == gpt_oss_local_kv_heads && tensor_args.v_num_heads() == 1,
+            "GPT-OSS sliding attention requires local heads 8Q:1K:1V, got {}Q:{}K:{}V",
+            NQH,
+            NKH,
+            tensor_args.v_num_heads());
+        TT_FATAL(
+            DH == gpt_oss_head_dim && tensor_args.v_head_dim(args.latent_v_head_dim) == gpt_oss_head_dim,
+            "GPT-OSS sliding attention requires Q/K/V head dimension {}, got Q={} V={}",
+            gpt_oss_head_dim,
+            DH,
+            tensor_args.v_head_dim(args.latent_v_head_dim));
+        TT_FATAL(has_input_v && has_gathered_v && !has_latent_v, "GPT-OSS sliding attention requires separate K and V");
+        TT_FATAL(
+            input_tensor_q.dtype() == DataType::BFLOAT16 && tensor_args.input_k.dtype() == DataType::BFLOAT8_B &&
+                tensor_args.input_v->dtype() == DataType::BFLOAT8_B &&
+                gathered_input_tensor_k.dtype() == DataType::BFLOAT8_B &&
+                tensor_args.gathered_v->dtype() == DataType::BFLOAT8_B,
+            "GPT-OSS sliding attention requires BF16 Q and BFP8_B K/V");
+        TT_FATAL(
+            gathered_buffer_n < N_local_kv * args.ring_size,
+            "GPT-OSS sliding attention requires a compact halo buffer, got gathered rows {} for {} global rows",
+            gathered_buffer_n,
+            N_local_kv * args.ring_size);
+        TT_FATAL(
+            supported_q_chunk && supported_k_chunk,
+            "GPT-OSS sliding attention supports Q chunks 64/128 and K chunk 128, got Q={} K={}",
+            q_chunk_size,
+            k_chunk_size);
+        TT_FATAL(args.is_causal, "Ring sliding-window attention is currently causal-only");
+        TT_FATAL(is_chunked, "Ring sliding-window attention requires chunked prefill");
+        TT_FATAL(!args.is_balanced, "Chunked ring sliding-window attention requires is_balanced=false");
+        TT_FATAL(!args.is_cross, "Ring sliding-window attention does not support cross attention");
+        TT_FATAL(L == 0, "Ring sliding-window attention does not support joint tokens");
+        const uint32_t halo_tokens = sliding_halo_token_count(gpt_oss_window_size, k_chunk_size);
+        TT_FATAL(
+            N_local_q % q_chunk_size == 0,
+            "q_chunk_size must divide the per-device Q slab for chunked sliding attention");
+        TT_FATAL(
+            N_local_q % k_chunk_size == 0,
+            "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
+        TT_FATAL(
+            halo_tokens <= N_local_q,
+            "Chunked GPT-OSS halo {} exceeds the per-device Q slab {}",
+            halo_tokens,
+            N_local_q);
+    } else {
+        TT_FATAL(B == 1, "Non-sliding RingJointSDPA supports batch size 1, got B={}", B);
+    }
 
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
 
@@ -650,6 +820,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     if (tensor_args.gathered_v.has_value()) {
         input_tensors.emplace_back(tensor_args.gathered_v.value());
     }
+    if (tensor_args.attention_sink.has_value()) {
+        input_tensors.emplace_back(tensor_args.attention_sink.value());
+    }
 
     auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
     auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
@@ -676,6 +849,26 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const uint32_t DH = q_shape[3];
     const uint32_t DV = tensor_args.v_head_dim(args.latent_v_head_dim);
+
+    if (args.has_sliding_window() && !has_joint_tensors) {
+        const uint32_t q_chunks = tt::div_up(N_local, args.get_q_chunk_size());
+        const uint32_t scheduled_q_work = B * NQH * q_chunks;
+        const uint32_t active_cores = std::min<uint32_t>(grid.x * grid.y, scheduled_q_work);
+        const uint32_t q_global_start =
+            static_cast<uint32_t>(args.logical_n) - N_local * static_cast<uint32_t>(args.ring_size);
+        int ideal_cycles = compute_sliding_window_sdpa_ideal_cycles(
+            B,
+            NQH,
+            N_local,
+            static_cast<uint32_t>(args.ring_size),
+            q_global_start,
+            args.sliding_window_size.value(),
+            DH,
+            DV,
+            fidelity,
+            active_cores);
+        return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
+    }
 
     if (args.is_causal && args.has_kv_pad_rotation() && !has_joint_tensors) {
         const uint32_t logical_n = static_cast<uint32_t>(args.logical_n);
@@ -727,7 +920,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
-    const std::optional<uint32_t> latent_v_head_dim) {
+    const std::optional<uint32_t> latent_v_head_dim,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    const std::optional<uint32_t> sliding_window_size) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -808,7 +1003,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         ccl_core_grid_offset,
         kv_cache_batch_idx,
         kv_actual_isl,
-        latent_v_head_dim.value_or(0));
+        latent_v_head_dim.value_or(0),
+        sliding_window_size);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -818,7 +1014,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v,
         .gathered_k = persistent_output_buffer_k,
-        .gathered_v = persistent_output_buffer_v};
+        .gathered_v = persistent_output_buffer_v,
+        .attention_sink = attention_sink};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

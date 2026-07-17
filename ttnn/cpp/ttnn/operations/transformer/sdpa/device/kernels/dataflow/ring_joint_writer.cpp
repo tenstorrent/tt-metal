@@ -11,6 +11,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
+#include "ring_utils.hpp"
 
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
 // Used by the non-streaming (old sdpa_ring) path for sigmoid-based inter-iteration merging.
@@ -430,17 +431,19 @@ void kernel_main() {
     constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(31);
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(32);
     constexpr uint32_t single_valid_kv_chunk_mask_compile [[maybe_unused]] = get_compile_time_arg_val(33);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(34);
+    constexpr bool has_sliding_window = sliding_window_size > 0;
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. The program factory masks kernel_is_causal off when chunked is on, so only one of
     // the two paths drives the stamp per program — but they share the CB slot layout.
-    constexpr bool diag_tile_enabled = (is_causal == 1) || chunked_enabled;
+    constexpr bool diag_tile_enabled = ((is_causal == 1) || chunked_enabled) && !has_sliding_window;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and the joint_out_generator.
     constexpr bool has_joint_q = num_joint_q_chunks > 0;
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
 
-    constexpr auto out_args = TensorAccessorArgs<34>();
+    constexpr auto out_args = TensorAccessorArgs<35>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
@@ -509,9 +512,14 @@ void kernel_main() {
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled || has_sliding_window;
     if constexpr (needs_lightweight_mask) {
-        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in, diag_tile_enabled>(noc);
+        generate_lightweight_mask_tiles<
+            global_n_partial_col,
+            joint_l_partial_col,
+            cb_mask_in,
+            (is_causal == 1) || chunked_enabled,
+            sliding_window_size>(noc);
     }
 
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
@@ -529,11 +537,14 @@ void kernel_main() {
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        // Sliding compute consumes all local/halo source ranges in one logical pass, so the
+        // writer sees exactly one final output per Q and never enters deferred staging.
+        uint32_t ring_id = has_sliding_window ? ring_index : fused_op_receiver.get_next_ring_id_and_sync();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so writer stays aligned with reader, compute, and all-gather.
-        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -592,7 +603,41 @@ void kernel_main() {
 
         // Deferred normalization is always paired with streaming compute.
         constexpr bool use_deferred_norm = use_streaming_compute;
-        if constexpr (use_deferred_norm) {
+
+        if constexpr (has_sliding_window) {
+            // Sliding compute consumes every local/halo source for a Q in one pass. There is
+            // therefore no intermediate state to restore or save: wait for the final result,
+            // write it once, and advance directly to the next assigned Q.
+            const bool single_q_chunk = (global_q_end - global_q_start == 1);
+            for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
+                const auto decoded_q =
+                    decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
+                const uint32_t nb = decoded_q.nb;
+                const uint32_t nq = decoded_q.nq;
+                const uint32_t q_chunk = decoded_q.q_chunk;
+                const auto qi = get_q_chunk_info<has_joint_q>(
+                    q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
+                const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_id, Lt, q_local_padded_Nt);
+
+                if (!single_q_chunk) {
+                    CircularBuffer cb_sig(cb_signal);
+                    cb_sig.wait_front(1);
+                    cb_sig.pop_front(1);
+                }
+
+                const auto& gen = [&]() -> const auto& {
+                    if constexpr (has_joint_q) {
+                        if (qi.is_joint_q) {
+                            return joint_out_generator;
+                        }
+                    }
+                    return out_generator;
+                }();
+                write_block_row_grouped_trid<output_has_no_padding>(
+                    noc, gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
+            }
+            noc.async_write_barrier();
+        } else if constexpr (use_deferred_norm) {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
@@ -619,10 +664,11 @@ void kernel_main() {
                 if (barrier_first) {
                     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = pf_trid});
                 }
-                const uint32_t gq = remap_q_index(global_q_start + pf_q_index, num_q_chunks, use_zigzag_balancing);
-                const uint32_t nb_pf = gq / (NH * num_q_chunks);
-                const uint32_t nq_pf = (gq % (NH * num_q_chunks)) / num_q_chunks;
-                const uint32_t qc_pf = gq % num_q_chunks;
+                const auto decoded_q =
+                    decompose_global_q_index(global_q_start + pf_q_index, num_q_chunks, NH, use_zigzag_balancing);
+                const uint32_t nb_pf = decoded_q.nb;
+                const uint32_t nq_pf = decoded_q.nq;
+                const uint32_t qc_pf = decoded_q.q_chunk;
                 const auto qi_pf = get_q_chunk_info<has_joint_q>(
                     qc_pf, nb_pf, nq_pf, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);
                 const auto& gen_pf = [&]() -> const auto& {
@@ -702,11 +748,11 @@ void kernel_main() {
             };
 
             for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
-                uint32_t global_q_chunk = remap_q_index(global_q_start + q_index, num_q_chunks, use_zigzag_balancing);
-
-                const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
-                const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
-                const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+                const auto decoded_q =
+                    decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
+                const uint32_t nb = decoded_q.nb;
+                const uint32_t nq = decoded_q.nq;
+                const uint32_t q_chunk = decoded_q.q_chunk;
 
                 const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
@@ -815,12 +861,11 @@ void kernel_main() {
             }
         } else {
             for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
-                uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
-
-                // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
-                const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
-                const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
-                const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+                const auto decoded_q =
+                    decompose_global_q_index(global_q_start + q_iter, num_q_chunks, NH, use_zigzag_balancing);
+                const uint32_t nb = decoded_q.nb;
+                const uint32_t nq = decoded_q.nq;
+                const uint32_t q_chunk = decoded_q.q_chunk;
 
                 const auto qi = get_q_chunk_info<has_joint_q>(
                     q_chunk, nb, nq, num_local_q_chunks, Sq_chunk_t, vDHt, Lt, q_local_padded_Nt);

@@ -225,9 +225,8 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
+    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
     // Write the unicast packet. num_hops=1 is correct under both topologies: 1D ring-AG always
     // targets the immediate neighbor; 2D ignores num_hops (HybridMesh::to_chip_unicast is a no-op

@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Animated technical explainer for the ring-joint SDPA attention-sink and sliding-window implementation on Blackhole.">
+  <title>Ring-Joint SDPA — Sliding Windows, Attention Sinks, and Compact GQA</title>
+  <style>
+    :root {
+      --bg: #071016;
+      --bg-soft: #0b1720;
+      --panel: rgba(15, 31, 41, 0.78);
+      --panel-solid: #0f1f29;
+      --line: rgba(160, 205, 220, 0.15);
+      --text: #ecf7f8;
+      --muted: #9fb8bf;
+      --cyan: #59e1e8;
+      --cyan-soft: rgba(89, 225, 232, 0.15);
+      --lime: #a8ef78;
+      --amber: #ffcb6b;
+      --coral: #ff826e;
+      --violet: #b69cff;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+      --radius: 22px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 0%, rgba(89, 225, 232, 0.12), transparent 28rem),
+        radial-gradient(circle at 90% 20%, rgba(182, 156, 255, 0.10), transparent 30rem),
+        linear-gradient(180deg, #071016 0%, #08141b 50%, #071016 100%);
+      font-family: var(--sans);
+      line-height: 1.62;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.24;
+      background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(to bottom, black, transparent 88%);
+      z-index: -1;
+    }
+
+    a { color: var(--cyan); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    code, pre { font-family: var(--mono); }
+    code {
+      padding: .12rem .34rem;
+      border: 1px solid rgba(89, 225, 232, .12);
+      border-radius: 6px;
+      background: rgba(4, 12, 17, .6);
+      color: #d9fbfd;
+      font-size: .92em;
+    }
+
+    .skip-link {
+      position: fixed;
+      left: 1rem;
+      top: -4rem;
+      z-index: 100;
+      padding: .75rem 1rem;
+      border-radius: 10px;
+      background: var(--cyan);
+      color: #041014;
+      font-weight: 800;
+    }
+    .skip-link:focus { top: 1rem; }
+
+    .topbar {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: min(1080px, calc(100% - 28px));
+      padding: 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(7, 16, 22, .76);
+      box-shadow: 0 12px 50px rgba(0,0,0,.25);
+      backdrop-filter: blur(18px);
+      transform: translateX(-50%);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: max-content;
+      padding: 0 12px 0 6px;
+      font-size: .78rem;
+      font-weight: 850;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .brand-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: conic-gradient(var(--cyan), var(--violet), var(--lime), var(--cyan));
+      box-shadow: 0 0 24px rgba(89,225,232,.35);
+      animation: spin 8s linear infinite;
+    }
+    .nav-scroll {
+      display: flex;
+      gap: 2px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      flex: 1;
+    }
+    .nav-scroll::-webkit-scrollbar { display: none; }
+    .nav-scroll a, .control {
+      min-width: max-content;
+      padding: 7px 10px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      font: 700 .75rem/1 var(--sans);
+      text-decoration: none;
+      cursor: pointer;
+      transition: background .2s ease, color .2s ease, transform .2s ease;
+    }
+    .nav-scroll a:hover, .control:hover {
+      color: var(--text);
+      background: rgba(255,255,255,.07);
+    }
+    .control:active { transform: scale(.96); }
+
+    main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+    section { scroll-margin-top: 90px; }
+
+    .hero {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1.08fr .92fr;
+      align-items: center;
+      gap: clamp(2rem, 6vw, 6rem);
+      min-height: 100vh;
+      padding: 120px 0 70px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border: 1px solid rgba(89,225,232,.2);
+      border-radius: 999px;
+      color: var(--cyan);
+      background: rgba(89,225,232,.07);
+      font: 800 .75rem/1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--lime);
+      box-shadow: 0 0 0 5px rgba(168,239,120,.10), 0 0 18px var(--lime);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    h1 {
+      max-width: 760px;
+      margin: 22px 0 22px;
+      font-size: clamp(3rem, 7vw, 6.8rem);
+      line-height: .95;
+      letter-spacing: -.068em;
+    }
+    .gradient-text {
+      color: transparent;
+      background: linear-gradient(100deg, var(--cyan), #b9f7e6 46%, var(--violet));
+      background-clip: text;
+      -webkit-background-clip: text;
+    }
+    .hero-copy {
+      max-width: 700px;
+      color: #c4d7dc;
+      font-size: clamp(1.05rem, 1.7vw, 1.3rem);
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      padding: 12px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: var(--text);
+      background: rgba(255,255,255,.04);
+      font-weight: 800;
+      text-decoration: none;
+      transition: transform .2s ease, border-color .2s ease, background .2s ease;
+    }
+    .button.primary { color: #051216; background: var(--cyan); border-color: var(--cyan); }
+    .button:hover { transform: translateY(-2px); border-color: rgba(89,225,232,.55); }
+
+    .hero-visual {
+      position: relative;
+      min-height: 530px;
+      border: 1px solid var(--line);
+      border-radius: 36px;
+      background: linear-gradient(145deg, rgba(17,39,49,.8), rgba(8,17,23,.82));
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      isolation: isolate;
+    }
+    .hero-visual::before {
+      content: "";
+      position: absolute;
+      width: 330px;
+      height: 330px;
+      left: 50%;
+      top: 50%;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(89,225,232,.17), transparent 68%);
+      transform: translate(-50%, -50%);
+      animation: breathe 4s ease-in-out infinite;
+      z-index: -1;
+    }
+    .ring-svg { width: 100%; height: 100%; min-height: 530px; }
+    .ring-path { fill: none; stroke: rgba(160,205,220,.2); stroke-width: 2; stroke-dasharray: 4 8; }
+    .chip { fill: #102832; stroke: rgba(89,225,232,.55); stroke-width: 2; }
+    .chip-core { fill: var(--cyan); filter: drop-shadow(0 0 8px rgba(89,225,232,.8)); }
+    .chip-label { fill: var(--text); font: 700 13px var(--mono); text-anchor: middle; }
+    .halo-packet { fill: var(--lime); filter: drop-shadow(0 0 6px rgba(168,239,120,.9)); }
+    .dense-packet { fill: var(--coral); filter: drop-shadow(0 0 7px rgba(255,130,110,.9)); opacity: 0; }
+    body.mode-dense .halo-packet { opacity: 0; }
+    body.mode-dense .dense-packet { opacity: 1; }
+    .visual-caption {
+      position: absolute;
+      left: 22px;
+      right: 22px;
+      bottom: 18px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(4,12,17,.72);
+      backdrop-filter: blur(12px);
+      font-size: .82rem;
+    }
+    .mode-switch { display: flex; gap: 5px; }
+    .mode-button {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--muted);
+      background: transparent;
+      font: 750 .72rem var(--sans);
+      cursor: pointer;
+    }
+    .mode-button.active { color: #061317; border-color: var(--cyan); background: var(--cyan); }
+
+    .metric-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin: -34px 0 110px;
+      position: relative;
+      z-index: 3;
+    }
+    .metric {
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(11, 25, 33, .88);
+      box-shadow: 0 12px 50px rgba(0,0,0,.18);
+      backdrop-filter: blur(14px);
+    }
+    .metric-value {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--cyan);
+      font: 900 clamp(1.8rem, 4vw, 3rem)/1 var(--mono);
+      letter-spacing: -.06em;
+    }
+    .metric-label { color: var(--muted); font-size: .84rem; }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: .38fr .62fr;
+      gap: 2rem;
+      align-items: end;
+      margin-bottom: 36px;
+    }
+    .kicker { color: var(--cyan); font: 800 .78rem var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    h2 { margin: 7px 0 0; font-size: clamp(2.2rem, 5vw, 4.5rem); line-height: 1; letter-spacing: -.055em; }
+    h3 { margin: 0 0 12px; font-size: 1.25rem; line-height: 1.24; letter-spacing: -.02em; }
+    .section-intro { margin: 0; color: #b6ccd2; font-size: 1.08rem; }
+    .block { margin-bottom: 120px; }
+
+    .grid { display: grid; gap: 16px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .card {
+      position: relative;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: 0 18px 65px rgba(0,0,0,.14);
+      overflow: hidden;
+    }
+    .card::after {
+      content: "";
+      position: absolute;
+      width: 130px;
+      height: 130px;
+      right: -55px;
+      top: -60px;
+      border-radius: 50%;
+      background: var(--glow, rgba(89,225,232,.08));
+      filter: blur(4px);
+      pointer-events: none;
+    }
+    .card p:last-child { margin-bottom: 0; }
+    .muted { color: var(--muted); }
+    .tag {
+      display: inline-flex;
+      margin-bottom: 14px;
+      padding: 5px 8px;
+      border-radius: 7px;
+      background: var(--cyan-soft);
+      color: var(--cyan);
+      font: 800 .7rem var(--mono);
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .tag.lime { color: var(--lime); background: rgba(168,239,120,.11); }
+    .tag.amber { color: var(--amber); background: rgba(255,203,107,.11); }
+    .tag.violet { color: var(--violet); background: rgba(182,156,255,.12); }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .compare-panel { min-height: 360px; }
+    .compare-panel.dense { --glow: rgba(255,130,110,.12); }
+    .compare-panel.sliding { --glow: rgba(168,239,120,.12); border-color: rgba(168,239,120,.25); }
+    .flow-list { display: grid; gap: 11px; margin-top: 20px; }
+    .flow-item {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 12px;
+      background: rgba(255,255,255,.035);
+    }
+    .flow-icon {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      color: var(--cyan);
+      background: rgba(89,225,232,.1);
+      font: 900 .82rem var(--mono);
+    }
+
+    .formula {
+      margin: 18px 0 0;
+      padding: 18px;
+      border: 1px solid rgba(89,225,232,.18);
+      border-radius: 14px;
+      background: rgba(3, 10, 14, .7);
+      color: #dffbfc;
+      font: 700 clamp(.82rem, 1.8vw, 1rem)/1.7 var(--mono);
+      overflow-x: auto;
+    }
+
+    .architecture {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr auto 1fr;
+      gap: 12px;
+      align-items: stretch;
+    }
+    .stage {
+      min-height: 290px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: linear-gradient(160deg, rgba(18,38,48,.9), rgba(9,21,28,.9));
+    }
+    .stage-number { color: var(--cyan); font: 900 3.2rem/1 var(--mono); opacity: .35; }
+    .arrow {
+      display: grid;
+      place-items: center;
+      color: var(--cyan);
+      font-size: 1.5rem;
+      animation: nudge 1.7s ease-in-out infinite;
+    }
+    .stage ul, .card ul { padding-left: 1.1rem; color: #bdd0d5; }
+    li + li { margin-top: 7px; }
+
+    .pipeline {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      padding: 26px 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(5,14,19,.65);
+      overflow: hidden;
+    }
+    .pipeline::before {
+      content: "";
+      position: absolute;
+      left: 7%;
+      right: 7%;
+      top: 51%;
+      height: 2px;
+      background: linear-gradient(90deg, var(--cyan), var(--violet), var(--lime));
+      opacity: .25;
+    }
+    .pipe-node {
+      position: relative;
+      z-index: 2;
+      padding: 18px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #0e2029;
+      text-align: center;
+    }
+    .pipe-node::before {
+      content: "";
+      display: block;
+      width: 10px;
+      height: 10px;
+      margin: 0 auto 10px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 0 7px rgba(89,225,232,.08), 0 0 18px rgba(89,225,232,.65);
+      animation: pulse 1.8s ease-in-out infinite;
+      animation-delay: var(--delay, 0s);
+    }
+    .pipe-node b { display: block; font-size: .88rem; }
+    .pipe-node small { color: var(--muted); }
+
+    .schedule-viz {
+      display: grid;
+      grid-template-columns: 1.05fr .95fr;
+      gap: 16px;
+    }
+    .core-grid {
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      gap: 5px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(4,12,17,.55);
+    }
+    .core {
+      aspect-ratio: 1;
+      border-radius: 5px;
+      background: rgba(89,225,232,.15);
+      border: 1px solid rgba(89,225,232,.18);
+      animation: coreWave 3.5s ease-in-out infinite;
+      animation-delay: calc(var(--i) * -35ms);
+    }
+    .core.hot { background: rgba(168,239,120,.68); border-color: rgba(168,239,120,.85); }
+    .core.ccl { background: rgba(182,156,255,.42); border-color: rgba(182,156,255,.7); }
+    .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; color: var(--muted); font-size: .78rem; }
+    .legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 2px; background: var(--dot); }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 18px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; background: rgba(7,17,23,.72); }
+    th, td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--cyan); background: rgba(89,225,232,.045); font: 800 .72rem var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    td { color: #bfd1d6; font-size: .88rem; }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { color: var(--text); font-weight: 750; }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(10,24,31,.62);
+      overflow: hidden;
+    }
+    details + details { margin-top: 10px; }
+    summary { padding: 16px 18px; cursor: pointer; font-weight: 800; }
+    summary::marker { color: var(--cyan); }
+    .details-body { padding: 0 18px 18px; color: #b9cdd2; }
+
+    .callout {
+      padding: 22px 24px;
+      border: 1px solid rgba(255,203,107,.25);
+      border-left: 4px solid var(--amber);
+      border-radius: 16px;
+      background: rgba(255,203,107,.055);
+    }
+    .callout strong { color: var(--amber); }
+
+    .file-map { display: grid; gap: 8px; }
+    .file-row {
+      display: grid;
+      grid-template-columns: minmax(260px, .9fr) 1.1fr;
+      gap: 18px;
+      padding: 13px 15px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255,255,255,.025);
+    }
+    .file-row code { word-break: break-word; }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(20px);
+      transition: opacity .7s ease, transform .7s ease;
+    }
+    .reveal.revealed { opacity: 1; transform: none; }
+
+    footer {
+      width: min(1180px, calc(100% - 32px));
+      margin: 40px auto 0;
+      padding: 34px 0 50px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: .84rem;
+    }
+    .footer-grid { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 18px; }
+
+    @keyframes spin { to { transform: rotate(1turn); } }
+    @keyframes pulse { 50% { transform: scale(.72); opacity: .65; } }
+    @keyframes breathe { 50% { transform: translate(-50%, -50%) scale(1.12); opacity: .7; } }
+    @keyframes nudge { 50% { transform: translateX(5px); } }
+    @keyframes coreWave { 50% { filter: brightness(1.35); } }
+
+    body.animations-paused *, body.animations-paused *::before, body.animations-paused *::after {
+      animation-play-state: paused !important;
+      scroll-behavior: auto !important;
+    }
+
+    @media (max-width: 920px) {
+      .hero { grid-template-columns: 1fr; padding-top: 130px; }
+      .hero-visual { min-height: 440px; }
+      .ring-svg { min-height: 440px; }
+      .metric-strip { grid-template-columns: repeat(2, 1fr); margin-top: 0; }
+      .section-head { grid-template-columns: 1fr; }
+      .architecture { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); min-height: 30px; }
+      .schedule-viz { grid-template-columns: 1fr; }
+      .pipeline { grid-template-columns: 1fr; }
+      .pipeline::before { display: none; }
+    }
+    @media (max-width: 650px) {
+      main { width: min(100% - 22px, 1180px); }
+      .brand span:last-child { display: none; }
+      .topbar { top: 9px; width: calc(100% - 18px); }
+      .hero { min-height: auto; padding-top: 110px; }
+      .hero-visual { min-height: 380px; border-radius: 24px; }
+      .ring-svg { min-height: 380px; }
+      .metric-strip, .grid.two, .grid.three, .compare { grid-template-columns: 1fr; }
+      .bar-value { text-align: left; }
+      .file-row { grid-template-columns: 1fr; gap: 7px; }
+      .visual-caption { flex-direction: column; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#content">Skip to content</a>
+
+  <header class="topbar" aria-label="Document navigation">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Ring-Joint SDPA</span></div>
+    <nav class="nav-scroll">
+      <a href="#why">Why</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#cache">Padded KV</a>
+      <a href="#traffic">Data movement</a>
+      <a href="#validation">Validation</a>
+      <a href="#files">Files</a>
+    </nav>
+    <button class="control" id="animationToggle" type="button" aria-pressed="false" title="Pause or resume animation">Pause</button>
+  </header>
+
+  <main id="content">
+    <section class="hero" id="top">
+      <div>
+        <span class="eyebrow">Blackhole · GPT-OSS · July 2026</span>
+        <h1>Do the <span class="gradient-text">useful attention</span>, not the allocation.</h1>
+        <p class="hero-copy">
+          Ring-joint SDPA now understands causal sliding windows and attention sinks as first-class execution modes.
+          It moves a compact K/V halo instead of a full shard, reads each Q work item once, reuses K/V across the
+          eight GPT-OSS query heads, and keeps padded KV storage out of both the math and transport path.
+        </p>
+        <div class="hero-actions">
+          <a class="button primary" href="#architecture">Explore the dataflow ↓</a>
+          <a class="button" href="#validation">See validation coverage</a>
+        </div>
+      </div>
+
+      <div class="hero-visual" aria-label="Animated eight-chip ring showing compact halo packets">
+        <svg class="ring-svg" viewBox="0 0 560 540" role="img" aria-labelledby="ringTitle ringDesc">
+          <title id="ringTitle">Compact directional K/V halo exchange</title>
+          <desc id="ringDesc">Eight chips form a ring. Small green packets represent compact sliding-window halos. Dense mode shows many large red packets.</desc>
+          <defs>
+            <path id="ringMotion" d="M280,70 C415,70 480,165 480,270 C480,385 395,470 280,470 C165,470 80,385 80,270 C80,160 160,70 280,70 Z"/>
+          </defs>
+          <path class="ring-path" d="M280,70 C415,70 480,165 480,270 C480,385 395,470 280,470 C165,470 80,385 80,270 C80,160 160,70 280,70 Z"/>
+          <g transform="translate(280 70)"><circle class="chip" r="30"/><circle class="chip-core" r="5"/><text class="chip-label" y="48">SP0</text></g>
+          <g transform="translate(420 118)"><circle class="chip" r="30"/><circle class="chip-core" r="5"/><text class="chip-label" y="48">SP1</text></g>
+          <g transform="translate(480 270)"><circle class="chip" r="30"/><circle class="chip-core" r="5"/><text class="chip-label" y="48">SP2</text></g>
+          <g transform="translate(420 420)"><circle class="chip" r="30"/><circle class="chip-core" r="5"/><text class="chip-label" y="48">SP3</text></g>
+          <g transform="translate(280 470)"><circle class="chip" r="30"/><circle class="chip-core" r="5"/><text class="chip-label" y="48">SP4</text></g>
+          <g transform="translate(140 420)"><circle class="chip" r="30"/><circle class="chip-core" r="5"/><text class="chip-label" y="48">SP5</text></g>
+          <g transform="translate(80 270)"><circle class="chip" r="30"/><circle class="chip-core" r="5"/><text class="chip-label" y="48">SP6</text></g>
+          <g transform="translate(140 118)"><circle class="chip" r="30"/><circle class="chip-core" r="5"/><text class="chip-label" y="48">SP7</text></g>
+
+          <circle class="halo-packet" r="7"><animateMotion dur="5.2s" repeatCount="indefinite"><mpath href="#ringMotion"/></animateMotion></circle>
+          <circle class="halo-packet" r="7"><animateMotion dur="5.2s" begin="-2.6s" repeatCount="indefinite"><mpath href="#ringMotion"/></animateMotion></circle>
+          <circle class="dense-packet" r="13"><animateMotion dur="3.2s" repeatCount="indefinite"><mpath href="#ringMotion"/></animateMotion></circle>
+          <circle class="dense-packet" r="13"><animateMotion dur="3.2s" begin="-.4s" repeatCount="indefinite"><mpath href="#ringMotion"/></animateMotion></circle>
+          <circle class="dense-packet" r="13"><animateMotion dur="3.2s" begin="-.8s" repeatCount="indefinite"><mpath href="#ringMotion"/></animateMotion></circle>
+          <circle class="dense-packet" r="13"><animateMotion dur="3.2s" begin="-1.2s" repeatCount="indefinite"><mpath href="#ringMotion"/></animateMotion></circle>
+          <circle class="dense-packet" r="13"><animateMotion dur="3.2s" begin="-1.6s" repeatCount="indefinite"><mpath href="#ringMotion"/></animateMotion></circle>
+          <text x="280" y="247" fill="#ecf7f8" text-anchor="middle" font-size="26" font-weight="850">128-token window</text>
+          <text x="280" y="278" fill="#9fb8bf" text-anchor="middle" font-size="14">compact K/V · Q once · direct GQA reads</text>
+          <text x="280" y="304" fill="#a8ef78" text-anchor="middle" font-family="monospace" font-size="13">17 KiB BFP8_B K/V / production chip</text>
+        </svg>
+        <div class="visual-caption">
+          <span id="modeCaption"><strong style="color:var(--lime)">Sliding:</strong> local K/V + one compact predecessor halo</span>
+          <div class="mode-switch" aria-label="Compare dataflow mode">
+            <button class="mode-button" id="denseMode" type="button">Dense</button>
+            <button class="mode-button active" id="slidingMode" type="button">Sliding</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="metric-strip reveal" aria-label="Key results">
+      <div class="metric"><span class="metric-value" data-count="128" data-suffix=" tokens">128 tokens</span><span class="metric-label">compact predecessor-halo storage per chip</span></div>
+      <div class="metric"><span class="metric-value" data-count="1" data-suffix=" hop">1 hop</span><span class="metric-label">cyclic predecessor transport</span></div>
+      <div class="metric"><span class="metric-value" data-count="0" data-suffix=" B">0 B</span><span class="metric-label">full-shard forward traffic in sliding mode</span></div>
+      <div class="metric"><span class="metric-value" data-count="1" data-suffix="×">1×</span><span class="metric-label">Q read, final normalization, sink fold, and output write</span></div>
+    </div>
+
+    <section class="block" id="why">
+      <div class="section-head reveal">
+        <div><span class="kicker">The problem</span><h2>Storage size is not attention work.</h2></div>
+        <p class="section-intro">
+          GPT-OSS keeps 56K tokens physically allocated, while a causal 128-token window needs only a tiny
+          neighborhood for each Q row. The old dense path allowed allocation geometry to dictate transport and iteration.
+          The new path derives work from logical positions and the window instead.
+        </p>
+      </div>
+
+      <div class="compare reveal">
+        <article class="card compare-panel dense">
+          <span class="tag" style="color:var(--coral);background:rgba(255,130,110,.11)">Historical dense path</span>
+          <h3>Move and iterate complete shards</h3>
+          <p class="muted">Correct and general for non-sliding modes, but wasteful for a 128-token window. Sliding calls no longer select this path.</p>
+          <div class="flow-list">
+            <div class="flow-item"><span class="flow-icon">1</span><span>Materialize remote K/V through the dense ring all-gather.</span></div>
+            <div class="flow-item"><span class="flow-icon">2</span><span>Preserve ring-major execution even when most K chunks are masked.</span></div>
+            <div class="flow-item"><span class="flow-icon">3</span><span>Defer final output and stage online-softmax accumulators through DRAM.</span></div>
+            <div class="flow-item"><span class="flow-icon">4</span><span>Independent GQA readers can load the same K/V eight times.</span></div>
+          </div>
+        </article>
+        <article class="card compare-panel sliding">
+          <span class="tag lime">Selected sliding path</span>
+          <h3>Move only the causal neighborhood</h3>
+          <p class="muted">A compile-time specialization keeps the dense implementation untouched for other modes.</p>
+          <div class="flow-list">
+            <div class="flow-item"><span class="flow-icon">1</span><span>Exchange the rounded tail required from the cyclic predecessor.</span></div>
+            <div class="flow-item"><span class="flow-icon">2</span><span>Build an ordered local/halo work plan clipped to the logical window.</span></div>
+            <div class="flow-item"><span class="flow-icon">3</span><span>Read Q once, fold the sink once, normalize once, write once.</span></div>
+            <div class="flow-item"><span class="flow-icon">4</span><span>Use independent per-core K/V reads without chain or multicast synchronization.</span></div>
+          </div>
+        </article>
+      </div>
+
+      <div class="formula reveal">
+        left_window_tokens = sliding_window_size - 1<br>
+        halo_tokens = round_up(left_window_tokens, k_chunk_size)<br>
+        production payload = 4 token tiles × 2 D tiles × 1,088 B/tile × (K + V) = 17 KiB / chip
+      </div>
+    </section>
+
+    <section class="block" id="shape">
+      <div class="section-head reveal">
+        <div><span class="kicker">Target geometry</span><h2>One model, production and local coverage.</h2></div>
+        <p class="section-intro">Production uses TP8/SP4 on Galaxy. The eight-chip TP1/SP8 surrogate preserves the per-chip 8Q:1KV grouped-GQA relationship for focused validation.</p>
+      </div>
+      <div class="grid three reveal">
+        <article class="card">
+          <span class="tag violet">Production</span>
+          <h3>GPT-OSS on Blackhole Galaxy</h3>
+          <ul>
+            <li>TP8 / SP4, batch 1</li>
+            <li>64 Q heads / 8 K/V heads globally</li>
+            <li>8Q:1KV per chip, head dimension 64</li>
+            <li>5,120 new Q tokens attending a 55K KV cache</li>
+            <li>BF16 Q, BFP8_B K/V, causal window 128</li>
+          </ul>
+        </article>
+        <article class="card">
+          <span class="tag">Local validation</span>
+          <h3>Native eight-chip ring</h3>
+          <ul>
+            <li>TP1 / SP8 on 8 Blackhole P150s</li>
+            <li>Firmware 19.8.1, approximately 1.35 GHz</li>
+            <li>Chunked SP8 shapes preserve predecessor-wrap behavior</li>
+            <li>B2 coverage stresses grouped scheduling and cache reuse</li>
+            <li>Not a substitute for Galaxy fabric calibration</li>
+          </ul>
+        </article>
+        <article class="card">
+          <span class="tag lime">Focused coverage</span>
+          <h3>Logical work inside padded storage</h3>
+          <ul>
+            <li>q128 / k128, causal sliding window 128</li>
+            <li>B1 production-style and B2 SP8 padded-cache cases</li>
+            <li>Changing <code>logical_n</code> with stable physical buffers</li>
+            <li>Garbage-filled padding proves logical bounds are honored</li>
+            <li>Program-cache repatching and bit-exact replay</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="block" id="api">
+      <div class="section-head reveal">
+        <div><span class="kicker">Public contract</span><h2>Two explicit inputs enable the behavior.</h2></div>
+        <p class="section-intro">The API adds an optional attention-sink tensor and an optional causal window. Existing callers retain their previous path when both are absent.</p>
+      </div>
+      <div class="grid two reveal">
+        <article class="card">
+          <span class="tag">attention_sink</span>
+          <h3>One scalar logit per query head</h3>
+          <p>BF16 with logical shape <code>[1, nqh, 1, 1]</code>, tensor-parallel sharded over heads and replicated over the sequence ring. It is supported by the GPT-OSS chunked sliding specialization, participates in online softmax as a sink, and contributes no V vector.</p>
+          <p class="muted">Sliding execution reads/recycles the scalar tile efficiently, folds it exactly once per Q row, and does not reintroduce accumulator staging.</p>
+        </article>
+        <article class="card">
+          <span class="tag">sliding_window_size</span>
+          <h3>Logical causal reach, in tokens</h3>
+          <p>The host work plan clips K ranges, the compact collective chooses the halo extent, and reader/compute kernels prune everything outside the window.</p>
+          <p class="muted">The selected specialization is intentionally limited to GPT-OSS: causal, 128-token window, 8Q:1K:1V local heads, D64, BF16 Q, BFP8_B K/V, and SP4/SP8. Other sliding geometry is rejected during validation.</p>
+        </article>
+      </div>
+      <pre class="formula reveal"><code>ttnn.ring_joint_scaled_dot_product_attention(
+    q, k, v,
+    ...,
+    kv_actual_isl=prior_valid_kv,
+    attention_sink=sink,          # optional [1, nqh, 1, 1]
+    sliding_window_size=128,      # optional causal window
+)</code></pre>
+    </section>
+
+    <section class="block" id="architecture">
+      <div class="section-head reveal">
+        <div><span class="kicker">Implementation</span><h2>Three dependent workstreams.</h2></div>
+        <p class="section-intro">Transport is fixed first, then execution order, then direct GQA reads. Shared host/device geometry makes the supported GPT-OSS path explicit from validation through kernel execution.</p>
+      </div>
+
+      <div class="architecture reveal">
+        <article class="stage">
+          <div class="stage-number">01</div>
+          <h3>Compact directional halo</h3>
+          <ul>
+            <li>Derive the current chunk group's predecessor tail.</li>
+            <li>Send only that K/V tail to the logical next device.</li>
+            <li>Write into one compact persistent slot.</li>
+            <li>Signal a direction only after K and V are visible.</li>
+          </ul>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="stage">
+          <div class="stage-number">02</div>
+          <h3>Q-once work plan</h3>
+          <ul>
+            <li>One item per <code>(batch, q_head, q_chunk)</code>.</li>
+            <li>Ordered local and halo K/V ranges.</li>
+            <li>No sliding accumulator save/restore.</li>
+            <li>One sink fold, normalization, and final write.</li>
+          </ul>
+        </article>
+        <div class="arrow" aria-hidden="true">→</div>
+        <article class="stage">
+          <div class="stage-number">03</div>
+          <h3>Direct GQA scheduling</h3>
+          <ul>
+            <li>Keep ordinary <code>(batch, q_head, q_chunk)</code> order.</li>
+            <li>Each core reads only its selected local/halo chunks.</li>
+            <li>No sliding chain, multicast, or retained-buffer mode.</li>
+            <li>Exact source ranges replace the old dense source scan.</li>
+          </ul>
+        </article>
+      </div>
+
+      <h3 style="margin-top:40px">Per-Q sliding pipeline</h3>
+      <div class="pipeline reveal" aria-label="Animated Q-once execution pipeline">
+        <div class="pipe-node" style="--delay:0s"><b>Wait selectively</b><small>only referenced halo</small></div>
+        <div class="pipe-node" style="--delay:.18s"><b>Read Q once</b><small>initialize online state</small></div>
+        <div class="pipe-node" style="--delay:.36s"><b>Stream K/V</b><small>local + compact halo</small></div>
+        <div class="pipe-node" style="--delay:.54s"><b>Fold sink</b><small>exactly once</small></div>
+        <div class="pipe-node" style="--delay:.72s"><b>Normalize + write</b><small>no DRAM staging</small></div>
+      </div>
+    </section>
+
+    <section class="block" id="halo">
+      <div class="section-head reveal">
+        <div><span class="kicker">Halo geometry</span><h2>Compact storage replaces holes in a gathered tensor.</h2></div>
+        <p class="section-intro">The shared chunked halo layout and work-plan helpers make address ownership explicit on both host and device. The reader selects local or predecessor-halo storage without ever pretending a full remote shard exists.</p>
+      </div>
+      <div class="grid two reveal">
+        <article class="card">
+          <span class="tag lime">Persistent layout</span>
+          <h3>One bounded halo slot</h3>
+          <p>Each device receives one predecessor tail rounded to K-chunk granularity. The allocation is independent of the full 55K KV capacity. K and V share direction and phase semantics so they cannot be signaled out of step.</p>
+          <div class="formula">compact_persistent_tokens = halo_tokens<br>for window128 / k128: 128 tokens</div>
+          <p>The specialization launches one CCL reader/writer worker per link—the predecessor direction only—rather than retaining an empty second all-gather direction.</p>
+        </article>
+        <article class="card">
+          <span class="tag amber">Validation boundary</span>
+          <h3>Unsupported sliding shapes fail explicitly</h3>
+          <p>The sliding API is intentionally limited to GPT-OSS window-128 geometry, 8Q:1K:1V heads, D64, BF16 Q, BFP8_B K/V, SP4 production, and the SP8 test surrogate. Unsupported sliding geometry is rejected instead of silently selecting dense transport.</p>
+          <p class="muted">Non-sliding, cross attention, joint tensors, ring MLA, indexed cache, and MiniMax regressions keep their established behavior.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="block" id="gqa">
+      <div class="section-head reveal">
+        <div><span class="kicker">Grouped-query attention</span><h2>Bound K/V reads without extra synchronization.</h2></div>
+        <p class="section-intro">GPT-OSS has eight Q heads sharing each K/V head. For the supported 5K chunk, chain synchronization and retained-buffer scheduling add complexity without improving the target, so every sliding core performs independent bounded reads.</p>
+      </div>
+      <div class="schedule-viz reveal">
+        <div class="card">
+          <span class="tag">100-core SDPA grid</span>
+          <div class="core-grid" id="coreGrid" aria-label="Ten by ten active-core visualization"></div>
+          <div class="legend">
+            <span style="--dot:rgba(168,239,120,.8)">active direct readers</span>
+            <span style="--dot:rgba(89,225,232,.2)">idle/available</span>
+          </div>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <span class="tag lime">Short shape</span>
+            <h3>Direct per-core reads</h3>
+            <p>Each worker reads exactly the two compact K/V chunks required by its own Q window. This avoids receiver handshakes, multicast phase state, and block-layout constraints while keeping all useful workers occupied.</p>
+          </article>
+          <article class="card"><span class="tag violet">Single mode</span><h3>No retained-buffer variant</h3><p>The ordinary flat Q schedule is used for every supported chunked shape. This keeps reader, compute, and writer indexing identical to non-sliding scheduling while the K work plan remains sparse.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="cache">
+      <div class="section-head reveal">
+        <div><span class="kicker">Padded KV cache</span><h2>Physical capacity stays stable; logical addresses move.</h2></div>
+        <p class="section-intro">The KV tensor can be oversized and reused across decoding/prefill steps. Correctness therefore depends on <code>logical_n</code> and <code>kv_actual_isl</code>, not the physical tensor tail—and those scalars change on program-cache hits.</p>
+      </div>
+
+      <div class="grid two reveal">
+        <article class="card">
+          <span class="tag amber">Bug exposed by the new test</span>
+          <h3>Cached compact-halo offsets were stale</h3>
+          <p>The first logical prefix compiled the correct directional tail. Reusing the same program at a later prefix retained the old absolute source range, producing approximately 0.52 PCC despite an unchanged physical tensor shape.</p>
+          <p class="muted">An early runtime-argument-header extension deadlocked. The safe runner detected it and invoked <code>tt-triage</code>; the final fix preserves the collective ABI.</p>
+        </article>
+        <article class="card">
+          <span class="tag lime">Final cache-hit fix</span>
+          <h3>Relocate reader and writer descriptors together</h3>
+          <p>On every cached dispatch, the program factory derives the current tail from the runtime sliding layout and shifts the backward reader/writer page ranges by the same delta. The writer reads the runtime-patched compact origin from its dedicated descriptor field; it is not overloaded onto the reader's indexed-cache batch offset.</p>
+          <p class="muted">The fixed runtime header and fabric/signaler argument layout remain unchanged, preventing host/device ABI skew.</p>
+        </article>
+      </div>
+
+      <div class="table-wrap reveal" style="margin-top:16px">
+        <table>
+          <thead><tr><th>Accuracy case</th><th>Physical KV</th><th>Logical prefix → N</th><th>Result</th><th>Cache invariant</th></tr></thead>
+          <tbody>
+            <tr><td>B1 production-style, BFP8_B KV</td><td>12,288 tokens, garbage-padded</td><td>1,024→2,048 · 2,048→3,072 · 10,240→11,264</td><td>PCC 0.999653–0.999685; RMSE ≤0.006316</td><td>same program entries; two runs bit-exact</td></tr>
+            <tr><td>B2 SP8 simulation, BFP8_B KV</td><td>same stable allocation</td><td>same three changing logical lengths</td><td>PCC 0.999650–0.999680; RMSE ≤0.005947</td><td>same program entries; two runs bit-exact</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="block" id="traffic">
+      <div class="section-head reveal">
+        <div><span class="kicker">Data movement</span><h2>The schedule encodes the reduction directly.</h2></div>
+        <p class="section-intro">Host geometry tests and exact halo-placement device tests validate the compact ranges. The selected path has no dense forwarding iteration and no intermediate accumulator staging.</p>
+      </div>
+      <div class="grid two reveal">
+        <article class="card">
+          <span class="tag lime">Compact transport</span>
+          <ul>
+            <li>Each chip exchanges only its rounded 128-token directional tail.</li>
+            <li>K and V use the same compact one-slot layout and completion protocol.</li>
+            <li>Padded cache rows beyond <code>logical_n</code> are excluded from source ranges.</li>
+          </ul>
+        </article>
+        <article class="card">
+          <span class="tag">Single-pass SDPA</span>
+          <ul>
+            <li>Each assigned Q work item is read once and finalized once.</li>
+            <li>Each Q-head worker reads only the K/V chunks named by its sparse work plan.</li>
+            <li>The writer emits final output directly, without accumulator save/restore.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+
+
+    <section class="block" id="validation">
+      <div class="section-head reveal">
+        <div><span class="kicker">Correctness and safety</span><h2>The fast path is surrounded by exact guards.</h2></div>
+        <p class="section-intro">Geometry is tested with exact host oracles; device accuracy uses PCC/RMSE; replay and semaphore behavior use bit-exact determinism and repeated dispatches. Device tests run only through the safe wrapper with built-in hang diagnosis.</p>
+      </div>
+      <div class="grid three reveal">
+        <article class="card">
+          <span class="tag lime">Geometry</span>
+          <h3>Shared pure helpers</h3>
+          <p>Tests cover the SP4 production and SP8 surrogate layouts, cyclic chunked wraparound, changing padded-cache prefixes, ratio-8 GQA, batches, and repeated dispatches.</p>
+        </article>
+        <article class="card">
+          <span class="tag">Accuracy</span>
+          <h3>References and determinism</h3>
+          <p>Full, sparse, boundary, grouped, padded-cache, sink-on/off, and program-cache repatch cases retain their PCC/RMSE gates. Grouped dispatch remained bit-exact across repeated calls.</p>
+        </article>
+        <article class="card">
+          <span class="tag amber">Hang safety</span>
+          <h3>Safe pytest + tt-triage</h3>
+          <p><code>scripts/run_safe_pytest.sh</code> owns device locking and dispatch timeout. Watcher is intentionally not used; hangs trigger <code>tt-triage</code> for device-state evidence.</p>
+        </article>
+      </div>
+
+      <div class="callout reveal" style="margin-top:16px">
+        <strong>Latest validation:</strong> both new padded-cache tests plus the existing cyclic-boundary and multibatch GPT-OSS sliding tests passed together (4/4). A broader file run reached 63 passing operator tests with zero failures before the nested perf-table generator self-deadlocked by trying to reacquire its parent process's device mutex; that harness issue is not an operation hang.
+      </div>
+
+      <div style="margin-top:18px" class="reveal">
+        <details open>
+          <summary>Representative accuracy results</summary>
+          <div class="details-body">With BFP8_B K/V, padded B1/B2 PCC remains at least 0.999650 with RMSE at most 0.006316. Multibatch chunked measured PCC 0.999673 and RMSE 0.005949. Production, chunk-boundary, padded-cache, and repeated-dispatch checks cover the supported chunked specialization.</div>
+        </details>
+        <details>
+          <summary>Program-cache guarantees</summary>
+          <div class="details-body">Tensor buffer addresses, logical N, prior valid KV length, sink address, compact directional ranges, and semaphore phases are repatched or reset on cached dispatch. The padded-cache tests assert stable cache-entry counts while logical lengths change.</div>
+        </details>
+        <details>
+          <summary>Regression boundaries</summary>
+          <div class="details-body">Dense non-sliding ring-joint SDPA, existing chunked-prefill variants, cross attention, joint tensors, ring MLA, indexed KV-cache behavior, and MiniMax tests remain on their established implementations. The GPT-OSS sliding case is additive rather than a rewrite of MiniMax coverage.</div>
+        </details>
+      </div>
+    </section>
+
+    <section class="block" id="files">
+      <div class="section-head reveal">
+        <div><span class="kicker">Code map</span><h2>Where the implementation lives.</h2></div>
+        <p class="section-intro">These are the primary entry points rather than an exhaustive list of every changed kernel helper.</p>
+      </div>
+      <div class="file-map reveal">
+        <div class="file-row"><code>ttnn/.../sdpa/sdpa.hpp · sdpa.cpp · sdpa_nanobind.cpp</code><span>Public <code>attention_sink</code> and <code>sliding_window_size</code> arguments and Python documentation.</span></div>
+        <div class="file-row"><code>device/sliding_halo_layout.{hpp,cpp}</code><span>Chunked predecessor-halo declarations and host-side runtime source-tail placement.</span></div>
+        <div class="file-row"><code>device/kernels/sliding_window_work_plan.hpp</code><span>Device-compatible Q-to-K/V source mapping shared by reader and compute.</span></div>
+        <div class="file-row"><code>device/ring_joint_sdpa_program_factory.cpp</code><span>Specialization selection, CB allocation, kernel arguments, runtime scalar/address repatching, and cached compact-range relocation.</span></div>
+        <div class="file-row"><code>device/kernels/dataflow/ring_joint_reader.cpp</code><span>Q-once source traversal, local/predecessor-halo K/V selection, direct sliding reads, and selective readiness.</span></div>
+        <div class="file-row"><code>device/kernels/compute/ring_joint_sdpa.cpp</code><span>Sliding compute specialization, sink folding, one-time normalization, and finalization protocol.</span></div>
+        <div class="file-row"><code>device/kernels/dataflow/ring_joint_writer.cpp</code><span>Immediate sliding output path with no accumulator save/restore.</span></div>
+        <div class="file-row"><code>experimental/ccl/ring_attention_all_gather_async/...</code><span>Directional compact transport, exact page ranges, writer compact placement, and program-cache-safe descriptors.</span></div>
+        <div class="file-row"><code>tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py</code><span>Production accuracy/performance, cyclic-boundary coverage, padded-cache reuse, and program-cache repatching.</span></div>
+      </div>
+    </section>
+
+
+    <section class="block" id="summary">
+      <div class="section-head reveal">
+        <div><span class="kicker">Design summary</span><h2>The invariants that matter.</h2></div>
+        <p class="section-intro">A compact description of the implementation's contract for future maintenance.</p>
+      </div>
+      <div class="grid three reveal">
+        <article class="card"><span class="tag lime">Transport</span><h3>Window-derived</h3><p>Move only geometry-derived local tails and compact halos. Never download or materialize a full remote shard for selected sliding mode.</p></article>
+        <article class="card"><span class="tag lime">Execution</span><h3>Q-derived</h3><p>Each real Q work item has one ordered causal source plan, one Q read, one sink fold, one normalization, and one final write.</p></article>
+        <article class="card"><span class="tag lime">Reuse</span><h3>KV-head-derived</h3><p>Each shared K/V chunk is loaded once per K/V work group and reused across the legal GQA heads without padded participants.</p></article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-grid">
+      <span>Generated from branch <code>pjosipovic/ring-joint-sdpa-attention-sinks</code></span>
+      <span>Measurements: Blackhole P150 · firmware 19.8.1 · ~1.35 GHz · updated 2026-07-17</span>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      const body = document.body;
+      const animationToggle = document.getElementById('animationToggle');
+      const denseMode = document.getElementById('denseMode');
+      const slidingMode = document.getElementById('slidingMode');
+      const modeCaption = document.getElementById('modeCaption');
+      const ringSvg = document.querySelector('.ring-svg');
+
+      animationToggle.addEventListener('click', () => {
+        const paused = body.classList.toggle('animations-paused');
+        if (paused && ringSvg.pauseAnimations) ringSvg.pauseAnimations();
+        if (!paused && ringSvg.unpauseAnimations) ringSvg.unpauseAnimations();
+        animationToggle.textContent = paused ? 'Resume' : 'Pause';
+        animationToggle.setAttribute('aria-pressed', String(paused));
+      });
+
+      function setMode(mode) {
+        const dense = mode === 'dense';
+        body.classList.toggle('mode-dense', dense);
+        denseMode.classList.toggle('active', dense);
+        slidingMode.classList.toggle('active', !dense);
+        modeCaption.innerHTML = dense
+          ? '<strong style="color:var(--coral)">Dense:</strong> complete remote shards circulate and materialize'
+          : '<strong style="color:var(--lime)">Sliding:</strong> local K/V + one compact predecessor halo';
+      }
+      denseMode.addEventListener('click', () => setMode('dense'));
+      slidingMode.addEventListener('click', () => setMode('sliding'));
+
+      const coreGrid = document.getElementById('coreGrid');
+      for (let i = 0; i < 100; i += 1) {
+        const core = document.createElement('span');
+        core.className = `core${i < 80 ? ' hot' : ''}`;
+        core.style.setProperty('--i', i);
+        core.title = i < 80 ? `Grouped worker ${i}` : `Available core ${i}`;
+        coreGrid.appendChild(core);
+      }
+
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reducedMotion && ringSvg.pauseAnimations) ringSvg.pauseAnimations();
+      const revealTargets = document.querySelectorAll('.reveal');
+      const reveal = (element) => {
+        element.classList.add('revealed');
+        if (!element.dataset.counted) {
+          element.dataset.counted = 'true';
+          element.querySelectorAll('[data-count]').forEach((node) => {
+            const target = Number(node.dataset.count);
+            const suffix = node.dataset.suffix || '';
+            if (reducedMotion || target <= 1) {
+              node.textContent = `${target}${suffix}`;
+              return;
+            }
+            const start = performance.now();
+            const duration = 900;
+            const tick = (now) => {
+              const t = Math.min(1, (now - start) / duration);
+              const eased = 1 - Math.pow(1 - t, 3);
+              node.textContent = `${Math.round(target * eased)}${suffix}`;
+              if (t < 1) requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          });
+        }
+      };
+
+      if ('IntersectionObserver' in window && !reducedMotion) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              reveal(entry.target);
+              observer.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.13 });
+        revealTargets.forEach((target) => observer.observe(target));
+      } else {
+        revealTargets.forEach(reveal);
+      }
+    })();
+  </script>
+</body>
+</html>
