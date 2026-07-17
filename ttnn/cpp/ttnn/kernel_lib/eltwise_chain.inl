@@ -2313,7 +2313,7 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
 
 namespace detail {
 
-template <bool EmitMathInit, bool EmitSfpuInit, uint32_t SlotBase, std::size_t I, class ElemT, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, uint32_t SlotBase, bool SkipCompute, std::size_t I, class ElemT, class... Es>
 ALWI void elem_apply_compute(
     const ElemT& elem,
     uint32_t i_flat,
@@ -2325,7 +2325,7 @@ ALWI void elem_apply_compute(
     uint32_t Wt) {
     // Per-block streaming: pass chunk-local index `j` to exec so Block
     // returns the local CB-front offset (the just-waited window).
-    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
+    [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
         (void)chain_lane_width; (void)Ht; (void)Wt;
@@ -2334,42 +2334,52 @@ ALWI void elem_apply_compute(
         // block_size 1, so per_tile and per_block never both fire). The Bulk upfront wait is NOT
         // here: it's hoisted once to the chain boundary (elem_wait_upfront, pre-loop fold), so it's
         // placed exactly once rather than re-issued per block-iter relying on idempotency.
+        //
+        // wait/pop are CB ops and always fire (even under SkipCompute) so the pipeline handshake and
+        // tile counts are byte-for-byte identical to Run — only init + exec are elided.
         elem.wait_per_tile(i_flat + inner_count);
         elem.wait_per_block(inner_count);
-        if constexpr (EmitMathInit) {
+        if constexpr (EmitMathInit && !SkipCompute) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             elem.init();  // instance dispatch (see convention note above)
         }
-        constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            if constexpr (per_side) {
-                // Per-side path: chain hands both indices; element picks per operand.
-                elem.exec(
-                    /*i_flat_local=*/j,
-                    /*i_flat_abs=*/(i_flat + j),
-                    ht,
-                    /*wt_local=*/j,
-                    /*wt_abs=*/(wt + j),
-                    SlotBase + j * chain_lane_width);
-            } else {
-                const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-                elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
+        if constexpr (!SkipCompute) {
+            constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                if constexpr (per_side) {
+                    // Per-side path: chain hands both indices; element picks per operand.
+                    elem.exec(
+                        /*i_flat_local=*/j,
+                        /*i_flat_abs=*/(i_flat + j),
+                        ht,
+                        /*wt_local=*/j,
+                        /*wt_abs=*/(wt + j),
+                        SlotBase + j * chain_lane_width);
+                } else {
+                    const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                    elem.exec(i_arg, ht, wt + j, SlotBase + j * chain_lane_width);
+                }
             }
         }
         elem.pop_per_tile(i_flat);
         elem.pop_per_block(inner_count);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
-        if constexpr (EmitSfpuInit) {
-            emit_pre_element_transitions<ElemT, I, Es...>();
-            elem.init();  // instance dispatch (see convention note above)
-        }
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            elem.exec(i_flat + j, SlotBase + j * chain_lane_width);
+        // DEST-only (SFPU) op — no CB side, so under SkipCompute it collapses to nothing.
+        if constexpr (!SkipCompute) {
+            if constexpr (EmitSfpuInit) {
+                emit_pre_element_transitions<ElemT, I, Es...>();
+                elem.init();  // instance dispatch (see convention note above)
+            }
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                elem.exec(i_flat + j, SlotBase + j * chain_lane_width);
+            }
+        } else {
+            (void)elem; (void)i_flat; (void)inner_count; (void)chain_lane_width;
         }
     }
 }
 
-template <std::size_t I, class ElemT, class... Es>
+template <bool SkipCompute, std::size_t I, class ElemT, class... Es>
 ALWI void elem_apply_pack(
     const ElemT& elem,
     uint32_t i_flat,
@@ -2379,10 +2389,16 @@ ALWI void elem_apply_pack(
     uint32_t chain_lane_width,
     [[maybe_unused]] uint32_t Ht,
     [[maybe_unused]] uint32_t Wt) {
-    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
+    [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
-        // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
-        emit_per_stage_pack_reconfig<ElemT, I, Es...>();
+        // reserve/push are CB ops and always fire (even under SkipCompute) so the output CB is still
+        // reserved and pushed with the same counts — the consumer handshake is intact. Only the
+        // pack-side reconfig (init), the packer-ReLU mode, and pack_tile (exec) are elided; the
+        // pushed tile is garbage.
+        if constexpr (!SkipCompute) {
+            // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
+            emit_per_stage_pack_reconfig<ElemT, I, Es...>();
+        }
         // Heterogeneous packer ReLU: this site sets its own mode right before its packs and restores
         // pass-through right after, so the next (differently-configured) pack site is unaffected and
         // the chain still exits with ReLU off. Homogeneous ReLU is bracketed once around the whole
@@ -2392,14 +2408,16 @@ ALWI void elem_apply_pack(
             ChainTraits<Es...>::pack_relu_hetero && (ElemT::pack_relu != PackRelu::None);
         elem.reserve_per_tile(i_flat);
         elem.reserve_per_block(inner_count);
-        if constexpr (per_stage_relu) {
+        if constexpr (per_stage_relu && !SkipCompute) {
             ckernel::pack_relu_config(ckernel::ReluConfig::zero());
         }
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-            elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+        if constexpr (!SkipCompute) {
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+            }
         }
-        if constexpr (per_stage_relu) {
+        if constexpr (per_stage_relu && !SkipCompute) {
             ckernel::pack_relu_config(ckernel::ReluConfig::none());  // bring it back before publish
         }
         elem.push_per_tile(i_flat);
@@ -2410,7 +2428,7 @@ ALWI void elem_apply_pack(
     }
 }
 
-template <bool EmitMathInit, bool EmitSfpuInit, uint32_t SlotBase, std::size_t... Is, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, uint32_t SlotBase, bool SkipCompute = false, std::size_t... Is, class... Es>
 ALWI void apply_compute_phase(
     std::index_sequence<Is...>,
     uint32_t i_flat,
@@ -2424,13 +2442,13 @@ ALWI void apply_compute_phase(
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_compute<EmitMathInit, EmitSfpuInit, SlotBase, II, ElemT, Es...>(
+        elem_apply_compute<EmitMathInit, EmitSfpuInit, SlotBase, SkipCompute, II, ElemT, Es...>(
             elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
 
-template <std::size_t... Is, class... Es>
+template <bool SkipCompute = false, std::size_t... Is, class... Es>
 ALWI void apply_pack_phase(
     std::index_sequence<Is...>,
     uint32_t i_flat,
@@ -2444,7 +2462,7 @@ ALWI void apply_pack_phase(
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_pack<II, ElemT, Es...>(
+        elem_apply_pack<SkipCompute, II, ElemT, Es...>(
             elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
@@ -2478,7 +2496,7 @@ ALWI void elem_apply_seed_first_l1_pack_one(
     }
 }
 
-template <std::size_t... Is, class... Es>
+template <bool SkipCompute = false, std::size_t... Is, class... Es>
 ALWI void apply_seed_first_l1_pack_phase(
     std::index_sequence<Is...>,
     uint32_t i_flat,
@@ -2487,18 +2505,26 @@ ALWI void apply_seed_first_l1_pack_phase(
     uint32_t inner_count,
     uint32_t chain_lane_width,
     Es&... elts) {
-    for (uint32_t j = 0; j < inner_count; ++j) {
-        auto run_one = [&](auto idx_const, auto& elem) {
-            constexpr std::size_t II = decltype(idx_const)::value;
-            using ElemT = std::remove_reference_t<decltype(elem)>;
-            elem_apply_seed_first_l1_pack_one<II, ElemT, Es...>(
-                elem, i_flat, ht, wt, j, chain_lane_width);
-        };
-        (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
+    // Under SkipCompute the pack exec + the L1-accum mode flip are elided. This phase has no CB
+    // reserve/push of its own (the L1 output CB is reserved upfront and pushed at end in
+    // chain_run_loop), so skipping the whole body still leaves the handshake intact.
+    if constexpr (SkipCompute) {
+        (void)i_flat; (void)ht; (void)wt; (void)inner_count; (void)chain_lane_width;
+        ((void)elts, ...);
+    } else {
+        for (uint32_t j = 0; j < inner_count; ++j) {
+            auto run_one = [&](auto idx_const, auto& elem) {
+                constexpr std::size_t II = decltype(idx_const)::value;
+                using ElemT = std::remove_reference_t<decltype(elem)>;
+                elem_apply_seed_first_l1_pack_one<II, ElemT, Es...>(
+                    elem, i_flat, ht, wt, j, chain_lane_width);
+            };
+            (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 
-        // Mode changes only after every accumulator slot has received logical tile zero.
-        if (i_flat == 0 && j == 0) {
-            pack_reconfig_l1_acc(1);
+            // Mode changes only after every accumulator slot has received logical tile zero.
+            if (i_flat == 0 && j == 0) {
+                pack_reconfig_l1_acc(1);
+            }
         }
     }
 }
@@ -2560,7 +2586,7 @@ ALWI void elem_push_per_row(const E& e) {
 // is emitted inside the loop. eltwise_chain_impl always passes `!hoist_*`: a hoistable cohort emits
 // nothing here (it was hoisted to boot by this call under SetupOwner::Chain, or by the caller under
 // SetupOwner::Caller), and a non-hoistable cohort re-inits per tile regardless.
-template <bool EmitMathInit, bool EmitSfpuInit, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, bool SkipCompute = false, class... Es>
 ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
     // Block size lives on the shape. The DEST footprint is block_size * chain_lane_width;
@@ -2596,7 +2622,7 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     // L1 accumulation is a packer-global mode. A preloaded accumulator enables it before the walk;
     // seed-first starts in overwrite mode and its tile-major pack phase enables it after every
     // output slot has packed logical tile zero. Both modes are reset before publication below.
-    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
+    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !SkipCompute) {
         pack_reconfig_l1_acc(detail::ChainTraits<Es...>::any_seed_first_l1_accumulation ? 0 : 1);
     }
 
@@ -2605,7 +2631,8 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     // publication below — the cheap path. A heterogeneous chain does NOT bracket here; each ReLU pack
     // sets and restores its own mode in elem_apply_pack. `any_pack_relu && !pack_relu_hetero` means
     // "homogeneous and at least one site is ReLU" (all such sites share the single non-None mode).
-    if constexpr (detail::ChainTraits<Es...>::any_pack_relu && !detail::ChainTraits<Es...>::pack_relu_hetero) {
+    if constexpr (detail::ChainTraits<Es...>::any_pack_relu && !detail::ChainTraits<Es...>::pack_relu_hetero &&
+                  !SkipCompute) {
         ckernel::pack_relu_config(ckernel::ReluConfig::zero());
     }
 
@@ -2621,15 +2648,15 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
             const uint32_t inner_count = (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
             const uint32_t i_flat = row_base + wt_base;
             tile_regs_acquire();
-            detail::apply_compute_phase<EmitMathInit, EmitSfpuInit, 0>(
+            detail::apply_compute_phase<EmitMathInit, EmitSfpuInit, 0, SkipCompute>(
                 IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (detail::ChainTraits<Es...>::any_seed_first_l1_accumulation) {
-                detail::apply_seed_first_l1_pack_phase(
+                detail::apply_seed_first_l1_pack_phase<SkipCompute>(
                     IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, elts...);
             } else {
-                detail::apply_pack_phase(
+                detail::apply_pack_phase<SkipCompute>(
                     IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
             }
             tile_regs_release();
@@ -2639,13 +2666,14 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
 
     // Reset before any output is published, so unrelated pack work after this chain cannot inherit
     // accumulation mode even if the consumer wakes immediately on the push below.
-    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation) {
+    if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !SkipCompute) {
         pack_reconfig_l1_acc(0);
     }
     // Same escape concern for packer ReLU (homogeneous path only): restore pass-through before the
     // push below so a later, unrelated pack in this kernel isn't silently clamped by our latched
     // STACC_RELU mode. A heterogeneous chain already restored none() after its last ReLU pack.
-    if constexpr (detail::ChainTraits<Es...>::any_pack_relu && !detail::ChainTraits<Es...>::pack_relu_hetero) {
+    if constexpr (detail::ChainTraits<Es...>::any_pack_relu && !detail::ChainTraits<Es...>::pack_relu_hetero &&
+                  !SkipCompute) {
         ckernel::pack_relu_config(ckernel::ReluConfig::none());
     }
 
@@ -2658,7 +2686,7 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
 // that row's Wt inputs, is packed once, then is reset by the next row's acquire. Ordinary elements
 // retain block-lane parallelism in D1..; the accumulating BinaryFpu ignores that offset and
 // remains pinned to D0. A 1D shape (Ht=1) retains the single-output behavior.
-template <bool EmitMathInit, bool EmitSfpuInit, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, bool SkipCompute = false, class... Es>
 ALWI void chain_run_dest_accumulation_loop(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
     constexpr uint32_t transient_lane_w = chain_transient_lane_width_v<Chain>;
@@ -2690,13 +2718,13 @@ ALWI void chain_run_dest_accumulation_loop(EltwiseShape shape, Es... elts) {
         for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
             const uint32_t inner_count = (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
             const uint32_t i_flat = row_base + wt_base;
-            detail::apply_compute_phase<EmitMathInit, EmitSfpuInit, 1>(
+            detail::apply_compute_phase<EmitMathInit, EmitSfpuInit, 1, SkipCompute>(
                 IdxSeq{}, i_flat, ht, wt_base, inner_count, transient_lane_w, Ht, Wt, elts...);
         }
         tile_regs_commit();
 
         tile_regs_wait();
-        detail::apply_pack_phase(IdxSeq{}, row_base, ht, 0, 1, 0, Ht, Wt, elts...);
+        detail::apply_pack_phase<SkipCompute>(IdxSeq{}, row_base, ht, 0, 1, 0, Ht, Wt, elts...);
         tile_regs_release();
 
         (detail::elem_push_per_row(elts), ...);
@@ -2715,6 +2743,12 @@ ALWI void chain_run_dest_accumulation_loop(EltwiseShape shape, Es... elts) {
 template <SetupOwner SO = SetupOwner::Chain, class... Es>
 ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
+    // Performance-analysis build knob (macro, NOT a template arg): emit only the CB lifecycle +
+    // tile_regs window; skip all one-time init, all per-tile init/reconfig, and all compute (see
+    // the CKL_ELTWISE_CHAIN_SKIP_COMPUTE doc in eltwise_chain.hpp). The CB wait/pop/reserve/push
+    // counts are unchanged, so the pipeline still handshakes — no hang. Threaded through EVERY walk
+    // (ordinary, L1-accumulation, and DEST-accumulation) so no chain silently ignores the knob.
+    constexpr bool skip_compute = (CKL_ELTWISE_CHAIN_SKIP_COMPUTE != 0);
     static_assert(
         detail::ChainTraits<Es...>::any_dest_accumulation ==
             detail::ChainTraits<Es...>::any_dest_accumulation_lifecycle,
@@ -2796,14 +2830,14 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
     constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
-    if constexpr (SO == SetupOwner::Chain) {
+    if constexpr (SO == SetupOwner::Chain && !skip_compute) {
         detail::pack_init_for_each<Es...>(IdxSeq{});
         detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
     }
     if constexpr (detail::ChainTraits<Es...>::any_dest_accumulation) {
-        chain_run_dest_accumulation_loop<!hoist_math, !hoist_sfpu>(shape, elts...);
+        chain_run_dest_accumulation_loop<!hoist_math, !hoist_sfpu, skip_compute>(shape, elts...);
     } else {
-        chain_run_loop<!hoist_math, !hoist_sfpu>(shape, elts...);
+        chain_run_loop<!hoist_math, !hoist_sfpu, skip_compute>(shape, elts...);
     }
 }
 
