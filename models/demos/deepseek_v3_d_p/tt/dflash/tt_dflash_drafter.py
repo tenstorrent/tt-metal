@@ -21,23 +21,24 @@ The FC context projection is decomposed across target layers because
 ``Linear(concat[h_1..h_6]) == sum_i fc_slice_i @ h_i`` — so it accumulates as the verifier streams
 its layers, matching the tt-blaze decode-side ``FCMatmulForward`` accumulation.
 
-PHASE-1 SHARDING (correctness-first; the migration/distributed format is Phase 2):
-  * hidden is TP-sharded on the verifier residual stream -> the FC tap is row-parallel + a TP all-reduce.
-  * ``target_hidden`` is TP-replicated (after the all-reduce); the caller supplies it seq-contiguous /
-    seq-replicated (the standalone unit test does exactly this).
+SHARDING (default = sequence-parallel / Phase 2; ``seq_parallel=False`` = Phase-1 seq-replicated bring-up):
+  * hidden is TP-sharded on the verifier residual stream -> the FC tap is row-parallel + a TP reduce_scatter.
   * k_proj/v_proj are column-parallel: KV heads are split across the TP axis (kv_heads/tp per device) —
     the natural drafter layout, matching the tt-blaze decode drafter (num_kv_heads=8, head_dim=128).
-  * The drafter K and V caches are SEPARATE tensors (GQA), TP-sharded on kv-head, seq NOT SP-sharded.
-    Phase 2 changes this to the tt-blaze-consumable HEIGHT_SHARDED/bf8 migration format.
+  * DEFAULT (``seq_parallel``): the sequence is ALSO SP-sharded — each SP chip builds + holds only its
+    cache_seq/sp tokens (separate GQA K/V caches, SP-sharded on seq + TP-sharded on kv-head); the caller
+    feeds SP-sharded seq (no SP-gather). Decode/migration-aligned, ~sp_factor× less work.
+  * ``seq_parallel=False``: correctness-first fallback — seq REPLICATED (every SP chip rebuilds the full
+    seq; caller pre-gathers). Phase 2 further switches dtype/layout to the tt-blaze HEIGHT_SHARDED/bf8 format.
 
-Nothing in this file has run on hardware yet — program configs / memory configs are left to ttnn
-defaults with `TODO(bring-up)` markers; expect on-hardware tuning while PCC'ing against
-``tests/speculative_decoding/dflash/test_dflash.py``.
+Validated on Blackhole (8×4) via ``tests/speculative_decoding/dflash/test_dflash.py``: both sharding
+modes × {sliced, concat} PCC ~= 0.9998 vs the real HF drafter. (The ``nlp_create_qkv_heads`` head-split
+is the one piece pending hw re-validation.) Program/memory configs are still ttnn defaults with
+`TODO(bring-up)` markers — expect further tuning.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
 import torch
@@ -68,9 +69,8 @@ class TtDFlashDrafter:
         max_seq_len: Optional[int] = None,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
-        weight_cache_path: Optional[Path] = None,
         fc_mode: str = "sliced",
-        seq_parallel: bool = False,
+        seq_parallel: bool = True,
     ):
         self.mesh_device = mesh_device
         self.config = config
@@ -94,11 +94,12 @@ class TtDFlashDrafter:
         # "cache max_seq_len, migrate last 4k". Capping here would break integration with the verifier's
         # 5k-token prefill chunks.
         self.cache_seq = max_seq_len if max_seq_len is not None else config.context_len
-        # seq_parallel (Phase 2): SP-shard the cache/seq so each SP chip builds + holds ONLY its
-        # cache_seq/sp tokens, instead of the Phase-1 SP-replicated cache where every SP chip redundantly
-        # builds the full seq. The drafter KV-build is token-parallel (no cross-seq op), so this needs NO
-        # seq reduction — only the RoPE table is SP-sharded (absolute positions). ~sp_factor× less compute
-        # + smaller TP collectives; matches the decode/migration layout.
+        # seq_parallel (DEFAULT, Phase 2): SP-shard the cache/seq so each SP chip builds + holds ONLY its
+        # cache_seq/sp tokens. The drafter KV-build is token-parallel (no cross-seq op), so this needs NO
+        # seq reduction — only the RoPE table is SP-sharded (absolute positions). ~sp_factor× less work
+        # (hw-measured ~5× total device time, ~7× CCL); matches the decode/migration layout, so the caller
+        # must feed SP-sharded seq (NO SP-gather). seq_parallel=False falls back to the Phase-1 seq-
+        # REPLICATED bring-up layout (every SP chip rebuilds the full seq; the caller pre-gathers the tap).
         self.seq_parallel = seq_parallel
         if seq_parallel:
             assert (
@@ -125,11 +126,13 @@ class TtDFlashDrafter:
             packer_l1_acc=True,
         )
 
-        self._load_weights(state_dict, weight_cache_path)
-        # RoPE tables are built lazily (sized to the sequence actually roped, not to the cache) so the
-        # single-shot path needs no slice and no oversized table — see _ensure_rope.
+        self._load_weights(state_dict)
+        # RoPE deepseek-yarn cos/sin: built ONCE here (kept OUT of the write_kv_cache hot path), covering
+        # the full [0, cache_seq) — SP-sharded on seq when seq_parallel. cache_seq == the padded chunk
+        # length, so write_kv_cache consumes the table directly (no per-call build).
         self._rope_cos = self._rope_sin = None
         self._rope_end = 0
+        self._ensure_rope(self.cache_seq)
         self._alloc_caches()
         self._reduced_accum: Optional[ttnn.Tensor] = None  # "sliced": running TP-partial FC sum
         self._taps: list = [None] * len(config.target_layer_ids)  # "concat": stored raw taps
@@ -147,17 +150,14 @@ class TtDFlashDrafter:
         mapper_col = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=col)
         return mapper_row, mapper_col
 
-    def _load_weights(self, state_dict: dict | None, cache_path: Optional[Path]):
+    def _load_weights(self, state_dict: dict | None):
         cfg = self.config
         H, kv_dim, D = cfg.hidden_size, cfg.kv_dim, cfg.head_dim
         mapper_row, mapper_col = self._mesh_mappers()
         replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
         have = state_dict is not None and "fc.weight" in state_dict
 
-        def _cache(name):
-            return str(cache_path / f"dflash.{name}") if cache_path else None
-
-        def _linear_w(torch_w, mapper, name):
+        def _linear_w(torch_w, mapper):
             # torch_w is the HF Linear weight [out, in]; ttnn.linear wants [in, out].
             t = torch_w.transpose(-2, -1).contiguous() if torch_w is not None else None
             return ttnn.as_tensor(
@@ -167,10 +167,9 @@ class TtDFlashDrafter:
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
-                cache_file_name=_cache(name),
             )
 
-        def _norm_w(torch_w, name):
+        def _norm_w(torch_w):
             # RMSNorm weight [dim] -> [1, 1, dim/32, 32] ROW_MAJOR bf16, replicated (matches ttMLA).
             t = torch_w.reshape(1, 1, -1, ttnn.TILE_SIZE) if torch_w is not None else None
             return ttnn.as_tensor(
@@ -180,7 +179,6 @@ class TtDFlashDrafter:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=replicate,
-                cache_file_name=_cache(name),
             )
 
         # FC context projection. Two layouts (see fc_mode):
@@ -200,7 +198,7 @@ class TtDFlashDrafter:
             fc_full = state_dict["fc.weight"] if have else None  # [H, n*H]
             for idx in range(n):
                 sl = fc_full[:, idx * H : (idx + 1) * H] if have else None  # [H(out), H(in)]
-                self.fc_slices.append(_linear_w(sl, mapper_row, f"fc_slice_{idx}"))
+                self.fc_slices.append(_linear_w(sl, mapper_row))
         else:  # "concat"
             assert H % self.tp_factor == 0, f"hidden {H} must be divisible by tp {self.tp_factor} for concat fc"
             fc_perm_w = None
@@ -215,12 +213,12 @@ class TtDFlashDrafter:
                     for col in range(d * hs, (d + 1) * hs)
                 ]
                 fc_perm_w = W[:, perm].contiguous()  # [H(out), n*H(in)] permuted
-            self.fc_perm = _linear_w(fc_perm_w, mapper_row, "fc_perm")
+            self.fc_perm = _linear_w(fc_perm_w, mapper_row)
 
         # hidden_norm spans the full H=7168 → it MUST be the DISTRIBUTED (TP-sharded) norm, exactly
         # like the model's attn_norm/ffn_norm. A plain ttnn.rms_norm over the replicated 7168 forces
         # one core to hold 7168-wide (224-tile) CBs and overflows L1. cluster_axis=tp_axis matches the
-        # H/tp shard it consumes (see write_kv_cache: mesh_partition -> norm -> all_gather).
+        # H/tp shard it consumes (see write_kv_cache: reduce_scatter -> norm -> all_gather).
         self.hidden_norm = TtDistributedRmsNorm(
             mesh_device=self.mesh_device,
             emb_dim=cfg.hidden_size,
@@ -229,8 +227,6 @@ class TtDFlashDrafter:
             cluster_axis=self.tp_axis,
             num_links=self.num_links,
             topology=self.topology,
-            weight_cache_path=cache_path,
-            cache_name_prefix="dflash.hidden_norm",
         )
 
         # Per draft layer: k/v proj column-parallel (KV heads split across TP), per-head k_norm replicated.
@@ -239,16 +235,16 @@ class TtDFlashDrafter:
             kw = state_dict[self._K_PROJ.format(i=i)] if have else None  # [kv_dim, H]
             vw = state_dict[self._V_PROJ.format(i=i)] if have else None
             kn = state_dict[self._K_NORM.format(i=i)] if have else None  # [head_dim]
-            self.k_proj.append(_linear_w(kw, mapper_col, f"l{i}.k_proj"))
-            self.v_proj.append(_linear_w(vw, mapper_col, f"l{i}.v_proj"))
-            self.k_norm.append(_norm_w(kn, f"l{i}.k_norm"))
+            self.k_proj.append(_linear_w(kw, mapper_col))
+            self.v_proj.append(_linear_w(vw, mapper_col))
+            self.k_norm.append(_norm_w(kn))
         assert kv_dim == cfg.num_key_value_heads * D
 
     def _ensure_rope(self, end: int) -> None:
-        """Build (memoized) drafter deepseek_yarn cos/sin covering positions [0, end), sized to what's
-        actually roped in a call — for single-shot prefill that's ``seq``, so ``write_kv_cache`` can use
-        the table directly with NO slice. Only (re)builds when a longer range is later requested (a
-        further chunk); yarn inv_freq is position-independent, so growing the table never changes the
+        """Build (memoized) drafter deepseek_yarn cos/sin covering positions [0, end). Called ONCE from
+        __init__ with end=cache_seq so it stays OUT of the write_kv_cache hot path; memoized, so it does
+        NOT rebuild per call (would only rebuild if a longer range were later requested). yarn inv_freq
+        is position-independent, so growing the table never changes the
         values at existing positions. HALF-SPLIT (interleave=False) to match Qwen3 rotate_half +
         ttnn.experimental.rotary_embedding_hf; full head_dim (128) rotated (unlike the MLA 64-dim pe).
         In seq_parallel mode ``end`` is the GLOBAL sequence length and the table is SP-sharded on seq, so
@@ -328,7 +324,7 @@ class TtDFlashDrafter:
         seq_parallel leaves seq SP-sharded (NO gather — each chip taps only its own slice).
 
         fc_mode="sliced": stream the FC-slice matmul and accumulate the (still TP-partial) sum; the TP
-            all-reduce is deferred to write_kv_cache (sum-then-reduce == reduce-then-sum).
+            cross-TP combine is deferred to write_kv_cache's reduce_scatter (local sum-then-scatter == scatter-then-sum).
         fc_mode="concat": store the raw tap for a single fc(concat) at write time."""
         if not self.is_target_layer(global_layer_idx):
             return
@@ -357,27 +353,22 @@ class TtDFlashDrafter:
             ttnn.deallocate(partial)
             self._reduced_accum = summed
 
-    def _tp_all_reduce(self, t: ttnn.Tensor) -> ttnn.Tensor:
-        """Sum a TP-partial [1,1,seq,H] across the TP axis -> replicated [1,1,seq,H]. Mirrors
-        ttMLA._kv_stem (all_gather on dim 1 + fast_reduce_nc)."""
-        if self.tp_factor == 1:
-            return t
-        gathered = ttnn.all_gather(
-            t, dim=1, cluster_axis=self.tp_axis, num_links=self.num_links, topology=self.topology
-        )
-        ttnn.deallocate(t)
-        reduced = ttnn.experimental.fast_reduce_nc(
-            gathered, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
-        )
-        ttnn.deallocate(gathered)
-        return reduced
+    def _split_heads(self, proj: ttnn.Tensor) -> ttnn.Tensor:
+        """[1, 1, seq, kv_heads_local*head_dim] -> [1, kv_heads_local, seq, head_dim].
 
-    def _split_heads(self, proj: ttnn.Tensor, seq: int) -> ttnn.Tensor:
-        """[1, 1, seq, kv_heads_local*head_dim] -> [1, kv_heads_local, seq, head_dim]."""
-        cfg = self.config
-        x = ttnn.reshape(proj, (1, seq, self.kv_heads_local, cfg.head_dim))
-        # TODO(bring-up): prefer ttnn.experimental.nlp_create_qkv_heads if TILE reshape/permute misbehaves.
-        return ttnn.permute(x, (0, 2, 1, 3))
+        One fused TILE-native op instead of reshape+permute (which forced untilize/retilize + the
+        non-scaling Tilize seen in profiling). num_kv_heads=0 selects the single-tensor "Q-path" reshape
+        (take the first output); transpose_k_heads=False keeps [.., heads, seq, head_dim] (NOT the QKᵀ
+        transpose). head_dim + seq are inferred from the tensor width/shape.
+        """
+        heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            proj,
+            num_heads=self.kv_heads_local,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return heads
 
     def write_kv_cache(self, positions_start: int = 0) -> None:
         """Finalize: build the TP-partial FC output (mode-dependent), TP-reduce it, hidden_norm, then per
@@ -407,8 +398,21 @@ class TtDFlashDrafter:
             assert self._reduced_accum is not None, "write_kv_cache called before any tap()"
             reduced_partial = self._reduced_accum
             self._reduced_accum = None
-        reduced = self._tp_all_reduce(reduced_partial)  # [1,1,seq,H] replicated on TP
-        seq = reduced.shape[2]  # PER-CHIP seq: local (cache_seq/sp) when seq_parallel, else the full seq
+        # Combine the row-parallel FC partials across TP: reduce_scatter SUMS them AND scatters on hidden
+        # in ONE op → exactly the [1,1,seq,H/tp] shard the distributed hidden_norm wants (no
+        # all_gather→replicate→mesh_partition round-trip). Matches MLA o_proj/q_a_proj + MoE tt_reduce.
+        if self.tp_factor > 1:
+            reduced = ttnn.reduce_scatter(
+                reduced_partial,
+                dim=-1,
+                cluster_axis=self.tp_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+            )  # [1,1,seq,H/tp] — summed FC output, TP-sharded on hidden
+            ttnn.deallocate(reduced_partial)
+        else:
+            reduced = reduced_partial  # tp==1: the partial IS the full sum; hidden_norm handles full H
+        seq = reduced.shape[2]  # PER-CHIP seq (dim2, unchanged by the hidden scatter): local when seq_parallel
         per_chip_cap = self.cache_seq // self.sp_factor if self.seq_parallel else self.cache_seq
         assert positions_start + seq <= per_chip_cap, (
             f"positions_start+seq ({positions_start + seq}) exceeds per-chip cache depth ({per_chip_cap}); "
@@ -416,13 +420,8 @@ class TtDFlashDrafter:
             f"the 4k window is applied at migration, not here)"
         )
 
-        # Distributed hidden_norm: partition the replicated full-H `reduced` across TP so each core
-        # norms only H/tp, run TtDistributedRmsNorm (stats all-gathered → correct full-H norm), then
-        # all-gather back to replicated so the column-parallel k/v_proj can consume it.
-        if self.tp_factor > 1:
-            part = ttnn.mesh_partition(reduced, dim=3, cluster_axis=self.tp_axis)  # [1,1,seq,H/tp]
-            ttnn.deallocate(reduced)
-            reduced = part
+        # Distributed hidden_norm on the [1,1,seq,H/tp] shard (stats all-gathered internally → correct
+        # full-H norm), then all-gather back to replicated so the column-parallel k/v_proj sees full H.
         target_hidden = self.hidden_norm(reduced)  # [1,1,seq,H/tp] (or full H when tp==1)
         ttnn.deallocate(reduced)
         if self.tp_factor > 1:
@@ -440,20 +439,20 @@ class TtDFlashDrafter:
         # TODO(Phase 3): for chunked prefill at arbitrary offsets, prefer an indexed rope op that takes
         # the offset on-device (like MLA's rotary_embedding_indexed) to drop the per-chunk slice too.
         if self.seq_parallel:
-            # Each SP chip holds only its local seq; the rope table is SP-sharded over the GLOBAL seq so
-            # this chip already received its absolute-position window (see _ensure_rope) — no slice/offset.
+            # The __init__-built rope table is SP-sharded over the GLOBAL seq, so this chip already holds
+            # its absolute-position window [r*cache_seq/sp, …); use it directly — no per-call build/slice.
             assert positions_start == 0, "seq_parallel chunked offset (positions_start>0) is a Phase-3 TODO"
-            self._ensure_rope(seq * self.sp_factor)  # GLOBAL length → SP-shard → per-chip window == [seq,..]
-            cos, sin, rope_owned = self._rope_cos, self._rope_sin, False
+            cos, sin, deallocate_rope = self._rope_cos, self._rope_sin, False
         else:
+            # The __init__-built rope table covers [0, cache_seq); a full chunk from 0 uses it directly,
+            # a shorter/offset chunk slices its window out.
             end = positions_start + seq
-            self._ensure_rope(end)  # table sized to the roped positions; single-shot from 0 => no slice
             if positions_start == 0 and self._rope_end == seq:
-                cos, sin, rope_owned = self._rope_cos, self._rope_sin, False
+                cos, sin, deallocate_rope = self._rope_cos, self._rope_sin, False
             else:
                 cos = ttnn.slice(self._rope_cos, [0, 0, positions_start, 0], [1, 1, end, cfg.head_dim])
                 sin = ttnn.slice(self._rope_sin, [0, 0, positions_start, 0], [1, 1, end, cfg.head_dim])
-                rope_owned = True
+                deallocate_rope = True
 
         for i in range(cfg.num_hidden_layers):
             k = ttnn.linear(
@@ -468,8 +467,8 @@ class TtDFlashDrafter:
                 compute_kernel_config=self.default_compute_kernel_config,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            k = self._split_heads(k, seq)  # [1, kvh_local, seq, head_dim]
-            v = self._split_heads(v, seq)
+            k = self._split_heads(k)  # [1, kvh_local, seq, head_dim]
+            v = self._split_heads(v)
             # per-head RMSNorm over head_dim, then Qwen3 half-split rope. V untouched.
             k = ttnn.rms_norm(
                 k,
@@ -487,7 +486,7 @@ class TtDFlashDrafter:
             ttnn.kv_cache.fill_cache_for_user_(self.v_cache, v, i)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
-        if rope_owned:
+        if deallocate_rope:
             ttnn.deallocate(cos)
             ttnn.deallocate(sin)
         ttnn.deallocate(target_hidden)
