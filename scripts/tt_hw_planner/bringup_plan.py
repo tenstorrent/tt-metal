@@ -56,6 +56,7 @@ class BringUpPlan:
     # Empty list means kernel_constraints raised or the config was unusable
     # — consumers must tolerate that.
     kernel_findings: List[Dict[str, Any]] = field(default_factory=list)
+    ranked_siblings: List[Tuple[str, int, str]] = field(default_factory=list)
 
     @property
     def counts(self) -> Dict[str, int]:
@@ -134,7 +135,24 @@ def _diff_status(new_shape: Dict[str, Any], sibling_shape: Dict[str, Any]) -> st
     return REUSE if not differ else ADAPT
 
 
-def _sibling_tt_file(backend: FamilyBackend, repo_root: Path, hint: str) -> Optional[str]:
+def _sibling_tt_file(
+    backend: FamilyBackend,
+    repo_root: Path,
+    hint: str,
+    extra_backends: Optional[List[FamilyBackend]] = None,
+) -> Optional[str]:
+    """Reuse target for one component, primary backend first then falling
+    through the ranked runner-up siblings (fixes-plan Point 2b) so a component's
+    reuse target comes from whichever sibling actually provides it — not only
+    the single locked family."""
+    for be in [backend, *(extra_backends or [])]:
+        hit = _sibling_tt_file_one(be, repo_root, hint)
+        if hit:
+            return hit
+    return None
+
+
+def _sibling_tt_file_one(backend: FamilyBackend, repo_root: Path, hint: str) -> Optional[str]:
     base = (repo_root / backend.demo_path).resolve()
     if not base.is_dir():
         return None
@@ -178,6 +196,7 @@ def _extract_components_vision(
     backend: FamilyBackend,
     repo_root: Path,
     new_model_type: Optional[str],
+    extra_backends: Optional[List[FamilyBackend]] = None,
 ) -> List[Component]:
     out: List[Component] = []
 
@@ -192,7 +211,7 @@ def _extract_components_vision(
         status = _diff_status(_shape(new_sub), _shape(sib_sub))
         if cfg_key not in sib_nest_keys:
             status = NEW
-        tt_target = _sibling_tt_file(backend, repo_root, kind.split("_")[0])
+        tt_target = _sibling_tt_file(backend, repo_root, kind.split("_")[0], extra_backends=extra_backends)
         out.append(
             Component(
                 name=cfg_key,
@@ -239,7 +258,7 @@ def _extract_components_vision(
                 )
             )
             continue
-        tt_target = _sibling_tt_file(backend, repo_root, hint)
+        tt_target = _sibling_tt_file(backend, repo_root, hint, extra_backends=extra_backends)
         if tt_target is None:
             continue
         status = _diff_status(new_flat, sib_flat)
@@ -289,6 +308,7 @@ def _extract_components_generic(
     backend: FamilyBackend,
     repo_root: Path,
     new_model_type: Optional[str],
+    extra_backends: Optional[List[FamilyBackend]] = None,
 ) -> List[Component]:
     new_flat = _shape(new_cfg)
     sib_flat = _shape(sibling_cfg)
@@ -320,7 +340,7 @@ def _extract_components_generic(
                 )
             )
             continue
-        tt_target = _sibling_tt_file(backend, repo_root, hint)
+        tt_target = _sibling_tt_file(backend, repo_root, hint, extra_backends=extra_backends)
         if tt_target is None:
             continue
         status = _diff_status(new_flat, sib_flat)
@@ -478,6 +498,15 @@ def build_bringup_plan(
         except Exception:
             sibling_cfg = {}
 
+    ranked: List[Tuple[FamilyBackend, int, str]] = []
+    try:
+        from .family_backends import rank_backends
+
+        ranked = rank_backends(category=backend.category, model_type=new_model_type)
+    except Exception:
+        ranked = []
+    extra_backends = [b for b, _, _ in ranked if b.name != backend.name]
+
     use_module_tree = bool(getattr(backend, "use_module_tree", False))
     if use_module_tree:
         comps = _extract_components_from_module_tree(
@@ -492,6 +521,7 @@ def build_bringup_plan(
             backend=backend,
             repo_root=repo_root,
             new_model_type=new_model_type,
+            extra_backends=extra_backends,
         )
     else:
         comps = _extract_components_generic(
@@ -500,6 +530,7 @@ def build_bringup_plan(
             backend=backend,
             repo_root=repo_root,
             new_model_type=new_model_type,
+            extra_backends=extra_backends,
         )
 
     if not use_module_tree:
@@ -611,18 +642,13 @@ def build_bringup_plan(
             "expect attention + encoder stacks to be NEW even if other shapes line up."
         )
 
-    try:
-        from .family_backends import rank_backends
-
-        ranked = rank_backends(category=backend.category, model_type=new_model_type)
-        if len(ranked) > 1:
-            alts = "; ".join(f"{b.name} (score {s}: {r})" for b, s, r in ranked)
-            plan.notes.append(
-                "Top sibling candidates (pull each component's reuse target from whichever "
-                f"provides it, not only the first): {alts}"
-            )
-    except Exception:
-        pass
+    plan.ranked_siblings = [(b.name, s, r) for b, s, r in ranked]
+    if len(ranked) > 1:
+        alts = "; ".join(f"{b.name} (score {s}: {r})" for b, s, r in ranked)
+        plan.notes.append(
+            "Top sibling candidates (per-component reuse targets are pulled from whichever "
+            f"sibling provides them, not only the first): {alts}"
+        )
 
     return plan
 
@@ -647,6 +673,21 @@ def render_markdown(plan: BringUpPlan) -> str:
         parts.append("> **Notes:**")
         for n in plan.notes:
             parts.append(f"> - {n}")
+        parts.append("")
+
+    if plan.ranked_siblings:
+        parts.append("## Sibling candidates (ranked)")
+        parts.append("")
+        parts.append(
+            "Top backends by match score — components pull their reuse target from whichever "
+            "of these provides it, not only rank 1."
+        )
+        parts.append("")
+        parts.append("| Rank | Backend | Score | Match reason |")
+        parts.append("|---|---|---|---|")
+        for i, (name, score, reason) in enumerate(plan.ranked_siblings, 1):
+            selected = " (selected)" if name == plan.backend_name else ""
+            parts.append(f"| {i} | `{name}`{selected} | {score} | {reason} |")
         parts.append("")
 
     parts.append("## Components")
@@ -725,6 +766,9 @@ def render_json(plan: BringUpPlan) -> str:
         "common_reuse": [{"purpose": p, "path": pth} for p, pth in plan.common_reuse],
         "components": [asdict(c) for c in plan.components],
         "notes": plan.notes,
+        "ranked_siblings": [
+            {"rank": i, "backend": n, "score": s, "reason": r} for i, (n, s, r) in enumerate(plan.ranked_siblings, 1)
+        ],
     }
     return json.dumps(payload, indent=2)
 
