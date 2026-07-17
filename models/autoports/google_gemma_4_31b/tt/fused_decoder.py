@@ -11,11 +11,8 @@ operations. Runtime inputs and outputs remain device tensors.
 from __future__ import annotations
 
 import ttnn
-from models.autoports.google_gemma_4_31b.tt.functional_decoder import (
-    FULL_ATTN_Q_CHUNK,
-    MLP_CHUNK,
-    FunctionalDecoder,
-)
+from models.autoports.google_gemma_4_31b.tt.decode_head_grid import decode_head_core_grid, decode_head_sub_core_grids
+from models.autoports.google_gemma_4_31b.tt.functional_decoder import FULL_ATTN_Q_CHUNK, MLP_CHUNK, FunctionalDecoder
 from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_MAX_SEQ,
     apply_per_head_norm,
@@ -180,9 +177,7 @@ class FusedDecoder(FunctionalDecoder):
         q.deallocate(True)
         k.deallocate(True)
         v.deallocate(True)
-        concatenated = self._concatenate_heads(
-            sdpa, num_heads=config.num_attention_heads, head_dim=config.head_dim
-        )
+        concatenated = self._concatenate_heads(sdpa, num_heads=config.num_attention_heads, head_dim=config.head_dim)
         sdpa.deallocate(True)
         output = ttnn.linear(concatenated, weights.o_proj)
         concatenated.deallocate(True)
@@ -238,9 +233,7 @@ class FusedDecoder(FunctionalDecoder):
                 program_config=program_config,
             )
             q.deallocate(True)
-            concatenated = self._concatenate_heads(
-                sdpa, num_heads=config.num_attention_heads, head_dim=config.head_dim
-            )
+            concatenated = self._concatenate_heads(sdpa, num_heads=config.num_attention_heads, head_dim=config.head_dim)
             sdpa.deallocate(True)
             projected_outputs.append(ttnn.linear(concatenated, weights.o_proj))
             concatenated.deallocate(True)
@@ -304,9 +297,7 @@ class FusedDecoder(FunctionalDecoder):
             while batch_size % grid_x:
                 grid_x -= 1
             grid_h = batch_size // grid_x
-            k_grid = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_h - 1))}
-            )
+            k_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_h - 1))})
             v_grid = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, grid_h), ttnn.CoreCoord(grid_x - 1, 2 * grid_h - 1))}
             )
@@ -373,13 +364,7 @@ class FusedDecoder(FunctionalDecoder):
             k_chunk_size=64,
             exp_approx_mode=False,
         )
-        from models.tt_transformers.tt.model_config import num_to_corerange
-
-        grid = self.mesh_device.compute_with_storage_grid_size()
-        grid_x = min(batch_size, grid.x)
-        if batch_size >= grid_x and batch_size % grid_x:
-            grid_x = max(x for x in range(grid_x, 0, -1) if batch_size % x == 0 and batch_size // x <= grid.y)
-        core_grid = ttnn.CoreRangeSet({num_to_corerange(batch_size, grid_x=grid_x, grid_y=grid.y)})
+        core_grid = decode_head_core_grid(self.mesh_device, batch_size)
         head_memory_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, config.head_dim),
             core_grid=core_grid,
@@ -411,7 +396,11 @@ class FusedDecoder(FunctionalDecoder):
         sdpa_interleaved = sdpa
         sdpa = ttnn.to_memory_config(sdpa_interleaved, head_memory_config)
         sdpa_interleaved.deallocate(True)
-        concatenated = ttnn.experimental.nlp_concat_heads_decode(sdpa, num_heads=config.num_attention_heads)
+        concatenated = ttnn.experimental.nlp_concat_heads_decode(
+            sdpa,
+            num_heads=config.num_attention_heads,
+            sub_core_grids=decode_head_sub_core_grids(self.mesh_device, core_grid),
+        )
         sdpa.deallocate(True)
         output = ttnn.sharded_to_interleaved(concatenated, ttnn.DRAM_MEMORY_CONFIG)
         concatenated.deallocate(True)
