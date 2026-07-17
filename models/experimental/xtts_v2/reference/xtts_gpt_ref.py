@@ -189,12 +189,90 @@ def make_golden_input(ckpt_path=DEFAULT_CKPT, n_text=16, n_mel=48, seed=0):
     return inputs_embeds.contiguous()
 
 
+# --------------------------------------------------------------------------------------
+# End-to-end generation reference (prefill prompt -> greedy decode until stop / max_new)
+# --------------------------------------------------------------------------------------
+START_AUDIO_TOKEN = 1024  # gpt_start_audio_token
+STOP_AUDIO_TOKEN = 1025  # gpt_stop_audio_token
+
+
+def load_gen_head(ckpt_path=DEFAULT_CKPT):
+    """Load the generation-head tensors (kept on CPU / outside the TT transformer block):
+    mel_head (latent->logits), mel_embedding + mel_pos (embed the sampled code), and the
+    text embeddings used to build a prompt."""
+    full = load_full_state(ckpt_path)
+    return {
+        "mel_head_w": full["gpt.mel_head.weight"].float(),  # (1026,1024)
+        "mel_head_b": full["gpt.mel_head.bias"].float(),  # (1026,)
+        "mel_emb": full["gpt.mel_embedding.weight"].float(),  # (1026,1024)
+        "mel_pos": full["gpt.mel_pos_embedding.emb.weight"].float(),  # (608,1024)
+        "text_emb": full["gpt.text_embedding.weight"].float(),  # (6681,1024)
+        "text_pos": full["gpt.text_pos_embedding.emb.weight"].float(),  # (404,1024)
+    }
+
+
+def build_prompt_embeds(heads, n_text=16, seed=0):
+    """A seeded text-only prompt [1, n_text, 1024] (stands in for cond+text until the
+    Perceiver / Block 1 exists). Reference and TTNN use the identical prompt."""
+    g = torch.Generator().manual_seed(seed)
+    text_ids = torch.randint(0, heads["text_emb"].shape[0], (n_text,), generator=g)
+    return (heads["text_emb"][text_ids] + heads["text_pos"][:n_text]).unsqueeze(0).contiguous()
+
+
+def reference_generate(ckpt_path=DEFAULT_CKPT, n_text=16, max_new=24, seed=0):
+    """Greedy generate: prefill [prompt, START] then decode until STOP or max_new.
+    Returns the prompt, per-step input embeddings (teacher-forcing), codes, logits, latents."""
+    heads = load_gen_head(ckpt_path)
+    gpt, final_norm = build_reference(ckpt_path)
+    prompt = build_prompt_embeds(heads, n_text, seed)
+    mel_emb, mel_pos = heads["mel_emb"], heads["mel_pos"]
+    mh_w, mh_b = heads["mel_head_w"], heads["mel_head_b"]
+
+    def head(latent):  # [1,1,1024] -> [1,1,1026]
+        return latent @ mh_w.t() + mh_b
+
+    with torch.no_grad():
+        start_emb = (mel_emb[START_AUDIO_TOKEN] + mel_pos[0]).view(1, 1, -1)
+        out = gpt(inputs_embeds=torch.cat([prompt, start_emb], dim=1), use_cache=True)
+        past = out.past_key_values
+        last = final_norm(out.last_hidden_state[:, -1:])
+        logits = head(last)
+        code = int(logits.argmax(-1))
+        codes, latents, step_inputs, step_logits = [code], [last], [start_emb], [logits]
+        cur = code
+        for m in range(1, max_new):
+            emb = (mel_emb[cur] + mel_pos[m]).view(1, 1, -1)
+            out = gpt(inputs_embeds=emb, past_key_values=past, use_cache=True)
+            past = out.past_key_values
+            last = final_norm(out.last_hidden_state[:, -1:])
+            logits = head(last)
+            step_inputs.append(emb)
+            step_logits.append(logits)
+            latents.append(last)
+            code = int(logits.argmax(-1))
+            codes.append(code)
+            if code == STOP_AUDIO_TOKEN:
+                break
+            cur = code
+
+    return {
+        "prompt_embeds": prompt,
+        "step_inputs": torch.cat(step_inputs, dim=1),  # [1,T,1024]
+        "ref_codes": torch.tensor(codes),  # [T]
+        "ref_logits": torch.cat(step_logits, dim=1),  # [1,T,1026]
+        "ref_latents": torch.cat(latents, dim=1),  # [1,T,1024]
+        "start_token": START_AUDIO_TOKEN,
+        "stop_token": STOP_AUDIO_TOKEN,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default=DEFAULT_CKPT)
     ap.add_argument("--out", default=GOLDEN_DIR)
     ap.add_argument("--n-text", type=int, default=16)
     ap.add_argument("--n-mel", type=int, default=48)
+    ap.add_argument("--max-new", type=int, default=24, help="generation golden steps")
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -213,7 +291,21 @@ def main():
         f"[ref] latents shape={tuple(latents.shape)} "
         f"mean={latents.mean().item():.5f} std={latents.std().item():.5f}"
     )
-    print(f"[ref] wrote goldens to {args.out}")
+    print(f"[ref] wrote prefill goldens to {args.out}")
+
+    # Generation golden (prefill + greedy decode)
+    gen_dir = os.path.join(args.out, "generate")
+    os.makedirs(gen_dir, exist_ok=True)
+    print(f"[ref] generating (max_new={args.max_new})")
+    gen = reference_generate(args.ckpt, n_text=args.n_text, max_new=args.max_new)
+    for k in ("prompt_embeds", "step_inputs", "ref_codes", "ref_logits", "ref_latents"):
+        torch.save(gen[k], os.path.join(gen_dir, f"{k}.pt"))
+    torch.save(
+        {"start_token": gen["start_token"], "stop_token": gen["stop_token"], "n_text": args.n_text},
+        os.path.join(gen_dir, "meta.pt"),
+    )
+    print(f"[ref] generated {gen['ref_codes'].numel()} codes: {gen['ref_codes'].tolist()}")
+    print(f"[ref] wrote generation goldens to {gen_dir}")
 
 
 if __name__ == "__main__":
