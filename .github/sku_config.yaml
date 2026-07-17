@@ -174,13 +174,6 @@ skus:
       - in-service
     weights-cache-mode: yyz4-mnt-models
 
-  bh_quietbox_2_iommu:
-    runs_on:
-      - BH-Quietbox-2-iommu
-      - pipeline-perf
-      - in-service
-    weights-cache-mode: yyz4-mnt-models
-
   bh_spsg:
     runs_on:
       - exabox-multihost-with-nfs
