@@ -152,6 +152,12 @@ class LTXTransformerState:
 BASE_SHIFT_ANCHOR = 1024
 MAX_SHIFT_ANCHOR = 4096
 
+# Default DiT-linear quant preset. bf8 weights are the shipped tier: the perf targets and the VBench
+# floors are calibrated against it, so a bare run must get it without env plumbing. LTX_QUANT="" opts
+# back to the bf16 baseline. The weight-cache name derives from the same value, so both readers must
+# resolve the default identically or a run dtype-clashes on a stale-precision cache hit.
+LTX_QUANT_DEFAULT = "all_bf8_lofi"
+
 
 def compute_sigmas(
     steps: int,
@@ -692,7 +698,7 @@ class LTXPipeline:
         if lora_specs:
             tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
             base = f"{base}.lora-{tag}"
-        preset = os.environ.get("LTX_QUANT", "").strip()
+        preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
         if preset:
             from .quant_config import QuantConfig
 
@@ -932,8 +938,10 @@ class LTXPipeline:
         self._prepare_transformer(0)
 
     def _maybe_apply_quant_config(self) -> None:
-        """Install a DiT-linear quant preset when LTX_QUANT names one. No-op (baseline) otherwise."""
-        preset = os.environ.get("LTX_QUANT", "").strip()
+        """Install a DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
+
+        LTX_QUANT="" selects the bf16 baseline."""
+        preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
         if not preset:
             return
         from .quant_config import QuantConfig, set_quant_config

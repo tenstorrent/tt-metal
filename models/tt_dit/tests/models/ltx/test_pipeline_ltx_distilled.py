@@ -117,6 +117,7 @@ line_trace_params = {**line_params, "trace_region_size": _LTX_TRACE_REGION, "l1_
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled(
+    request,
     mesh_device,
     mesh_shape,
     sp_axis,
@@ -147,7 +148,13 @@ def test_pipeline_distilled(
     width = int(os.environ.get("WIDTH", "1920"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
-    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    # Tracing is the shipped configuration and carries the stage/audio-decode timings the perf targets
+    # assume, so it defaults ON — but only where this config reserved a trace region: capture needs
+    # trace_region_size, and the bare line_params/ring_params entries leave it 0. Keying the default off
+    # the config keeps those parametrizations runnable instead of failing capture on a 0-sized region.
+    _device_params = request.node.callspec.params.get("device_params") or {}
+    _traced_default = "1" if _device_params.get("trace_region_size") else "0"
+    traced = os.environ.get("LTX_TRACED", _traced_default) in ("1", "true", "True")
 
     pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,

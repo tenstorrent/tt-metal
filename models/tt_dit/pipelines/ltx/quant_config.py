@@ -27,11 +27,12 @@ from loguru import logger
 
 import ttnn
 
-# ``activation_dtype`` is honoured only when this is set. It is a far more aggressive change than
-# the weight quant it rides on — weights are a fixed, well-conditioned distribution, activations
-# are not — and it is the one knob here that changes what the *collectives* move, so it is opt-in
-# and A/B-able against the shipped preset rather than folded into it.
-LTX_QUANT_ACTIVATIONS = os.environ.get("LTX_QUANT_ACTIVATIONS", "0") in ("1", "true", "True")
+# ``activation_dtype`` is honoured only when this is set. It is a more aggressive change than the
+# weight quant it rides on — weights are a fixed, well-conditioned distribution, activations are not
+# — and it is the one knob here that changes what the *collectives* move. It is on by default because
+# the shipped 1080p tier is measured and VBench-gated with it on; set it to 0 to A/B against the
+# weight-only preset.
+LTX_QUANT_ACTIVATIONS = os.environ.get("LTX_QUANT_ACTIVATIONS", "1") in ("1", "true", "True")
 
 # Forces the ring-SDPA input cast on top of whatever preset is selected. Same knob as
 # ``all_bf8_lofi_sdpa_bf8``, reachable without changing the preset name — which matters because the
