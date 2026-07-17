@@ -69,7 +69,7 @@ def perf_counter_groups_to_bitfield(groups):
     return bits
 
 
-def merge_perf_counter_device_logs(pass_csvs, out_csv):
+def merge_perf_counter_device_logs(pass_csvs, out_csv, base_dir):
     """Merge per-pass device profiler CSVs into one.
 
     Each pass replayed the same workload, so zone-timing rows are equivalent and ops align by
@@ -77,19 +77,26 @@ def merge_perf_counter_device_logs(pass_csvs, out_csv):
     (zones + its counter rows) and append ONLY the perf-counter rows (marker id 9090) from later
     passes, so the merged log carries every group's counters against one set of zones.
 
-    `pass_csvs` and `out_csv` are internal profiler artifacts produced by this module (per-pass
-    snapshots of `generate_logs_folder(outputFolder)/profile_log_device.csv`); they are not
-    external/user input, so there is no path-traversal surface here.
+    All reads/writes are confined to ``base_dir`` (the profiler logs folder): every path is resolved
+    to an absolute path and rejected if it escapes ``base_dir``, so a crafted path can never read or
+    write outside the profiler output tree.
     """
-    base = Path(pass_csvs[0]).read_text().splitlines(keepends=True)  # cycode:ignore path-traversal (internal path)
-    merged = list(base)
+    base = Path(base_dir).resolve()
+
+    def _confined(p):
+        resolved = Path(p).resolve()
+        if resolved != base and base not in resolved.parents:
+            raise ValueError(f"perf-counter log path escapes {base}: {resolved}")
+        return resolved
+
+    merged = list(_confined(pass_csvs[0]).read_text().splitlines(keepends=True))
     for extra in pass_csvs[1:]:
-        for line in Path(extra).read_text().splitlines(keepends=True):  # cycode:ignore path-traversal (internal path)
+        for line in _confined(extra).read_text().splitlines(keepends=True):
             # column 4 (0-indexed) is timer_id; perf-counter rows use PERF_COUNTER_MARKER_ID.
             fields = line.split(",")
             if len(fields) > 4 and fields[4].strip() == PERF_COUNTER_MARKER_ID:
                 merged.append(line)
-    Path(out_csv).write_text("".join(merged))  # cycode:ignore path-traversal (internal path)
+    _confined(out_csv).write_text("".join(merged))
 
 
 def main():
@@ -546,7 +553,7 @@ def main():
                     else:
                         logger.warning(f"Device log missing after perf-counter pass {i + 1}: {device_log}")
                 if pass_logs:
-                    merge_perf_counter_device_logs(pass_logs, device_log)
+                    merge_perf_counter_device_logs(pass_logs, device_log, generate_logs_folder(outputFolder))
                     logger.info(f"Merged {len(pass_logs)} perf-counter pass logs into {device_log}")
             else:
                 run_workload(envVars)
