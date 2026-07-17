@@ -77,9 +77,8 @@ _FTZ_THRESHOLD = {
 def _apply_ftz(result: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
     """Flush subnormal-magnitude values in *result* to zero, matching hardware FTZ.
 
-    The flush boundary is the format's smallest normal value; anything below it
-    is a subnormal the hardware flushes. Integer formats have no subnormals, so
-    they are returned unchanged.
+    The threshold is format-specific (see _FTZ_THRESHOLD above). Integer formats
+    have no subnormals, so they are returned unchanged.
     """
     if data_format.is_integer():
         return result
