@@ -24,12 +24,8 @@ using namespace tt;
 
 namespace {
 
-// Worker-core list for the fill_cache work-split. batch_idx_fallback (excluded from the program
-// hash, baked into writer runtime args) is the SAME value on every core, so re-patching it on a
-// cache hit only needs the core *ordering* — not the per-core block counts. This helper is the
-// single source of truth for that ordering: both build_paged_fill_cache_descriptor (cache miss)
-// and PagedFillCacheDeviceOperation::get_dynamic_runtime_args (cache hit) call it, so the two
-// paths cannot drift in which cores they touch or in what order.
+// Worker-core list for the fill_cache work-split: the single source of truth for core ordering used
+// by build_paged_fill_cache_descriptor when emitting per-core runtime args.
 std::vector<tt_metal::CoreCoord> compute_paged_fill_cache_cores(
     const PagedFillCacheParams& /*operation_attributes*/, const PagedFillCacheInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -240,7 +236,7 @@ ProgramDescriptor build_paged_fill_cache_descriptor(
     uint32_t g1_numcores = core_group_1.num_cores();
     uint32_t g2_numcores = core_group_2.num_cores();
 
-    // Core list shared with get_dynamic_runtime_args (single source of truth for ordering).
+    // Core list (single source of truth for ordering).
     const auto cores = compute_paged_fill_cache_cores(operation_attributes, tensor_args);
 
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
@@ -314,48 +310,21 @@ ProgramDescriptor PagedFillCacheMeshWorkloadFactory::create_descriptor(
     return build_paged_fill_cache_descriptor(operation_attributes, tensor_args, noop);
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> PagedFillCacheDeviceOperation::get_dynamic_runtime_args(
+void PagedFillCacheDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // Coords excluded from a mesh dispatch build a noop program (kernels early-exit), so there is
-    // nothing meaningful to re-patch there.
-    if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
-        !operation_attributes.mesh_coords.value().contains(mesh_dispatch_coordinate.value())) {
-        return {};
-    }
-
-    // batch-idx-tensor mode: the writer pushes the batch_idx tensor's Buffer* (writer arg 4), which
-    // the framework already re-patches by buffer base address. Nothing op-specific to re-apply.
-    if (tensor_args.batch_idx_tensor_opt.has_value()) {
-        return {};
-    }
-
-    // Scalar-fallback mode: batch_idx_fallback is excluded from the program hash (so two calls
-    // differing only in it cache-hit) yet baked into writer runtime arg index 4 — re-patch it on
-    // every dispatch or it freezes at the first cache-miss value. It is the SAME value on every
-    // core (operation_attributes.batch_idx_fallback, not per-core), so we emit one arg per core
-    // using the shared core-list helper (single source of truth for core ordering).
-    //
-    // noop is intentionally NOT re-patched: it is derived from the hashed mesh_coords (the mesh
-    // factory sets it per coord from coord-membership), so it is stable across cache hits for a
-    // fixed coord and is already correct in the cached program.
-    //
-    // Kernel push order in build_paged_fill_cache_descriptor: reader(0), writer(1).
-    // Writer rt args: [0]=dst, [1]=page_table, [2]=start_row_num, [3]=num_rows,
-    //                 [4]=batch_idx_fallback (scalar-fallback mode), [5]=noop.
-    constexpr uint32_t kWriterKernelIdx = 1;
-    constexpr uint32_t kBatchIdxFallbackArgIdx = 4;
-
-    const auto cores = compute_paged_fill_cache_cores(operation_attributes, tensor_args);
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size());
-    for (const auto& core : cores) {
-        dynamic_args.push_back(
-            {kWriterKernelIdx, core, kBatchIdxFallbackArgIdx, operation_attributes.batch_idx_fallback});
-    }
-    return dynamic_args;
+    // Re-derive the descriptor from the single source of truth (create_descriptor, per select_program_factory)
+    // and re-apply it to the cached program — re-patches hash-excluded batch_idx_fallback and all buffer
+    // addresses. No rebuild; supersedes get_dynamic_runtime_args/resolve_bindings.
+    auto desc =
+        operation_attributes.mesh_coords.has_value()
+            ? PagedFillCacheMeshWorkloadFactory::create_descriptor(
+                  operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate)
+            : PagedFillCacheProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::experimental::prim

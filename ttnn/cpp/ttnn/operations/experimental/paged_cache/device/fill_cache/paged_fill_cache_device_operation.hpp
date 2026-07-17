@@ -37,14 +37,10 @@ struct PagedFillCacheDeviceOperation {
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // batch_idx_fallback and noop are excluded from the program hash (so calls differing only in
-    // them cache-hit). Of these only batch_idx_fallback is genuinely dynamic: in the scalar-fallback
-    // path (no batch_idx_tensor) it is baked into a writer runtime arg, so it must be re-applied to
-    // the cached program on every dispatch. Returns empty in batch-idx-tensor mode (the writer pushes
-    // a Buffer* the framework already re-patches) and for coords excluded from a mesh dispatch. noop
-    // is derived from the hashed mesh_coords and is therefore stable across cache hits, so it is not
-    // re-patched.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Cache-hit re-derivation: re-run create_descriptor (single source of truth) for the current
+    // tensors/attrs and re-apply it, so hash-excluded batch_idx_fallback can't freeze at the miss value.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
