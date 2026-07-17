@@ -402,6 +402,7 @@ class TtPrefillTransformer(LightweightModule):
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
                 on_layer_complete=on_layer_complete,
+                on_layer_hidden=on_layer_hidden,
                 actual_start=actual_start,
                 actual_end=actual_end,
                 cache_user_id=cache_user_id,
@@ -420,11 +421,6 @@ class TtPrefillTransformer(LightweightModule):
             else:
                 h, _ = ret
             signpost(f"forward_layer_{i}_end")
-            if on_layer_hidden is not None:
-                # On-device, per-layer tap: hand this layer's output residual stream [1,1,seq/sp,H/tp]
-                # (GLOBAL index) to a consumer (e.g. the DFlash drafter). The consumer decides which layers
-                # to keep (only target layers) and where — stays on device (DRAM), no host copy here.
-                on_layer_hidden(self.first_layer_idx + i, h)
             if self.kv_only_last_layer and i == len(self.layers) - 1:
                 # Last layer was kv-only — KV cache filled, migration callback
                 # fired, no hidden state flowing forward. Skip norm + lm_head +

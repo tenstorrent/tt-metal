@@ -430,6 +430,7 @@ class TtPrefillBlock(LightweightModule):
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
         on_layer_complete: Optional[Callable[[int], None]] = None,
+        on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
@@ -450,6 +451,10 @@ class TtPrefillBlock(LightweightModule):
                 region-offset bounds). Has no effect on dense layers.
             on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
                 the chunk this block zeros the pad window past actual_end, flushes, then fires this.
+            on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
+                residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
+                matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
+                not free/mutate x — it flows on to the next layer.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache
                 write offset = cumulative valid-KV count before it; None for single-shot). Selects
                 MLA's chunked path; requires the block to have been built with is_chunked=True.
@@ -566,6 +571,12 @@ class TtPrefillBlock(LightweightModule):
             rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
             rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
             rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
+
+        # Post-FFN output-residual tap (e.g. the DFlash drafter): fire with this block's GLOBAL layer
+        # index (self.mla.layer_idx) and its final output residual. Not reached for kv_only blocks (they
+        # returned above with no output). The callback must NOT free/mutate x — it flows to the next layer.
+        if on_layer_hidden is not None:
+            on_layer_hidden(self.mla.layer_idx, x)
 
         if return_kv_intermediates:
             if return_indexer_indices:
