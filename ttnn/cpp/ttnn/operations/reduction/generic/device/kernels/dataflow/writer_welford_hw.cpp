@@ -75,10 +75,11 @@ void kernel_main() {
 
     for (std::uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: W-combine all per-column partials into one scalar ---
-        float mean = 0.0f;
-        float means_m2 = 0.0f;
+        float base_mean = 0.0f;
+        float mean_delta_sum = 0.0f;
+        float mean_delta_sq_sum = 0.0f;
         float partial_var_sum = 0.0f;
-        std::uint32_t num_partials = 0;
+        bool have_base_mean = false;
 
         for (std::uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (std::uint32_t wt = 0; wt < Wt; ++wt) {
@@ -102,15 +103,14 @@ void kernel_main() {
                     // Every partial summarizes the same H samples. The total population
                     // variance is therefore the average partial variance plus the
                     // population variance of the partial means.
-                    if (num_partials == 0) {
-                        mean = partial_mean;
+                    if (!have_base_mean) {
+                        base_mean = partial_mean;
                         partial_var_sum = partial_var;
-                        num_partials = 1;
+                        have_base_mean = true;
                     } else {
-                        ++num_partials;
-                        const float delta = partial_mean - mean;
-                        mean += delta / static_cast<float>(num_partials);
-                        means_m2 += delta * (partial_mean - mean);
+                        const float delta = partial_mean - base_mean;
+                        mean_delta_sum += delta;
+                        mean_delta_sq_sum += delta * delta;
                         partial_var_sum += partial_var;
                     }
                 }
@@ -119,15 +119,24 @@ void kernel_main() {
             }
         }
 
+        // Centering the partial means around the first value avoids cancellation
+        // from their absolute magnitude. All counts are compile-time constants,
+        // so this formulation requires no floating-point division at runtime:
+        // M2(means) = sum(delta^2) - sum(delta)^2 / num_partials.
+        constexpr std::uint32_t num_partials = reduce_batch_size * W;
+        constexpr float inv_num_partials = 1.0f / static_cast<float>(num_partials);
+        const float mean_delta = mean_delta_sum * inv_num_partials;
+        const float means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
         const float var_sum = partial_var_sum + means_m2;
         float final_var;
         if constexpr (correction) {
-            const std::uint32_t sample_count = num_partials * H;
+            constexpr std::uint32_t sample_count = num_partials * H;
             // var_sum / num_partials is the population variance. Folding the sample
             // count correction into it cancels num_partials from the divisor.
-            final_var = var_sum * static_cast<float>(H) / static_cast<float>(sample_count - 1);
+            constexpr float correction_scale = static_cast<float>(H) / static_cast<float>(sample_count - 1);
+            final_var = var_sum * correction_scale;
         } else {
-            final_var = var_sum / static_cast<float>(num_partials);
+            final_var = var_sum * inv_num_partials;
         }
 
         // Write the combined scalar into a tile in cb_combined.  The compute

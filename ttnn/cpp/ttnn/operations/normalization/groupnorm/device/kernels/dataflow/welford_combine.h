@@ -96,23 +96,30 @@ inline WelfordStats<std::uint16_t> combine_welford_stats(T means, T vars) {
         std::is_same_v<std::remove_volatile_t<std::remove_pointer_t<T>>, std::uint16_t>,
         "T must be uint16_t* or volatile uint16_t*");
 
-    float mean = bf16_to_fp32(means[0]);
-    float means_m2 = 0.0f;
+    const float base_mean = bf16_to_fp32(means[0]);
+    float mean_delta_sum = 0.0f;
+    float mean_delta_sq_sum = 0.0f;
     float var_sum = bf16_to_fp32(vars[0]);
 
     for (std::uint32_t i = 1; i < ARRAY_SIZE; ++i) {
         const float next_mean = bf16_to_fp32(means[i * STRIDE]);
-        const float delta = next_mean - mean;
-        mean += delta / static_cast<float>(i + 1);
-        means_m2 += delta * (next_mean - mean);
+        const float delta = next_mean - base_mean;
+        mean_delta_sum += delta;
+        mean_delta_sq_sum += delta * delta;
         var_sum += bf16_to_fp32(vars[i * STRIDE]);
     }
 
     // Equal-sized populations have total variance equal to the average subgroup
-    // variance plus the population variance of their means.
+    // variance plus the population variance of their means. Centering the means
+    // around the first value avoids cancellation from their absolute magnitude:
+    // M2(means) = sum(delta^2) - sum(delta)^2 / ARRAY_SIZE.
+    constexpr float inv_size = 1.0f / static_cast<float>(ARRAY_SIZE);
+    const float mean_delta = mean_delta_sum * inv_size;
+    const float means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+
     WelfordStats<std::uint16_t> result;
-    result.mean = fp32_to_bf16_truncate(mean);
-    result.variance = fp32_to_bf16_truncate((var_sum + means_m2) / static_cast<float>(ARRAY_SIZE));
+    result.mean = fp32_to_bf16_truncate(base_mean + mean_delta);
+    result.variance = fp32_to_bf16_truncate((var_sum + means_m2) * inv_size);
     result.count = ARRAY_SIZE * COUNT_PER_VALUE;
 
     return result;
