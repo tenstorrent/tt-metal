@@ -18,45 +18,63 @@ description: >-
 inputs:
   kind:
     required: true
-    description: "Artifact kind: packages | build | ttnn-import"
+    description: "Artifact kind: packages | build | ttnn-import | wheel"
   ref:
     required: true
     description: "Resolved git ref/SHA the build was performed at (i.e. inputs.ref || github.sha), NOT a workflow run ID"
-  distro:
-    required: true
-  version:
-    required: true
-  architecture:
-    required: true
   build-type:
     required: true
-  toolchain:
-    required: true
-    description: "Raw toolchain path, e.g. cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
   build-image:
     required: true
     description: >-
       The exact resolved container image the build actually compiles inside
       (e.g. ghcr.io/.../ci-build:<hash> or a caller-supplied override via
-      ci-build-docker-image). This is the compiler/runtime environment -- it
-      affects compiled output as much as toolchain/build-type do, so it's
-      part of the canonical key and manifest for every kind, not just build.
+      ci-build-docker-image, or the manylinux image for kind=wheel). This is
+      the compiler/runtime environment -- it affects compiled output as much
+      as toolchain/build-type do, so it's part of the canonical key and
+      manifest for every kind.
   tracy:
-    required: true
-  distributed:
     required: true
   enable-lto:
     required: true
+  # packages/build/ttnn-import only -- wheels.yaml's cibuildwheel-based build
+  # has no distro/toolchain/distributed/skip-tt-train/build-umd-tests/profile
+  # concept at all, so these are optional and simply omitted from the
+  # canonical tuple and manifest for kind=wheel.
+  distro:
+    required: false
+    default: ""
+  version:
+    required: false
+    default: ""
+  architecture:
+    required: false
+    default: ""
+  toolchain:
+    required: false
+    default: ""
+    description: "Raw toolchain path, e.g. cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+  distributed:
+    required: false
+    default: "false"
   skip-tt-train:
-    required: true
+    required: false
+    default: "false"
   build-umd-tests:
-    required: true
+    required: false
+    default: "false"
   profile:
-    required: true
+    required: false
+    default: "false"
   build-ttnn-import-artifact:
     required: false
     default: "false"
     description: "Only relevant for kind=ttnn-import; included in that kind's canonical key"
+  # wheel only
+  python-version:
+    required: false
+    default: ""
+    description: "Only relevant for kind=wheel; e.g. 3.10, 3.12"
 
 outputs:
   name:
@@ -79,9 +97,9 @@ runs:
       run: |
         set -eu
 
-        TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
         SANITIZED_REF=$(echo "${{ inputs.ref }}" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
         SHA12="${SANITIZED_REF:0:12}"
+        KIND="${{ inputs.kind }}"
 
         # Defensive boolean normalization: some of these inputs are only
         # declared under this workflow's `workflow_call.inputs` and NOT under
@@ -94,8 +112,57 @@ runs:
         # JSON and the hash is stable regardless of which trigger fired.
         norm_bool() { [ "$1" = "true" ] && echo "true" || echo "false"; }
         TRACY=$(norm_bool "${{ inputs.tracy }}")
-        DISTRIBUTED=$(norm_bool "${{ inputs.distributed }}")
         ENABLE_LTO=$(norm_bool "${{ inputs.enable-lto }}")
+
+        if [ "$KIND" = "wheel" ]; then
+          # wheels.yaml (cibuildwheel-based) has no distro/toolchain/distributed/
+          # skip-tt-train/build-umd-tests/profile concept -- only the fields
+          # that actually affect its compiled output go in the tuple/manifest.
+          PYVER_NODOT=$(echo "${{ inputs.python-version }}" | tr -d '.')
+
+          CANONICAL=$(cat <<EOF
+        ref=${SANITIZED_REF}
+        build-type=${{ inputs.build-type }}
+        build-image=${{ inputs.build-image }}
+        tracy=${TRACY}
+        enable-lto=${ENABLE_LTO}
+        python-version=${{ inputs.python-version }}
+        EOF
+          )
+          CANONICAL_SORTED=$(echo "$CANONICAL" | sort)
+          CFGHASH=$(printf '%s' "$CANONICAL_SORTED" | sha256sum | cut -c1-10)
+
+          # "ttnn-dist" prefix preserved: download-artifacts-from-run/action.yml
+          # and tests/scripts/download_artifacts.sh both grep for "ttnn-dist|ttnn".
+          NAME="ttnn-dist-cp${PYVER_NODOT}-${SHA12}-${CFGHASH}"
+
+          MANIFEST=$(cat <<JSON
+        {
+          "schema-version": 1,
+          "kind": "wheel",
+          "ref": "${SANITIZED_REF}",
+          "build-type": "${{ inputs.build-type }}",
+          "build-image": "${{ inputs.build-image }}",
+          "tracy": ${TRACY},
+          "enable-lto": ${ENABLE_LTO},
+          "python-version": "${{ inputs.python-version }}",
+          "cfg-hash": "${CFGHASH}"
+        }
+        JSON
+          )
+
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          {
+            echo "manifest-json<<ARTIFACT_KEY_MANIFEST_EOF"
+            echo "$MANIFEST"
+            echo "ARTIFACT_KEY_MANIFEST_EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Computed artifact key: $NAME"
+          exit 0
+        fi
+
+        TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+        DISTRIBUTED=$(norm_bool "${{ inputs.distributed }}")
         SKIP_TT_TRAIN=$(norm_bool "${{ inputs.skip-tt-train }}")
         BUILD_UMD_TESTS=$(norm_bool "${{ inputs.build-umd-tests }}")
         PROFILE=$(norm_bool "${{ inputs.profile }}")
@@ -120,7 +187,7 @@ runs:
         EOF
         )
 
-        if [ "${{ inputs.kind }}" = "ttnn-import" ]; then
+        if [ "$KIND" = "ttnn-import" ]; then
           CANONICAL="${CANONICAL}
         build-ttnn-import-artifact=${BUILD_TTNN_IMPORT_ARTIFACT}"
         fi
@@ -128,7 +195,7 @@ runs:
         CANONICAL_SORTED=$(echo "$CANONICAL" | sort)
         CFGHASH=$(printf '%s' "$CANONICAL_SORTED" | sha256sum | cut -c1-10)
 
-        case "${{ inputs.kind }}" in
+        case "$KIND" in
           packages)
             NAME="packages-${SHA12}-${CFGHASH}"
             ;;
@@ -140,7 +207,7 @@ runs:
             NAME="ttnn-import-${{ inputs.build-type }}-${SHA12}-${CFGHASH}"
             ;;
           *)
-            echo "::error::compute-artifact-key: unknown kind '${{ inputs.kind }}'"
+            echo "::error::compute-artifact-key: unknown kind '$KIND'"
             exit 1
             ;;
         esac
