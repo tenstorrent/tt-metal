@@ -282,7 +282,7 @@ void kernel_main() {
     noc_semaphore_set(local_semaphore_ptr, 0);
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle2);
 
-    if (is_termination_master) {
+    if (is_termination_master2) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address2);
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x2, fabric_mux_y2, fabric_mux_termination_signal_address);
