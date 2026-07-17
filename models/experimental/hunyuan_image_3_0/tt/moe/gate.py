@@ -97,16 +97,19 @@ class HunyuanTtTopKGate(LightweightModule):
         if self.weight_dtype == ttnn.float32 and x.get_dtype() != ttnn.float32:
             x = ttnn.typecast(x, ttnn.float32)
 
-        # Router projection (M-tiny decode, K=4096, N=num_experts=64). ttnn.linear
-        # auto mis-schedules this skinny matmul to ~90us / 0.4 TFLOPs; the 1D split-N
-        # mcast config recovers ~13us (~6.8x, program-cache ON — see gate sweep). It
-        # returns None (=> auto/wide_mm) for wide-M prefill, so only decode is affected.
+        # Router projection (K=4096, N=num_experts=64). Skinny-N: decode_mm picks
+        # gather-K (mcast_in0=False) — BH 25.4us split-N → 17.7us gather-K nc=8
+        # (test_matmul_shard_sweep / decode_mm skinny-N path). Returns None for Mt>=8.
+        # allow_width_shard=False: MoE reuses this same `x` for every expert body.
+        # The default width-shard path (taken when gate_pc is None, e.g. S=1 decode)
+        # deallocates its activation input — which then TT_FATALs in expert linear.
         gate_pc = decode_mm_program_config(self.device, x.shape[-2], x.shape[-1], self.wg.shape[-1])
         logits = l1_sharded_linear(
             x,
             self.wg,
             compute_kernel_config=self.compute_kernel_config,
             program_config=gate_pc,
+            allow_width_shard=False,
         )  # [B, S, num_experts]
         logits = to_interleaved_if_sharded(logits)
 

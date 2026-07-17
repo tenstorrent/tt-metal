@@ -165,19 +165,18 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
 
 
 def decode_mm_program_config(device, M: int, K: int, N: int):
-    """1D-multicast config for a small-M (decode / mid-M) projection: broadcasts the
-    M-tile rows of activations and splits N across the widest core count that divides
-    Nt. Complements wide_mm_program_config (which handles the LARGE-M / Mt>=8 prefill
-    regime, where a 2D rectangular grid is needed). Measured on hardware:
-      * Mt==1 (single-token decode): ~1.3-1.55x vs auto.
-      * Mt 2-7 (mid-M, e.g. the M=64 recaption gate_up/down): 1.3-1.83x vs auto — auto
-        under-distributes N at these M and leaves the 110-core grid idle (the `wide_mm`
-        2D config is ~1.7x SLOWER here; only this 1D split-N config wins). PCC 0.9999.
-        (tests/perf/test_expert_down_sweep.py; benchmarked gate_up 100->74us, down 64->39us.)
+    """1D-multicast config for a small-M (decode / mid-M) projection.
 
-    Returns None (=> auto) unless every dim is tile-aligned and Mt <= 7, so callers can
-    pass it for any M — the large-M (Mt>=8) prefill shape falls through to wide_mm and
-    the caller's own auto path.
+    Complements wide_mm_program_config (LARGE-M / Mt>=8). Two regimes, measured on BH:
+
+      * Wide N (Nt > 4): mcast activations, split N across cores (mcast_in0=True).
+        Mt 1-7: 1.3-1.83x vs auto (tests/perf/test_expert_down_sweep.py;
+        test_matmul_shard_sweep.py — L1-interleaved beats width/height/block-sharded acts).
+      * Skinny N (Nt <= 4, e.g. MoE router 64x4096x64): split-N starves the grid
+        (Nt=2 → 2 cores). Parallelize the K reduction instead (mcast_in0=False /
+        gather-K). BH: split-N 25.4us → gather-K nc=8 17.7us (1.43x).
+
+    Returns None (=> auto) unless every dim is tile-aligned and Mt <= 7.
     """
     if M % TILE or K % TILE or N % TILE:
         return None
@@ -185,7 +184,36 @@ def decode_mm_program_config(device, M: int, K: int, N: int):
     if Mt < 1 or Mt >= 8:
         return None
     grid = device.compute_with_storage_grid_size()
-    ncols = _largest_divisor_leq(Nt, grid.x * grid.y)
+    max_cores = grid.x * grid.y
+
+    # Skinny-N: gather-K. Prefer nc=8 (BH MoE-gate sweet spot: 17.7us vs
+    # split-N 25.4us); larger nc (32) regresses toward the split-N floor.
+    if Nt <= 4:
+        for nc in (8, 16, 4, 32, 2):
+            if nc > max_cores or Kt % nc != 0:
+                continue
+            gy = _largest_divisor_leq(nc, grid.y)
+            while gy > 0 and nc % gy != 0:
+                gy -= 1
+            if gy < 1:
+                continue
+            gx = nc // gy
+            if gx > grid.x:
+                continue
+            osw = next((w for w in (4, 3, 2, 1) if Nt % w == 0), 1)
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(gx, gy),
+                in0_block_w=Kt // nc,
+                out_subblock_h=1,
+                out_subblock_w=osw,
+                per_core_M=Mt,
+                per_core_N=Nt,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            )
+
+    ncols = _largest_divisor_leq(Nt, max_cores)
     per_core_n = Nt // ncols
     osw = next((w for w in (4, 3, 2, 1) if per_core_n % w == 0), 1)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

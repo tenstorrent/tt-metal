@@ -460,22 +460,32 @@ def l1_sharded_linear(
     batch_rows: int | None = None,
     allow_width_shard: bool = True,
 ) -> ttnn.Tensor:
-    """ttnn.linear with L1 output and a tuned matmul program config.
+    """ttnn.linear with a tuned matmul program config.
 
-    ``allow_width_shard=False`` forces the plain DRAM path (skipping the small-M
-    width-sharded schedules) while keeping the large-M 2D-mcast config. Set by the
-    attention o_proj, where width-sharding measured slower than plain DRAM
-    interleaved for its decode shape (32x2048x4096: 75us width-shard vs 38us DRAM).
+    Width-sharded small-M schedules (emb / lm_head) only run when ``program_config``
+    is None and ``allow_width_shard=True``. An explicit ``program_config`` is always
+    honored (L1-interleaved + MultiCast1D wins over width-shard for attn QKV/o_proj —
+    see tests/perf/test_matmul_shard_sweep.py).
+
+    ``allow_width_shard=False`` skips those schedules and, when no config is passed,
+    installs ``decode_mm_program_config`` for Mt < 8 (attn o_proj was previously left
+    on auto at ~39us; decode_mm is ~25us for 32x2048x4096).
     """
     m, k, n = infer_matmul_mkn(x, weight)
     small_m = math.ceil(m / TILE_SIZE) <= 1
+    mt = math.ceil(m / TILE_SIZE)
 
-    if allow_width_shard and (
-        decode
-        or (
-            _l1_sharded_matmul_enabled()
-            and weight.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-            and small_m
+    # Width-shard paths ignore program_config — only take them when none was passed.
+    if (
+        program_config is None
+        and allow_width_shard
+        and (
+            decode
+            or (
+                _l1_sharded_matmul_enabled()
+                and weight.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                and small_m
+            )
         )
     ):
         return decode_width_sharded_linear(
@@ -483,7 +493,8 @@ def l1_sharded_linear(
         )
 
     if (
-        allow_width_shard
+        program_config is None
+        and allow_width_shard
         and _l1_sharded_matmul_enabled()
         and small_m
         and weight.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
@@ -492,17 +503,19 @@ def l1_sharded_linear(
             x, weight, bias=bias, batch_rows=batch_rows, compute_kernel_config=compute_kernel_config
         )
 
-    # Large-M (backbone MoE / shared MLP / gate on full sequence): L1 output +
-    # 8×10 prefill CBs clash with residual activations already in L1. DRAM is the
-    # stable denoise path; L1 width-sharding above remains for small-M emb ops.
-    # Schedule is M-dependent (measured, tests/perf/test_expert_down_sweep.py):
-    # mid M (Mt 2-7) is FASTEST on ttnn auto, but large M (Mt >= 8) degrades
-    # catastrophically on auto (~3% FLOP, all 110 cores) — force the rectangular-grid
-    # 2D-mcast config there. wide_mm_program_config returns None => auto when unsafe.
-    if program_config is None and math.ceil(m / TILE_SIZE) >= 8:
+    # Schedule is M-dependent (tests/perf/test_expert_down_sweep.py):
+    #   Mt >= 8 → wide_mm 2D-mcast (auto mis-schedules)
+    #   Mt <  8 + allow_width_shard=False → decode_mm (attn QKV/o_proj; do NOT
+    #     auto-install for arbitrary callers — lm_head N=133120 TT_THROWs on 1D
+    #     for Mt>=3, and emb ops stay on the width-shard path above).
+    if program_config is None and mt >= 8:
         from .parallel_utils import wide_mm_program_config
 
         program_config = wide_mm_program_config(x.device(), m, k, n)
+    elif program_config is None and mt < 8 and not allow_width_shard:
+        from .parallel_utils import decode_mm_program_config
+
+        program_config = decode_mm_program_config(x.device(), m, k, n)
     kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "compute_kernel_config": compute_kernel_config}
     if program_config is not None:
         kwargs["program_config"] = program_config
@@ -510,8 +523,6 @@ def l1_sharded_linear(
         kwargs["bias"] = bias
     if dtype is not None:
         kwargs["dtype"] = dtype
-    if program_config is not None:
-        kwargs["program_config"] = program_config
     return ttnn.linear(x, weight, **kwargs)
 
 

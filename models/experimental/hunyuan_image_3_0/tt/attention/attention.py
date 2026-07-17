@@ -290,16 +290,16 @@ class HunyuanTtAttention(LightweightModule):
 
         # ---- 1. Fused QKV projection ----------------------------------------
         # x: [B, S, H]  →  xqkv: [B, S, Q_dim + 2*KV_dim]
-        # l1_sharded_linear self-schedules: small-M -> L1 width-sharded, large-M ->
-        # DRAM with an explicit 2D-mcast config (ttnn auto mis-schedules these large-M
-        # bf16 x bf8 projections onto 110 cores at ~3% FLOP). Width-sharding is the
-        # good decode schedule here (38us @ 32c); plain DRAM auto mis-schedules this
-        # M=32/N=3072 shape to 96c @ 138 GB/s / 3.3% FLOP = 93us (perfar36).
+        # L1-interleaved + decode_mm (1D split-N, ~96c) beats the previous
+        # width-sharded act path (~32c): isolation 36us vs 40us / in-model ~47us
+        # (tests/perf/test_matmul_shard_sweep.py). allow_width_shard=False installs
+        # decode_mm via l1_sharded_linear; auto alone is ~93us on this shape.
         xqkv = l1_sharded_linear(
             x,
             self.qkv_proj,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
+            allow_width_shard=False,
         )
         xqkv = to_interleaved_if_sharded(xqkv)
 
@@ -431,12 +431,14 @@ class HunyuanTtAttention(LightweightModule):
         # Row-parallel under TP: each device multiplies its head-shard's concat
         # output [B,S,Q_dim/tp] by its o_proj rows [Q_dim/tp, H] to get a PARTIAL
         # [B,S,H], then we all-reduce the partials over tp_axis for the full output.
+        # allow_width_shard=False → decode_mm (~25us) instead of auto (~39us) or
+        # width-shard (~75us) for 32x2048x4096 (test_matmul_shard_sweep.py).
         out = l1_sharded_linear(
             attn_out,
             self.o_proj,
             dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
-            allow_width_shard=False,  # decode 32x2048x4096: plain DRAM 38us vs width-shard 75us
+            allow_width_shard=False,
         )
         out = to_interleaved_if_sharded(out)
         attn_out.deallocate(True)
