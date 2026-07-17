@@ -479,8 +479,8 @@ template <
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-    ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
+    ReduceAlgorithm algorithm = ReduceAlgorithm::Auto,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
