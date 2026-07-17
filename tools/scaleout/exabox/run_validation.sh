@@ -262,17 +262,23 @@ run_cluster_validation() {
     done
 
     if [[ $DOCKER_IMAGE == "none" ]]; then
-        mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_include "$MPI_IF" \
-            "${MPI_EXTRA_ARGS[@]}" \
-            --tag-output \
-            ./build/tools/scaleout/run_cluster_validation \
+        # Self-tag each rank's output with its own [hostname][time] at the source
+        # (mpirun merges all ranks into one stream at the launcher, so tagging must
+        # happen on the rank). pipefail keeps run_cluster_validation's real exit code.
+        local bin_cmd
+        bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
             "${VALIDATION_EXTRA_ARGS[@]}" \
             --send-traffic \
             --num-iterations 10 \
-            --output-path "$validation_output_path"
+            --output-path "$validation_output_path")
+        mpirun --host "$HOSTS" \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            bash -c "set -o pipefail; $bin_cmd 2>&1 | while IFS= read -r l; do printf '[%s][%(%H:%M:%S)T] %s\n' \"\$(hostname)\" -1 \"\$l\"; done"
     else
+        # mpi-docker tags each rank's output with [hostname][time] at the source
+        # by default (real host, replacing mpirun's [jobid,rank] tag).
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
             --mpi-interface "$MPI_IF" \
