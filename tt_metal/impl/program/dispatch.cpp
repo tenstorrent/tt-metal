@@ -1238,16 +1238,31 @@ public:
         uint32_t max_cbs = hal.get_arch_num_circular_buffers();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
-        const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
-        const uint16_t num_multicast_cb_sub_cmds = circular_buffers_unique_coreranges.size();
+        auto cb_config_coreranges = program.circular_buffers_unique_coreranges();
+        // circular_buffers_unique_coreranges() returns non-overlapping ranges, so this is a single build.
+        CoreRangeSet covered_cb_cores(cb_config_coreranges);
+        const auto& kernel_groups = program.get_kernel_groups(index);
+        for (const auto& kernel_group : kernel_groups) {
+            const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
+            if (kernel_config.min_remote_cb_start_index() >= max_cbs) {
+                continue;
+            }
+            // Firmware scans remote CB configs down through min_remote_cb_start_index. Include cores with no CBs so
+            // fast dispatch explicitly clears stale configs there instead of leaving a prior program's remote CB.
+            const auto uncovered_cores = kernel_group->core_ranges.subtract(covered_cb_cores);
+            cb_config_coreranges.insert(
+                cb_config_coreranges.end(), uncovered_cores.ranges().begin(), uncovered_cores.ranges().end());
+            covered_cb_cores = covered_cb_cores.merge(uncovered_cores);
+        }
+
+        const uint16_t num_multicast_cb_sub_cmds = cb_config_coreranges.size();
         cb_config_payloads = std::vector<std::vector<uint32_t>>(
             num_multicast_cb_sub_cmds,
             std::vector<uint32_t>(program.get_program_config(index).cb_size / sizeof(uint32_t), 0));
         if (num_multicast_cb_sub_cmds > 0) {
             uint32_t i = 0;
             uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
-            auto index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
+            for (const CoreRange& core_range : cb_config_coreranges) {
                 const CoreCoord& virtual_start =
                     device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
                 const CoreCoord& virtual_end =
@@ -1255,6 +1270,19 @@ public:
 
                 auto& cb_config_payload = cb_config_payloads[i];
                 uint32_t max_index = 0;
+                for (const auto& kernel_group : kernel_groups) {
+                    if (!kernel_group->core_ranges.intersects(core_range)) {
+                        continue;
+                    }
+                    const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
+                    const uint32_t min_remote_cb_start_index = kernel_config.min_remote_cb_start_index();
+                    if (min_remote_cb_start_index < max_cbs) {
+                        max_index = std::max(
+                            max_index,
+                            remote_offset_index +
+                                (max_cbs - min_remote_cb_start_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                    }
+                }
                 const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
                 for (const std::shared_ptr<CircularBufferImpl>& cb : circular_buffers_on_corerange) {
                     const uint32_t cb_address = cb->address();

@@ -58,7 +58,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = DM_KERNEL,
-        .runtime_arg_values = {{node, {{"address", address}}}},
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
     experimental::SetProgramRunArgs(program, params);
@@ -133,7 +133,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_KERNEL,
-            .runtime_arg_values = {{node, {{"address", address}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
             .common_runtime_arg_values = {{"value", value}},
         }};
         experimental::SetProgramRunArgs(program, params);

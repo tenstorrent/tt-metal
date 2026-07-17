@@ -158,23 +158,23 @@ void run_single_core_copy_block_matmul_partials(
     experimental::ComputeHardwareConfig compute_hw_config;
     {
         // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
-        // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
-        // Default is unpack via SrcA/B, ~19-bit precision.
-        experimental::ComputeUnpackToDestModes unpack_modes{};
+        // consumes it, so the Metal 2.0 host API requires an explicit unpack_modes entry.
+        // UnpackToSrc is unpack via SrcA/B, ~19-bit precision.
+        experimental::ComputeUnpackModes unpack_modes{};
         if (test_config.fp32_dest_acc_en) {
-            unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}};
+            unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc}};
         }
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
             compute_hw_config = experimental::ComputeGen2Config{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_mode = unpack_modes,
+                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .double_buffer_dest = !test_config.dst_full_sync_en,
+                .unpack_modes = unpack_modes,
             };
         } else {
             compute_hw_config = experimental::ComputeGen1Config{
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_mode = unpack_modes,
+                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .double_buffer_dest = !test_config.dst_full_sync_en,
+                .unpack_modes = unpack_modes,
             };
         }
     }
@@ -229,23 +229,23 @@ void run_single_core_copy_block_matmul_partials(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_dram_buffer->address()},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.reader_ublock},
-                   {"reader_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_dram_buffer->address()},
+                 {"src_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", test_config.reader_ublock},
+                 {"reader_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_dram_buffer->address()},
-                   {"dst_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.writer_ublock},
-                   {"writer_only", 0u}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_dram_buffer->address()},
+                 {"dst_dram_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"ublock_size_tiles", test_config.writer_ublock},
+                 {"writer_only", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

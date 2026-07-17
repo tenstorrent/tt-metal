@@ -12,7 +12,11 @@ set_target_properties(
         INTERFACE_HEADER_SETS_TO_VERIFY
             api
 )
-file(GLOB_RECURSE kernels device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 target_sources(
     ttnn_op_embedding
     PUBLIC
