@@ -1,0 +1,151 @@
+name: "Compute Artifact Key"
+description: >-
+  Computes a canonical, content-addressable name and a build-manifest.json for
+  a build-artifact.yaml output, given every build parameter that affects
+  compiled output. This is the single source of truth for artifact naming:
+  it is used at upload time (build-artifact.yaml) and will be used again at
+  reuse-lookup time (a follow-up PR) so the two computations can never drift
+  apart.
+
+  The legacy substring markers that existing consumers grep for are
+  preserved by construction: the `packages-` prefix (download-artifacts-from-run),
+  the `TTMetal_build_any` prefix and `_profiler_` substring when tracy is
+  enabled (download-artifacts-from-run and tests/scripts/download_artifacts.sh).
+  The trailing workflow run ID that made every prior name unique-per-run
+  (and therefore never reusable, even for byte-identical rebuilds) is
+  dropped and replaced with a short hash of every build-affecting parameter.
+
+inputs:
+  kind:
+    required: true
+    description: "Artifact kind: packages | build | ttnn-import"
+  ref:
+    required: true
+    description: "Resolved git ref/SHA the build was performed at (i.e. inputs.ref || github.sha), NOT a workflow run ID"
+  distro:
+    required: true
+  version:
+    required: true
+  architecture:
+    required: true
+  build-type:
+    required: true
+  toolchain:
+    required: true
+    description: "Raw toolchain path, e.g. cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+  tracy:
+    required: true
+  distributed:
+    required: true
+  enable-lto:
+    required: true
+  skip-tt-train:
+    required: true
+  build-umd-tests:
+    required: true
+  profile:
+    required: true
+  build-ttnn-import-artifact:
+    required: false
+    default: "false"
+    description: "Only relevant for kind=ttnn-import; included in that kind's canonical key"
+
+outputs:
+  name:
+    description: "Canonical artifact name for this kind"
+    value: ${{ steps.compute.outputs.name }}
+  manifest-json:
+    description: >-
+      JSON manifest of every literal parameter value plus the computed
+      cfg-hash. Write this into the artifact alongside its payload; a reuse
+      consumer must validate it field-by-field before trusting a name-based
+      match -- the name/hash is a lookup optimization, this manifest is the
+      actual correctness guarantee.
+    value: ${{ steps.compute.outputs.manifest-json }}
+
+runs:
+  using: composite
+  steps:
+    - id: compute
+      shell: bash
+      run: |
+        set -eu
+
+        TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+        SANITIZED_REF=$(echo "${{ inputs.ref }}" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+        SHA12="${SANITIZED_REF:0:12}"
+
+        # Canonical, order-independent parameter tuple. Every field that
+        # affects compiled output must be listed here.
+        CANONICAL=$(cat <<EOF
+        ref=${SANITIZED_REF}
+        distro=${{ inputs.distro }}
+        version=${{ inputs.version }}
+        architecture=${{ inputs.architecture }}
+        build-type=${{ inputs.build-type }}
+        toolchain=${TOOLCHAIN_CLEANED}
+        tracy=${{ inputs.tracy }}
+        distributed=${{ inputs.distributed }}
+        enable-lto=${{ inputs.enable-lto }}
+        skip-tt-train=${{ inputs.skip-tt-train }}
+        build-umd-tests=${{ inputs.build-umd-tests }}
+        profile=${{ inputs.profile }}
+        EOF
+        )
+
+        if [ "${{ inputs.kind }}" = "ttnn-import" ]; then
+          CANONICAL="${CANONICAL}
+        build-ttnn-import-artifact=${{ inputs.build-ttnn-import-artifact }}"
+        fi
+
+        CANONICAL_SORTED=$(echo "$CANONICAL" | sort)
+        CFGHASH=$(printf '%s' "$CANONICAL_SORTED" | sha256sum | cut -c1-10)
+
+        case "${{ inputs.kind }}" in
+          packages)
+            NAME="packages-${SHA12}-${CFGHASH}"
+            ;;
+          build)
+            TRACY_SUFFIX="${{ (inputs.tracy == 'true' && '_profiler') || '' }}"
+            NAME="TTMetal_build_any${TRACY_SUFFIX}_${SHA12}_${CFGHASH}"
+            ;;
+          ttnn-import)
+            NAME="ttnn-import-${{ inputs.build-type }}-${SHA12}-${CFGHASH}"
+            ;;
+          *)
+            echo "::error::compute-artifact-key: unknown kind '${{ inputs.kind }}'"
+            exit 1
+            ;;
+        esac
+
+        echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+        MANIFEST=$(cat <<JSON
+        {
+          "schema-version": 1,
+          "kind": "${{ inputs.kind }}",
+          "ref": "${SANITIZED_REF}",
+          "distro": "${{ inputs.distro }}",
+          "version": "${{ inputs.version }}",
+          "architecture": "${{ inputs.architecture }}",
+          "build-type": "${{ inputs.build-type }}",
+          "toolchain": "${TOOLCHAIN_CLEANED}",
+          "tracy": ${{ inputs.tracy }},
+          "distributed": ${{ inputs.distributed }},
+          "enable-lto": ${{ inputs.enable-lto }},
+          "skip-tt-train": ${{ inputs.skip-tt-train }},
+          "build-umd-tests": ${{ inputs.build-umd-tests }},
+          "profile": ${{ inputs.profile }},
+          "build-ttnn-import-artifact": ${{ inputs.build-ttnn-import-artifact || false }},
+          "cfg-hash": "${CFGHASH}"
+        }
+        JSON
+        )
+
+        {
+          echo "manifest-json<<ARTIFACT_KEY_MANIFEST_EOF"
+          echo "$MANIFEST"
+          echo "ARTIFACT_KEY_MANIFEST_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Computed artifact key: $NAME"

@@ -413,7 +413,7 @@ jobs:
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
-      build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+      build_artifact_name: ${{ steps.set_build_artifact_name.outputs.name }}
       ttnn_import_artifact_id: ${{ steps.upload_ttnn_import.outputs.artifact-id }}
     env:
       # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
@@ -464,6 +464,16 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
 
     steps:
+      - name: ⬇️ Checkout actions
+        # Sparse-checkout just .github/actions so local composite actions (like
+        # compute-artifact-key below) resolve before the full checkout later in
+        # this job. Mirrors the same pattern used in parse-platform/download-artifacts.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+
       - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
@@ -522,33 +532,21 @@ jobs:
 
       - name: Set artifact name
         id: set-artifact-name
-        run: |
-          TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness
-          # Sanitize ref/SHA by replacing invalid characters with hyphens
-          RAW_REF="${{ inputs.ref || github.sha }}"
-          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
-          DIST_SUFFIX="${{ (inputs.distributed == false && '-no-distributed') || '' }}"
-          DISTRO="${{ env.DISTRO }}"
-          VERSION="${{ env.VERSION }}"
-          ARCH="${{ inputs.architecture }}"
-          BUILD_TYPE="${{ inputs.build-type }}"
-          RUN_ID="${{ github.run_id }}"
-          ARTIFACT_PARTS=(
-            "packages"
-            "${DISTRO}"
-            "${VERSION}"
-            "${ARCH}"
-            "${BUILD_TYPE}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
-            "${SANITIZED_REF}"
-            "${RUN_ID}"
-          )
-          ARTIFACT_NAME=$(IFS='-'; echo "${ARTIFACT_PARTS[*]}")
-
-          echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
-          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+        uses: ./.github/actions/compute-artifact-key
+        with:
+          kind: packages
+          ref: ${{ inputs.ref || github.sha }}
+          distro: ${{ env.DISTRO }}
+          version: ${{ env.VERSION }}
+          architecture: ${{ inputs.architecture }}
+          build-type: ${{ inputs.build-type }}
+          toolchain: ${{ env.TOOLCHAIN }}
+          tracy: ${{ inputs.tracy }}
+          distributed: ${{ inputs.distributed }}
+          enable-lto: ${{ inputs.enable-lto }}
+          skip-tt-train: ${{ inputs.skip-tt-train }}
+          build-umd-tests: ${{ inputs.build-umd-tests }}
+          profile: ${{ inputs.profile }}
 
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -706,15 +704,23 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
+      - name: Write packages manifest
+        if: ${{ inputs.publish-package }}
+        run: |
+          cat > /work/build/build-manifest.json <<'MANIFEST_EOF'
+          ${{ steps.set-artifact-name.outputs.manifest-json }}
+          MANIFEST_EOF
+
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: ${{ steps.set-artifact-name.outputs.name }}
           path: |
             /work/build/*.deb
             /work/build/*.ddeb
+            /work/build/build-manifest.json
           compression-level: 0
           if-no-files-found: error
 
@@ -729,13 +735,40 @@ jobs:
           cp -a /work/runtime /work/ttnn-import/runtime
           echo "Lean ttnn-import tree size:"; du -sh /work/ttnn-import /work/ttnn-import/build/lib
 
+      - name: Set ttnn-import artifact name
+        id: set-ttnn-import-artifact-name
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        uses: ./.github/actions/compute-artifact-key
+        with:
+          kind: ttnn-import
+          ref: ${{ inputs.ref || github.sha }}
+          distro: ${{ env.DISTRO }}
+          version: ${{ env.VERSION }}
+          architecture: ${{ inputs.architecture }}
+          build-type: ${{ inputs.build-type }}
+          toolchain: ${{ env.TOOLCHAIN }}
+          tracy: ${{ inputs.tracy }}
+          distributed: ${{ inputs.distributed }}
+          enable-lto: ${{ inputs.enable-lto }}
+          skip-tt-train: ${{ inputs.skip-tt-train }}
+          build-umd-tests: ${{ inputs.build-umd-tests }}
+          profile: ${{ inputs.profile }}
+          build-ttnn-import-artifact: ${{ inputs.build-ttnn-import-artifact }}
+
+      - name: Write ttnn-import manifest
+        if: ${{ inputs.build-ttnn-import-artifact }}
+        run: |
+          cat > /work/ttnn-import/build-manifest.json <<'MANIFEST_EOF'
+          ${{ steps.set-ttnn-import-artifact-name.outputs.manifest-json }}
+          MANIFEST_EOF
+
       - name: ☁️ Upload ttnn-import artifact
         id: upload_ttnn_import
         if: ${{ inputs.build-ttnn-import-artifact }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
-          name: ttnn-import-${{ inputs.build-type }}
+          name: ${{ steps.set-ttnn-import-artifact-name.outputs.name }}
           path: /work/ttnn-import
           compression-level: 1
           if-no-files-found: error
@@ -755,37 +788,38 @@ jobs:
 
       - name: Set build artifact name
         id: set_build_artifact_name
+        uses: ./.github/actions/compute-artifact-key
+        with:
+          kind: build
+          ref: ${{ inputs.ref || github.sha }}
+          distro: ${{ env.DISTRO }}
+          version: ${{ env.VERSION }}
+          architecture: ${{ inputs.architecture }}
+          build-type: ${{ inputs.build-type || 'Release' }}
+          toolchain: ${{ env.TOOLCHAIN }}
+          tracy: ${{ inputs.tracy }}
+          distributed: ${{ inputs.distributed }}
+          enable-lto: ${{ inputs.enable-lto }}
+          skip-tt-train: ${{ inputs.skip-tt-train }}
+          build-umd-tests: ${{ inputs.build-umd-tests }}
+          profile: ${{ inputs.profile }}
+
+      - name: Write build manifest
+        if: ${{ inputs.publish-artifact }}
         run: |
-          TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness
-          # Sanitize ref/SHA by replacing invalid characters with hyphens
-          RAW_REF="${{ inputs.ref || github.sha }}"
-          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
-          DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
-          BUILD_TYPE="${{ inputs.build-type || 'Release' }}"
-          VERSION="${{ env.VERSION }}"
-          ARCH="${{ inputs.architecture }}"
-          RUN_ID="${{ github.run_id }}"
-          BUILD_ARTIFACT_PARTS=(
-            "TTMetal_build_any"
-            "${VERSION}"
-            "${ARCH}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}_${BUILD_TYPE}"
-            "${SANITIZED_REF}"
-            "${RUN_ID}"
-          )
-          BUILD_ARTIFACT_NAME=$(IFS='_'; echo "${BUILD_ARTIFACT_PARTS[*]}")
-          echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
-          echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          cat > /work/ttm_any.manifest.json <<'MANIFEST_EOF'
+          ${{ steps.set_build_artifact_name.outputs.manifest-json }}
+          MANIFEST_EOF
 
       - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
-          name: ${{ env.build_artifact_name }}
-          path: /work/ttm_any.tar.zst
+          name: ${{ steps.set_build_artifact_name.outputs.name }}
+          path: |
+            /work/ttm_any.tar.zst
+            /work/ttm_any.manifest.json
           if-no-files-found: error
           compression-level: 0
 
