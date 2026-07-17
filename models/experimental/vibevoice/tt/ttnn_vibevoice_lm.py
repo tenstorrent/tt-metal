@@ -813,8 +813,18 @@ class TTVibeVoiceLM:
         if not compute_logits:
             return None, last_hidden
 
+        # Only the LAST position's logits are consumed (greedy argmax of the next token),
+        # so for prefill (S>1) run lm_head on just the last row — bit-exact, and cuts the
+        # 256×1536×151936 matmul's M from S to 1 (1752→1215 µs, the compute portion; the
+        # 467 MB weight read is the remaining floor).  last_hidden stays full-S.
+        x_head = (
+            x
+            if S == 1
+            else ttnn.slice(x, [0, 0, S - 1, 0], [B, 1, S, x.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+
         logits = ttnn.linear(
-            x,
+            x_head,
             self.w.lm_head_w,
             compute_kernel_config=_HIFI4,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
