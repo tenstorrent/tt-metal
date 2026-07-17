@@ -41,6 +41,70 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
     return k * TokensPerDevice + t_idx;
 }
 
+// Signal combine completion to the other devices in the replicate group.
+//
+// Templated (not inlined into kernel_main) so the `if constexpr` below genuinely discards the
+// unused branch: fabric_multicast_bidirectional_atomic_inc_1d static_asserts a 1D topology, so it
+// must not be instantiated for a 2D (Mesh/Torus) build — which only holds inside a template.
+//
+// 1D fix (matches selective_reduce_combine / all_to_all_dispatch_metadata): send the completion
+// credit as a bidirectional ring/line multicast so it egresses on BOTH arcs and therefore follows
+// this device's payloads on whichever arc they took (same-connection, in-order) — it can no longer
+// overtake a payload on the opposite arc. Previously the credit re-derived its route via the
+// stateful get_route(), which for the antipodal "tie" destination could pick the opposite arc from
+// the payload and be observed before the data landed. DoubleAntipodalAtomicInc=true increments the
+// antipodal device from both directions, so on a Ring every device receives exactly
+// replicate_group_devices credits (see the wait in kernel_main); Linear does no antipodal doubling.
+//
+// 2D path is unchanged: the credit routes via the deterministic hop router (not get_route), so a
+// per-device unicast credit cannot mis-route relative to the payload.
+template <
+    uint32_t LinearizedMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReplicateGroup ReplicateAxis,
+    uint32_t SrcChipId,
+    uint32_t DeviceBeginIdx,
+    uint32_t DeviceEndIdx,
+    uint32_t DeviceStride,
+    typename SenderType>
+inline void send_completion_credits(
+    std::array<SenderType, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header_pos,
+    volatile PACKET_HEADER_TYPE* packet_header_neg,
+    uint64_t global_noc_semaphore_addr,
+    const uint8_t* dest_chip_ids,
+    const uint8_t* dest_mesh_ids) {
+    if constexpr (is_1d_topology<Topology>() && ReplicateAxis != ReplicateGroup::NONE) {
+        fabric_multicast_bidirectional_atomic_inc_1d<
+            LinearizedMeshCoord,
+            Topology,
+            MeshRows,
+            MeshCols,
+            ReplicateAxis,
+            /*DoubleAntipodalAtomicInc=*/(Topology == tt::tt_fabric::Topology::Ring)>(
+            fabric_connections, packet_header_pos, packet_header_neg, global_noc_semaphore_addr);
+        noc_async_atomic_barrier();
+    } else {
+        for (uint32_t device_idx = DeviceBeginIdx; device_idx < DeviceEndIdx; device_idx += DeviceStride) {
+            if (device_idx == LinearizedMeshCoord) {
+                noc_semaphore_inc(global_noc_semaphore_addr, 1);
+                noc_async_atomic_barrier();
+            } else if (is_configured_target<LinearizedMeshCoord, MeshRows, MeshCols, ReplicateAxis>(device_idx)) {
+                fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+                    fabric_connections,
+                    packet_header_pos,
+                    dest_chip_ids[device_idx],
+                    dest_mesh_ids[device_idx],
+                    global_noc_semaphore_addr,
+                    1,
+                    true);
+            }
+        }
+    }
+}
+
 }  // namespace detail
 
 void kernel_main() {
@@ -109,8 +173,8 @@ void kernel_main() {
 
     const auto output_addrgen = TensorAccessor(output_args, output_base_addr);
 
-    volatile PACKET_HEADER_TYPE * packet_headers[2];
-    for(uint8_t i =0;i<2;++i){
+    volatile PACKET_HEADER_TYPE* packet_headers[3];
+    for (uint8_t i = 0; i < 3; ++i) {
         cb_reserve_back(packet_header_cb_id,1);
         const uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
@@ -213,38 +277,32 @@ void kernel_main() {
         noc_async_write_barrier();
     }
     const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
-    // "multicast" semaphore increment to let other devices know we are done
-    for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
-        const auto & dest_chip_id = dest_chip_ids[device_idx];
-
-        if (device_idx == linearized_mesh_coord) {
-            noc_semaphore_inc(global_noc_semaphore_addr, 1);
-            noc_async_atomic_barrier();
-        } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
-            if constexpr (is_1d_topology<topology>()) {
-                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
-                    linearized_mesh_coord,
-                    topology,
-                    mesh_rows,
-                    mesh_cols>(fabric_connections, packet_headers[1], device_idx, global_noc_semaphore_addr, 1, true);
-            } else {
-                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
-                const auto& dest_chip_id = dest_chip_ids[device_idx];
-                fabric_send_chip_unicast_noc_unicast_semaphore_only<src_chip_id, mesh_rows, mesh_cols>(
-                    fabric_connections,
-                    packet_headers[1],
-                    dest_chip_id,
-                    dest_mesh_id,
-                    global_noc_semaphore_addr,
-                    1,
-                    true);
-            }
-        }
-    }
+    // Signal completion to the other devices in the replicate group (see send_completion_credits).
+    detail::send_completion_credits<
+        linearized_mesh_coord,
+        topology,
+        mesh_rows,
+        mesh_cols,
+        replicate_axis,
+        src_chip_id,
+        device_begin_idx,
+        device_end_idx,
+        device_stride>(
+        fabric_connections,
+        packet_headers[1],
+        packet_headers[2],
+        global_noc_semaphore_addr,
+        dest_chip_ids,
+        dest_mesh_ids);
 
     close_direction_connections(directions, fabric_connections);
 
     auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-    noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
+    // Ring (bidirectional, DoubleAntipodal): each device receives replicate_group_devices credits.
+    // Linear (bidirectional): replicate_group_devices - 1 (no antipodal doubling).
+    // 2D unicast path: local self-inc (1) + (replicate_group_devices - 1) remotes = replicate_group_devices.
+    constexpr uint32_t expected_credits =
+        (topology == tt::tt_fabric::Topology::Linear) ? (replicate_group_devices - 1) : replicate_group_devices;
+    noc_semaphore_wait(semaphore_ptr, expected_credits);
     noc_semaphore_set(semaphore_ptr, 0);
 }
