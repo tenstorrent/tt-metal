@@ -254,7 +254,7 @@ static GlobalCircularBuffer build_matmul_1d_gcb_krow_major(
         kMaxCbPagesBytes);
 
     return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
-        *mesh_device, bank_to_receivers, size, buffer_type);
+        *mesh_device, bank_to_receivers, size, buffer_type, /*support_multi_receiver_shards=*/true);
 }
 
 namespace {

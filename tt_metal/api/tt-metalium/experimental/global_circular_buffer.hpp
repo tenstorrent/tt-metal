@@ -42,12 +42,12 @@ enum class SenderCoreType : uint8_t {
 // sets across senders must be disjoint and must not collide with the resolved DRAM-sender
 // physical NOC coords.
 //
-// `support_multi_receiver_shards` (the default) declares that a bank's shard may be consumed by
+// `support_multi_receiver_shards=true` declares that a bank's shard may be consumed by
 // more than one receiver — the legacy interleaved DRAM layout, where a single read pulls data for
 // every receiver on the bank. Because the receivers share that data, the bank must be driven by a
 // single sender core (the free non-endpoint subchannel on NOC0).
 //
-// Set it to false to promise the opposite: each receiver owns a disjoint, contiguous shard (the
+// The default, false, promises the opposite: each receiver owns a disjoint, contiguous shard (the
 // receiver-contiguous layout). With no shared data between receivers, a bank holding two or more
 // receivers can then be driven by two DRISC sender cores (the free subchannel plus the bank's
 // NOC1-endpoint subchannel, both on NOC0), splitting the bank's receivers ceil/floor across them
@@ -63,7 +63,7 @@ GlobalCircularBuffer CreateGlobalCircularBufferForTensorPrefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
-    bool support_multi_receiver_shards = true);
+    bool support_multi_receiver_shards = false);
 
 // Read-only accessors for the DRAM-sender state inside a GlobalCircularBuffer. For
 // GCBs created via the worker-sender path these return SenderCoreType::Worker / 0 /
