@@ -238,6 +238,11 @@ void RunTestOnCore(
         }
         // (gen1 path: no CTA bindings needed; the kernel runs on exactly one DM processor.)
 
+        // Under SD the kernel signals completion via RUN_MSG_DONE, not the FD notify path (which wedges the NOC).
+        if (fixture->IsSlowDispatch()) {
+            defines["WATCHER_KERNEL_SLOW_DISPATCH"] = "1";
+        }
+
         // Select the DM config variant matching the current architecture (Gen2 on Quasar, Gen1 otherwise).
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
