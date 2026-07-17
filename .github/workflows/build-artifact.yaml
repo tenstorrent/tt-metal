@@ -807,7 +807,7 @@ jobs:
       - name: Write build manifest
         if: ${{ inputs.publish-artifact }}
         run: |
-          cat > /work/ttm_any.manifest.json <<'MANIFEST_EOF'
+          cat > /work/build-manifest.json <<'MANIFEST_EOF'
           ${{ steps.set_build_artifact_name.outputs.manifest-json }}
           MANIFEST_EOF
 
@@ -819,7 +819,7 @@ jobs:
           name: ${{ steps.set_build_artifact_name.outputs.name }}
           path: |
             /work/ttm_any.tar.zst
-            /work/ttm_any.manifest.json
+            /work/build-manifest.json
           if-no-files-found: error
           compression-level: 0
 
