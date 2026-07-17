@@ -4,6 +4,7 @@
 
 #include "generalized_moe_gate_program_descriptor_builder.hpp"
 
+#include <cstdlib>
 #include <cstring>
 
 #include <tt_stl/assert.hpp>
@@ -160,7 +161,18 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     // exist. =1 → ungrouped global top-k; =0 → DeepSeek grouped gate. Set on ALL THREE kernels: the single
     // .cpp is compiled for every RISC and includes the compute API header, whose `#error` guard requires the
     // macro to be defined (so a missing define is a hard compile error, never a silent grouped fallthrough).
-    const KernelDescriptor::Defines gmg_defines = {{"GMG_UNGROUPED_TOP8", operation_attrs.grouped ? "0" : "1"}};
+    // DEST-resident multi-block (>256) combine (perf): skip the L1 stash round-trip by keeping block0's run
+    // resident in the shadow DEST tiles across block1's separate acquire (needs the dst_full_sync_en set above).
+    // OFF by default (uses the proven L1 stash path); opt in with env GMG_DEST_RESIDENT=1. Injected as a compile
+    // DEFINE so the kernel selects the path with `#if` at preprocess time. NOTE: the env is read at program-build
+    // time and is NOT part of the auto-derived program hash — set it before a process's first run (or clear the
+    // program cache) when toggling, or a cached program of the other variant may be reused.
+    const char* dest_resident_env = std::getenv("GMG_DEST_RESIDENT");
+    const bool dest_resident = dest_resident_env != nullptr && std::strcmp(dest_resident_env, "1") == 0;
+    const KernelDescriptor::Defines gmg_defines = {
+        {"GMG_UNGROUPED_TOP8", operation_attrs.grouped ? "0" : "1"},
+        {"GMG_DEST_RESIDENT", dest_resident ? "1" : "0"},
+    };
 
     KernelDescriptor reader{
         .kernel_source = std::string(kGeneralizedMoeGateKernelPath),

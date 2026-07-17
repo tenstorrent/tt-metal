@@ -519,6 +519,61 @@ inline void _gmg_copy_topk_run()
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + to_hi);
 }
 
+/**
+ * @brief Copy a stored top-8 run (bias + concat idx|score) between DEST locations with independent whole-tile
+ *        base offsets on the source and destination — the tiled variant of @ref _gmg_copy_topk_run.
+ *
+ * Same field convention as @ref _gmg_copy_topk_run (bias mode 0; idx LO16; score HI16); src_base is added to
+ * every source region address and dst_base to every destination region address. Used by the DEST-resident
+ * combine to PARK the live {0,2} run into the SHADOW tiles (scores/idx/bias each shifted by dst_base rows) and
+ * later RESTORE it into the live {4,6} merge slot, so block0's run survives block1's re-compute without an L1
+ * round-trip. Park: src_base=0, dst_base=shadow. Restore: src_base=shadow, dst_base=0. SFPU (MATH).
+ *
+ * @tparam from_lo: source column for the run's low half (within the src_base-shifted regions).
+ * @tparam from_hi: source column for the run's high half.
+ * @tparam to_lo: destination column for the low half (within the dst_base-shifted regions).
+ * @tparam to_hi: destination column for the high half.
+ * @tparam src_base: whole-tile row offset added to scores/indices/bias source addresses (0 = live, 256 = shadow).
+ * @tparam dst_base: whole-tile row offset added to scores/indices/bias destination addresses.
+ * @note Resets the Dst RWC counter at entry (SET_D) like @ref _gmg_copy_topk_run — run after any FPU MOP.
+ *       Clobbers LREG0/1/4/5.
+ */
+template <std::uint32_t from_lo, std::uint32_t from_hi, std::uint32_t to_lo, std::uint32_t to_hi, std::uint32_t src_base = 0, std::uint32_t dst_base = 0>
+inline void _gmg_copy_topk_run_tiled()
+{
+    // Reset the Dst RWC counter (a preceding FPU MOP leaves it advanced; without this the SFPLOAD/SFPSTORE
+    // offsets below are biased and hit the wrong rows).
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + src_base + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + src_base + from_hi);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + src_base + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + src_base + from_hi);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + src_base + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + src_base + from_hi);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + dst_base + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + dst_base + to_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + dst_base + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + dst_base + to_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + dst_base + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + dst_base + to_hi);
+}
+
+// Un-mask (clear the DEST zero-flags of) the 3 shadow field-tiles (scores/idx/bias, faces shadow_base/16 +
+// {0,4,8}) so a run PARKED there in a previous acquire reads back real data. tile_regs_release() runs
+// ZEROACC(CLR_ALL) which, in a block mode, only SETS the per-row zero-flags to emulate a cleared dest (the RAM
+// physically survives) — reads then return 0 until the flags are cleared. BLACKHOLE form: ZEROACC's dedicated
+// clear_zero_flags operand (bit 17) = 1 clears the flags. MATH (config op). @note run at the start of the next
+// acquire, after the block that re-writes tiles 0-3, before reading the shadow back.
+template <std::uint32_t shadow_base>
+inline void _gmg_unmask_shadow_tiles()
+{
+    // (clear_mode, use_32_bit_mode, clear_zero_flags=1, addr_mode, where=face). 16-bit dest -> use_32b=0.
+    TTI_ZEROACC(p_zeroacc::CLR_16, 0, 1, ADDR_MOD_1, shadow_base / 16 + 0);
+    TTI_ZEROACC(p_zeroacc::CLR_16, 0, 1, ADDR_MOD_1, shadow_base / 16 + 4);
+    TTI_ZEROACC(p_zeroacc::CLR_16, 0, 1, ADDR_MOD_1, shadow_base / 16 + 8);
+}
+
 // Multi-block combine: place ONE field of a run from the intermediate region {src_lo,src_hi} into its home
 // region (scores/indices/bias) {dst_lo,dst_hi}. The field-tile was unpacked (copy_tile) into intermediate
 // from the L1 run stash; this SFPU copy is row-selective so it writes only {dst_lo,dst_hi}, leaving

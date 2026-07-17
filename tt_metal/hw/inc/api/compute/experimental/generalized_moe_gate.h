@@ -103,6 +103,43 @@ ALWI void generalized_moe_gate_relocate_run() {
         VectorMode::RC_custom)));
 }
 
+// ---- DEST-resident (>256) combine helpers -----------------------------------------------------
+// Relocate a run between DEST locations with whole-tile base offsets on the source AND destination — the
+// tiled variant of generalized_moe_gate_relocate_run. Used to PARK block0's run from the live {0,2} slot into
+// the SHADOW tiles (dst_base = shadow_base) and later RESTORE it from the shadow into the live {4,6} merge
+// slot (src_base = shadow_base), so block0's run survives block1's separate-acquire re-compute without an L1
+// round-trip. See generalized_moe_gate_unmask_shadow for the read-back caveat across the acquire boundary.
+template <
+    uint32_t from_lo,
+    uint32_t from_hi,
+    uint32_t to_lo,
+    uint32_t to_hi,
+    uint32_t src_base = 0,
+    uint32_t dst_base = 0>
+ALWI void generalized_moe_gate_relocate_run_tiled() {
+    MATH((SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        generalized_moe_gate_copy_topk_run_tiled,
+        (APPROX, DST_ACCUM_MODE, from_lo, from_hi, to_lo, to_hi, src_base, dst_base),
+        0,
+        VectorMode::RC_custom)));
+}
+
+// Un-mask the shadow DEST tiles after crossing a tile_regs_release()/acquire() boundary. In full-sync mode
+// (dst_full_sync_en) tile_regs_release() issues ZEROACC(CLR_ALL) which, in block mode, only SETS the per-row
+// zero-flags to emulate a cleared dest (the RAM physically survives) — reads then return 0 until the flags are
+// cleared. So block0's run PARKED in the shadow tiles survives the release physically but reads back as 0 until
+// un-masked. Block1's own pipeline re-writes (and thereby un-masks) tiles 0-3 as it runs, so ONLY the shadow
+// tiles (scores/idx/bias, faces shadow_base/16 + {0,4,8}) need this. Call in block1's acquire AFTER block1's
+// produce_run and BEFORE the shadow->{4,6} restore. MATH (a config op, not an SFPU DEST op). The ZEROACC
+// un-mask encoding is arch-divergent (BH: clear_zero_flags operand; WH: AddrMode bit3), so it lives in the
+// per-arch SFPU lib (_gmg_unmask_shadow_tiles); this just forwards.
+template <uint32_t shadow_base = 256>
+ALWI void generalized_moe_gate_unmask_shadow() {
+    MATH((sfpu::generalized_moe_gate_unmask_shadow<shadow_base>()));
+}
+
 // produce_run: for the multi-block (>256) path, end the ungrouped pipeline at merge16_to_run (a
 // re-mergeable top-8 RUN at {run_store_lo, run_store_hi}, idx += idx_offset) and SKIP normalize+step2.
 // Default (produce_run=false) = the single-256 path: finalize (merge + normalize) + step2.

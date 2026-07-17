@@ -180,6 +180,92 @@ struct GeneralizedMoeGate {
             bias_cb.pop_front(1);
         }
 
+#if defined(GMG_DEST_RESIDENT) && GMG_DEST_RESIDENT
+        // DEST-resident 2-block combine (perf: no L1 stash round-trip). block0's top-8 run is PARKED in the
+        // shadow DEST tiles (scores/idx/bias each shifted by kShadowBase rows) and read back in block1's
+        // SEPARATE acquire, then the two runs are merged in-DEST. Requires dst_full_sync_en (single stable
+        // 16-tile bank so a run parked in one acquire survives into the next) — set by the descriptor builder.
+        //
+        // Why SEPARATE acquires (not one): running both blocks' pipelines in a single acquire poisons the
+        // second pipeline's transpose start (produce_run's SFPU/srcb state) -> all-zero output. So block0 gets
+        // its own acquire; the cross-acquire persistence is what the shadow-tile park + unmask handles.
+        void combine_blocks_dest_resident() {
+            // shadow tiles 4/5/6 (scores/idx/bias) at DEST rows 256/320/384; kShadowBase is the whole-tile row
+            // shift added to each field region. The live pipeline uses tiles 0-3 only, so 4-6 are free.
+            constexpr uint32_t kShadowBase = 256;
+
+            CircularBuffer bias_cb(CTArgs::bias_cb);
+            CircularBuffer input_cb(CTArgs::input_cb);
+            CircularBuffer output_cb(CTArgs::output_cb);
+            CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
+
+            // ---- acquire 1: block0 -> top-8 run at {0,2} -> PARK to shadow{0,2}. step2_only "settles" the
+            //      math state (block1's transpose-based pipeline only starts cleanly after a prior step2). NO
+            //      pack — block0 stays resident in DEST. ----
+            bias_cb.wait_front(1);
+            input_cb.wait_front(1);
+            reconfig_data_format_srca(CTArgs::input_indices_cb);
+            copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+            tile_regs_acquire();
+            copy_tile(CTArgs::input_indices_cb, 0, 1);  // block0 GLOBAL indices (arange + 0*256)
+            reconfig_data_format_srca(CTArgs::input_cb);
+            generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
+            generalized_moe_gate<CTArgs::enable_sigmoid, false, /*produce_run=*/true, 0, 2, 0>(
+                CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);  // run at {0,2} (math)
+            // Park the math-layout run BEFORE step2 (step2 would transpose it to standard, which merge16 can't
+            // read). Park copies, so the live {0,2} step2 transposes next is discarded.
+            generalized_moe_gate_relocate_run_tiled<0, 2, 0, 2, /*src_base=*/0, /*dst_base=*/kShadowBase>();
+            generalized_moe_gate_step2_only<false>();  // settle only (output discarded); needed for block1 start
+            tile_regs_commit();
+            tile_regs_wait();
+            // full-sync release MASKS all 16 tiles' zero-flags (block0's shadow survives physically, reads as 0).
+            tile_regs_release();
+            input_cb.pop_front(1);
+            bias_cb.pop_front(1);
+
+            // ---- acquire 2: block1 -> top-8 run at {0,2}; un-mask + RESTORE block0 shadow -> {4,6}; merge
+            //      {0,2}(block1) + {4,6}(block0) -> global top-8 + normalize + step2 -> pack. ----
+            bias_cb.wait_front(1);
+            input_cb.wait_front(1);
+            reconfig_data_format_srca(CTArgs::input_indices_cb);
+            copy_tile_to_dst_init_short(CTArgs::input_indices_cb);
+            tile_regs_acquire();
+            // Un-mask block0's shadow tiles FIRST — before block1's pipeline. The unmask is a MATH ZEROACC
+            // (config), the restore below is an SFPU SFPLOAD (different backend unit): issuing them back-to-back
+            // races (the SFPLOAD can read the still-masked tile as 0 -> block0 loses whichever lanes lost the
+            // race). Placing the unmask here puts block1's ENTIRE produce_run between it and the restore, so the
+            // ZEROACC has retired long before the shadow is read. block1 never touches tiles 4-6, so un-masking
+            // them early is safe and their parked data (physically preserved across the release) is untouched.
+            generalized_moe_gate_unmask_shadow<kShadowBase>();
+            copy_tile(CTArgs::input_indices_cb, 1, 1);  // block1 GLOBAL indices (arange + 1*256)
+            reconfig_data_format_srca(CTArgs::input_cb);
+            generalized_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
+            generalized_moe_gate<CTArgs::enable_sigmoid, false, /*produce_run=*/true, 0, 2, 0>(
+                CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);  // block1 run at {0,2}
+            // block0's shadow (un-masked above, physically preserved across the release) -> live {4,6}.
+            generalized_moe_gate_relocate_run_tiled<0, 2, 4, 6, /*src_base=*/kShadowBase, /*dst_base=*/0>();
+            // merge {0,2}+{4,6} -> global top-8 + normalize + step2 (output layout). No transpose_wh here (both
+            // runs are already resident in DEST math layout), so the produce_run->transpose poison does not apply.
+            generalized_moe_gate_combine_init<false>();
+            UNPACK((llk_unpack_set_srcb_dummy_valid()));
+            generalized_moe_gate_combine_finalize<false, CTArgs::topk, CTArgs::output_softmax>(
+                CTArgs::eps, CTArgs::scaling_factor);
+            tile_regs_commit();
+            input_cb.pop_front(1);
+            bias_cb.pop_front(1);
+            output_cb.reserve_back(1);
+            output_indices_cb.reserve_back(1);
+            tile_regs_wait();
+            pack_reconfig_data_format(CTArgs::output_cb);
+            pack_tile(0, CTArgs::output_cb);
+            output_cb.push_back(1);
+            pack_reconfig_data_format(CTArgs::output_indices_cb);
+            pack_tile(1, CTArgs::output_indices_cb);
+            output_indices_cb.push_back(1);
+            tile_regs_release();
+        }
+#endif  // GMG_DEST_RESIDENT
+
 #endif
 
         void impl() {
@@ -248,6 +334,11 @@ struct GeneralizedMoeGate {
                 output_indices_cb.push_back(1);
                 tile_regs_release();
             } else {
+#if defined(GMG_DEST_RESIDENT) && GMG_DEST_RESIDENT
+                // DEST-resident combine: block0's run stays resident in the shadow DEST tiles across block1's
+                // separate acquire (no L1 stash round-trip). See combine_blocks_dest_resident above.
+                combine_blocks_dest_resident();
+#else
                 CircularBuffer run_scores_cb(CTArgs::run_scores_cb);
                 CircularBuffer run_idx_cb(CTArgs::run_idx_cb);
                 CircularBuffer run_bias_cb(CTArgs::run_bias_cb);
@@ -344,6 +435,7 @@ struct GeneralizedMoeGate {
                 pack_tile(1, CTArgs::output_indices_cb);
                 output_indices_cb.push_back(1);
                 tile_regs_release();
+#endif  // GMG_DEST_RESIDENT
             }
 #endif
         }
