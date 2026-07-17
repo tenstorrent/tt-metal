@@ -192,3 +192,32 @@ were modified or staged, and nothing was pushed.
 
 The resumed review artifact was committed in the `tt-metal` repository on
 branch `odjuricic/agentic-research/graph-rewrite-skill` as `540983e5b85`.
+
+## 2026-07-17: downstream dynamic-batch correction
+
+Stage 11 exposed a latent bug in the exact Stage 04 source: fixed batch 32
+passed, but the rectangular head-grid selection raised for dynamic active
+batches 13, 17, 19, 23, 26, 29, and 31 on the target 11x10 P150 worker grid.
+This invalidates the earlier reviews' assumption that the batch-32 row covered
+all supported partial-batch geometries.
+
+The existing downstream `$autofix` diagnosis and repair were adopted into this
+resumed stage rather than reimplemented. Commit
+`97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f` installs exact multi-range grids
+and matching concat subcores. The host regression was rerun here and passed
+all 146 cases. Tracked release evidence shows real P150x4 trace preparation at
+all seven irregular active batches, completion of 541/541 IFEval requests, and
+zero failed requests across 17 benchmark points including concurrency 13 and
+26. See `evidence/dynamic_batch_correction.md`.
+
+No additional device run was launched because the later target-mesh release
+coverage is stronger and already exercises the fixed graph with real weights.
+The Stage 11 readiness block is unrelated mandatory accuracy-reference
+evidence, not a decoder runtime failure.
+
+A fresh post-correction `$stage-review` returned `clean-pass` with no required
+work or hard-check gaps. It accepted the exhaustive structural regression plus
+real-weight full-stack trace/release coverage because the repair changes only
+core routing and head-concat subcore selection, not numerical operations. The
+verdict and residual-risk analysis are recorded in
+`stage_review_resume_2.md`.

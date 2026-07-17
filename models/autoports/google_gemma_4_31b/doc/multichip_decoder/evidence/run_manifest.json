@@ -34,5 +34,17 @@
     "exact_context": "2 passed at absolute position 262143",
     "watcher": "2 passed; worker and NoC checks enabled; clean teardown",
     "review": "clean-pass"
-  }
+  },
+  "post_stage_corrections": [
+    {
+      "issue": "dynamic decode head grid required one rectangle and crashed for active batches 13, 17, 19, 23, 26, 29, and 31 on the target 11x10 worker grid",
+      "fix_git_commit": "97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f",
+      "artifact": "evidence/dynamic_batch_correction.md",
+      "host_regression": "146 passed for batches 1-32 on 11x10 and 14x10 grids",
+      "target_mesh_evidence": "post-fix P150x4 release prepared traces for all seven irregular batches and completed 541 IFEval requests plus 17 benchmark points with zero failed requests",
+      "review_artifact": "stage_review_resume_2.md",
+      "review": "clean-pass",
+      "status": "fixed"
+    }
+  ]
 }

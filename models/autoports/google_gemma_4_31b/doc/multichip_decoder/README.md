@@ -210,3 +210,20 @@ successfully but timed out restoring one instrumented Ethernet router during
 teardown. A coordinated four-board reset restored the mesh; disabling only
 Ethernet watcher instrumentation produced the clean gate. The failed commands,
 errors, recovery, and passing XML/logs remain in `evidence`.
+
+## Post-stage dynamic-batch correction
+
+A downstream 32-request release workload found that the original Stage 04
+head-concat grid planner crashed when the active batch could not form one
+rectangle on the target 11x10 worker grid. Affected active batches were 13,
+17, 19, 23, 26, 29, and 31. This was a real Stage 04 coverage gap: the original
+suite exercised fixed batch 32 but not dynamic partial batches.
+
+Commit `97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f` fixes the decoder with exact
+row-wise multi-range core sets and the required concat-heads subcore contract.
+The exhaustive host suite passes all batches 1-32 (`146 passed`), and the
+post-fix P150x4 release prepared traces at every affected batch, completed all
+541 IFEval requests, and completed explicit concurrency-13 and concurrency-26
+benchmarks. No public padding or context reduction was introduced. Exact
+diagnosis, hashes, commands, and target-mesh evidence are in
+`evidence/dynamic_batch_correction.md`.
