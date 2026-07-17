@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -13,6 +14,48 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+
+def _pipeline_self_opens_device(demo_dir: Path):
+    """Return [(rel_path, lineno)] for every ttnn.open_device / open_mesh_device
+    call in the emitted tt/ package that is NOT inside an `if __name__ ==
+    "__main__"` guard (fixes-plan Point 10).
+
+    The pipeline must run on the single device passed into build_pipeline; the
+    test fixture is the sole opener (with num_command_queues=2 + trace_region_size
+    for the trace+2CQ lever). A second, ad-hoc open in the importable/callable path
+    creates a competing device with a different command-queue count — the exact
+    cause of the trace+2CQ `id < mesh_command_queues_.size()` fatal. A standalone
+    `__main__` self-test opening its own device is fine and not flagged.
+    """
+    tt_pkg = demo_dir / "tt"
+    hits = []
+    if not tt_pkg.is_dir():
+        return hits
+    for p in sorted(tt_pkg.rglob("*.py")):
+        try:
+            src = p.read_text(errors="ignore")
+            tree = ast.parse(src)
+        except Exception:
+            continue
+        main_spans = [
+            (n.lineno, n.end_lineno)
+            for n in ast.walk(tree)
+            if isinstance(n, ast.If)
+            and isinstance(n.test, ast.Compare)
+            and isinstance(n.test.left, ast.Name)
+            and n.test.left.id == "__name__"
+        ]
+        for n in ast.walk(tree):
+            if (
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr in ("open_device", "open_mesh_device")
+            ):
+                ln = n.lineno
+                if not any(a <= ln <= b for a, b in main_spans):
+                    hits.append((str(p.relative_to(demo_dir)), ln))
+    return hits
 
 
 def _reset_device() -> str:
@@ -677,6 +720,18 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
         reasons.append("G4 structure: no tt/ package (standard demo layout)")
     if not (demo_dir / "README.md").is_file():
         reasons.append("G4 structure: no README.md (standard demo layout)")
+
+    _self_opens = _pipeline_self_opens_device(demo_dir)
+    if _self_opens:
+        _where = ", ".join(f"{rel}:{ln}" for rel, ln in _self_opens)
+        reasons.append(
+            "G5 device-ownership: the pipeline opens its own device "
+            f"(ttnn.open_device/open_mesh_device at {_where}). The pipeline MUST run on the `device` passed "
+            "into build_pipeline — the test fixture is the SOLE device opener (it opens once with "
+            "num_command_queues=2 + trace_region_size for the trace+2CQ lever). A second ad-hoc open creates a "
+            "competing device with a different command-queue count, which is what breaks trace+2CQ with "
+            "`id < mesh_command_queues_.size()`. Remove these open_device calls and thread the passed-in device through."
+        )
 
     if os.environ.get("E2E_ALL_TASKS", "0") == "1":
         model_id = os.environ.get("E2E_MODEL_ID", "")
