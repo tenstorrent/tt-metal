@@ -166,9 +166,8 @@ shield:
   e2e:
     wh_llmbox: 110
   e2e_tier2:
-    wh_n150: 225
+    wh_n150: 355
     wh_n300: 150
-    wh_n300_perf: 115
     bh_p150: 80
     bh_p150b_civ2: 150
   e2e_tier3:
