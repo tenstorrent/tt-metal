@@ -134,6 +134,25 @@ def run_dispatch(
     if (fp8_output or fp8_input) and is_wormhole_b0():
         pytest.skip("fp8 (input or output) not supported on Wormhole hardware")
 
+    # The fp8-scaled path (per-token scales in the metadata tail) is validated only for these models.
+    if fp8_scaled_input and model_name not in FP8_DISP_COMPRESSION_MODELS:
+        pytest.skip("fp8-scaled dispatch supported only for the fp8-compression models")
+
+    # CI runs only two representative dispatch dtype/layout/scale combinations; every other
+    # combination is covered locally. The non-selected combinations reach the body and skip here after
+    # the mesh_device fixture has opened, which is exactly the device-open cost this branch measures.
+    ci_dispatch_combos = {
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT, ttnn.fp8_e4m3, True),
+    }
+    if (is_ci_env or is_ci_v2_env) and (
+        input_dtype,
+        input_layout,
+        output_dtype,
+        fp8_scaled_input,
+    ) not in ci_dispatch_combos:
+        pytest.skip("dispatch CI runs only the two whitelisted dtype/layout/scale combos")
+
     # FP8_E4M3 is a ROW_MAJOR-only tensor spec (no tiled fp8 layout exists), so an fp8 input
     # tensor can only be ROW_MAJOR. The tile path's input is therefore always bf16.
     if fp8_input and input_layout == ttnn.TILE_LAYOUT:
