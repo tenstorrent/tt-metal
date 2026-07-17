@@ -377,7 +377,7 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 
             addr_mod_t {
                 .srca = {.incr = 16},
-                .srcb = {.incr = 16, .cr = 1},
+                .srcb = {.incr = 40},
                 .dest = {.cr = 1},
             }
                 .set(ADDR_MOD_2);
