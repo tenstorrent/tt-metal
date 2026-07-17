@@ -111,6 +111,16 @@ bool groupnorm_legacy_rm_input_fits_l1(
     return est * 100 <= available_l1 * kGroupnormTilizedL1UsagePercent;
 }
 
+bool groupnorm_legacy_rm_prefer_composite_for_perf(
+    uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches, uint32_t per_core_work_tiles) {
+    const bool imbalanced =
+        num_virtual_rows != 0 && num_batches >= num_virtual_rows && (num_batches % num_virtual_rows) != 0;
+    const bool severe_underutil = num_cores <= kGroupnormLegacyRmSevereUnderutilCores;
+    const bool small_grid_with_work =
+        num_cores <= kGroupnormLegacyRmMinCoresForOnChip && per_core_work_tiles >= kGroupnormLegacyRmMinWorkTiles;
+    return imbalanced || severe_underutil || small_grid_with_work;
+}
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;

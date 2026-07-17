@@ -407,11 +407,25 @@ Tensor group_norm(
             /*has_mask=*/true,  // a mask CB is always allocated (get_mask_tensor creates one if absent)
             output_layout.value_or(input_tensor.layout()) == Layout::ROW_MAJOR,
             available_l1);
-        if (!fits) {
+        // Perf heuristic: prefer the composite for some grids/batches even when the group fits L1 (see predicate).
+        const uint32_t num_virtual_cols =
+            compute_num_virtual_cols(core_grid->x, static_cast<int>(num_groups), input_padded_shape[3]);
+        const uint32_t num_virtual_rows = num_virtual_cols == 0 ? 0 : (core_grid->x / num_virtual_cols) * core_grid->y;
+        const uint32_t num_cores = num_virtual_cols * num_virtual_rows;
+        const uint32_t per_core_Nt = num_virtual_cols == 0 ? 0 : (input_padded_shape[3] / num_virtual_cols) / tile_w;
+        const uint32_t block_ht =
+            num_virtual_rows == 0
+                ? 0
+                : (input_padded_shape[0] >= num_virtual_rows ? Ht / input_padded_shape[0] : Ht / num_virtual_rows);
+        const uint32_t per_core_work_tiles = block_ht * per_core_Nt;
+        const bool prefer_composite = ttnn::prim::groupnorm_legacy_rm_prefer_composite_for_perf(
+            num_cores, num_virtual_rows, input_padded_shape[0], per_core_work_tiles);
+        if (!fits || prefer_composite) {
             log_debug(
                 tt::LogOp,
-                "group_norm: ROW_MAJOR input does not fit L1 as a resident tilized group; "
-                "tilizing on host and running the TILE path (composite).");
+                "group_norm: tilizing ROW_MAJOR input on host and running the TILE path (composite) -- "
+                "reason: {}.",
+                !fits ? "resident tilized group does not fit L1" : "small core grid / uneven batch (perf)");
             // Keep the intermediate in the input's memory config (typically DRAM interleaved). Tilizing into
             // output_mem_config would be wrong if the caller requested a different output config.
             gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());

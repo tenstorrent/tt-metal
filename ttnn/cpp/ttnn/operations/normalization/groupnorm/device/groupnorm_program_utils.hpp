@@ -60,4 +60,20 @@ bool groupnorm_legacy_rm_input_fits_l1(
     bool untilize_out,
     uint64_t available_l1);
 
+// Perf heuristic, separate from the L1-fit check: even when a legacy ROW_MAJOR input fits L1 on-core, the host
+// composite (tilize + TILE path) can be faster when the on-core gather is not amortized. Returns true (prefer
+// composite) for an uneven batch load, a severely under-parallelized op, or a small grid that still carries
+// enough per-core work; tiny small-grid shapes stay fused.
+// num_cores = num_virtual_cols * num_virtual_rows; per_core_work_tiles = block_ht * per_core_Nt.
+bool groupnorm_legacy_rm_prefer_composite_for_perf(
+    uint32_t num_cores, uint32_t num_virtual_rows, uint32_t num_batches, uint32_t per_core_work_tiles);
+
+// Thresholds for the heuristic above
+// Above this many active cores there is enough parallelism to keep the gather on-core (stay fused).
+inline constexpr uint32_t kGroupnormLegacyRmMinCoresForOnChip = 32;
+// At or below this many active cores the op is severely under-parallelized: always composite.
+inline constexpr uint32_t kGroupnormLegacyRmSevereUnderutilCores = 4;
+// Minimum per-core work (in tiles) for a small grid (<= kGroupnormLegacyRmMinCoresForOnChip) to composite.
+inline constexpr uint32_t kGroupnormLegacyRmMinWorkTiles = 48;
+
 }  // namespace ttnn::prim
