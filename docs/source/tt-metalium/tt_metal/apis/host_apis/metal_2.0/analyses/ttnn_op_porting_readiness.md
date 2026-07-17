@@ -35,7 +35,7 @@ docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/analyses/ttnn_op_porti
      | base64 -d > docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/analyses/ttnn_op_porting_readiness.csv
    ```
    Use the exact `<SAVED_TOOL_RESULT_PATH>` the tool reported. (No `jq`? Any base64-decode of the `content` field works.)
-4. **Look up your op** by grepping the CSV on the op path (column 1) — e.g. `grep -i '^data_movement/slice,' <csv>`. Pull only the row(s) you need into context; don't read the whole file in.
+4. **Look up your op** by grepping the CSV for the op path — e.g. `grep -i 'data_movement/slice,' <csv>`. Grep the *value* (it's distinctive), not a fixed column position. Pull only the row(s) you need; then map each cell to its column by reading the **header row** (see *Reading the CSV*), never by absolute position. Don't read the whole file in.
 
 > **Do not use `read_file_content` for this sheet.** It truncates large sheets — you'll silently miss every op past roughly the "d"s — and renders ~15 phantom empty columns. `download_file_content` as CSV is complete and clean.
 
@@ -45,29 +45,29 @@ docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/analyses/ttnn_op_porti
 
 ## Reading the CSV
 
-One row per **(op, DeviceOperation, ProgramFactory variant)**. The 14 columns:
+**Reference every column by its header name, not its position.** The sheet evolves — Diego adds and reorders columns — but two guarantees hold: **existing column names never change, and no column is ever deleted.** So read the **header row** (row 1) to find a column by name; never hard-code "column N." A grep-by-op-path lookup gives you the row; the header row tells you which cell is which. (Do not reproduce a positional column list here — it goes stale the moment a column is inserted.)
 
-| # | Column | What it holds |
-|---|---|---|
-| 1 | `Op` | op path, e.g. `data_movement/slice` |
-| 2 | `Device operation` | the `DeviceOperation` class |
-| 3 | `Factory (variant)` | the ProgramFactory this row describes |
-| 4 | `Concept` | factory concept (`descriptor`, `WorkloadDescriptor`, `legacy device-op`, …) |
-| 5 | `Custom hash (compute_program_hash)` | declares a custom hash? |
-| 6 | `Runtime-args update (override_runtime_arguments / get_dynamic_runtime_args)` | custom override / dynamic-RTA hook? |
-| 7 | `Pybind descriptor (nb::class_ of device op)` | pybinds factory / device-op internals? |
-| 8 | `Smuggled pointer (raw buffer addr in RTA/CRTA)` | raw buffer address routed through an RTA/CRTA? |
-| 9 | `Is safe to port?` | Diego's safety call |
-| 10 | `Is able to port?` | Audrey's feasibility call |
-| 11 | `Model` | which model surfaced it (`llama`, `resnet`, `other`) |
-| 12 | `TensorParameter relaxation` | proposed relaxation, if any (`Structural`, `Coarsening`, `Address`, …) |
-| 13 | `Factory definition path` | file the factory is defined in |
-| 14 | `Declared in` | file the device-op is declared in |
+One row per **(op, DeviceOperation, ProgramFactory variant)** — an op with several factories has several rows. The columns the audit reads, by name:
+
+- **`Op`** — op path (`data_movement/slice`); the lookup key.
+- **`Device operation`** / **`Factory (variant)`** — which DeviceOperation and ProgramFactory the row describes.
+- **`Concept`** — the factory's *current* concept: `descriptor`, `WorkloadDescriptor`, `legacy device-op`, or `MetalV2` (already ported).
+- **`Custom hash (…)`** — declares a custom `compute_program_hash`?
+- **`Runtime-args update (…)`** — has the `get_dynamic_runtime_args` hook? (Possible only on `descriptor` / `WorkloadDescriptor` concepts — a cross-column invariant.)
+- **`Pybind descriptor (…)`** — pybinds factory / device-op internals (`create_descriptor`)?
+- **`Smuggled pointer (…)`** — an un-annotated pointer argument (a PD-migration bug); feeds `Is safe to port?`.
+- **`Is safe to port?`** — Diego's correctness call (`yes` / `no` / `warning` / blank): did the prior PD migration introduce a bug?
+- **`Is able to port?`** — the derived Metal-2.0 **gate** verdict. Its derivation is documented in the [audit's TTNN factory concept prerequisite](../ai/port_op_to_metal2_audit.md#ttnn-factory-concept-prerequisite).
+- **`TensorParameter relaxation`** — proposed relaxation, if any (e.g. `dynamic_tensor_shape`, `match_padded_shape_only`, `none`).
+- **`Op-owned tensors?`** / **`Secretly SPMD Workload?`** — feed the target concept and the `WorkloadDescriptor` escape respectively.
+- **`Factory definition path`** / **`Declared in`** — the source files, for the cross-check.
+
+The sheet may carry other, informational columns (e.g. `Model`); find any of them by header too.
 
 Notes:
 
-- Cell values are mostly `yes` / `no`, but some are `PR` (being handled in an in-flight PR) or other short tags. **Diego owns these classifications and their exact semantics** — treat the sheet as his cross-team readiness view, a useful prior, **not** ground truth that overrides your own audit findings. Where the sheet and your evidence disagree, your evidence wins; note the discrepancy in your report.
-- **Ignore the trailing summary block.** The last few rows aren't ops — they're category totals (`With Smuggled pointers, 66`, and similar). A grep-by-op-path lookup skips them naturally.
+- Cell values are mostly `yes` / `no`, but some are `warning`, `PR` (handled in an in-flight PR), blank, or other short tags. **Diego owns these classifications.** The sheet is a shortcut to work you'd otherwise do by hand — **trust it, but cross-check the cheaply-checkable columns against the code** (per the audit subject). On a code-vs-sheet **conflict, or a missing op, the sheet is broken → gate the port** and route it to the readiness-sheet owner to reconcile.
+- **Ignore the trailing summary block.** The last rows aren't ops — they're category totals (`With Smuggled pointers, 66`, and similar) and stray labels. A grep-by-op-path lookup skips them naturally.
 - CSV export covers only the sheet's first tab (`Sheet1`), which today holds all the data.
 
 ## Troubleshooting
