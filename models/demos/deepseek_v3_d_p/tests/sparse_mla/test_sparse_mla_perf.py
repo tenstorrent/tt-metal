@@ -131,6 +131,9 @@ _CONFIG_BUILDERS = {"deepseek_v32": deepseek_v32_hf_config, "glm_5_1": glm_hf_co
 # so the recorded provenance can never drift from what actually ran (FABRIC_2D is the production transport;
 # FABRIC_1D exhibited the multi-hop line-broadcast hang).
 PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
+# Matches the production GLM adapters: enough room for all_gather's global semaphores without reducing
+# the static-CB headroom required by the dense MLA path.
+L1_SMALL_SIZE = 512
 
 
 def _subdir(variant: str, mode: str) -> str:
@@ -366,6 +369,7 @@ def _require_perf(request):
             "fabric_config": PERF_FABRIC,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": L1_SMALL_SIZE,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
         }
     ],

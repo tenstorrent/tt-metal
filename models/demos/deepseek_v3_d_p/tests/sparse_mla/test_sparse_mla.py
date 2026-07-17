@@ -37,6 +37,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 SPARSE_OUTPUT_PCC = 0.98
 SPARSE_KVPE_PCC = 0.99
+# Matches the production GLM adapters: enough room for all_gather's global semaphores without reducing
+# the static-CB headroom required by the dense MLA path.
+L1_SMALL_SIZE = 512
 # Indexer key cache is stored bf8 on device vs the bf16 CPU reference, so it carries block-float
 # quantization noise. Measured ~0.99991 on 2x4 BH (both variants, chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
@@ -112,16 +115,19 @@ SPARSE_ANCHOR_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=True)
 _SPARSE_FABRICS = {
     "line": {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "l1_small_size": L1_SMALL_SIZE,
         "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
     },
     "ring": {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        "l1_small_size": L1_SMALL_SIZE,
         "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
     },
     "fabric2d": {
         "fabric_config": ttnn.FabricConfig.FABRIC_2D,
         "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        "l1_small_size": L1_SMALL_SIZE,
         "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
     },
 }
