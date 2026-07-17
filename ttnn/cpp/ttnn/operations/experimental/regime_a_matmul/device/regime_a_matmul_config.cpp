@@ -33,6 +33,12 @@ inline uint32_t rup(uint32_t x, uint32_t y) { return cdiv(x, y) * y; }
 constexpr uint32_t kCsat = 24, kAcap = 6, kKbcap = 2;
 constexpr double kKk = 0.5, kAa = 2.0, kOvl = 1.0, kStart = 0.0, kWst = 0.5;
 constexpr uint32_t kL1Budget = 1440u * 1024u, kTB = 2048u;
+// v3 M-split fallback (trained on the Mt<=8 campaign, tools/mm_sweep/picker_v3.py): the deployed Sm=1
+// ranking is the ANCHOR; an Sm>1 candidate is chosen only for NARROW-N shapes (Nband<=kNbandMax, where
+// N-split cannot supply parallelism) when its reduction-aware cost beats the anchor's by kMSplitMargin.
+// kRk penalises split-K reduction (rk*(Pk-1)*out-tiles/core). Zero-regression on all 60 campaign shapes.
+constexpr double kRk = 0.8, kMSplitMargin = 0.03;
+constexpr uint32_t kNbandMax = 2u;
 
 // Lightweight geometry + feasibility (mirrors picker_v2.plan()). Returns false if infeasible.
 struct PickGeo {
@@ -85,6 +91,13 @@ double pick_cost(uint32_t Kt, uint32_t Nt, uint32_t kb, uint32_t nsb, const Pick
     return base * (1.0 + kWst * (g.wasteK + g.wasteN));
 }
 
+// v3 reduction-aware cost: deployed cost + split-K reduction penalty (rk*(Pk-1)*output-tiles-per-core).
+// Used ONLY for the narrow-N Sm>1 hysteresis so the Sm=1 ranking stays byte-identical to the deployed model.
+double pick_cost_v3(uint32_t Kt, uint32_t Nt, uint32_t Pk, uint32_t kb, uint32_t nsb, const PickGeo& g) {
+    const double reduce = kRk * (Pk > 1u ? static_cast<double>(Pk - 1u) : 0.0) * g.Mblk * g.Nown;
+    return pick_cost(Kt, Nt, kb, nsb, g) + reduce;
+}
+
 }  // namespace
 
 RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
@@ -115,15 +128,41 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
         {{16, 192, 48}, {12, 1, 1, 2, 1}},
         // Mt=8 low-AI shape: the cost-model fallback picks N-split (Ns2) which is ~15% slower here than
         // M-split. Exhaustive op-side sweep (788 configs) winner; overhead/reduction-tail-bound at ~37%.
-        {{8, 64, 32}, {4, 1, 2, 2, 2}},
+        // Mt<=8 re-baseline campaign (2026-07, tools/mm_sweep/picker_v3.py + regime_a_campaign): measured
+        // winners for the M-scaling shapes, +3..+32% vs the old fallback, all zero-regression (stability /
+        // exhaustive-expand / validate confirmed; single-run entries re-validated by the gated corpus re-run).
+        {{8, 64, 32}, {4, 1, 2, 2, 4}},    // 256x2048x1024 +5% (was {4,1,2,2,2})
+        {{8, 480, 48}, {6, 1, 2, 2, 6}},   // 256x15360x1536 +32%
+        {{8, 64, 16}, {4, 1, 3, 2, 2}},    // 256x2048x512 +24%
+        {{1, 480, 24}, {6, 1, 1, 2, 3}},   // 32x15360x768 +24%
+        {{8, 72, 192}, {3, 4, 1, 1, 3}},   // 256x2304x6144 +21%
+        {{4, 64, 16}, {4, 1, 2, 2, 2}},    // 128x2048x512 +21%
+        {{4, 480, 48}, {12, 1, 1, 1, 3}},  // 128x15360x1536 +21%
+        {{2, 64, 16}, {4, 2, 1, 2, 1}},    // 64x2048x512 +21%
+        {{8, 64, 48}, {4, 1, 3, 2, 3}},    // 256x2048x1536 +19%
+        {{1, 64, 32}, {2, 4, 1, 4, 1}},    // 32x2048x1024 +19%
+        {{2, 64, 32}, {4, 2, 1, 2, 2}},    // 64x2048x1024 +14%
+        {{8, 480, 24}, {6, 1, 2, 2, 3}},   // 256x15360x768 +10%
+        {{8, 64, 64}, {4, 1, 3, 2, 4}},    // 256x2048x2048 +9%
+        {{4, 64, 32}, {4, 1, 2, 2, 4}},    // 128x2048x1024 +9%
+        {{8, 192, 48}, {6, 1, 2, 4, 2}},   // 256x6144x1536 +8%
+        {{1, 72, 192}, {3, 2, 1, 1, 6}},   // 32x2304x6144 +7%
+        {{2, 64, 64}, {2, 3, 1, 2, 3}},    // 64x2048x2048 +5%
+        {{1, 480, 48}, {6, 1, 1, 2, 3}},   // 32x15360x1536 +5%
+        {{8, 192, 192}, {6, 1, 2, 4, 2}},  // 256x6144x6144 +4%
+        {{4, 64, 64}, {4, 3, 1, 2, 3}},    // 128x2048x2048 +4%
+        {{2, 480, 24}, {10, 1, 1, 2, 3}},  // 64x15360x768 +4%
+        {{1, 192, 24}, {6, 1, 1, 2, 3}},   // 32x6144x768 +4%
+        {{8, 192, 144}, {6, 1, 2, 4, 2}},  // 256x6144x4608 +3%
     };
     if (auto it = kTable.find({Mt, Kt, Nt}); it != kTable.end()) {
         return it->second;
     }
 
-    // Cost-model fallback: enumerate feasible (Sm=1) candidates, pick min cost.
-    RegimeAMatmulConfig best{};
-    double best_cost = std::numeric_limits<double>::infinity();
+    // Cost-model fallback. Step 1: the deployed Sm=1 ANCHOR (min deployed cost) -- unchanged behaviour.
+    RegimeAMatmulConfig anchor{};
+    double anchor_cost = std::numeric_limits<double>::infinity();
+    PickGeo anchor_g{};
     const uint32_t Nband = cdiv(Nt, 8u);
     for (uint32_t Pk = 1; Pk <= 12u; ++Pk) {
         for (uint32_t Ns = 1; Ns <= 6u; ++Ns) {
@@ -135,9 +174,10 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
                         continue;
                     }
                     const double c = pick_cost(Kt, Nt, kb, nsb, g);
-                    if (c < best_cost) {
-                        best_cost = c;
-                        best = RegimeAMatmulConfig{
+                    if (c < anchor_cost) {
+                        anchor_cost = c;
+                        anchor_g = g;
+                        anchor = RegimeAMatmulConfig{
                             .k_slices = Pk,
                             .n_slices = Ns,
                             .m_slices = 1u,
@@ -149,12 +189,51 @@ RegimeAMatmulConfig auto_select_config(uint32_t Mt, uint32_t Kt, uint32_t Nt) {
         }
     }
     TT_FATAL(
-        best_cost != std::numeric_limits<double>::infinity(),
+        anchor_cost != std::numeric_limits<double>::infinity(),
         "regime_a_matmul auto-select found no feasible config for Mt={} Kt={} Nt={}",
         Mt,
         Kt,
         Nt);
-    return best;
+
+    // Step 2: NARROW-N M-split hysteresis. Only where N-split cannot supply parallelism (Nband<=kNbandMax)
+    // do we consider Sm>1, and only adopt it when its reduction-aware cost beats the anchor's by the margin.
+    // Otherwise the anchor (deployed pick) is returned -> zero regression by construction.
+    if (Nband > kNbandMax || Mt < 2u) {
+        return anchor;
+    }
+    RegimeAMatmulConfig bestG{};
+    double bestG_cost = std::numeric_limits<double>::infinity();
+    for (uint32_t Pk = 1; Pk <= 12u; ++Pk) {
+        for (uint32_t Ns = 1; Ns <= 6u; ++Ns) {
+            const uint32_t Nown = cdiv(Nband, Ns);
+            for (uint32_t Sm = 2; Sm <= Mt; ++Sm) {
+                for (uint32_t kb : {1u, 2u, 4u, 8u}) {
+                    for (uint32_t nsb = 1; nsb <= Nown; ++nsb) {
+                        PickGeo g{};
+                        if (!pick_plan(Mt, Kt, Nt, Ns, Pk, Sm, kb, nsb, g)) {
+                            continue;
+                        }
+                        const double c = pick_cost_v3(Kt, Nt, Pk, kb, nsb, g);
+                        if (c < bestG_cost) {
+                            bestG_cost = c;
+                            bestG = RegimeAMatmulConfig{
+                                .k_slices = Pk,
+                                .n_slices = Ns,
+                                .m_slices = Sm,
+                                .k_block_tiles = kb,
+                                .n_subblock_tiles = nsb};
+                        }
+                    }
+                }
+            }
+        }
+    }
+    const double anchor_cost_v3 =
+        pick_cost_v3(Kt, Nt, anchor.k_slices, anchor.k_block_tiles, anchor.n_subblock_tiles, anchor_g);
+    if (bestG_cost < std::numeric_limits<double>::infinity() && bestG_cost < anchor_cost_v3 * (1.0 - kMSplitMargin)) {
+        return bestG;
+    }
+    return anchor;
 }
 
 plan::PlanResult make_and_build_plan(
