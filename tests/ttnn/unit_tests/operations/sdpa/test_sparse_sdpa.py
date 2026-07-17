@@ -209,6 +209,32 @@ def test_sparse_sdpa_indexed_kv_cache(device):
     assert n == 1, f"indexing into a different slot recompiled: {n} program-cache entries (expected 1)"
 
 
+# ---- override_runtime_arguments on a cache HIT must re-derive BOTH the excluded slot offset
+# ---- (kv_batch_page_offset = cache_batch_idx*T) AND every tensor buffer address. Here each iteration changes
+# ---- cache_batch_idx AND freshly allocates q/kv/indices (prior tensors kept alive so the new buffers get
+# ---- different addresses) — correct PCC for every step, on ONE cache entry, proves the hit path re-applies
+# ---- both from create_descriptor (not stale baked values). ----
+@run_for_blackhole()
+def test_sparse_sdpa_indexed_addr_change_on_hit(device):
+    H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 3
+    device.clear_program_cache()
+    scale = K_DIM**-0.5
+    keep_alive = []  # hold device tensors so each reallocation lands at a fresh address
+    for cb in range(B):
+        q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B, seed=cb)  # fresh data + fresh buffers each step
+        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        keep_alive += [tt_q, tt_kv, tt_idx]
+        tt_out = ttnn.transformer.sparse_sdpa(
+            tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+        )
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))
+        assert p >= 0.99, f"PCC {p:.5f} (cache_batch_idx={cb}, reallocated buffers)"
+    n = device.num_program_cache_entries()  # slot + address changes are runtime args, not a recompile
+    assert n == 1, f"addr/slot change on hit recompiled: {n} program-cache entries (expected 1)"
+
+
 # ---- indexed KV cache that is ND-sharded across DRAM banks (each batch slot is one shard). ----
 def _nd_sharded_dram_config(device, rows_per_shard):
     num_banks = device.dram_grid_size().x
