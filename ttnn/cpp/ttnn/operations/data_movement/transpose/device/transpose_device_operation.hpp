@@ -55,13 +55,14 @@ struct TransposeDeviceOperation {
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, const Tensor& output);
 
-    // #48928: opt the CB-bound height-sharded factories into the descriptor fast-path. Defined in
-    // transpose_hc_sharded_program_factory.cpp so it can reuse that factory's per-core arg builders.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&,
-        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
+    // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer addresses)
+    // from the same factory the miss path picks. See transpose_device_operation.cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::prim
