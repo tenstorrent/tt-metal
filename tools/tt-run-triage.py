@@ -52,8 +52,8 @@ TRIAGE_PY = Path(__file__).resolve().parent / "triage" / "triage.py"
 
 # tt-run runs triage under `mpirun --tag-output`, prefixing each line: `[<jobid>,<rank>]<stream>: <payload>`
 _TAG_RE = re.compile(r"^\[\d+,(\d+)\]<(stdout|stderr)>:\s?(.*)$")
-# Triage script-section header: `script_name.py:` or `script_name.py [0.42s]:`
-_SCRIPT_HEADER_RE = re.compile(r"^[a-zA-Z_]\w*\.py(?:\s+\[[\d.]+s\])?\s*:\s*$")
+# Triage script-section header: `script_name.py:` or `script_name.py [0.42s]:` (group 1 = filename).
+_HEADER_LINE_RE = re.compile(r"^([A-Za-z_]\w*\.py)(?:\s+\[[\d.]+s\])?\s*:\s*$")
 # SGR escapes — stripped before header matching (per-rank output is colored).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -126,15 +126,35 @@ def _discover_rank_count(tt_run_args: list[str]) -> int:
     raise SystemExit(2)
 
 
-class TextStreamingRenderer:
-    """Buffers per-rank lines between script headers; renders each script's
-    section once all N ranks have moved past it."""
+# Cell states for the [script][rank] grid.
+_PENDING, _RUNNING, _PASS, _FAIL, _SILENT, _STOPPED = range(6)
 
-    def __init__(self, expected_ranks: int):
+
+class TextStreamingRenderer:
+    """Renders each triage script's per-rank output in canonical execution order.
+
+    Every rank walks the scripts in the same order, so "rank R emitted S" proves
+    R passed everything before S. That lets each silent cell in the [script][rank]
+    grid be resolved deterministically: a provider that stayed silent succeeded, a
+    checker that stayed silent was skipped because a dependency failed."""
+
+    def __init__(self, expected_ranks: int, scripts: dict):
         from rich.console import Console
         from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+        import triage
 
         self.N = expected_ranks
+        self.order = [s.name for s in triage.resolve_execution_order(scripts)]
+        self.order_index = {name: i for i, name in enumerate(self.order)}
+        self.is_provider = {s.name: bool(s.config.data_provider) for s in scripts.values()}
+        self.dep_closure = self._build_dep_closure(scripts)
+
+        # The grid plus two cursors: `current` = the script a rank is mid-emitting,
+        # `next_row` = the next row to render (streams down the fixed order).
+        self.status = {name: [_PENDING] * self.N for name in self.order}
+        self.lines: dict[str, dict[int, list[str]]] = {name: {} for name in self.order}
+        self.current: dict[int, str] = {}
+        self.next_row = 0
 
         out_width = None if sys.stdout.isatty() else 10000
         self.console = Console(
@@ -143,7 +163,6 @@ class TextStreamingRenderer:
             width=out_width,
             file=sys.stdout,
         )
-
         self.progress = Progress(
             SpinnerColumn(),
             TextColumn("{task.description}"),
@@ -155,71 +174,118 @@ class TextStreamingRenderer:
         self.progress.start()
         self.ranks_task = self.progress.add_task("(waiting for first record)", total=self.N)
 
-        self.rank_current_script: dict[int, str] = {}
-        self.rank_current_lines: dict[int, list[str]] = {}
-        self.seen_scripts: list[str] = []
-        self.script_lines: dict[str, dict[int, list[str]]] = {}
-        self.rendered_scripts: set[str] = set()
+    @staticmethod
+    def _build_dep_closure(scripts: dict) -> dict:
+        path_to_name = {path: s.name for path, s in scripts.items()}
+        direct = {s.name: [path_to_name[d] for d in s.config.depends if d in path_to_name] for s in scripts.values()}
+        closure: dict[str, set[str]] = {}
+        for name in direct:
+            seen: set[str] = set()
+            stack = list(direct[name])
+            while stack:
+                d = stack.pop()
+                if d not in seen:
+                    seen.add(d)
+                    stack.extend(direct.get(d, ()))
+            closure[name] = seen
+        return closure
 
     def on_line(self, rank: int, payload: str) -> None:
-        header = _ANSI_RE.sub("", payload).strip()
-        if _SCRIPT_HEADER_RE.match(header):
-            new_script = header.rstrip(":")
-            self._flush_rank(rank)
-            if new_script not in self.script_lines:
-                self.seen_scripts.append(new_script)
-                self.script_lines[new_script] = {}
-            self.rank_current_script[rank] = new_script
-            self.rank_current_lines[rank] = []
-            self._pump()
-        elif rank in self.rank_current_script:
-            self.rank_current_lines[rank].append(payload)
+        header = _HEADER_LINE_RE.match(_ANSI_RE.sub("", payload).strip())
+        if header and header.group(1) in self.status:
+            self._start(rank, header.group(1))
+        elif rank in self.current:
+            self.lines[self.current[rank]][rank].append(payload)
 
-    def _flush_rank(self, rank: int) -> None:
-        if rank not in self.rank_current_script:
-            return
-        script = self.rank_current_script.pop(rank)
-        lines = self.rank_current_lines.pop(rank)
-        self.script_lines[script][rank] = lines
+    def _start(self, rank: int, script: str) -> None:
+        self._flush(rank)
+        # Everything before `script` this rank never emitted is now resolved:
+        # a silent provider succeeded, a silent checker was skipped.
+        for name in self.order[: self.order_index[script]]:
+            if self.status[name][rank] == _PENDING:
+                self.status[name][rank] = _SILENT
+        self.status[script][rank] = _RUNNING
+        self.lines[script][rank] = []
+        self.current[rank] = script
+        self._advance()
+
+    def _flush(self, rank: int) -> None:
+        script = self.current.pop(rank, None)
+        if script is not None:
+            self.status[script][rank] = _FAIL if self._failed(script, self.lines[script][rank]) else _PASS
 
     def on_eof(self) -> None:
-        # Final script of each rank has no "next header" — flush at exit.
-        for rank in list(self.rank_current_script.keys()):
-            self._flush_rank(rank)
-        self._pump(final=True)
+        for rank in list(self.current):
+            self._flush(rank)
+        # Cells a rank never reached: skipped if a dependency failed, else it stopped.
+        for name in self.order:
+            for rank in range(self.N):
+                if self.status[name][rank] == _PENDING:
+                    self.status[name][rank] = _SILENT if self._failed_dep(rank, name) else _STOPPED
+        self._advance(final=True)
 
-    def _pump(self, final: bool = False) -> None:
-        for script in self.seen_scripts:
-            if script in self.rendered_scripts:
-                continue
-            finished = len(self.script_lines.get(script, {}))
-            if finished < self.N and not final:
-                self._update_progress(script, finished)
+    def _advance(self, final: bool = False) -> None:
+        while self.next_row < len(self.order):
+            script = self.order[self.next_row]
+            col = self.status[script]
+            settled = sum(st not in (_PENDING, _RUNNING) for st in col)
+            if settled < self.N and not final:
+                self._progress(script, settled)
                 return
-            self._render_script(script)
-            self.rendered_scripts.add(script)
-        self._update_progress(None, 0)
+            self._render(script)
+            self.next_row += 1
+        self._progress(None, self.N)
 
-    def _render_script(self, script: str) -> None:
-        from rich.text import Text
+    def _failed(self, script: str, lines: list[str]) -> bool:
+        if self.is_provider.get(script):  # providers emit only on failure
+            return not any(_ANSI_RE.sub("", l).strip() == "pass" for l in lines)
+        return any(_ANSI_RE.sub("", l).strip() == "fail" for l in lines)
 
+    def _failed_dep(self, rank: int, script: str) -> Optional[str]:
+        failed = [d for d in self.dep_closure.get(script, ()) if self.status[d][rank] == _FAIL]
+        return min(failed, key=self.order_index.get) if failed else None
+
+    def _render(self, script: str) -> None:
+        col = self.status[script]
+        provider = self.is_provider.get(script)
+        if provider and _FAIL not in col:
+            return  # provider succeeded on every rank; nothing to report
         self.console.print()
         self.console.print(f"{script}:", markup=False, highlight=False)
-        reported = self.script_lines[script]
+        if provider:
+            return self._render_provider(script, col)
         for rank in range(self.N):
             self.console.print(f"  [rank {rank}]", markup=False, highlight=False)
-            if rank not in reported:
-                self.console.print("    <no output — rank exited before this script>", markup=False, highlight=False)
-                continue
-            for line in reported[rank]:
-                # Pre-colored from the subprocess
-                self.console.print(Text.from_ansi(line), highlight=False)
+            if col[rank] in (_PASS, _FAIL):
+                self._print_lines(self.lines[script][rank])
+            elif col[rank] == _SILENT:
+                dep = self._failed_dep(rank, script)
+                note = f"skipped (failed dependency: {dep})" if dep else "skipped"
+                self.console.print(f"    ({note})", markup=False, highlight=False)
+            else:
+                self.console.print("    (no output - rank stopped here)", markup=False, highlight=False)
 
-    def _update_progress(self, script: Optional[str], finished: int) -> None:
+    def _render_provider(self, script: str, col: list) -> None:
+        # Providers print only on failure, so only failed ranks have output.
+        failed = [rank for rank in range(self.N) if col[rank] == _FAIL]
+        for rank in failed:
+            self.console.print(f"  [rank {rank}]", markup=False, highlight=False)
+            self._print_lines(self.lines[script][rank])
+        rest = self.N - len(failed)
+        if rest:
+            self.console.print(f"  ({rest} rank(s): no failure reported)", markup=False, highlight=False)
+
+    def _print_lines(self, lines: list[str]) -> None:
+        from rich.text import Text
+
+        for line in lines:
+            self.console.print(Text.from_ansi(line), highlight=False)  # pre-colored by the subprocess
+
+    def _progress(self, script: Optional[str], done: int) -> None:
         if script is not None:
             # reset() re-arms the spinner; otherwise completed==total marks it finished.
             self.progress.reset(self.ranks_task, total=self.N, description=script)
-            self.progress.update(self.ranks_task, completed=finished)
+            self.progress.update(self.ranks_task, completed=done)
         else:
             self.progress.update(self.ranks_task, description="(done)", completed=self.N)
 
@@ -246,7 +312,7 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
     print(f"[tt-run-triage] launching: {' '.join(cmd)}", file=sys.stderr)
     print(f"[tt-run-triage] expecting {rank_count} ranks", file=sys.stderr)
 
-    renderer = TextStreamingRenderer(expected_ranks=rank_count)
+    renderer = TextStreamingRenderer(expected_ranks=rank_count, scripts=scripts)
 
     interactive = sys.stdout.isatty()
     cols = shutil.get_terminal_size().columns if interactive else 10000
