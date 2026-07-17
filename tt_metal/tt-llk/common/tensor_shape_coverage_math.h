@@ -25,7 +25,7 @@ inline bool is_math_tensor_shape_covered(const TensorShape& tensor_shape)
            tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR4_NF1x1) || tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR4_NF1x2) ||
            tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR8_NF1x1) || tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR8_NF1x2) ||
            tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR16_NF1x1) || tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR16_NF1x2) ||
-           tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR16_NF2x2);
+           tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR16_NF2x1) || tensor_shape_eq(tensor_shape, TENSOR_SHAPE_FR16_NF2x2);
 }
 
 } // namespace ckernel::coverage
