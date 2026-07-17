@@ -8,8 +8,11 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+
+#include <unordered_map>
 
 namespace tt::tt_metal::experimental {
 
@@ -20,8 +23,30 @@ namespace tt::tt_metal::experimental {
 
 // Create a Program object from a ProgramSpec
 // (This will become a constructor for the Program class)
+//
+// INVARIANT: A successfully constructed Program is always valid.
+//
 Program MakeProgramFromSpec(
     const distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
+
+// Create a MeshWorkload object from a set of region-mapped ProgramSpecs
+// (This will become a constructor for the MeshWorkload class)
+//
+// INVARIANT: A successfully constructed MeshWorkload is always valid.
+//
+distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
+    const distributed::MeshDevice& mesh_device,
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
+    bool skip_validation = false);
+
+// Create a MeshWorkload object from single ProgramSpec,
+// to be applied mesh-wide (SPMD)
+// (This will become a constructor for the MeshWorkload class)
+//
+// INVARIANT: A successfully constructed MeshWorkload is always valid.
+//
+distributed::MeshWorkload MakeMeshWorkloadFromSpec(
+    const distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation = false);
 
 // Configure the arguments (mutable parameters) of an existing Program
 // (This will become a member function for the Program class)
