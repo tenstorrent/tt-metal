@@ -935,13 +935,7 @@ def test_tilize_block_sharded_shapes(device, tensor_shape, grid_shape, dtype):
 )
 @pytest.mark.parametrize(
     "tile_shape",
-    [
-        (16, 32),
-        (8, 32),
-        (4, 32),
-        (2, 32),
-        # (1, 32), Disabled due to LLK bug
-    ],
+    [(16, 32), (8, 32), (4, 32), (2, 32), (1, 32)],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_shape, dtype):
@@ -1006,8 +1000,8 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
         ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
     ],
 )
-@pytest.mark.parametrize("input_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32)])
-@pytest.mark.parametrize("output_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32)])
+@pytest.mark.parametrize("input_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)])
+@pytest.mark.parametrize("output_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype):
     """Retile an already-tiled input into a different tile shape (invokes the retile factory)."""
