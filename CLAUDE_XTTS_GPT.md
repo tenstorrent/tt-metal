@@ -16,8 +16,10 @@ Parent: `CLAUDE_XTTS_TTNN.md` (read it first for shared decisions + integration 
     stop/max) — teacher-forced latent PCC **0.99955**, **100% argmax agreement (24/24)**;
     free-running bf16 codes **identical** to the fp32 reference (24/24). Host-driven loop,
     generation head (mel_head/mel_embedding/mel_pos) on CPU.
+  - **Trace-captured decode** (`TTNNGPTTracedDecoder`) — decode step replayed from a device
+    trace; PCC 0.99972 (identical to non-traced). ~1.4× faster (see Perf below).
 - Not yet done: real prompt (cond+text via Block 1 Perceiver — currently a seeded text-only
-  prompt), trace-capture of the decode step for throughput.
+  prompt); host-side decode optimizations (reuse host tensors, on-device sampling, 2CQ).
 
 ## Role in pipeline
 The autoregressive core. Takes conditioning latents (Block 1) as a prefix + text tokens
@@ -76,10 +78,11 @@ Other (not in this block): `gpt.text_embedding` (6681,1024), `gpt.mel_embedding`
   reference builder, golden generator. Also `make_golden_input` (realistic seeded input
   built from the real embedding tables).
 - `models/experimental/xtts_v2/tt/ttnn_xtts_gpt.py` — `TTNNGPTCore` (prefill) + `preprocess_gpt_parameters`.
-- `models/experimental/xtts_v2/tt/ttnn_xtts_gpt_decode.py` — `TTNNGPTDecoder` (KV-cached decode).
+- `models/experimental/xtts_v2/tt/ttnn_xtts_gpt_decode.py` — `TTNNGPTDecoder` (KV-cached decode) + `TTNNGPTTracedDecoder` (trace-captured decode).
 - `models/experimental/xtts_v2/tt/ttnn_xtts_gpt_generate.py` — `TTNNGPTGenerator` (prefill + greedy generate + teacher_forced; generation head on CPU).
 - `models/experimental/xtts_v2/tests/test_gpt_pcc.py` — prefill PCC gate.
 - `models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py` — decode PCC gate (vs prefill golden).
+- `models/experimental/xtts_v2/tests/test_gpt_trace_pcc.py` — trace-captured decode PCC gate.
 - `models/experimental/xtts_v2/tests/test_gpt_generate_pcc.py` — end-to-end generate gate (vs reference_generate).
 
 ## How to run
@@ -108,6 +111,16 @@ python -m pytest models/experimental/xtts_v2/tests/test_gpt_generate_pcc.py -q
 | **fp32** | **manual matmul+softmax** | **0.99996** | **YES** |
 | bf16 (decode) | flash-decode SDPA, KV cache | 0.99972 | n/a (gate 0.999) |
 
+## Perf (N150 Wormhole, bf16, prompt P=16 + 32 decode steps, 1 warmup + 10 runs)
+| path | total (avg) | decode / token |
+|---|---|---|
+| host-driven (`TTNNGPTDecoder`) | 853 ms | 18.79 ms |
+| trace-captured (`TTNNGPTTracedDecoder`) | 602 ms | 12.81 ms |
+
+Trace removes per-token host op-dispatch of the 30 layers; remaining per-token cost is
+host-side (input tilization/copy, latent readback, CPU sampling head), which now dominates.
+~12.8 ms/token ≈ 78 tok/s ≈ 3.6× real-time at 21.53 Hz. (Throwaway bench script, not committed.)
+
 ## Findings log (dated)
 - 2026-07-17: Core matches reference. Key precision findings:
   - The PCC gap was **not** the residual stream (fp32 residual + bf16 SDPA only reached
@@ -134,7 +147,11 @@ python -m pytest models/experimental/xtts_v2/tests/test_gpt_generate_pcc.py -q
 - [x] **End-to-end generate** (2026-07-17): `TTNNGPTGenerator` — prefill [prompt, START]
       into the cache, greedy decode w/ mel_head until stop/max. bf16 codes match the fp32
       reference exactly (24/24); teacher-forced latent PCC 0.99955.
-- [ ] Trace-capture the decode step for throughput (single stable graph per step).
+- [x] Trace-capture the decode step (2026-07-17): `TTNNGPTTracedDecoder`, PCC 0.99972,
+      ~1.4× faster. Tensor-position via paged_update_cache(update_idxs_tensor) +
+      sdpa_decode(cur_pos_tensor); token/pos copied into stable tensors each step.
+- [ ] Host-side decode opt: reuse pre-allocated host tensors (avoid per-step from_torch),
+      move sampling head on-device, 2CQ overlap — host I/O now dominates per-token time.
 - [ ] Parallel prefill into the cache (currently token-by-token via decode_step) using
       fill_cache / the prefill path, for faster prompt processing.
 - [ ] Real prompt from Block 1 (cond latents + text) instead of the seeded text-only prompt.
