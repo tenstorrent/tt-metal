@@ -154,18 +154,58 @@ void bias_untilize_fullblock() {
 template <uint32_t rows, uint32_t cols, bool use_fp32_partials, uint32_t local_cb, uint32_t remote_cb>
 void reduce_fullblock_inplace(uint32_t num_workers) {
     constexpr uint32_t num_tiles = rows * cols;
+    constexpr uint32_t max_dst_tiles = compute_kernel_lib::DEST_AUTO_LIMIT;
 
     cb_wait_front(local_cb, num_tiles);
+    if (num_workers == 0) {
+        return;  // no worker partials to reduce (C_in_num_blocks == 1)
+    }
 
+    // Pack-side L1 accumulation, but with the block-invariant reconfigs HOISTED out of the
+    // per-worker loop. The prior add_inplace_l1_acc<> re-issued copy_tile_to_dst_init +
+    // pack_reconfig_data_format + pack_reconfig_l1_acc(1)/(0) on EVERY worker; that reconfig
+    // churn scaled with num_workers and dominated the frequent small-tile reductions of the
+    // skinny-Cout conv3d upsamplers (Cin1024->Cout32-block, C_in_num_blocks=16, num_workers~15)
+    // — measured +2.5% on Blackhole. The datacopy srcA init, packer format, and L1-acc mode
+    // are identical for every worker (nothing between workers dirties them), so issue them
+    // ONCE here and keep L1-acc enabled across all workers (each worker accumulates onto the
+    // running sum in local_cb). This keeps L1-acc's fused-pack benefit while removing the churn.
     if constexpr (use_fp32_partials) {
-        reconfig_data_format_srca(local_cb);
+        reconfig_data_format(local_cb, remote_cb);
     }
-    for (uint32_t i = 0; i < num_workers; i++) {
+    copy_tile_to_dst_init_short_with_dt(local_cb, remote_cb);
+    pack_reconfig_data_format(local_cb);
+    pack_reconfig_l1_acc(1);
+    for (uint32_t w = 0; w < num_workers; w++) {
         cb_wait_front(remote_cb, num_tiles);
-        // Flatten rows x cols into one logical row so the full remote partial block is
-        // consumed tile-for-tile while preserving the physical-full inout_cb invariant.
-        add_inplace_l1_acc<1, num_tiles, true>(local_cb, remote_cb);
+        // local_cb is physically full: pop_front + reserve_back returns the same L1 slots so
+        // the indexed L1-acc pack lands on top of the existing partials. Chunk by DST capacity.
+        for (uint32_t i = 0; i < num_tiles; i += max_dst_tiles) {
+            const uint32_t tiles_cur = (num_tiles - i) < max_dst_tiles ? (num_tiles - i) : max_dst_tiles;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < tiles_cur; ++j) {
+                copy_tile(remote_cb, j, j);
+            }
+            tile_regs_commit();
+            cb_pop_front(local_cb, tiles_cur);
+            cb_pop_front(remote_cb, tiles_cur);
+            cb_reserve_back(local_cb, tiles_cur);
+            tile_regs_wait();
+            for (uint32_t j = 0; j < tiles_cur; ++j) {
+#if defined(ARCH_WORMHOLE)
+                // tt-metal #44077: WH pack_tile reprograms the packer L1 destination; stall so
+                // the next pack can't rewrite the address while the previous pack is in flight.
+                if (j != 0) {
+                    PACK(TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK));
+                }
+#endif
+                pack_tile<true>(j, local_cb, j);
+            }
+            cb_push_back(local_cb, tiles_cur);
+            tile_regs_release();
+        }
     }
+    pack_reconfig_l1_acc(0);
 }
 
 template <
