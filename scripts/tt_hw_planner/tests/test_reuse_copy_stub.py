@@ -1,10 +1,10 @@
-"""ADAPT/REUSE start from a native COPY of the existing tt-module.
+"""ADAPT starts from an editable native COPY of the existing tt-module.
 
-Instead of a torch-fallback placeholder, a component that points at an existing
-tt-module (tt_reuse_target) gets that module's source copied in verbatim as its
-initial stub — a native starting point, editable for this model, with the
-original source left untouched. NEW (or an unresolvable target) still gets the
-torch-fallback template.
+ADAPT is the tier meant to be adjusted, so its initial stub is a verbatim copy of
+the tt_reuse_target module (native, editable, original untouched). REUSE (a pure
+drop-in) instead gets an IMPORT canonical-wrapper — written in the autofill loop,
+not by _render_component_stub — so through the dispatcher a REUSE component does
+NOT copy. NEW (or an unresolvable target) gets the torch-fallback template.
 """
 
 from __future__ import annotations
@@ -37,10 +37,10 @@ def _make_target(repo: Path) -> str:
     return src
 
 
-def test_reuse_starts_from_native_copy_original_untouched(tmp_path):
+def test_adapt_starts_from_native_copy_original_untouched(tmp_path):
     bl = _bl()
     orig = _make_target(tmp_path)
-    comp = {"name": "qwen3_r_m_s_norm", "status": "REUSE", "tt_reuse_target": "models/common/rmsnorm.py"}
+    comp = {"name": "some_norm", "status": "ADAPT", "tt_reuse_target": "models/common/rmsnorm.py"}
 
     body = bl._render_component_stub(comp, model_id="org/m", repo_root=tmp_path)
     # native copy: real ttnn code, not the torch-fallback template
@@ -51,11 +51,15 @@ def test_reuse_starts_from_native_copy_original_untouched(tmp_path):
     assert (tmp_path / "models" / "common" / "rmsnorm.py").read_text() == orig
 
 
-def test_adapt_also_copies(tmp_path):
+def test_reuse_does_not_copy_via_dispatcher(tmp_path):
+    # REUSE's import canonical-wrapper is written in the autofill loop, not here,
+    # so through the dispatcher a REUSE component falls back to the torch template.
     bl = _bl()
     _make_target(tmp_path)
-    comp = {"name": "x", "status": "ADAPT", "tt_reuse_target": "models/common/rmsnorm.py"}
-    assert "class RMSNorm:" in bl._render_component_stub(comp, model_id="org/m", repo_root=tmp_path)
+    comp = {"name": "x", "status": "REUSE", "tt_reuse_target": "models/common/rmsnorm.py"}
+    body = bl._render_component_stub(comp, model_id="org/m", repo_root=tmp_path)
+    assert bl._REUSE_COPY_MARKER not in body
+    assert "_get_torch_submodule" in body
 
 
 def test_new_uses_torch_template(tmp_path):
@@ -64,8 +68,8 @@ def test_new_uses_torch_template(tmp_path):
     assert "_get_torch_submodule" in body and bl._REUSE_COPY_MARKER not in body
 
 
-def test_missing_target_falls_back_to_torch(tmp_path):
+def test_adapt_missing_target_falls_back_to_torch(tmp_path):
     bl = _bl()
-    comp = {"name": "z", "status": "REUSE", "tt_reuse_target": "models/common/does_not_exist.py"}
+    comp = {"name": "z", "status": "ADAPT", "tt_reuse_target": "models/common/does_not_exist.py"}
     body = bl._render_component_stub(comp, model_id="org/m", repo_root=tmp_path)
     assert "_get_torch_submodule" in body

@@ -1720,15 +1720,16 @@ def _reuse_target_source_path(tt_reuse_target: Optional[str], repo_root: Path) -
 
 
 def _render_reuse_copy_stub(component_name: str, tt_reuse_target: str, repo_root: Path) -> Optional[str]:
-    """Native starting stub for ADAPT/REUSE: a VERBATIM copy of the existing
-    tt-module's source (the ``tt_reuse_target``), so bring-up starts from the real
-    ttnn implementation instead of a torch fallback.
+    """Native starting stub for ADAPT: a VERBATIM copy of the existing tt-module's
+    source (the ``tt_reuse_target``), so bring-up starts from the real ttnn
+    implementation instead of a torch fallback.
 
-    A copy (not an import) so the loop can edit it for this model's quirks (ADAPT)
-    without touching the original source. Absolute imports in the copied source
-    still resolve against the real package. Returns None if the target can't be
-    read (caller falls back to the torch template — e.g. NEW, or an unreadable
-    target)."""
+    A copy (not an import) because ADAPT is the tier meant to be ADJUSTED for this
+    model's quirks — the loop can edit the copy freely without touching the
+    original source. (REUSE, by contrast, is a pure drop-in and uses an import
+    canonical-wrapper.) Absolute imports in the copied source still resolve
+    against the real package. Returns None if the target can't be read (caller
+    falls back to the torch template — e.g. NEW, or an unreadable target)."""
     src_file = _reuse_target_source_path(tt_reuse_target, repo_root)
     if src_file is None:
         return None
@@ -1748,10 +1749,13 @@ def _render_reuse_copy_stub(component_name: str, tt_reuse_target: str, repo_root
 
 
 def _render_component_stub(comp: dict, *, model_id: str, repo_root: Path) -> str:
-    """Initial stub for a component. ADAPT/REUSE with a readable tt_reuse_target
-    start from a native COPY of that module (:func:`_render_reuse_copy_stub`);
-    NEW (or an unresolvable target) starts from the torch-fallback template."""
-    if comp.get("status") in ("ADAPT", "REUSE"):
+    """Initial stub for a component. ADAPT with a readable tt_reuse_target starts
+    from a native, EDITABLE COPY of that module (:func:`_render_reuse_copy_stub`)
+    — ADAPT is the tier meant to be adjusted, so it needs an editable copy. REUSE
+    starts from an IMPORT canonical-wrapper (handled in the autofill loop) — a
+    drop-in that isn't edited, so importing avoids duplication. NEW (or an
+    unresolvable target) starts from the torch-fallback template."""
+    if comp.get("status") == "ADAPT":
         copied = _render_reuse_copy_stub(comp.get("name", ""), comp.get("tt_reuse_target") or "", repo_root)
         if copied is not None:
             return copied
@@ -1971,7 +1975,8 @@ def _render_canonical_import_stub(
 
     Caller is responsible for gating: only call when
     ``component["tt_reuse_target"]`` is non-empty AND
-    ``component["status"] == "ADAPT"``."""
+    ``component["status"] == "REUSE"`` (the drop-in tier). A REUSE that fails
+    iter-0 is demoted to ADAPT, which switches to an editable copy."""
     safe = _safe_id(component_name)
     # Derive a CamelCase-ish class name from the component slug.
     # ("decoder_layer" -> "DecoderLayer", "r_m_s_norm" -> "RMSNorm").
@@ -2229,16 +2234,17 @@ def autofill_stubs(
         # the existing op-synth/torch-fallback path unchanged.
         _tt_reuse_target = comp.get("tt_reuse_target")
         _wrote_canonical_import = False
-        # Gate on tt_reuse_target presence AND status == ADAPT
-        # (post-2026-06-01: force_adapt_all demotes REUSE -> ADAPT,
-        # not REUSE -> NEW). For cold-start NEW components with no
-        # tt_reuse_target, fall through to the torch-fallback path.
+        # REUSE = drop-in: import the canonical class + delegate (no copy, no
+        # edit). If it passes iter-0 it graduates as-is; if not, the gate demotes
+        # it to ADAPT, which gets an EDITABLE copy instead. ADAPT + NEW do not
+        # take this import path (ADAPT -> editable copy via _render_component_stub;
+        # NEW -> torch fallback).
         _comp_status = comp.get("status", "")
         if (
             _tt_reuse_target
             and isinstance(_tt_reuse_target, str)
             and _tt_reuse_target.strip()
-            and _comp_status == "ADAPT"
+            and _comp_status == "REUSE"
         ):
             canonical_body = _render_canonical_import_stub(
                 component_name=comp["name"],
