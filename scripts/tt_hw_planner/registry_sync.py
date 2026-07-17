@@ -307,6 +307,134 @@ def _read_provides(py: Path) -> List[dict]:
     return out
 
 
+def _module_top_classes(py: Path) -> List[str]:
+    """Top-level class names in a module (AST, no import/exec). [] on error."""
+    try:
+        tree = ast.parse(py.read_text(errors="replace"))
+    except Exception:
+        return []
+    return [n.name for n in tree.body if isinstance(n, ast.ClassDef)]
+
+
+_REUSE_MODULE_SUBTREES = ("models/tt_transformers/tt", "models/tt_dit", "models/common")
+
+
+def _derive_reuse_concepts(root: Path) -> List[dict]:
+    """Derive per-module REUSE/ADAPT targets from the fetched reusable-module
+    tree so a component's bring-up can wrap an already-implemented upstream
+    module instead of writing it from scratch (fixes-plan Point 2a).
+
+    Each candidate is status ADAPT (never a trusted REUSE): the loop wraps it,
+    emits a PCC test, and the LLM refines on PCC failure — so a wrong auto-match
+    degrades gracefully to NEW rather than silently claiming a wrong module.
+    Keyed by file basename as the concept; consumers match by concept overlap.
+    """
+    out: List[dict] = []
+    for sub in _REUSE_MODULE_SUBTREES:
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for py in sorted(d.rglob("*.py")):
+            rel = str(py.relative_to(root))
+            if py.name.startswith("_") or py.name == "__init__.py":
+                continue
+            if "/tests/" in rel or "/test/" in rel or "/experimental/" in rel:
+                continue
+            classes = _module_top_classes(py)
+            if not classes:
+                continue
+            out.append(
+                {
+                    "concept": py.stem.lower().strip("_"),
+                    "tt_path": rel,
+                    "tt_class": max(classes, key=len),
+                    "status": "ADAPT",
+                    "source": "auto-derived-upstream",
+                }
+            )
+    return out
+
+
+_DEMO_CATEGORY_HINTS = (
+    ("whisper", "STT"),
+    ("speech", "STT"),
+    ("wav2vec", "STT"),
+    ("tts", "TTS"),
+    ("xtts", "TTS"),
+    ("vocoder", "TTS"),
+    ("stable_diffusion", "Image"),
+    ("diffusion", "Image"),
+    ("flux", "Image"),
+    ("sana", "Image"),
+    ("video", "Video"),
+    ("segformer", "CNN"),
+    ("yolo", "CNN"),
+    ("resnet", "CNN"),
+    ("vgg", "CNN"),
+    ("unet", "CNN"),
+    ("mobilenet", "CNN"),
+    ("vit", "CNN"),
+    ("sam", "CNN"),
+    ("bert", "NLP"),
+    ("roberta", "NLP"),
+    ("llama", "LLM"),
+    ("qwen", "LLM"),
+    ("mistral", "LLM"),
+    ("mixtral", "LLM"),
+    ("gemma", "LLM"),
+    ("phi", "LLM"),
+    ("falcon", "LLM"),
+    ("mamba", "LLM"),
+)
+
+
+def _list_upstream_demos(git_root: Path) -> List[str]:
+    """Top-level demo directory names under ``models/demos`` at the fetched sha,
+    via ``git ls-tree`` (names only — no content checkout). [] if unavailable."""
+    try:
+        cp = _git(["ls-tree", "-d", "--name-only", "HEAD", "models/demos/"], cwd=git_root, timeout=20)
+    except Exception:
+        return []
+    if cp.returncode != 0:
+        return []
+    names: List[str] = []
+    for line in cp.stdout.splitlines():
+        line = line.strip().rstrip("/")
+        if line:
+            names.append(Path(line).name)
+    return names
+
+
+def _derive_demo_families(demo_names: List[str]) -> List[dict]:
+    """Derive low-confidence sibling family candidates from fetched demo dir
+    names (fixes-plan Point 2a) so a brand-new upstream demo is auto-proposed to
+    ``rank_backends`` without a hand-edit. Conservative: only when a category can
+    be inferred; ``model_type_keys`` = the dir name, so an exact model_type match
+    surfaces the demo, and it never overrides a curated entry (dropped on name/
+    model_type collision by the family overlay loader)."""
+    out: List[dict] = []
+    for name in demo_names:
+        low = name.lower()
+        cat = next((c for k, c in _DEMO_CATEGORY_HINTS if k in low), None)
+        if not cat:
+            continue
+        out.append(
+            {
+                "kind": "family",
+                "name": f"{name} (auto-upstream)",
+                "category": cat,
+                "demo_path": f"models/demos/{name}",
+                "routing_mode": "template",
+                "canonical_hf_id": None,
+                "model_type_keys": [low],
+                "pipeline_tags": [],
+                "notes": "auto-derived upstream demo (fixes-plan Point 2a); low-confidence sibling candidate ranked below curated entries.",
+                "source": "auto-derived-upstream",
+            }
+        )
+    return out
+
+
 def _overlay_path() -> Path:
     return _cache_root() / "registry_overlay.json"
 
@@ -336,6 +464,21 @@ def refresh_registry(tree_root, sha: str = "LOCAL") -> dict:
                     m = dict(m)
                     m.setdefault("tt_path", rel)
                     (families if m.get("kind") == "family" else concepts).append(m)
+    except Exception:
+        pass
+
+    declared_concept_paths = {c.get("tt_path") for c in concepts}
+    declared_family_names = {f.get("name") for f in families}
+    try:
+        for c in _derive_reuse_concepts(root):
+            if c["tt_path"] not in declared_concept_paths:
+                concepts.append(c)
+    except Exception:
+        pass
+    try:
+        for f in _derive_demo_families(_list_upstream_demos(root)):
+            if f["name"] not in declared_family_names:
+                families.append(f)
     except Exception:
         pass
 
