@@ -89,6 +89,12 @@ tt::ARCH get_mock_arch_from_env() {
     return arch;
 }
 
+// Default (1): mock device, for device-less compile hosts / the multi-client
+// remote-server harness. Set to 0 to compile against the real attached device
+// (CI runtime-perf runs on device SKUs, where mock's real->mock transition would
+// throw because MeshDispatchFixture::SetUpTestSuite already opened the device).
+bool use_mock_mode() { return tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_MOCK", 1) != 0; }
+
 constexpr std::string_view target_device_type_to_string(tt::TargetDevice t) noexcept {
     const std::string_view name = enchantum::to_string(t);
     return name.empty() ? std::string_view{"Unknown"} : name;
@@ -191,22 +197,28 @@ void write_result_json(const std::string& path, const StressResult& r) {
 class CompileStressFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
-        experimental::configure_mock_mode(
-            get_mock_arch_from_env(), tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_CHIPS", 1));
+        if (use_mock_mode()) {
+            experimental::configure_mock_mode(
+                get_mock_arch_from_env(), tt::parse_env<std::uint32_t>("TT_METAL_COMPILE_STRESS_NUM_CHIPS", 1));
+        }
         MeshDispatchFixture::SetUp();
     }
     void TearDown() override {
         MeshDispatchFixture::TearDown();
-        experimental::disable_mock_mode();
+        if (use_mock_mode()) {
+            experimental::disable_mock_mode();
+        }
     }
 };
 
 TEST_F(CompileStressFixture, DISABLED_TensixCompileStress) {
     const auto target = MetalContext::instance().get_cluster().get_target_device_type();
-    TT_FATAL(
-        target == tt::TargetDevice::Mock,
-        "CompileStressFixture expects mock device; got target_type={}.",
-        target_device_type_to_string(target));
+    if (use_mock_mode()) {
+        TT_FATAL(
+            target == tt::TargetDevice::Mock,
+            "CompileStressFixture expects mock device; got target_type={}.",
+            target_device_type_to_string(target));
+    }
 
     IDevice* dev = devices_[0]->get_devices()[0];
 

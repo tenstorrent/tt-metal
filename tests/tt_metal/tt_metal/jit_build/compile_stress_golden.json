@@ -1,0 +1,10 @@
+{
+  "arch": "wormhole_b0",
+  "num_kernels": 300,
+  "tolerance_pct": 15.0,
+  "comment": "Local JIT-build throughput golden for the (Runtime) Performance Tests pipeline (SKU wh_n300_civ2). RECORD MODE: metrics are null so the job prints but does not gate. Arm compile_ms_min from CI-run medians in a follow-up once numbers are stable. See README_compile_stress_ci.md.",
+  "metrics": {
+    "compile_ms_min": null,
+    "kernels_per_sec_max": null
+  }
+}

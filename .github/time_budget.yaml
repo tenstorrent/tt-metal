@@ -247,8 +247,8 @@ runtime:
     wh_galaxy: 15
     bh_galaxy: 15
   perf:
-    wh_n300_civ2: 55
-    bh_p150_perf: 40
+    wh_n300_civ2: 65
+    bh_p150_perf: 50
 
 triage:
   merge_gate:
