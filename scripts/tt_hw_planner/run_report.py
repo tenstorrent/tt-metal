@@ -218,6 +218,38 @@ def _emit_run_report_impl(
         lines.extend(_backend_lines)
         lines.append("")
 
+    try:
+        from .family_backends import all_backends, rank_backends
+
+        _bs3 = {}
+        _bs3_path = demo_dir / "bringup_status.json"
+        if _bs3_path.is_file():
+            _bs3 = json.loads(_bs3_path.read_text())
+        _picked = (_bs3.get("backend") or {}).get("name")
+        _cat = _bs3.get("category") or next((b.category for b in all_backends() if b.name == _picked), None)
+        if _cat:
+            _ranked = rank_backends(
+                category=_cat,
+                model_type=_bs3.get("new_model_type"),
+                pipeline_tag=_bs3.get("pipeline_tag"),
+                top_n=5,
+            )
+            if _ranked:
+                lines.append("## Sibling candidates (ranked)")
+                lines.append("")
+                lines.append(
+                    "Top backends by match score — the demo can compose per-component reuse across these, not only rank 1."
+                )
+                lines.append("")
+                lines.append("| Rank | Backend | Score | Match reason |")
+                lines.append("|---|---|---|---|")
+                for _i, (_b, _score, _reason) in enumerate(_ranked, 1):
+                    _sel = " (selected)" if _b.name == _picked else ""
+                    lines.append(f"| {_i} | `{_b.name}`{_sel} | {_score} | {_reason} |")
+                lines.append("")
+    except Exception:
+        pass
+
     lines.append("## Placement summary")
     lines.append("")
     lines.append(f"- **ON_DEVICE** ({len(cat_report.on_device)}): graduated, native ttnn, PCC verified")
@@ -254,13 +286,14 @@ def _emit_run_report_impl(
     )
     lines.append("## Module placement (all components)")
     lines.append("")
-    lines.append("| module | on device? | why | per-module pytest |")
-    lines.append("|---|---|---|---|")
+    lines.append("| Module | Status | Placement | Detail | Per-module PCC test |")
+    lines.append("|---|---|---|---|---|")
+    _status_glyph = {"ON_DEVICE": "[ ok ]", "KERNEL_MISSING": "[ cpu ]", "PENDING": "[wait]"}
     for comp, placement in _rows:
         safe = safe_identifier(comp)
-        on_dev = "✅ yes" if placement == "ON_DEVICE" else f"❌ no ({placement})"
+        glyph = _status_glyph.get(placement, "[ -- ]")
         lines.append(
-            f"| `{comp}` | {on_dev} | {_reason_for(comp, placement)} | "
+            f"| `{comp}` | {glyph} | {placement} | {_reason_for(comp, placement)} | "
             f"`{demo_rel}/tests/pcc/test_{safe}.py::test_{safe}` |"
         )
     lines.append("")
