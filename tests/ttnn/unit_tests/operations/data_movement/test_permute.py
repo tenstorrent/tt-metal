@@ -438,7 +438,13 @@ def test_permute_identity(device, shape, dtype):
     ],
 )
 @pytest.mark.parametrize("implementation", ["auto", "codegen"])
-def test_permute_noop_bypasses_codegen(device, shape, perm, implementation):
+def test_permute_layout_noop_bypasses_reshape(device, shape, perm, implementation):
+    """These shapes/perms all hit is_permute_layout_nop() in permute.cpp, which returns a
+    zero-copy ttnn.reshape() before the "auto"/"codegen" selector is ever consulted. This test
+    does NOT exercise the codegen kernel path (RowInvariant/BlockedGeneric) at all -- it only
+    confirms the reshape-bypass shortcut is a true no-copy no-op regardless of which
+    `implementation` was requested. See test_permute_codegen_* below for actual codegen coverage.
+    """
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
     cache_entries_before = device.num_program_cache_entries()
@@ -448,6 +454,158 @@ def test_permute_noop_bypasses_codegen(device, shape, perm, implementation):
     assert output_tensor.buffer_address() == input_tensor.buffer_address()
     assert device.num_program_cache_entries() == cache_entries_before
     assert_equal(torch.permute(torch_tensor, perm), ttnn.to_torch(output_tensor))
+
+
+def test_permute_codegen_rejects_unsupported_input(device, expect_error):
+    """Finding #3: implementation="codegen" on an input rejected by supported_by_codegen()
+    (permute_codegen_supported.cpp) must raise rather than silently falling back to native.
+    TILE layout is entirely out of scope for this port -- supported_by_codegen() rejects it
+    unconditionally -- and (0, 1, 3, 2) on a 4D tensor is not a layout/reshape no-op, so this
+    reaches the codegen TT_FATAL rather than the reshape-bypass shortcut above.
+    """
+    torch_tensor = torch.rand((1, 1, 32, 64), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    with expect_error(
+        RuntimeError,
+        'ttnn::permute: implementation="codegen" requested but this input is not supported by the '
+        "codegen implementation",
+    ):
+        ttnn.permute(input_tensor, (0, 1, 3, 2), implementation="codegen")
+
+
+def test_permute_codegen_program_cache(device):
+    """Finding #4: program-cache regression coverage for implementation="codegen". An identical
+    (shape, dims, dtype) config must cache-hit on the second call (no growth), and a differing
+    config that switches from the RowInvariant factory (dims[-1] unchanged) to the BlockedGeneric
+    factory (W-changing) must add its own new entry rather than colliding with the first.
+    """
+    torch.manual_seed(2005)
+
+    def run_codegen(shape, dims, dtype):
+        torch_tensor = random_torch_tensor(dtype, shape)
+        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device)
+        output_tensor = ttnn.permute(input_tensor, dims, implementation="codegen")
+        return ttnn.to_torch(output_tensor), torch.permute(torch_tensor, dims)
+
+    # Row-invariant: dims[-1] == rank - 1 -> RowInvariant::create_descriptor.
+    row_invariant_shape, row_invariant_dims = (2, 3, 32, 64), (1, 0, 2, 3)
+    # W-changing: dims[-1] != rank - 1 (and not the fused-WH-transpose case) -> BlockedGeneric.
+    w_changing_shape, w_changing_dims = (2, 3, 64, 96), (2, 0, 3, 1)
+
+    entries_before = device.num_program_cache_entries()
+
+    out_a, ref_a = run_codegen(row_invariant_shape, row_invariant_dims, ttnn.bfloat16)
+    entries_after_first = device.num_program_cache_entries()
+    assert entries_after_first == entries_before + 1, "first codegen call must add exactly one cache entry"
+    assert_equal(ref_a, out_a)
+
+    out_b, ref_b = run_codegen(row_invariant_shape, row_invariant_dims, ttnn.bfloat16)
+    entries_after_repeat = device.num_program_cache_entries()
+    assert entries_after_repeat == entries_after_first, "identical (shape, dims, dtype) must cache-hit"
+    assert_equal(ref_b, out_b)
+
+    out_c, ref_c = run_codegen(w_changing_shape, w_changing_dims, ttnn.bfloat16)
+    entries_after_second_config = device.num_program_cache_entries()
+    assert entries_after_second_config == entries_after_repeat + 1, (
+        "a different (W-changing/BlockedGeneric) config must add a new cache entry, not collide "
+        "with the RowInvariant entry cached above"
+    )
+    assert_equal(ref_c, out_c)
+
+
+@pytest.mark.parametrize(
+    "shape, dims",
+    [
+        pytest.param((2, 3, 32, 64), (1, 0, 2, 3), id="row_invariant"),
+        pytest.param((2, 3, 64, 96), (2, 0, 3, 1), id="w_changing"),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+def test_permute_codegen_correctness(device, shape, dims, dtype):
+    """Finding #9 / Finding #15: explicit implementation="codegen" correctness across the
+    RowInvariant (dims[-1] unchanged) and BlockedGeneric (W-changing) factories, for all 3
+    codegen-supported dtypes (permute_codegen_supported.cpp's dtype check: BFLOAT16, FLOAT32,
+    INT32). The w_changing/int32 case is Finding #15 (int32 through BlockedGeneric); it's kept
+    here rather than duplicated since this parametrization already covers it explicitly.
+    """
+    torch.manual_seed(2005)
+    torch_tensor = random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device)
+    output_tensor = ttnn.permute(input_tensor, dims, implementation="codegen")
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, dims)
+    assert_equal(torch_output, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape, dims, dtype",
+    [
+        # W not a multiple of 32: row-invariant, so aligned_stick_bytes/tt::align handles the
+        # unaligned stick size rather than the 32x32-block path.
+        pytest.param((3, 5, 17, 50), (1, 0, 2, 3), ttnn.bfloat16, id="row_invariant_unaligned_w"),
+        # Single-tile-equivalent: 32x32 with nc == 1 < kFusedMinNc, so despite dims[-1] == rank - 2
+        # (a WH transpose), fused_wh_ok() is false and this is accepted as BlockedGeneric.
+        pytest.param((1, 1, 32, 32), (0, 1, 3, 2), ttnn.int32, id="single_tile_w_changing"),
+    ],
+)
+def test_permute_codegen_shape_edge_cases(device, shape, dims, dtype):
+    """Finding #9: an unaligned-W (W % 32 != 0) shape and a single-tile-equivalent small shape,
+    both forced through implementation="codegen"."""
+    torch.manual_seed(2005)
+    torch_tensor = random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device)
+    output_tensor = ttnn.permute(input_tensor, dims, implementation="codegen")
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, dims)
+    assert_equal(torch_output, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape, dims, dtype",
+    [
+        pytest.param((64, 96), (1, 0), ttnn.bfloat16, id="demoted_2d"),
+        pytest.param((2, 96, 128), (0, 2, 1), ttnn.float32, id="demoted_3d"),
+        pytest.param((1, 2, 3, 64, 96), (1, 2, 0, 3, 4), ttnn.int32, id="demoted_5d"),
+    ],
+)
+def test_permute_codegen_demoted_entries_still_correct(device, shape, dims, dtype):
+    """Finding #12: these (shape, dims, dtype) tuples are taken directly from
+    permute_codegen_supported.cpp's demoted_entries() perf-demotion ledger. is_demoted() is only
+    consulted by the implementation="auto" branch in permute.cpp, never when codegen is forced --
+    so forcing implementation="codegen" here proves these entries are still numerically correct
+    on the codegen path, just not perf-preferred by "auto".
+    """
+    torch.manual_seed(2005)
+    torch_tensor = random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=device)
+    output_tensor = ttnn.permute(input_tensor, dims, implementation="codegen")
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, dims)
+    assert_equal(torch_output, output_tensor)
+
+
+def test_permute_codegen_uneven_core_split(device):
+    """Finding #17: BlockedGeneric's create_descriptor (permute_codegen_program_factory.cpp)
+    splits num_blocks_total work units across the device's compute_with_storage_grid_size() via
+    split_work_to_cores(), which only produces an uneven split (core_group_1 getting one more
+    unit than core_group_2) when units_to_divide > num_cores available and doesn't divide evenly.
+    shape=(total_cores + 1, 32, 17) with dims=(0, 2, 1) yields x_blocks == w_blocks == 1, so
+    num_blocks_total == shape[0] == total_cores + 1: guaranteed non-divisible across the full
+    grid on any hardware. dims=(0, 2, 1) also puts dims[-1] == rank - 2 (a WH transpose shape),
+    but W=17 fails fused_wh_ok()'s 32-alignment check, so this still routes to BlockedGeneric
+    rather than being rejected as the fused-WH-transpose case.
+    """
+    grid = device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
+    shape = (total_cores + 1, 32, 17)
+    dims = (0, 2, 1)
+    torch.manual_seed(2005)
+    torch_tensor = random_torch_tensor(ttnn.bfloat16, shape)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    output_tensor = ttnn.permute(input_tensor, dims, implementation="codegen")
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, dims)
+    assert_equal(torch_output, output_tensor)
 
 
 @pytest.mark.parametrize("shape", [[2, 2, 67, 67, 65]])
