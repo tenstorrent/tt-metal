@@ -35,6 +35,11 @@ if TYPE_CHECKING:
 
     from PIL import Image
 
+# Defaults aligned with diffusers FluxImg2ImgPipeline for image-to-image generation.
+DEFAULT_NUM_INFERENCE_STEPS = 28
+DEFAULT_IMG2IMG_STRENGTH = 0.6
+DEFAULT_GUIDANCE_SCALE = 4.0
+
 
 class Flux2TransformerState:
     def __init__(self) -> None:
@@ -70,6 +75,7 @@ class Flux2Pipeline:
         trace_warmup: bool = False,
         vae_use_conv3d: bool = False,
         shard_prompt: bool = False,
+        warmup_image: Image.Image | None = None,
     ) -> None:
         self._mesh_device = mesh_device
         self._parallel_config = parallel_config
@@ -223,20 +229,25 @@ class Flux2Pipeline:
             prompt_rope_sin.unsqueeze(0).unsqueeze(0), False, mesh_axes=prompt_rope_mesh_axes, device=self._mesh_device
         )
 
-        self.warmup(warmup_info="e2e warmup")  # E2E warmup. Preallocate buffers
+        # Warm up with a condition image when the pipeline will be used for img2img, so the
+        # persistent StateTensor buffers (latents, spatial rope) get preallocated at the combined
+        # noise+image sequence length. Otherwise the text2img e2e warmup sizes them for noise-only
+        # latents and the first img2img (traced) call fails the copy-into-existing-buffer.
+        self.warmup(warmup_info="e2e warmup", image=warmup_image)  # E2E warmup. Preallocate buffers
         if trace_warmup:  # warmup for trace capture
-            self.warmup(traced=True, warmup_info="trace warmup")  # warmup for trace capture
+            self.warmup(traced=True, warmup_info="trace warmup", image=warmup_image)  # warmup for trace capture
             self.warmup(
-                traced=True, warmup_info="steady state trace warmup for VAE"
+                traced=True, warmup_info="steady state trace warmup for VAE", image=warmup_image
             )  # TODO: INVESTIGATE. For some reason, the VAE time still incures some overhead without this extra trace
 
-    def warmup(self, traced: bool = False, warmup_info="warmup") -> None:
+    def warmup(self, traced: bool = False, warmup_info="warmup", image: Image.Image | None = None) -> None:
         logger.info(f"Warming up pipeline___ {warmup_info}...")
         self.__call__(
             prompts=["warmup"],
             num_inference_steps=2,
             seed=0,
             traced=traced,
+            image=image,
         )
 
     def _prepare_transformer(self) -> None:
@@ -298,6 +309,7 @@ class Flux2Pipeline:
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
         shard_prompt: bool = False,
+        warmup_image: Image.Image | None = None,
     ) -> Flux2Pipeline:
         dit_parallel_config = DiTGParallelConfigNoCFG(
             tensor_parallel=ParallelFactor(factor=int(mesh_device.shape[tp_axis]), mesh_axis=tp_axis),
@@ -325,16 +337,18 @@ class Flux2Pipeline:
             trace_warmup=trace_warmup,
             vae_use_conv3d=vae_use_conv3d,
             shard_prompt=shard_prompt,
+            warmup_image=warmup_image,
         )
 
     def __call__(
         self,
         *,
         num_images_per_prompt: int = 1,
-        guidance_scale: float = 4.0,
+        guidance_scale: float = DEFAULT_GUIDANCE_SCALE,
         prompts: Sequence[str],
-        num_inference_steps: int,
+        num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
         image: Image.Image | None = None,
+        strength: float = DEFAULT_IMG2IMG_STRENGTH,
         prompt_upsample_temperature: float | None = None,  # prompt upsampling is currently very slow
         seed: int | None = None,
         traced: bool = False,
@@ -347,6 +361,11 @@ class Flux2Pipeline:
 
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
+
+        if image is not None:
+            if strength < 0 or strength > 1:
+                msg = f"The value of strength should be in [0.0, 1.0] but is {strength}"
+                raise ValueError(msg)
 
         latents_height = self._height // self._vae_scale_factor
         latents_width = self._width // self._vae_scale_factor
@@ -400,6 +419,20 @@ class Flux2Pipeline:
             step_count=num_inference_steps,
             spatial_sequence_length=noise_sequence_length,
         )
+        if image is not None:
+            timesteps, sigmas, num_inference_steps = _truncate_timesteps_for_strength(
+                self._scheduler,
+                timesteps=timesteps,
+                sigmas=sigmas,
+                num_inference_steps=num_inference_steps,
+                strength=strength,
+            )
+            if num_inference_steps < 1:
+                msg = (
+                    f"After adjusting num_inference_steps by strength={strength}, the number of pipeline steps is "
+                    f"{num_inference_steps}, which is < 1 and not appropriate for this pipeline."
+                )
+                raise ValueError(msg)
 
         guidance = torch.full([transformer_batch_size], fill_value=guidance_scale)
 
@@ -652,6 +685,26 @@ class Flux2Pipeline:
 
         latents = latents.reshape([batch_size, height // p, p, width // p, p, channels])
         return latents.permute(0, 1, 3, 5, 2, 4).flatten(3, 5).flatten(1, 2)
+
+
+def _truncate_timesteps_for_strength(
+    scheduler: FlowMatchEulerDiscreteScheduler,
+    *,
+    timesteps: torch.Tensor,
+    sigmas: torch.Tensor,
+    num_inference_steps: int,
+    strength: float,
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    # Copied from diffusers.pipelines.stable_diffusion_3.pipeline_stable_diffusion_3_img2img.StableDiffusion3Img2ImgPipeline.get_timesteps
+    init_timestep = min(num_inference_steps * strength, num_inference_steps)
+    t_start = int(max(num_inference_steps - init_timestep, 0))
+    order = scheduler.order
+    timesteps = timesteps[t_start * order :]
+    sigmas = sigmas[t_start * order : t_start * order + len(timesteps) + 1]
+    if hasattr(scheduler, "set_begin_index"):
+        scheduler.set_begin_index(t_start * order)
+
+    return timesteps, sigmas, num_inference_steps - t_start
 
 
 def _schedule(

@@ -257,13 +257,14 @@ def test_flux2_performance(
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, device_params",
     [
-        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 4, False, False, line_params_flux2],
+        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 4, True, False, line_params_flux2],
     ],
     ids=[
         "wh_glx_linear",
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.timeout(1800)  # full e2e img2img perf run (encoder load + trace warmups + 3x50-step runs)
 def test_flux2_img2img_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -297,6 +298,13 @@ def test_flux2_img2img_performance(
         f"mesh={tuple(mesh_device.shape)}, sp={sp_factor}, tp={tp_factor}, topology={topology}"
     )
 
+    # Deterministic condition image for the img2img reference path. Built before the pipeline so it
+    # can be passed as warmup_image, ensuring the traced latents/rope buffers are sized for the
+    # combined noise+image sequence (the timed traced runs reuse those buffers).
+    torch.manual_seed(42)
+    cond_array = (torch.rand(cond_height, cond_width, 3) * 255).to(torch.uint8).numpy()
+    condition_image = Image.fromarray(cond_array, mode="RGB")
+
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-dev"),
@@ -314,12 +322,8 @@ def test_flux2_img2img_performance(
         is_fsdp=is_fsdp,
         trace_warmup=True,
         shard_prompt=True,
+        warmup_image=condition_image,
     )
-
-    # Deterministic condition image for the img2img reference path.
-    torch.manual_seed(42)
-    cond_array = (torch.rand(cond_height, cond_width, 3) * 255).to(torch.uint8).numpy()
-    condition_image = Image.fromarray(cond_array, mode="RGB")
 
     logger.info(f"Running {NUM_PERF_RUNS} timed img2img iterations...")
 
