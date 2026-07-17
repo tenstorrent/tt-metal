@@ -235,7 +235,12 @@ def create_program_descriptor(
         _cb(CB_SCALER, bf16, 1, ttnn.bfloat16, all_cores),
         _cb(CB_SCALE, bf16, 1, ttnn.bfloat16, all_cores),
         _cb(CB_M_NEW, fp32, Sq_chunk_t, ttnn.float32, all_cores),
-        _cb(CB_SUM_CHUNK, fp32, Sq_chunk_t, ttnn.float32, all_cores),
+        # R3e: cb_sum_chunk carries the per-chunk partial row-sum. In the fused
+        # (fp32_dest_acc_en=False) regime it is the L1-accumulation target of the
+        # exp dual-pack, so it MUST share cb_exp's data format (interm_format) — the
+        # two packs then need no pack_reconfig_data_format between them. In the
+        # non-fused (fp32-DEST) regime interm_format is fp32, so this is unchanged.
+        _cb(CB_SUM_CHUNK, interm_bytes, Sq_chunk_t, interm_format, all_cores),
         _cb(CB_OUT, out_page, Sq_chunk_t * Dt * OUT_DEPTH, output_tensor.dtype, all_cores),
         _cb(CB_Q_SCALED, bf16, Sq_chunk_t * Dt, ttnn.bfloat16, all_cores),
         # cb_scores / cb_exp: fp32 under fp32-DEST accumulation (softmax precision),
@@ -335,6 +340,12 @@ def create_program_descriptor(
     # so it gets the full speedup. The alpha-correction exp (phase 5) stays exact
     # regardless (protects the online-softmax running (m, l, O) across chunks).
     fast_exp = 0 if fp32_dest else 1
+    # R3e (perf): fuse the per-chunk row-sum reduce into the exp pack via packer L1
+    # accumulation (raw-LLK dual-pack in the compute kernel). Same gate as fast_exp
+    # (the fp32_dest_acc_en=False throughput regime): the softmax intermediates are
+    # bf16 so the dual-pack targets (cb_exp + cb_sum_chunk) share a format, and the
+    # max-precision fp32-DEST regime keeps the exact per-chunk reduce (byte-identical).
+    fuse_rowsum = 0 if fp32_dest else 1
     compute_ct = [
         Dt,
         Sq_chunk_t,
@@ -347,6 +358,7 @@ def create_program_descriptor(
         Skv_t,
         dest_limit,
         fast_exp,
+        fuse_rowsum,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
