@@ -69,6 +69,54 @@
 - **Verdict:** Refuted as an in-stage closure path.  A GPU/HF control produced
   outside this CPU-only environment remains required.
 
+### 4. A faster exact local generation path can make the full control tractable
+
+- **Workload audit:** The authoritative saved artifacts contain 497,845 IFEval
+  completion tokens across 541 rows and 604,704 GPQA completion tokens across
+  448 rows: 1,102,549 completion tokens total, in addition to 146,022 prompt
+  tokens.  The saved completion count is a workload-size indicator rather than
+  a claim that exact HF reaches EOS at the same positions.
+- **Static batching experiment:** An exact BF16 batch-32 GPQA probe loaded the
+  first 32 canonical prompts (8,327 prompt tokens) and attempted 128 generated
+  tokens per row.  It hit the 900-second hard bound before returning the batch.
+  Even crediting all 4,096 requested output tokens at the timeout boundary gives
+  an end-to-end rate below 4.551 output tokens/second for this prompt/128-token
+  workload and a direct same-shape projection above 67.3 hours for the saved
+  completion-token count.  This is diagnostic, not a strict lower bound for
+  longer generations, which amortize prefill differently.  Together with the
+  earlier 2,048-token batch-4 timeout, it shows no demonstrated static-batch
+  path with the required order-of-magnitude gain.  Peak sampled RSS was
+  approximately 70 GiB.
+- **Official Gemma 4 MTP experiment:** The official
+  `google/gemma-4-31B-it-assistant` draft model produced an exact token/text
+  match on GPQA row 0 (229 generated tokens including EOS; SHA-256
+  `bd7dad34149ca19e0b62fc8d1b9b005bf3e6344ca02d4d8e4542d68bba495b40`),
+  but took 227.121 seconds versus 223.36 seconds without MTP.  The drafter is
+  trained for the instruction-tuned checkpoint, and its candidates provide no
+  useful acceleration for this raw base checkpoint.
+- **Prompt-lookup experiment 1:** GPQA row 0 was again token/text exact with
+  the same hash.  Prompt lookup took 138.803 seconds versus 223.36 seconds, a
+  1.61x speedup, which remains far from an hours-scale full control.
+- **Prompt-lookup experiment 2:** A deliberately capped/high-repetition saved
+  TT sample, GPQA document 111, was tested rather than extrapolating from the
+  short row.  Exact ordinary HF produced 256 tokens in 237.512 seconds; prompt
+  lookup produced the identical token tensor and decoded SHA-256
+  `abe212897b6384b99176f11844cf2d863a03a23f5ede0e800b63a6050119e262`
+  in 193.240 seconds, only 1.229x faster.  The exact HF prefix was a coherent
+  cyclotron derivation, not the repeated `The best answer is A` pattern in the
+  saved TT response, so TT repetition cannot predict HF lookup acceptance.
+- **Source audit:** This host has 16 physical CPU cores and no CUDA or ROCm
+  device.  Its installed Transformers prompt-lookup generator is explicitly
+  written around batch size 1 (`input_ids[0]` and a single chosen candidate),
+  so its modest batch-1 gain cannot be combined with the measured batch-32
+  throughput.  The only locally installed vLLM is the TT fork, not a canonical
+  CPU HF reference engine.  No exact-output-equivalent llama.cpp engine is
+  installed, and changing backend or precision would cease to be the required
+  exact Transformers BF16 control.  Teacher-forcing saved TT completions cannot
+  recover the HF continuation after the first token divergence.
+- **Verdict:** Refuted.  Both exact speculative paths preserve output, but
+  neither makes the full local control tractable.
+
 The exact CPU commands ran from
 `.workflow_venvs/.venv_evals_meta/meta_eval_gemma-4-31B_b9lic27d`:
 
@@ -102,8 +150,17 @@ to 26.3392857143%.  It does not supply a legitimate acceptance threshold.  The
 remaining blocker is a canonical full-reference requirement, not a supportable
 code guess:
 
-1. run both reconstructed raw-base tasks on the exact HF revision using a
-   tractable GPU environment and record the scores as the GPU reference; or
+1. provide a GPU worker that can load the 62.5 GB BF16 checkpoint (one H200
+   141 GB is the preferred minimum; otherwise use enough H100-class workers to
+   hold independent exact replicas), and run both reconstructed tasks with
+   Transformers on revision
+   `d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3`, BF16 weights, the exact
+   tokenizer and BOS behavior, raw prompts, greedy decoding, unchanged
+   1,280-token IFEval and 2,048-token GPQA caps, and the corrected scorer.  A
+   32-row pilot for each task must first demonstrate a projected wall time of
+   eight hours or less; if it does not, add replicas before launching all
+   541+448 rows.  Preserve per-sample outputs, task configs, revision, scores,
+   and hardware/runtime metadata as the canonical control artifact; or
 2. obtain a product-owned published threshold for these exact base prompts.
 
 The Google model card's benchmark table is explicitly instruction-tuned and
