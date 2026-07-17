@@ -15,9 +15,9 @@
 - **Tenstorrent accelerators** come in two architectural generations. **Gen1** is the shipping silicon today: `WH` = Wormhole, `BH` = Blackhole. **Gen2** is in development: `Quasar` (and siblings). This audit covers Gen1 ops; Metal 2.0 is designed to serve both architectures.
 - **TTNN** is the high-level neural-network library for Tenstorrent accelerators. Ops live in `ttnn/cpp/ttnn/operations/<family>/<op>/`. A typical op has a device-operation class on the host side and one or more program factories that build what runs on the accelerator.
 - **Metal 2.0** is the new **host API** — what the program factory uses to declare kernels, buffers, semaphores, and bindings. It also introduces **DFB** (Dataflow Buffer) at the spec layer, replacing the legacy **CB** (CircularBuffer); the two are essentially synonyms on Gen1, but DFB's semantics diverge meaningfully on Gen2.
-- **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `experimental::Noc`, kernel-side `CircularBuffer` wrappers, etc.). The [Prerequisites step](#prerequisites) gates on Device 2.0 migration — for the op's own kernels *and* any donor kernels it calls — as a hard prerequisite to Metal 2.0, but Device 2.0 is *not* part of Metal 2.0 itself.
-- **`ProgramDescriptor` API** is a TTNN-side framework that ops must migrate to before a Metal 2.0 port becomes possible. The [Prerequisites step](#prerequisites) gates on it.
-- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric); `SPSC` = single-producer / single-consumer (per CB instance, per node).
+- **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `experimental::Noc`, kernel-side `CircularBuffer` wrappers, etc.). The [Device 2.0 prerequisite](#device-20-prerequisite) gates on Device 2.0 migration — for the op's own kernels *and* any donor kernels it calls (kernels it borrows from other ops or shared pools) — as a hard prerequisite to Metal 2.0, but Device 2.0 is *not* part of Metal 2.0 itself.
+- **`ProgramDescriptor` API** is a TTNN-side framework that ops must migrate to before a Metal 2.0 port becomes possible. The [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite) gates on it (an op still on the legacy imperative API shows up on the per-factory readiness sheet — fetched and explained in that subject — as a non-`descriptor` concept, which fails the gate).
+- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric); `SPSC` = single-producer / single-consumer (per CB instance, per node — a **node** here is one core in the op's core range); `SPMD` = single-program, multiple-data.
 
 For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-args split — see [`metal2_migration_guide.md`](../metal2_migration_guide.md).
 
@@ -26,7 +26,7 @@ For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSp
 The audit produces useful findings for ops in two states:
 
 - **Already on the `ProgramDescriptor` API.** The audit decides whether the Metal 2.0 port can proceed. GREEN → port can begin (after explicit user go-ahead).
-- **Still on legacy `host_api.hpp` (imperative builder).** The audit RED's the ProgramDescriptor prerequisite and continues — the remaining subjects still surface findings that inform what the eventual Metal 2.0 port will need, once the `ProgramDescriptor` migration (a substantial, separate workstream) lands. This is data-gathering for downstream planning, not a port attempt.
+- **Still on legacy `host_api.hpp` (imperative builder).** The audit RED's the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite) — an imperative-builder op isn't on the `ProgramDescriptor` API, so its concept isn't `descriptor` and the gate fails — and continues: the remaining subjects still surface findings that inform what the eventual Metal 2.0 port will need, once the `ProgramDescriptor` migration (a substantial, separate workstream) lands. This is data-gathering for downstream planning, not a port attempt.
 
 In either case, the audit's deliverable is the report. Porting itself happens via the [port recipe](port_op_to_metal2_recipe.md), which is loaded only after the audit clears (GREEN) with explicit user go-ahead.
 
@@ -40,7 +40,9 @@ If you are unsure whether your task fits the in-scope description, ask the user 
 **Operating principle**: Your job is to identify gaps, not to invent solutions for unimplemented features.
 
 Some features the legacy API supports are not yet available in Metal 2.0. When you encounter such a feature, the correct response is to **refuse the port and report the gap to the user.** Refusing is not a failure mode — it is the correct outcome when a gate fails.
-When in doubt about feature support, **ask the user.** Do not infer support from API surface — the absence of a compile error does not mean the construct is supported.
+Which features are unsupported is settled by Appendix A — treat that list as **authoritative**. A construct not listed there is supported (the recipe translates it mechanically); don't gate on it, and don't reverse-engineer support from the API surface.
+
+**Why the auditor carries the judgment.** You run *once*, unhurried, with the whole op in view; the porter runs later, under tighter constraints, one file at a time. So this recipe deliberately pushes judgment onto you to lighten the porter: where a call *can* be made now — classifying a `TensorAccessor` 3rd-argument site, hunting the hidden second CB writer, deciding whether an RTA-vararg count is runtime-varying or fixed — you make it and hand the porter the conclusion, not the raw signal to re-derive. That is the principle behind what this audit keeps versus cuts: a subject earns its place when the auditor can resolve something the porter would otherwise have to.
 
 **What happens to your report.** Each audit report becomes a direct input to a downstream effort — not just an entry in a tracking spreadsheet:
 
@@ -56,7 +58,7 @@ Your tier assignment, your subset suggestions, and the specificity of your findi
 
 Porting an op is a workflow split across two documents:
 
-1. **Feasibility audit.** *(This document.)* Assess this op's Metal 2.0 portability and capture findings — including what work will be required if the port can't proceed yet. Output: write `METAL2_PREPORT_AUDIT.md` to the op directory, then STOP.
+1. **Feasibility audit.** *(This document.)* Assess this op's Metal 2.0 portability and capture findings — including what work will be required if the port can't proceed yet. Output: write `METAL2_PREPORT_AUDIT.md` (team-facing, always) — and, when the audit clears every gate, `METAL2_PORT_BRIEF.md` (porter-facing) — to the op directory, then STOP.
 2. **Port recipe** — legacy inventory, spec planning, construction, and verification. Lives in [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md). Loaded only after the audit clears with explicit user go-ahead.
 
 This audit document covers the feasibility audit only. **Your job in this document is to decide whether the port is feasible — not to perform it.** Producing the audit report and stopping is the complete deliverable. The recipe document is loaded as a separate step, after the user has reviewed your audit and explicitly asked you to proceed.
@@ -67,69 +69,55 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 
 ## Feasibility audit
 
-For the op in scope, work through the audit in eight subjects, in order: **[Prerequisites](#prerequisites)** (ProgramDescriptor + Device 2.0), **[Feature compatibility](#feature-compatibility)**, **[TensorAccessor handling](#tensoraccessor-handling)**, **[DFB endpoint legality](#dfb-endpoint-legality-spsc)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[Custom program hash](#custom-program-hash)**, **[Other signals](#other-signals)**, and **[TTNN factory concept analysis](#ttnn-factory-concept-analysis)** (run last, since it draws on the others' findings). Each subject's checks have three possible outcomes:
+For the op in scope, work through the audit in eleven subjects. The three **prerequisite gates** run first — a failed gate means no port: **[Device 2.0 prerequisite](#device-20-prerequisite)**, **[Feature compatibility](#feature-compatibility)**, and **[TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite)**. The remaining subjects gather the porter's working detail: **[TTNN porting shape](#ttnn-porting-shape)**, **[TensorParameter relaxations](#tensorparameter-relaxations)**, **[TensorParameter analysis](#tensorparameter-analysis)**, **[TensorAccessor 3rd argument](#tensoraccessor-3rd-argument)**, **[CB endpoints](#cb-endpoints)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[RTA varargs](#rta-varargs)**, and **[Incidental anomalies](#incidental-anomalies)**. Each subject's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
 - **Red** — record the reason in the audit report and continue the audit. A RED outcome means the port is blocked on this finding; it does not mean stop auditing. Always complete the remaining checks and steps so the report captures everything the port will eventually need to clear, not just the first blocker.
 
-**Reference data (recommended).** Before working the subjects, fetch Diego's per-factory porting-readiness data (his *"Operations analysis"* sheet) and grep out your op's rows — it pre-classifies several of the signals you're about to check (factory concept, custom hash, RTA-smuggled pointers, pybind-of-internals, custom override-runtime-args). Treat it as an informative **prior, not ground truth**: let it orient your search, but your own `file:line` evidence decides every finding, and you note any place the sheet and your evidence disagree. Fetch procedure + column legend: [`../analyses/ttnn_op_porting_readiness.md`](../analyses/ttnn_op_porting_readiness.md).
+**Reference data (recommended).** Before working the subjects, fetch the per-factory porting-readiness data (the readiness *"Operations analysis"* sheet, maintained by the TTNN team) and grep out your op's rows — it pre-classifies several of the signals you're about to check (factory concept, custom hash, RTA-smuggled pointers, pybind-of-internals, custom override-runtime-args). Treat it as an informative **prior, not ground truth**: let it orient your search, but your own `file:line` evidence decides every finding, and you note any place the sheet and your evidence disagree. Fetch procedure + column legend: [`../analyses/ttnn_op_porting_readiness.md`](../analyses/ttnn_op_porting_readiness.md).
 
 **Scope of the audit.**
 
 - **Follow kernel references, not directory boundaries.** Audit every kernel referenced by any `KernelDescriptor::kernel_source` in the op's program factories — cross-op kernels living in adjacent directories (e.g. `eltwise/`, `data_movement/`, `kernels/dataflow/`) are in scope when the op uses them.
 - **Unreferenced kernel files in the op's directory are out of scope.** If the op's directory contains kernel files that no factory references (dead code, tests, work-in-progress), do not audit their contents. If their presence could confuse a reader of the report, mention them in the identifying section as unreferenced; otherwise ignore them.
-- **Multiple device-operations in one op directory.** If the directory contains more than one `DeviceOperation` type sharing factories or kernels (e.g. `ReduceDeviceOperation` plus `WelfordReduceDeviceOperation`), audit them together and produce a single combined report. If the device-operations are independent, audit each separately. Ask the user if unsure whether to bundle. **When bundling, retain per-DeviceOperation attribution where findings differ** — name which DeviceOperation (or which of its factories) a given finding applies to, so a downstream consumer (per-op spreadsheet, ticket tracker, port planner) can extract per-DeviceOperation status from the bundled report when their accounting needs it. Bundling reflects the porting unit (shared code → shared port); downstream tools may legitimately operate at the DeviceOperation level (e.g. Tracy profiling, per-op leadership reporting).
-- **Routine runtime-arg setup is not a general audit signal — [TensorAccessor handling](#tensoraccessor-handling) handles the one specific case.** Most RTAs translate directly to `KernelSpec::runtime_arg_schema` and `ProgramRunArgs`; treat them as routine port work, not gates. The historical `tensor.buffer()->address()`-as-RTA pattern is the one exception: pre–Metal 2.0 it was style-yuck-but-correct, but under TTNN's recent fast-path-cache binding-injection changes it is now a per-binding correctness hazard. The TensorAccessor-handling subject catches and reports buffer-address RTAs specifically (as Case 2 bindings); routine runtime-arg setup outside that pattern remains non-signal.
+- **Multiple device-operations in one op directory.** If the directory contains more than one `DeviceOperation` type sharing factories or kernels (e.g. `ReduceDeviceOperation` plus `WelfordReduceDeviceOperation`), audit them together and produce a single combined report. If the device-operations are independent, audit each separately. When it's a borderline call, make your own best-judgement decision on the shared-code test above rather than deferring — the user launching you typically isn't the op's subject-matter owner. **When bundling, retain per-DeviceOperation attribution where findings differ** — name which DeviceOperation (or which of its factories) a given finding applies to, so a downstream consumer (per-op spreadsheet, ticket tracker, port planner) can extract per-DeviceOperation status from the bundled report when their accounting needs it. Bundling reflects the porting unit (shared code → shared port); downstream tools may legitimately operate at the DeviceOperation level (e.g. Tracy profiling, per-op leadership reporting).
+- **Routine runtime-arg setup is not a general audit signal — [TensorParameter analysis](#tensorparameter-analysis) handles the one specific case.** Most RTAs translate directly to `KernelSpec::runtime_arg_schema` and `ProgramRunArgs`; treat them as routine port work, not gates. The historical `tensor.buffer()->address()`-as-RTA pattern is the one exception: pre–Metal 2.0 it was style-yuck-but-correct, but under TTNN's recent fast-path-cache binding-injection changes it is now a per-binding correctness hazard. The [TensorParameter analysis](#tensorparameter-analysis) subject explains that mechanism and catches and reports buffer-address RTAs specifically (as Case 1 / Case 2 bindings); routine runtime-arg setup outside that pattern remains non-signal.
 
 **Finding roles and routing.** Every audit finding carries one of four roles, and the role decides which output document it lands in (see [Output: the two documents](#output-the-two-documents)). This table is the audit's backbone — the per-check sections below *produce* these findings; they are not a separate set of rules.
 
 | Finding | Role | Routing |
 |---|---|---|
-| Op on ProgramDescriptor API | **GATE** | brief: cleared/blocked · team: detail → ProgramDescriptor team |
 | Device 2.0 compliance (own + donor kernels) | **GATE** | brief: cleared/blocked · team: exact violations → Device 2.0 team |
-| UNSUPPORTED feature in use (incl. CTA varargs) | **GATE** | brief: cleared/blocked · team: detail → wait-for-feature |
-| TTNN factory analysis — op-owned tensors · genuine MeshWorkload need | **FYI-U** | team only |
-| TTNN factory analysis — pybind `create_descriptor` · other risky pybind · custom override-RTA | **FYI-P** | brief (Watch-for) + team |
-| Per-binding TensorAccessor handling — Case 1 (`TensorAccessor`) / Case 2 (raw pointer → bridge) | **PORT WORK** | brief (Construct) + team |
-| Delete custom `compute_program_hash` (→ default) | **PORT WORK** | brief (Construct) + team |
-| Notable constructs — aliased CB / borrowed-mem DFB / dynamic TA (confusing); non-zero sem init (deprecated-but-fine) | **FYI-P** | brief (Watch-for) + team |
-| Sync-free CB (address-only; no FIFO producer + consumer) — port applies the interim workaround | **FYI-P** | brief (Watch-for) + team |
-| DFB endpoint legality — SPSC violation (hidden 2nd writer / multi-reader tensor-view on a node) | **GATE** (config-scoped) | brief: blocked / clean subset · team: detail + pre-port fix → op owner |
-| DFB endpoint legality — dead CB (zero endpoints) | **FYI-P** | brief (Watch-for) + team |
+| UNSUPPORTED feature in use | **GATE** | brief: cleared/blocked · team: detail → wait-for-feature |
+| TTNN factory concept — op not on the supported whitelist | **GATE** | brief: cleared/blocked · team: detail → TTNN / PD-migration team |
+| TTNN porting shape (target factory concept) | **FYI-P** | brief (TTNN factory analysis section) + team |
+| TensorParameter relaxations (from the readiness sheet; auditor confirms) | **PORT WORK** | brief (Construct) + team |
+| TensorParameter analysis — Case 1 (`TensorAccessor`) / Case 2 (raw pointer → bridge) | **PORT WORK** | brief (Construct) + team |
+| TensorAccessor 3rd argument — page-size arg (Class 1/2 drop) | **PORT WORK** | brief (Construct) + team |
+| TensorAccessor 3rd argument — wrong/inexpressible page size (Class 3/4/Special) | **GATE** | brief: cleared/blocked · team: detail → the ops team |
+| CB endpoints — endpoint legality (per CB, per node) | **PORT WORK** + **FYI-P** | brief (Construct + Watch-for) + team |
 | Cross-op / shared-kernel flags | **FYI-P** | brief (Watch-for) + team |
 | RTA varargs | **FYI-P** | brief (Watch-for) + team |
 | Out-of-directory coupling & donor shape analysis | **FYI-U** | team only |
-| Tensor-parameter relaxation candidates (fallible) | **FYI-U** | team only |
+| Relaxation candidates mined from a custom hash (fallible; gated ops) | **FYI-U** | team only |
 | Incidental code anomalies — dead RTAs, dead-but-hashed attributes, suspicious constants | **FYI-U** | team only |
 
 **The four roles:**
-- **GATE** — blocks the port (an unmet prereq, an UNSUPPORTED feature, or an SPSC endpoint-legality violation needing an op-owner pre-port fix). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. (A *config-scoped* GATE — e.g. GlobalCircularBuffer or an SPSC violation confined to one factory/path — still issues a brief for the clean subset; see [Code-path scope](#output-the-two-documents).) Always complete every check even after a GATE fails — the report captures everything the port will eventually need.
+- **GATE** — blocks the port (an unmet prereq or an UNSUPPORTED feature). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. (A *config-scoped* GATE — e.g. GlobalCircularBuffer confined to one factory — still issues a brief for the clean subset; see [Code-path scope](#output-the-two-documents).) Always complete every check even after a GATE fails — the report captures everything the port will eventually need.
 - **PORT WORK** — the porter must *act* on it during the port.
 - **FYI-P** — informational, surfaced *to the porter* (and recorded for the team).
 - **FYI-U** — informational, *team-only* (feeds other workstreams; never reaches the porter).
 
 Findings flow to the two output documents by role: the **porter brief** carries GATE-cleared lines + all PORT WORK + all FYI-P; the **team findings** doc carries everything. See [Output: the two documents](#output-the-two-documents).
 
-### Prerequisites
+### Device 2.0 prerequisite
 
-Metal 2.0 migration sits at the end of a chain of prior modernizations. This subject confirms the two hard prerequisites — the **`ProgramDescriptor` API** and **Device 2.0 data-movement migration** — and **both GATE the port**:
+Metal 2.0 migration sits at the end of a chain of prior modernizations. The first hard prerequisite is **Device 2.0 data-movement migration**, and it **GATEs the port**. The op's TTNN-side readiness — `ProgramDescriptor` factory concept, custom hash, and the rest — is the *second* prerequisite gate, handled separately in [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite) against the readiness sheet.
 
-- **Check 1 — `ProgramDescriptor` API** is the standalone hard prereq. If unmet, it is its own PR — substantial, separate work with TTNN-infrastructure implications that does *not* bundle with the Metal 2.0 port. Record the gap and continue the audit; do not attempt the migration here.
-- **Check 2 — Device 2.0 migration** (the op's own kernels *and* any donor kernels it calls) is also a hard prereq: the Metal 2.0 binding tokens attach to Device 2.0 wrapper objects, so a kernel still on Device 1.0 idioms cannot take the whitelisted swaps.
+**Complete this check regardless of its outcome, then continue through the remaining subjects.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, and downstream dependencies on donor migrations. Do not exit early on a RED prereq — surface all findings to the report.
 
-**Complete both checks regardless of individual outcomes, then continue through the remaining subjects.** The audit's job is to gather a complete picture of what porting this op will require, including features the op uses that may be blocked on prereq work, characteristics that shape the port's scope, downstream dependencies on donor migrations, and per-binding correctness hazards. Do not exit early on a RED prereq — surface all findings to the report.
-
-**Check 1 (GATE): Op is on the `ProgramDescriptor` API.**
-
-Confirm the op's program-factory code populates a `ProgramDescriptor` and uses `KernelDescriptor`, `CBDescriptor`, `SemaphoreDescriptor`, etc. — *not* the older imperative-builder style from `host_api.hpp` (`CreateProgram` / `CreateKernel` / `CreateCircularBuffer` / `SetRuntimeArgs` / etc.).
-
-**Populating a `ProgramDescriptor` is necessary but not sufficient — it must be the ProgramDescriptor *factory concept*.** A clean PD-concept op exposes `create_descriptor()` returning a `ProgramDescriptor` and lets the framework handle cache-hit patching. An op that exposes the legacy `create()` + `override_runtime_arguments()` factory concept is **not** PD-concept even if it builds a `ProgramDescriptor` internally as a data structure and hand-rolls its own patching in the override hook. The tell for this hybrid is an `override_runtime_arguments()` that imperatively re-patches device state — especially `UpdateCircularBuffer*` / `UpdateDynamicCircularBufferAddress` calls (see [Per-execution CircularBuffer size updates](#per-execution-circularbuffer-size-updates-updatecircularbuffertotalsize-updatecircularbufferpagesize-updatedynamiccircularbufferaddressandtotalsize--unsupported-via-the-pd-concept-port-legacy-factory-concept)). Treat such a hybrid as RED — it needs migration to the true PD-concept factory first.
-
-- **Green**: op uses the `ProgramDescriptor` **factory concept** — `create_descriptor()` returning a `ProgramDescriptor`, with framework-managed cache-hit patching.
-- **Red (GATE)**: op uses the imperative `host_api.hpp` builder API (not `ProgramDescriptor`), **or** the legacy `create()` + `override_runtime_arguments()` factory concept (even if it populates a `ProgramDescriptor` internally as a data structure). Record the prereq gap — `ProgramDescriptor` migration is a **prerequisite to Metal 2.0 porting**, a substantial standalone body of work with TTNN-infrastructure implications, addressed in its own PR. **Do not attempt the migration as part of this audit, do not bundle it with anything, do not propose a partial conversion.** Continue with Check 2 and the remaining subjects — the feature-compatibility, TensorAccessor, call-surface, and other scans still produce useful findings (some features may need attention regardless of which API the op is currently on; others will only become relevant after the prereq lands).
-
-**Check 2 (GATE): Device 2.0 Data Movement migration — every kernel the op uses.**
+**GATE: Device 2.0 Data Movement migration — every kernel the op uses.**
 
 Confirm **every kernel this op exercises** is Device 2.0 compliant — **regardless of where the kernel file lives**. The op's own kernels, shared kernel-library code, in-family shared kernels, and borrowed/donor kernels from other families all count equally; location does not change the gate. What matters is whether the op's program factory instantiates or calls into the kernel. (An op may own *no* kernels of its own and file-path-instantiate all of them from a shared pool — those instantiated kernels are still fully subject to this gate; treat them as the op's effective kernels here.) See the [Device 2.0 Data Movement migration guide](../../../kernel_apis/data_movement/device_api_migration_guide.md) for what compliance entails. The *coupling* that borrowing induces is inventoried under [Out-of-directory coupling](#out-of-directory-coupling); the *gating* judgment lives here.
 
@@ -139,50 +127,110 @@ Confirm **every kernel this op exercises** is Device 2.0 compliant — **regardl
   Each holdover is a 1-line mechanical replacement (e.g. `get_read_ptr(cb_id)` → `cb_obj.get_read_ptr()`). The op is otherwise structurally Device 2.0 — the wrapper objects are in scope, so the Metal 2.0 binding tokens attach — so the op is *feasible*, and the audit **still issues the porter brief** (no point forcing a re-audit after a trivial cleanup). **But the port cannot start until the holdover is fixed, and the fix is not part of the port:** a Device 2.0 change is out of port scope even when it's one line (the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) lets the port touch no Device 2.0 idioms — the port never scoops up stray holdovers). So: report each holdover with `file:line`, route it to the Device 2.0 effort to be cleaned **first** on that track, and have the brief flag it **prominently as a blocker the porter must clear before porting** (see [Output: the two documents](#output-the-two-documents)). The yellow tier applies when the holdovers are isolated within a kernel that otherwise consistently uses the wrappers; absolute count is a heuristic, not a rule.
 - **Red (GATE)**: any kernel the op uses — own, shared-library, in-family shared, or cross-family donor — broadly uses legacy Device 1.0 idioms (raw `noc_async_read`, manual CB index management, `InterleavedAddrGen` / `ShardedAddrGen` / `InterleavedAddrGenFast` / `InterleavedPow2AddrGen*`, raw sem addresses, etc.). **The port is blocked** until that kernel's Device 2.0 migration lands; route the exact violations to the team that owns Device 2.0 migration, naming the kernel file (and, for a borrowed/donor kernel, its owning family) so the dependency is schedulable.
 
-**Why Device 2.0 gates the port.** Device 2.0 cleanup is *not* on the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) of sanctioned port-time changes, and — more fundamentally — the Metal 2.0 binding tokens (`dfb::name`, `sem::name`, `ta::name`) attach to the Device 2.0 wrapper objects. A kernel still on Device 1.0 idioms has nothing for those tokens to bind to, so it cannot take the whitelisted Metal 2.0 swaps. Device 2.0 is therefore a hard structural prerequisite, on par with the `ProgramDescriptor` migration. (The isolated-holdover YELLOW above is the one carve-out, and only because the wrappers are *already in scope* there — the kernel is structurally Device 2.0 and the tokens attach.)
+**Why Device 2.0 gates the port.** Device 2.0 cleanup is *not* on the [kernel-side whitelist](port_op_to_metal2_recipe.md#kernel-side-whitelist) of sanctioned port-time changes, and — more fundamentally — the Metal 2.0 binding tokens (`dfb::name`, `sem::name`, `ta::name`) attach to the Device 2.0 wrapper objects. A kernel still on Device 1.0 idioms has nothing for those tokens to bind to, so it cannot take the whitelisted Metal 2.0 swaps. Device 2.0 is therefore a hard structural prerequisite, on par with the TTNN-side readiness gate. (The isolated-holdover YELLOW above is the one carve-out, and only because the wrappers are *already in scope* there — the kernel is structurally Device 2.0 and the tokens attach.)
 
 ### Feature compatibility
 
-Some legacy-API features are not yet supported in Metal 2.0. If the op uses one, it cannot be ported until support lands — those are **GATE** findings. Most legacy features, though, already have a Metal 2.0 home; a few of those translate via a non-obvious construct or carry a caveat, and those surface to the porter as heads-ups (**FYI-P**).
+Some legacy-API features are not yet supported in Metal 2.0. If the op uses one, it cannot be ported until support lands — those are **GATE** findings. (Legacy features that *do* have a Metal 2.0 home need no entry here: the port translates them mechanically, so they live in the porting recipe, not the audit.)
 
-**Run this scan regardless of the [Prerequisites](#prerequisites) outcome.** Each Appendix A entry's recognition signals work against both ProgramDescriptor-form and imperative-`host_api.hpp`-form code — see the per-entry recognition bullets. Even when the ProgramDescriptor prereq RED's the op, the feature scan still surfaces which features it uses; that's the data point the human reader needs to plan downstream work.
+**Run this scan regardless of the prerequisite gates' outcome.** Each Appendix A entry's recognition signals work against both ProgramDescriptor-form and imperative-`host_api.hpp`-form code — see the per-entry recognition bullets. Even when a prerequisite gate REDs the op, the feature scan still surfaces which features it uses; that's the data point the human reader needs to plan downstream work.
 
-For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-metal-20-feature-compatibility), scan the op (host code, kernel code, factory functions, descriptors) using the recognition signals listed for that feature. Each entry declares its tier in the header — `UNSUPPORTED` (no Metal 2.0 support yet — or, for the per-execution CB-size entry, a capability the host API has but the PD-concept port path cannot reach, which gates for the same practical effect) or `LANDED` (supported today; the Status field names the replacement construct).
+For each entry in [Appendix A: Metal 2.0 feature compatibility](#appendix-a-metal-20-feature-compatibility), scan the op (host code, kernel code, factory functions, descriptors) using the recognition signals listed for that feature. Every entry is `UNSUPPORTED` — a feature with no Metal 2.0 support yet; using one blocks the port.
 
-- **Green**: no entry's recognition signals fire, or only `LANDED` entries fire whose translation is routine.
-- **Red (GATE)**: an `UNSUPPORTED` entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. The port is blocked on this finding; continue scanning the remaining Appendix A entries and the rest of the audit — complete the full audit even after a RED match.
-- **Yellow**: an `UNSUPPORTED` entry's signals match *ambiguously* (you cannot be sure whether the feature is in use). Ask the user; on confirmation it becomes a GATE, otherwise green.
+- **Green**: no entry's recognition signals fire.
+- **Red (GATE)**: an entry's signals match definitively. Report the feature name, the `file:line` where it appears, and the recognition signal that fired. The port is blocked on this finding; continue scanning the remaining Appendix A entries and the rest of the audit — complete the full audit even after a RED match.
+- **Yellow**: an entry's signals match *ambiguously* (you cannot be sure whether the feature is in use). Ask the user; on confirmation it becomes a GATE, otherwise green.
 
-**Notable `LANDED` features (FYI-P heads-up).** A handful of supported features are worth flagging to the porter even though they don't gate — they translate via a non-obvious construct or carry a caveat. When one fires, surface it as a heads-up with its `file:line` and the construct the port will use:
+A feature **not listed** in Appendix A is supported — port it; don't gate on it or reverse-engineer support from the API surface. (In the rare case something genuinely unsupported slips through, it surfaces during the port and gets added to Appendix A then.)
 
-- **Aliased CBs** → `DataflowBufferSpec::advanced_options.alias_with` (a ninja feature; see the entry for the legality constraints).
-- **Borrowed-memory DFB** (dynamic CB on borrowed `Buffer` memory) → `DataflowBufferSpec::borrowed_from`.
-- **Dynamic `TensorAccessor`** (`ArgConfig::Runtime*`) → the **UNSAFE** `TensorParameterAdvancedOptions` relaxation opt-ins; adopting them has per-dispatch-caching implications, so flag for the user's awareness.
-- **Non-zero semaphore initial value** → `SemaphoreSpec::advanced_options.initial_value`, which is `[[deprecated]]` and unsupported on Gen2. Deprecated-but-fine on Gen1; note it so nobody mistakes it for a blocker.
+### TTNN factory concept prerequisite
 
-If the op uses something *not listed* in Appendix A and you are uncertain of its support status, treat as yellow and ask. Do not assume support from API surface.
+The second hard prerequisite is the op's **TTNN-side shape**: is it on a factory concept the Metal 2.0 port can handle today, and is its prior `ProgramDescriptor` migration free of the correctness bugs that migration sometimes introduced? Both **GATE the port**. Unlike Device 2.0, you do **not** re-derive this from the code — the hard classification already lives in the **per-factory readiness sheet** (the TTNN team's *"Operations analysis"* sheet). This subject is a *lookup with a lightweight cross-check*, not an analysis.
 
-### TensorAccessor handling
+**Fetch and locate.** Pull a fresh copy of the sheet every run and find your op's row(s) per [`../analyses/ttnn_op_porting_readiness.md`](../analyses/ttnn_op_porting_readiness.md) — that doc owns the fetch procedure, the column meanings, and the standing rule to **reference every column by header name, never by position** (the sheet owner adds and reorders columns; existing names are stable and no column is deleted). The sheet has **one row per (op, DeviceOperation, ProgramFactory variant)** — an op with several factories has several rows. Read them all; the gate is per-factory, so carry each factory's verdict through to the report.
+
+**The gate verdict: the `Is able to port?` column.** For each factory row, that cell *is* the gate — `yes` clears it, `no` blocks. It already composes everything below, but you must *understand* its derivation, both to route a `no` correctly and to know what to cross-check:
+
+```
+Is able to port?  =
+      Is safe to port?          == "yes"
+  AND Custom hash               == "no"
+  AND Runtime-args update       == "no"
+  AND Pybind descriptor         == "no"
+  AND ( Concept == "descriptor"
+        OR (Concept == "WorkloadDescriptor" AND Secretly SPMD Workload? == "yes") )
+```
+
+Two axes are folded into that one verdict, and which one fails decides where a `no` routes:
+
+- **`Is safe to port?` — the correctness axis (the readiness-sheet owner's).** Whether the op's prior `ProgramDescriptor` migration introduced a bug — most often a *smuggled pointer* (in `ProgramDescriptor`, every pointer must ride a CRTA/RTA, and the factory concept only works if each is explicitly marked; a missed one silently mis-patches on cache hits) or a pybound `create_descriptor` whose dependent experimental infra a port would break (surfaced as `warning`). We gate on it only because we won't port a known-buggy op. **This is the readiness-sheet owner's expert judgment — trust it. Do not try to re-derive "did the migration introduce a subtle bug."**
+- **The shape criteria — the portability axis (ours).** `Concept`, `Custom hash`, `Runtime-args update`, `Pybind descriptor`: whether the factory shape is one the Metal 2.0 recipe + TTNN infra support today. `descriptor` is the vanilla single-program PD concept; a `WorkloadDescriptor` op clears only if it is *secretly SPMD* — morally single-program (one program across the mesh, on the multi-program path only as an artifact). The rest must be absent. **These gates are current-state, not structural** — each lifts as support lands (the custom-hash gate goes once the recipe interprets custom-hash + relaxation; `Runtime-args update` and pybound-`create_descriptor` go once their TTNN infra ships).
+
+**Lightweight cross-check (trust, but verify).** The sheet is a shortcut to work you'd otherwise do by hand, so confirm it cheaply before relying on it. Verify the **cheaply-checkable factual columns** against the op's code (the factory-definition and device-op files are named in the sheet's last two columns):
+
+- `Concept` — legible from the factory's methods: `create_descriptor()` returning a `ProgramDescriptor` (descriptor), a mesh-workload return (`WorkloadDescriptor`), `create()` + `override_runtime_arguments()` (legacy), or an already-`MetalV2` factory.
+- `Custom hash` — grep the device-op for a `compute_program_hash` override.
+- `Runtime-args update` — grep the factory for `get_dynamic_runtime_args` / `override_runtime_arguments`.
+- `Pybind descriptor` — grep the op's `*_nanobind.cpp` for a `create_descriptor` binding.
+- `Secretly SPMD Workload?` (only when `Concept == WorkloadDescriptor`) — `create_descriptor` returns a `WorkloadDescriptor`; a **single entry** in its `programs` vector (each a `PerCoordProgram` = `MeshCoordinateRange` + `ProgramDescriptor`) ⇒ SPMD.
+
+Also check **cross-column invariants** — a violated one means the sheet is internally inconsistent: e.g. `Runtime-args update == "yes"` is only possible on `descriptor` / `WorkloadDescriptor` concepts, never `legacy device-op`; and `Op-owned tensors? == "yes"` is only possible on `WorkloadDescriptor` (the `descriptor` concept can't carry op-owned tensors, so a `descriptor` row with op-owned tensors is a broken sheet). **Do not verify** `Is safe to port?` (or the smuggled-pointer signal it subsumes) — that is the expert-judgment axis. **Do not fetch or cross-check in a subagent** — the Drive connector authorizes only in the main session, and the cross-check needs the op's code in hand.
+
+**Routing.**
+
+- **`Is able to port?` == `yes`** → TTNN gate cleared; carry the factory forward (its target concept is recorded in [TTNN porting shape](#ttnn-porting-shape)).
+- **`no`** → GATE. Read the derivation to attribute the cause and route it: a **shape** failure (`Concept` / `Custom hash` / `Runtime-args update` / `Pybind`) → the **TTNN / ProgramDescriptor-migration team**, with the note that the gate lifts when the relevant support lands; a **`safe`** failure → the **readiness-sheet owner** (the correctness call is theirs; the buggy PD migration must be reconciled before the port). Name which conjunct failed.
+- **Cross-check conflicts with the sheet, or the op has no row** → **"spreadsheet is broken"** → GATE, routed to the **readiness-sheet owner** to reconcile. The sheet *is* the analysis we're relying on; if it is wrong or silent for this op, stop rather than proceed on data we can't trust. (Ignore the sheet's trailing summary block — those non-op rows are category totals, not a missing-op signal.)
+- **`Concept == MetalV2`** → the factory is *already* ported; report it as done, not blocked.
+
+**Finding role: GATE** (per-factory). On PASS, the porter brief carries a cleared line; on a whole-op FAIL, no brief. Apply [Code-path scope](#output-the-two-documents): if some factories clear and others don't, RED the op and offer the clean factory subset.
+
+### TTNN porting shape
+
+Once the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite) clears, record the **target** Metal 2.0 factory concept the porter builds toward — a porter heads-up (**FYI-P**), not a gate. The sheet's `Concept` column is the op's *current* concept; the target is derived from it plus `Op-owned tensors?`:
+
+- **`descriptor`** → **`MetalV2FactoryConcept`**. A `descriptor` op has **no** op-owned tensors — the `ProgramDescriptorFactoryConcept` doesn't support them (see below).
+- **`WorkloadDescriptor` + SPMD** → **`MetalV2FactoryConcept`**. The SPMD MeshWorkload collapses to the single-program concept; if the op has **op-owned tensors** (`Op-owned tensors? == "yes"`), `MetalV2FactoryConcept` carries them natively.
+
+**Op-owned tensors force `WorkloadDescriptor`.** The `descriptor` concept (`ProgramDescriptorFactoryConcept`) can't carry op-owned tensors, so an op that needs them must move up to the `WorkloadDescriptorFactoryConcept` — where it is expressed as an SPMD workload *purely* to unlock the op-owned-tensor feature. So **`Op-owned tensors? == "yes"` always co-occurs with `Concept == WorkloadDescriptor` (and SPMD)**; a `descriptor` op with op-owned tensors is not a real state. (A quirky design: every op that needs op-owned tensors is morally single-program, yet has to wear the SPMD-workload shape to get them.)
+
+Code basis for `Op-owned tensors?`: a non-empty `buffers` vector on the returned `WorkloadDescriptor` (the field is named `buffers`, not `tensors` — a historical quirk).
+
+The supported target set is narrow today and will grow; the plain `MetalV2FactoryConcept` (no op-owned tensors) is the common target. If a cleared op maps to none of the above, treat it as a spreadsheet/recipe gap and flag it (per the prerequisite subject's spreadsheet-broken routing) rather than guessing.
+
+**Finding role: FYI-P** — surface the target concept in the porter brief; it feeds the port's TTNN ProgramFactory wiring (see [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md)).
+
+### TensorParameter relaxations
+
+The sheet's `TensorParameter relaxation` column proposes, per factory, a relaxation the port should apply so the ported op accepts the same range of tensor shapes the legacy op did — `dynamic_tensor_shape`, `match_padded_shape_only`, `none`, or a descriptive `OTHER(...)`. This is **PORT WORK** (the porter applies the relaxation on the affected `TensorParameter`), not a gate.
+
+**Not yet active — but coming very soon.** A relaxation-bearing op has a **custom hash** (the relaxation *is* the hash excluding the relaxed property from the cache key), and the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite) currently gates custom-hash ops — so today a real relaxation value co-occurs with a gate and this subject rarely fires. It activates when that gate lifts (the recipe learning to interpret custom-hash + relaxation).
+
+**The check when it fires (involved, not a passthrough).** Applying a relaxation must not change behavior — the port promises no semantic difference. So confirm the **existing custom hash's logic matches the listed relaxation**: the properties the hash excludes from the key must be exactly the ones the relaxation says may vary. A mismatch would let the cache reuse a program for an input the legacy op would have rebuilt for — a silent semantic change. On mismatch, **do not apply the relaxation**; flag it (`file:line` for the hash, the sheet's proposed relaxation, and the discrepancy) for the ops team.
+
+**Relaxation candidates (FYI-U).** Even while custom-hash ops are gated, a custom hash sometimes reveals which tensor properties the op *actually* depends on — a candidate for a future relaxation. Record any such candidate for the team's relaxation roadmap; it is **fallible** (many custom hashes are themselves wrong) and never reaches the porter brief.
+
+**Finding role: PORT WORK** (with a mismatch flagged to the ops team); the relaxation-candidate note is **FYI-U**.
+
+### TensorParameter analysis
 
 Every tensor a kernel reads must reach Metal 2.0 through the typed binding channel (`TensorParameter` / `TensorBinding`). This subject inventories, **per binding**, how the legacy op accesses each tensor and classifies the port work into one of two cases. Both cases are **PORT WORK** — the porter acts on them during the port; neither gates. (This subject merges what earlier versions of the audit split across a "TensorAccessor usage" check and a separate "TensorAccessor bypass" check: they detect the same population — tensors not cleanly on `TensorAccessor` — so they are one subject now.)
 
 **Why this matters.** The legacy hazard is a tensor base address that reaches the kernel through an RTA/CRTA. Under TTNN's fast-path-cache binding-injection model, the framework patches the typed-binding channel on cache hit but leaves RTAs untouched — so a buffer address routed through an RTA stays at whatever value the cache-populating call wrote, and on later cache hits with new tensor storage of the same shape the kernel reads the *original* buffer. No assertion fires; just wrong numerics, only on cache hits with non-identical storage. Pre–Metal 2.0 this was a style concern (*"yuck, raw pointers"*); the fast-path change made it silently wrong. The port replaces that RTA-smuggled address with a typed `TensorParameter` binding (which *does* refresh) — regardless of what the kernel then does with the base pointer (the two cases below), and including kernels that use no `TensorAccessor` at all (older addr-gen idioms, hand-rolled NoC walks).
 
-This resolves **at port time** — it waits for no framework feature, with one exception: a raw-pointer (Case 2) binding inside a **compute** kernel, which is blocked pending the compute-kernel `TensorBinding` fix (see the compute-kernel callout under *The two cases*).
+This resolves **at port time** — it waits for no framework feature. (A raw-pointer Case-2 binding in a **compute** kernel used to be blocked; it no longer is — a compute kernel can bind a `TensorAccessor` / `LocalTensorAccessor` today, so compute Case 2 is ordinary port work.)
 
 **Scope.** Audit only kernels that actually touch tensor memory. **Compute kernels that only consume from / produce to circular buffers are out of scope** — they read CB pointers, not tensor memory; the tensor read happens upstream in a dataflow kernel.
 
-**Causal-link gate (run this first, per binding).** Before classifying any binding, check whether the kernel's access is a **borrowed-memory DFB read**: it reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory CB (see the [Dynamic CircularBuffer entry](#dynamic-circularbuffer-cb-built-on-borrowed-buffer-memory--landed) under Feature compatibility). There the lack of `TensorAccessor` is *intended* — the borrowed-memory DFB **is** the tensor access — and the port handles it via `DataflowBufferSpec::borrowed_from`. Mark such a binding **clean**; do not force it into Case 1 or Case 2. Mis-classifying it as "convert to TensorAccessor" would be a regression.
+**Causal-link gate (run this first, per binding).** Before classifying any binding, check whether the kernel's access is a **borrowed-memory DFB read**: it reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory CB (a CB backed by a device buffer — host-side `set_globally_allocated_address(buffer)`; the borrowed-memory translation is a mechanical porting-recipe step via `DataflowBufferSpec::borrowed_from`, not an Appendix A gate). There the lack of `TensorAccessor` is *intended* — the borrowed-memory DFB **is** the tensor access — and the port handles it via `DataflowBufferSpec::borrowed_from`. Mark such a binding **clean**; do not force it into Case 1 or Case 2. Mis-classifying it as "convert to TensorAccessor" would be a regression.
 
-**But "clean" requires the CB to be *synchronized*.** A borrowed-memory CB is a genuine DFB only if the kernels actually drive its FIFO machinery — something `push_back`s into it and something `wait_front`s on it (a sharded reader presenting already-resident data via `push_back`, satisfying a waiting compute consumer, is the canonical legit case). **Litmus: does any kernel drive the sync machinery on this CB — a FIFO producer *and* a FIFO consumer — or is it pointer-only?** (The same core may be both endpoints.) If nothing produces into the CB and it is merely read by base pointer — no FIFO anyone waits on — it is a **sync-free CB**, *not* a clean borrowed-memory DFB. A sync-free CB cannot be expressed as a Metal 2.0 DFB (the spec validator requires ≥1 producer and ≥1 consumer), so the port resolves it with the sanctioned **interim workaround** (see [the porting recipe](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround)). This does **not** gate — the workaround keeps the port unblocked — but **report it as a heads-up (FYI-P)** at the **(CB, endpoint)** edge (the same CB can be a synchronized LLK operand on one binding and pointer-only on another). A resident input read by raw pointer, with no producer — e.g. a reciprocal lookup table — is the trap this catches. If a kernel involves sharded code paths or reads from a CB rather than via `TensorAccessor`, scan the Dynamic CircularBuffer rule for the same code path before finalizing. **The synchronized/sync-free verdict can itself flip per config:** the same CB can be a sync-free scratchpad under one sharding and a real FIFO under another, so classify it per instantiation, never once for the op (conv2d `ACT_TILIZED` is the canonical confuser — height-sharded → scratchpad, block/width-sharded → FIFO; see [the catalog's per-config note](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround)). This is only the *floor* (≥1 of each); a CB that passes it can still fail the *ceiling* — see [DFB endpoint legality](#dfb-endpoint-legality-spsc) for the SPSC (≤1 per node) and dead-CB (zero-endpoint) checks, including the **hidden second writer** — invisible to a FIFO-sync trace, so it slips this floor as "clean," yet a real SPSC violation best caught here pre-port (otherwise a cryptic late port-validation rejection).
+Marking a binding **clean** here defers the *legality* of that borrowed-memory CB — is it a valid DFB, a sync-free CB (resolved by a self-loop), or a multi-endpoint CB? — to [CB endpoints](#cb-endpoints), which assesses every CB per node. Do not resolve it here: mark the borrowed-memory DFB read clean and move on.
 
 **The two cases.** For each `TensorParameter` the op declares (or would declare in the port), classify by **what the kernel does with the tensor's base pointer**. In *both* cases the legacy host smuggles `buffer()->address()` in through an RTA/CRTA — the distinction is purely what the kernel does with that raw pointer on the device side, not whether one exists. A mechanical observation, not a judgment call:
 
 - **clean** — a borrowed-memory DFB read (the causal-link gate above). The DFB *is* the tensor access; the port handles it via `DataflowBufferSpec::borrowed_from`. Neither Case 1 nor Case 2 — no work item here.
 - **Case 1 — via `TensorAccessor`** (the common case). The kernel feeds that base address into a `TensorAccessor` constructor (`TensorAccessor(args, addr)`) and does all its memory access *through* the accessor (`accessor.get_noc_addr(page)` and friends). **Port work:** express the binding as a `TensorParameter` / `TensorBinding`; the kernel builds `TensorAccessor(ta::name)` instead, and the legacy address-via-RTA plus its `TensorAccessorArgs` plumbing both disappear. Mechanical, low-risk.
 - **Case 2 — raw pointer.** The kernel uses that base address *directly* — explicit address arithmetic and hand-rolled NoC calls, never constructing a `TensorAccessor` from it. **Port work:** express the binding as a `TensorParameter` / `TensorBinding` too (the address never stays on an RTA), but the kernel pulls the base via the sanctioned `TensorAccessor::get_bank_base_address` bridge and **keeps its existing raw arithmetic unchanged**. We do **not** rewrite raw access into `TensorAccessor` iteration — that conversion is deliberately out of scope (too high-risk for a port). A buffer-address RTA is *not* an acceptable substitute for the bridge.
-
-  > ⚠ **Case 2 in a *compute* kernel is currently blocked.** `get_bank_base_address` lives on `TensorAccessor`, which a compute (TRISC) kernel cannot bind today — so a compute kernel needing a raw base address has no bridge. Such a binding **gates the port**: report it and stop, routing it to the compute-kernel `TensorBinding` fix. Do *not* fall back to smuggling the address through a CRTA/RTA — even from an op-owned tensor, where it would be strictly correct, that path is closed (see [recipe rule 5](port_op_to_metal2_recipe.md#kernel-side-whitelist)).
 
 **Detection — host side.** Any site where `buffer->address()` (or `->address()` / `(*buffer).address()` / `tensor.buffer()->address()`) flows into a runtime-args context. Common shapes:
 
@@ -205,77 +253,101 @@ For each `TensorParameter`, cross-check: does the same buffer also appear in an 
 
 - `get_arg_val<uint32_t>` for shape / count / index / control values. Those uint32s aren't addresses.
 - `accessor.get_noc_addr(page_id)` outputs — that's the `TensorAccessor` path (Case 1), not a raw-pointer Case 2; don't flag it.
-- Host-side `set_globally_allocated_address(buffer)` — the borrowed-memory pattern, covered by the Dynamic CircularBuffer feature entry (clean via the causal-link gate).
+- Host-side `set_globally_allocated_address(buffer)` — the borrowed-memory pattern (a mechanical porting-recipe translation via `borrowed_from`); clean via the causal-link gate.
 - Kernel reading from a borrowed-memory CB via `cb.get_read_ptr()` — clean; the causal-link gate applies.
 
 **Granularity — per binding, not per op.** An op may have multiple tensor bindings, some clean and some needing work. Report per binding — a single Case-1 or Case-2 binding fires this subject even when the op's primary I/O is via `TensorAccessor`. **Classification can also vary per factory within one bundled op** — the *same* `TensorParameter` may be clean (borrowed-memory DFB) in one factory and Case 1 in another (e.g. a sharded vs. an interleaved factory). When that happens, record the per-factory split via the report's Per-DeviceOperation attribution rather than forcing one flat verdict for the binding.
 
 **Op-level roll-up:** `✓ clean` (every binding clean) / `⚠ port work` (one or more Case-1 / Case-2 bindings), with the per-binding inventory in the report.
 
-### DFB endpoint legality (SPSC)
+### TensorAccessor 3rd argument
 
-**Precondition — Device 2.0 clean.** This subject's recognition signals assume **Device-2.0 kernel idioms** (`get_write_ptr` methods, `get_local_cb_interface`, `Semaphore` objects). Run it only when the [Device 2.0 gate](#prerequisites) is clean (GREEN, or YELLOW on isolated holdovers). On a **Device-2.0-RED** op, *defer* it — mark it `(deferred — re-evaluate after Device 2.0 migration)` — because the kernel rewrite changes the idioms the scan keys on, and a best-effort pass over legacy idioms can **false-negative the hidden writer** (worse than deferring: it would report "clean"). (A ProgramDescriptor-RED op already defers it via the [RED short-circuit](#red-short-circuit-the-programdescriptor-prerequisite-fires).)
+`TensorAccessor`'s constructor takes an **optional** third argument — an explicit page size (`TensorAccessor(args, base_addr, page_size)`). Most accessors omit it and only a handful of ops set it, so this subject fires rarely. When it *is* present, deciding what the port does with it is **not** the mechanical drop it looks like — a subtlety (below) tripped up the first pass through these ops.
 
-**This subject checks the *count* of producers and consumers — the ceiling the [floor check in TensorAccessor handling](#tensoraccessor-handling) never reaches.** That check asks whether a CB has *at least* one producer and one consumer (the floor): too few → it's sync-free or single-ended → the port bridges it (compute self-loop / DM fabricated consumer; one case GATEs — see the single-ended note). This subject asks the complement — *at most* one of each **per node** (the ceiling) — and flags the two ways a CB lands outside the legal `(1 producer, 1 consumer)` window: **zero endpoints** (a dead CB) and **excess endpoints on a node** (an SPSC violation).
+**Lean on the checked-in triage, the way you lean on the readiness sheet.** The per-op classification is already done and checked in — [`../analyses/2026-07-06_tensor_accessor_3rd_arg_triage.md`](../analyses/2026-07-06_tensor_accessor_3rd_arg_triage.md) carries an op→class lookup table. As with the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite), this subject is a **lookup plus a lightweight staleness check, not a re-derivation**: find your op's row in that table, then confirm the classification still holds against the current code (the analysis is dated — ops get fixed or refactored after it). Do **not** re-derive from scratch. The model below is what you need to *read* the table, run the staleness check, and classify an accessor the table doesn't list (rare).
 
-**Why the ceiling matters — and why to catch it pre-port.** Metal 2.0 enforces **single-producer / single-consumer per node** (SPSC) as a spec-validator legality rule — fundamental on Gen2, whose per-node dataflow hardware assumes it. The host **cannot waive SPSC selectively**: at spec-construction it cannot tell a sync-free multi-endpoint CB from a synchronized one, so relaxing the check for one would unsafely relax it for all. Two consequences: an SPSC violation is **not port-fixable** — the op owner must resolve it *before* the port, as a functional change (out of port scope). And although the spec validator **will** reject it at port time — once the offending access is bound, the second endpoint surfaces and the SPSC check fires — that is a *cryptic, late* failure: a 2-producer (or 2-consumer) rejection whose root cause isn't obvious, on a violation the porter can't fix anyway. So catch it **pre-port**: name the cause and route the op-owner rewrite before any conversion effort is sunk. One face — the hidden second writer — is moreover invisible to a FIFO-sync trace (its raw co-fill uses no FIFO ops), so you must actively hunt for it; miss it and the auditor hands the porter a clean bill that detonates mid-port. Run this subject for every op, even when the floor check passed.
+**The load-bearing subtlety: the 3rd arg means different things for sharded vs. interleaved.** The two `TensorAccessor` specializations interpret the page-size argument differently, so you **cannot judge the value until you know which specialization the accessor is**:
 
-**The endpoint census.** SPSC binds a **CB *instance*** — the device-side per-node materialization — not the host `CBDescriptor` / `CreateCircularBuffer` (one descriptor over a core range makes **one instance per node**). So count **per CB, per node**: on each node's instance, tally the endpoints. An endpoint is any kernel that touches the CB — FIFO-produces (`reserve_back`/`push_back`), FIFO-consumes (`wait_front`/`pop_front`), **or** accesses the memory by **raw pointer** (`get_write_ptr` / `get_read_ptr` / `get_local_cb_interface(<cb>).fifo_*_ptr`). *Any* access counts: in Metal 2.0 a kernel structurally cannot touch a DFB it hasn't bound — there is no back-door base-pointer grab — so every access is a binding, hence an endpoint (the hidden raw writers below included).
+- **Interleaved** strides by `align_power_of_2(page_size, alignment)` — it *silently realigns* the passed value up to the allocator alignment. So any value of the **right order of magnitude** is inert; only a wrong-*magnitude* value (off by more than alignment rounding) actually mis-addresses. This realignment is what dissolved most of the "bug" flags an earlier sweep raised — they were correct-magnitude-but-unaligned interleaved values, i.e. harmless.
+- **Sharded** uses the passed value **verbatim** as the stride. There is no realignment safety net — *any* wrong value mis-addresses.
 
-> **Count and sync are orthogonal — don't fuse them.** The census counts endpoints by *access* (FIFO or raw pointer — all count); the [synchronized/sync-free axis](#tensoraccessor-handling) separately judges whether those accesses drive the FIFO machinery (**synchronized**) or just walk the memory (**sync-free**). A lone pointer reader is **one** endpoint *and* sync-free (→ interim bridge); two pointer readers on a node are **two** endpoints (→ SPSC violation) whatever their sync. Count first, judge sync second.
+Metal 2.0 supplies the `aligned_page_size` implicitly and provides **no explicit page-size override API** (there is no valid use case for one). So the port's default job is to confirm the manual override is redundant and drop it — *unless* the override is load-bearing or wrong, which is where the gate lives.
 
-Classify by the pair:
+**The taxonomy.** Every accessor that passes a 3rd argument falls into one of five classes. The triage doc enumerates which op is which; the classes are captured here so a blocking verdict routes correctly:
 
-| (producers, consumers) on a node | Verdict | Handled |
+| Class | What the 3rd arg is | Port action | Role |
+|---|---|---|---|
+| **1 — Dynamic page size** | genuinely *varies* with row width across cache-reused shapes (interleaved row-major) | set `dynamic_tensor_shape` and drop the manual override — the page size is then auto-supplied | **PORT WORK** (a relaxation — see [TensorParameter relaxations](#tensorparameter-relaxations)) |
+| **2 — Redundant / inert** | `== aligned_page_size`, **or** a correct-magnitude value on an *interleaved* accessor (realigned), **or** never used (`page_id ≡ 0`) | drop the arg (pure no-op) | **PORT WORK** (mechanical) |
+| **3 — Latent bug** | a **wrong-magnitude** value the realignment can't repair, but masked today by a dead path / test config | — (blocked) | **GATE** — the ops team fixes it first (the recipe makes no functional changes) |
+| **4 — Live bug** | a **wrong-magnitude** (or sharded-verbatim-wrong) value that mis-addresses **in the default config** | — (blocked) | **GATE** — the ops team analyzes and fixes it first |
+| **S — Special** | a manual override the binding model **cannot express** — a sharded raw-pack page, or a sub-page base offset | stays on manual addressing | **GATE** — the ops team ports it by hand |
+
+**The staleness check** (also how to classify an accessor the table doesn't list): resolve the two questions the classification hinges on and confirm they still match the table's verdict.
+
+1. **Sharded or interleaved?** (`src_args.is_sharded`, or trace the tensor's memory config.) This decides whether realignment is in play at all.
+2. **Correct or wrong magnitude?** Resolve the expression to a host value (trace the CTA/RTA back to the factory) and compare to the true logical page (`buffer->page_size()`): `tt::tile_size` / `get_tile_size(cb)`, `buffer->page_size()`, and `aligned_page_size()` are correct magnitude; `element_size()*1024` (drops the block-float exponent — bf8 gives 1024, not 1088), a stale hardcoded constant, or a sub-page fragment are wrong magnitude. Evaluate alignment on **Blackhole/Quasar DRAM (64)** — the strictest, and this hardware's target.
+
+If your op isn't in the table, or the code no longer matches its row (the accessor changed sharding, the op was already fixed on `main`, the value moved), treat it like a broken readiness-sheet row: **don't guess** — flag it (`file:line`) for the triage-doc owner to re-vet, and gate the affected site if the mismatch could be a wrong-magnitude value.
+
+Divergence from a clean drop is rare — across all current ops the triage found just one latent-bug op and a couple of Special cases — so the overwhelmingly common outcome is Class 2, a clean mechanical drop. But **do not port a divergent site silently**: Classes 3/4/S each block the port until the owning team acts.
+
+**Finding role: PORT WORK (Classes 1, 2) + GATE (Classes 3, 4, Special).** On a Class-1/2 site the porter drops the arg (Class 1 also sets the relaxation, cross-referenced to [TensorParameter relaxations](#tensorparameter-relaxations)); on a Class-3/4/Special site the port is blocked — record the op, the accessor `file:line`, the class, and the route (Class 3/4 → the ops team to fix the value; Special → the ops team to port by hand).
+
+### CB endpoints
+
+This subject assesses **CB endpoint legality**: for each CB, on each node, is the number of endpoints legal? It unifies the *floor* (too few endpoints) and the *ceiling* (too many) into one classification. **It is now GATE-free** — every out-of-window case has a port-time resolution (a self-loop, the multi-binding advanced option, or a documented drop), so nothing here blocks a Gen1 port. The auditor's job is to classify each CB and record the disposition the porter will apply. (The refactors that some of these resolutions defer belong to the later **Quasar-uplift** stage — a separate, out-of-scope effort with its own audit — never port work here.)
+
+**Precondition — Device 2.0 clean.** The recognition signals assume Device-2.0 kernel idioms (`get_write_ptr` methods, `get_local_cb_interface`, `Semaphore` objects). Run this only when the [Device 2.0 gate](#device-20-prerequisite) is clean (GREEN, or YELLOW on isolated holdovers); on a Device-2.0-RED op, **defer** it — mark `(deferred — re-evaluate after Device 2.0 migration)` — because the kernel rewrite changes the idioms the scan keys on, and a best-effort pass over legacy idioms can false-negative the hidden second writer (worse than deferring: it would report "clean").
+
+**The endpoint census.** Count **per CB, per node** — a CB is a device-side per-node instance (one `CBDescriptor` over a core range makes one instance per node), so tally endpoints on each node's instance. An endpoint is any kernel that touches the CB: FIFO-produces (`reserve_back`/`push_back`), FIFO-consumes (`wait_front`/`pop_front`), **or** accesses the memory by **raw pointer** (`get_write_ptr` / `get_read_ptr` / `get_local_cb_interface(<cb>).fifo_*_ptr`). Any access counts — in Metal 2.0 a kernel cannot touch a DFB it hasn't bound, so every access is a binding, hence an endpoint (the hidden raw writers below included).
+
+> **The disposition is a pure function of the per-node count — so count *every* access.** The easy miss is a non-FIFO one: a raw-pointer read or write is a binding in Metal 2.0, hence an endpoint, exactly like a FIFO produce/consume. A CB with no FIFO ops still has endpoints (its pointer readers/writers) — a lone pointer reader is one, two on a node are two — so never skip a CB just because nothing `push_back`s into it.
+
+Classify by the (producers, consumers) pair on a node:
+
+| (producers, consumers) | Verdict | Port-time resolution |
 |---|---|---|
-| (0, 0) | **Dead CB** — allocated, never referenced | here (drop pre-port) |
-| (1, 0) / (0, 1) | **Single-ended CB** — one endpoint | [interim bridge](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround) (port fabricates the missing side) — **except a DM single-ended *producer*, which GATEs** (note below) |
-| (1, 1) | **Legal** — one producer + one consumer | — |
-| (≥2, ·) / (·, ≥2) | **SPSC violation** — excess on a node | here (op-owner pre-port fix) |
+| (0, 0) | **Dead CB** — allocated, never referenced | porter drops it + documents (below) |
+| (1, 0) / (0, 1), or pointer-only | **single-ended / sync-free** | **self-loop** — legal on Gen1 for compute *and* DM |
+| (1, 1) | **Legal** | — |
+| (≥2, ·) / (·, ≥2) | **multi-binding** — excess on a node | **set the DFB multi-binding advanced option** + record Quasar debt (below) |
 
-> **Single-ended forks by kernel + sync.** A single-ended CB is bridged at port time — compute → self-loop (INTRA); DM sync-free → fabricated consumer — **except a single-ended *producer* on a DM kernel** (real `reserve_back` / `push_back`, no consumer; a DM "packer"): a DM self-loop has no backend lowering and a fabricated consumer would risk deadlocking a real producer, so it has **no port-time bridge → GATE.** Route the op-owner rewrite (a DM kernel can write its output tensor directly, so the FIFO is gratuitous). See the [recipe's fork](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround).
+**Classify per instantiation, not once for the op.** A CB's endpoint count flips with config, so its disposition flips too: the same CB can be a single-ended scratchpad under one sharding and a legal `(1, 1)` FIFO under another (conv2d `ACT_TILIZED`: height-sharded → self-loop, block/width-sharded → legal), or single-endpoint under one config and multi-binding under another (split-reader / mcast). Classify each `(CB, config)` separately.
 
-#### Dead CB (0, 0) — FYI-P, pre-port drop
+**Single-ended / sync-free → self-loop (no gate).** A CB with one real endpoint, or with pointer-only access, is bridged by binding the touching kernel as **both** producer and consumer (a self-loop). On Gen1 a DFB lowers to a plain circular buffer that a single RISC — compute *or* DM — can both fill and drain, so the self-loop is legal for both kernel types (the spec validator rejects a DM self-loop only on Gen2). The kernel code is untouched and runtime behavior is identical to the legacy CB. *(A DM self-loop is rejected only at the later Quasar-uplift stage — recorded for the Quasar audit, not a Gen1 blocker.)*
 
-**Recognition.** A CB whose `buffer_index` is referenced by **no** kernel — no `reserve_back`/`push_back`, no `wait_front`/`pop_front`, no `get_read_ptr`/`get_write_ptr`, no raw access. Grep the bound kernels for the index and any named CTA carrying it; zero hits.
+#### Dead CB (0, 0)
 
-**Why it matters.** Left in place, the port mechanically builds a `DataflowBufferSpec` for it that the validator then rejects — a DFB needs ≥1 producer + ≥1 consumer, and a zero-endpoint DFB has neither. Pre-flagging spares the porter a dead end.
+**Recognition — and distrust a `(0, 0)` result.** A CB whose `buffer_index` is referenced by **no** kernel: no `reserve_back`/`push_back`, no `wait_front`/`pop_front`, no raw access. Grep the bound kernels for the index and any named CTA carrying it; zero hits. **But a dead CB should be *exceedingly rare*** — ops are well-optimized, and burning L1 on a CB no kernel touches is a flagrant waste you would not expect to find. So treat a `(0, 0)` result as **more likely a gap in your own analysis than a real dead CB**: before believing it, rule out every *indirect* path the index could take to a kernel — a CTA carrying it handed to a helper function, an index computed/offset/aliased from another value, a reference that appears only under a config you didn't inspect. Confirm across **all instantiations**, not just the default.
 
-**Action.** **FYI-P.** Flag for the op owner to drop the allocation (and any dead CTA carrying its index) as a **pre-port cleanup** — a functional change, out of port scope. Surface it to the porter as a heads-up so an unreferenced CB index doesn't read as a missed binding. Record `file:line`.
+**Resolution — a dead CB *must* be dropped; the danger is dropping a *live* one.** A zero-endpoint CB **cannot be carried into Metal 2.0 at all**: a DFB with no producer and no consumer binding is rejected by the spec validator — it is structurally impossible to express a dead DFB. So a genuinely dead CB *must* be dropped, and doing so honors the port's **zero-functional-change** contract (a dead CB has no behavior, so removing its allocation changes L1 footprint and nothing else). The hazard is the mirror error — marking a CB dead when it is **actually live** (a reference hid behind indirection, or an unchecked config) and dropping it — which can **silently** mis-address or lose a real access → wrong numerics or a hang, the worst outcome this port can produce. And the safety net runs **one way only**: the validator structurally catches a *dead* DFB — a truly-dead CB you *fail* to flag simply resurfaces at port time as a bindingless DFB the porter can't build (loud, resolved then) — but nothing catches a wrongly-dropped *live* one. So bias hard toward caution: **report a CB dead only once you have positively confirmed its index is unreferenced by every kernel in every config; on any residual doubt, do not mark it dead — raise it as a question for the ops team.** (A real dead CB resurfaces at the validator regardless; a live one you drop does not.)
 
-**Examples in the wild:** conv2d `L1_ARRAY` — a 1-page "L1 scratchpad CB" whose index is threaded to the reader as a (dead) CTA, yet no kernel ever accesses it.
+For a *confirmed* dead CB, frame it to the porter as *"a dead CB has no behavior, so removing it changes none"* — **not** as a sanctioned exception to "don't modify behavior" (that framing invites a porter to generalize the permission). The condition itself is deterministic (*no kernel references the `buffer_index`*); the care goes into *establishing* it (above). So a confirmed drop is a rule the porter executes, not a judgment call: **the porter drops the allocation and any dead CTA carrying its index during the port, and records each drop with `file:line` prominently in the report.** PORT WORK when confirmed; a question to the ops team on any doubt.
 
-#### SPSC violation (≥2 of one kind on a node) — GATE (config-scoped), route to the op owner
+*Example:* conv2d `L1_ARRAY` — a 1-page "L1 scratchpad CB" whose index is threaded to the reader as a (dead) CTA, yet no kernel ever accesses it.
 
-**Why it can't be bridged.** The interim bridge fabricates the *missing* endpoint for a CB with a single real toucher (a compute self-loop, or a DM fabricated consumer); it cannot absorb a *second* kernel that also genuinely touches the CB on the same node — that is the very two-endpoint shape SPSC rejects. So an SPSC violation has **no port-time workaround**; it is an op-owner pre-port functional change. Two faces:
+#### Multi-binding (≥2 of one kind on a node)
 
-**(a) Hidden second writer — the hidden face.** A CB presents as single-producer to a FIFO trace (one kernel does `reserve_back`/`push_back`), but a *second* kernel co-fills it via a **raw write** — `<cb>.get_write_ptr()` / `get_local_cb_interface(<cb>).fifo_wr_ptr` + offset, **with no** `reserve_back`/`push_back` — coordinated by **dedicated semaphores** (e.g. `reserve_done` / `write_done`) rather than CB FIFO sync. It is invisible to the floor check (the CB has a FIFO producer + consumer → "clean") and to an **auditor's FIFO-sync trace** (the raw co-fill uses no FIFO ops). The port-time validator *does* catch it — the `dfb::` handle the co-fill writes through doesn't exist unless the host binds it, and binding it makes the CB a two-PRODUCER node → SPSC fires — but only as a cryptic late rejection, on a violation the porter can't fix. So **hunt for it pre-port:** for each CB, scan *every* kernel that touches it for a `get_write_ptr()` / `fifo_wr_ptr` write by a kernel that is **not** the CB's FIFO producer, gated by a semaphore wait/post pair. It is a genuine two-producers-on-a-node, hidden behind side-channel sync.
+Metal 2.0 enforces single-producer / single-consumer per node (SPSC) as a spec-validator rule. But on Gen1 a DFB carries a **multi-binding advanced option** that permits the extra endpoint faithfully — the legacy co-fill or multi-read still happens, byte-for-byte — so a multi-binding CB is **port work, not a gate: the porter sets the flag.** The flag *self-documents the Quasar debt*, since a multi-binding DFB is exactly what Quasar uplift must refactor; no separate tracking is needed. **Multi-binding CBs are uncommon** — most CBs are a clean single producer + single consumer, and many ops have none. But here rarity cuts the *opposite* way from a dead CB: the dangerous error is **missing** one (a false negative), not over-calling it, because the hidden second writer (face (a) below) is invisible to a FIFO-sync trace — under-count it and the port silently drops a real co-fill. So treat rarity as a reason to run the hunt *carefully*, never to skip it. **Hunt for both faces** — the porter's job is harder than the auditor's, and one face hides from a casual read:
 
-> *Resolution (op owner, pre-port):* typically a Gen2-conditional that has **one** DM fill the whole CB instead of the split co-fill — output-preserving, with the split-reader L1 saving demoted to a deferred optimization.
->
-> *Example:* conv2d `ACT` under `split_reader_cb_shared` — the writer co-fills `cb_act_second_obj.get_write_ptr()+offset` gated by `reserve_done`/`write_done` (CTAs 32/33) while the reader is the FIFO producer.
+**(a) Hidden second writer — hunt for it.** A CB presents as single-producer to a FIFO trace (one kernel `reserve_back`/`push_back`s), but a *second* kernel co-fills it via a **raw write** — `<cb>.get_write_ptr()` / `get_local_cb_interface(<cb>).fifo_wr_ptr` + offset, with **no** `reserve_back`/`push_back` — coordinated by dedicated semaphores (e.g. `reserve_done`/`write_done`) rather than CB FIFO sync. It is invisible to a FIFO-sync trace (the raw co-fill uses no FIFO ops), so **actively scan every kernel that touches each CB** for a `get_write_ptr()` / `fifo_wr_ptr` write by a kernel that is not the CB's FIFO producer, gated by a semaphore wait/post pair. It is a genuine two-producers-on-a-node. *Example:* conv2d `ACT` under `split_reader_cb_shared` — the writer co-fills `cb_act_second_obj.get_write_ptr()+offset` (CTAs 32/33) while the reader is the FIFO producer.
 
-**(b) Multiple readers — the visible face.** A borrowed-memory, **sync-free** tensor-view CB (read by base pointer) whose read sites span **2+ co-resident kernels**: a split-reader's two DM readers, or a reader plus a writer acting as a second reader. A single-reader version routes to the interim bridge; with 2+ readers the bridge cannot express it (it would put two consumer endpoints on the node → SPSC rejection).
+**(b) Multiple readers — the visible face.** A borrowed-memory, sync-free tensor-view CB read by base pointer whose read sites span **2+ co-resident kernels** (a split-reader's two DM readers, or a reader plus a writer acting as a second reader). *Recognition:* base-pointer read sites spanning 2+ co-resident kernels; a FIFO producer that also raw-reads its own buffer counts as a consumer (a `push_back` then `get_read_ptr`, alongside a second reader, is 1 producer + 2 consumers). *Examples:* pool `raw_in` / `in_reader_indices` / `config_cb`; conv2d `ACT_SHARDED` / `READER_INDICES` in split-reader / mcast; halo `src_cb` ROW_MAJOR.
 
-> *Resolution (op owner, pre-port):* convert the borrowed CB to **per-reader `TensorAccessor`s** — each reader reads the resident tensor through its own accessor (no DFB, no SPSC endpoint). A functional change.
->
-> *Recognition:* a borrowed-memory, sync-free tensor-view CB whose base-pointer read sites span 2+ co-resident kernels. **A FIFO producer that also raw-reads its own buffer counts as one of those consumers** — a kernel that `push_back`s then `get_read_ptr`s, alongside a second reader, is a (1 producer, 2 consumers) violation, not a clean (1,1).
->
-> *Examples:* pool `raw_in` / `in_reader_indices` / `config_cb` (split-reader, two DM readers); conv2d `ACT_SHARDED` / `READER_INDICES` in split-reader / mcast configs (reader + writer-as-2nd-reader); halo `src_cb` ROW_MAJOR (1P + 2C).
+**Config-dependence.** Record **which configs** need the flag — a CB is often multi-binding only under split-reader / mcast and single-endpoint otherwise (per *Classify per instantiation*, above).
 
-**Config-dependence (both faces).** The *same* CB is typically single-endpoint under one config (→ legal, or a port-handled sync-free/single-ended CB) and multi-endpoint under another (split-reader / mcast → SPSC violation). Classify **per instantiation**, and apply [Code-path scope](#output-the-two-documents): RED the violating config-path and name the clean configs as a portable subset (`RED at op level; subset <X> is clear`). The clean subset still gets a brief. **But when the multi-endpoint shape is *unconditional* — structural, not one branch among portable siblings (e.g. a split reader that is always on) — say so explicitly: there is no portable subset, the op is RED whole, and the op-owner functional fix is the only path.** Don't leave "no subset" to be inferred from silence.
+**Finding role: PORT WORK** — self-loop the single-ended/sync-free CBs, set the multi-binding advanced option where the census shows excess, drop the *confirmed*-dead CBs (with `file:line`; on any doubt, raise a question rather than dropping). Surfaced to the porter (an **FYI-P** heads-up for the multi-binding shapes to watch). Nothing here gates.
 
-**Finding role.** **GATE** at config-path granularity — the port is blocked on the violating path until the op owner's pre-port fix lands; route the detail (and the recommended fix) to the **op owner**, and offer the clean subset. Unlike the prereq / feature GATEs, the resolution is an op-owner *functional change*, never framework work and never folded into the port.
-
-**Op-level roll-up:** `✓ legal` (every CB in the legal window or a port-handled sync-free/single-ended CB) / `⚠ dead CB(s)` / `⛔ SPSC violation(s) — pre-port op-owner fix`, with the per-`(CB, config)` inventory in the report.
+**Op-level roll-up:** `✓ legal`, else the per-CB dispositions — `self-loop`, `multi-binding flag` (with configs), `dead-CB drop` — with the per-`(CB, config)` inventory in the report.
 
 ### Out-of-directory coupling
 
-Run this subject regardless of the other subjects' outcomes. **The findings here are informational (FYI).** The one place donor coupling *gates* the port — a donor kernel still on pre-Device-2.0 idioms — is judged in [Prerequisites § Check 2](#prerequisites); this subject inventories the coupling in full so that gate is well-scoped and any future multi-op coordination is visible. This is the most substantial subject in the audit; budget time accordingly. It covers **two distinct escape types**: *function-call escape* (the kernel `#include`s and calls another op's helper function) and *file-path kernel instantiation* (the program factory `CreateKernel`s a kernel `.cpp` owned by another op). The bulk of the machinery addresses function-call escape; file-path escape is surfaced separately at the end as a coupling signal.
+Run this subject regardless of the other subjects' outcomes. **The findings here are informational (FYI).** The one place donor coupling *gates* the port — a donor kernel still on pre-Device-2.0 idioms — is judged in [the Device 2.0 prerequisite](#device-20-prerequisite); this subject inventories the coupling in full so that gate is well-scoped and any future multi-op coordination is visible. This is the most substantial subject in the audit; budget time accordingly. It covers **two distinct escape types**: *function-call escape* (the kernel `#include`s and calls another op's helper function) and *file-path kernel instantiation* (the program factory `CreateKernel`s a kernel `.cpp` owned by another op). The bulk of the machinery addresses function-call escape; file-path escape is surfaced separately at the end as a coupling signal.
 
 **Why this check exists.** Op kernels frequently `#include` headers outside their own directory. When a Metal 2.0 port crosses one of these boundaries, the kernel's named tokens (`dfb::name`, `sem::name`, `ta::name`) need to translate into whatever shape the donor's signature expects. Some shapes cross cleanly; others require donor-side conversion work, most commonly because **the donor itself isn't on Device 2.0 yet**.
 
-The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2.0 migration before Metal 2.0 can proceed. A donor consumed by this op that is still on pre-Device-2.0 idioms (`InterleavedAddrGen`, `ShardedAddrGen`, raw sem addresses, `CircularBuffer&`) blocks this op's Metal 2.0 port until the donor migrates — that **GATE judgment is recorded in [Prerequisites § Check 2](#prerequisites)**; here, inventory the donor shape so the gate is specific and schedulable.
+The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2.0 migration before Metal 2.0 can proceed. A donor consumed by this op that is still on pre-Device-2.0 idioms (`InterleavedAddrGen`, `ShardedAddrGen`, raw sem addresses, `CircularBuffer&`) blocks this op's Metal 2.0 port until the donor migrates — that **GATE judgment is recorded in [the Device 2.0 prerequisite](#device-20-prerequisite)**; here, inventory the donor shape so the gate is specific and schedulable.
 
 **Inventory phase.** For each kernel file in the op, list every `#include` whose resolved path lies outside the op's own directory. Identify the donor class:
 
@@ -283,7 +355,7 @@ The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2
 2. **`ttnn/cpp/ttnn/kernel_lib/`** — official shared kernel library; lib team handles internally.
 3. **`ttnn/cpp/ttnn/kernel/`** (singular) — a second shared-kernel pool. Treat as shared-lib class.
 4. **`ttnn/cpp/ttnn/operations/kernel_helper_functions/`** — small shared utility pool.
-5. **In-family shared** — kernels within the same op family. In-family escapes don't *gate* the Metal 2.0 port; you port the family together. (This concerns the Metal 2.0 *syntax* rewrite, not Device 2.0 — in-family kernels remain fully subject to the [Device 2.0 gate](#prerequisites), which is location-independent.)
+5. **In-family shared** — kernels within the same op family. In-family escapes don't *gate* the Metal 2.0 port; you port the family together. (This concerns the Metal 2.0 *syntax* rewrite, not Device 2.0 — in-family kernels remain fully subject to the [Device 2.0 gate](#device-20-prerequisite), which is location-independent.)
 6. **Cross-family donor** — kernels in another op family's directory.
 
 **Per-call shape analysis.** For each donor file consumed by the op, identify which public functions the op's kernels actually call, and classify each by the shape of the resource handles in its signature.
@@ -296,7 +368,7 @@ The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2
 | `TensorAccessor<DSpec>` / ref (Shape 1) | ✓ excellent | Porter constructs `TensorAccessor(ta::name)` and passes. |
 | `TensorAccessorArgs<N>` (Shape 2) | ✗ not OK | Porter can pass `ta::name.args`. Workable, but suboptimal. |
 | Tensor CTA offset as NTTP (Shape 3) | ✗ not OK | No workaround today; would require a one-line `ta::name::cta_offset` add to `TensorAccessorBindingToken`. |
-| Old-style addr-gen — `InterleavedAddrGen`, `ShardedAddrGen`, `InterleavedAddrGenFast`, `InterleavedPow2AddrGen*` (Shape 4) | ⭐ ✗ very not OK | Donor is pre-Device-2.0 — the donor-side Device 2.0 **GATE** (recorded in [Prerequisites § Check 2](#prerequisites); the op's *own* kernels are gated there too). Inventory the donor file + kernel here so the gate is specific. |
+| Old-style addr-gen — `InterleavedAddrGen`, `ShardedAddrGen`, `InterleavedAddrGenFast`, `InterleavedPow2AddrGen*` (Shape 4) | ⭐ ✗ very not OK | Donor is pre-Device-2.0 — the donor-side Device 2.0 **GATE** (recorded in [the Device 2.0 prerequisite](#device-20-prerequisite); the op's *own* kernels are gated there too). Inventory the donor file + kernel here so the gate is specific. |
 | `uint32_t cb_id` | ✓ OK | `dfb::name`'s constexpr cast handles runtime AND template-parameter position. |
 | `CircularBuffer` / `CircularBuffer&` / `const CircularBuffer&` | ⭐ ⚠ flag | Op-by-op porting + DFB-replaces-CB on the consumer side leaves no clean per-op story today. Flag for cross-team discussion. |
 
@@ -308,7 +380,7 @@ One donor file can have multiple functions with different shapes — classify pe
 2. **Summary table** — one row per (op kernel, donor file) pair across all buckets.
 3. **Per-call detail** — per-function breakdown for donors with ⚠ / ✗ / ⭐ entries. Omitted entirely if all rolls are ✓.
 
-Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that create scheduling blockers — Shape 4 (donor pre-Device-2.0, the donor-side Device 2.0 gate per [Prerequisites § Check 2](#prerequisites)) and `CircularBuffer&` (op-by-op friction). Other ✗/⚠ items are workable today or need donor work, but don't sequence-block.
+Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that create scheduling blockers — Shape 4 (donor pre-Device-2.0, the donor-side Device 2.0 gate per [the Device 2.0 prerequisite](#device-20-prerequisite)) and `CircularBuffer&` (op-by-op friction). Other ✗/⚠ items are workable today or need donor work, but don't sequence-block.
 
 **Borrowed kernel files (file-path kernel instantiation).** Separate from the function-call escapes inventoried above: list every kernel `.cpp` file the op's program factory instantiates whose source it does **not** own — anything from a shared pool, in-family or cross-family. (Some ops own *none* of their kernels and instantiate every one from a shared pool — list them all.) For each, record:
 
@@ -316,65 +388,29 @@ Status roll-up uses ✓ / ⚠ / ✗ / ⭐. The star is reserved for entries that
 - The owning op family (or shared pool).
 - Whether the file is also instantiated by other ops (broadly-shared) or is a one-off borrow — and, where cheap to determine, *which* other ops.
 
-This signal **does not gate the port**, but it induces a **port-the-family-together coupling that must be reported**. A shared kernel's Metal 2.0 rewrite (CB→DFB, named-token bindings, etc.) is a *single* rewrite: every op that instantiates that kernel must adopt it in the same change, or the co-borrowers break the instant one op migrates in isolation. So the set of ops sharing a kernel forms a Metal 2.0 **port-together set** — report that set (or as much of it as is cheap to find) so planners can sequence the shared rewrite as one unit. Surface this even when the function-call escape roll-up is `✓ clean` — file-path coupling is independent. (This is distinct from the [Device 2.0 gate](#prerequisites), which applies to every one of these kernels regardless of coupling.)
+This signal **does not gate the port**, but it induces a **port-the-family-together coupling that must be reported**. A shared kernel's Metal 2.0 rewrite (CB→DFB, named-token bindings, etc.) is a *single* rewrite: every op that instantiates that kernel must adopt it in the same change, or the co-borrowers break the instant one op migrates in isolation. So the set of ops sharing a kernel forms a Metal 2.0 **port-together set** — report that set (or as much of it as is cheap to find) so planners can sequence the shared rewrite as one unit. Surface this even when the function-call escape roll-up is `✓ clean` — file-path coupling is independent. (This is distinct from the [Device 2.0 gate](#device-20-prerequisite), which applies to every one of these kernels regardless of coupling.)
 
-### Custom program hash
+### RTA varargs
 
-**Recognition.** The op's device-operation type defines a `compute_program_hash` member or override, replacing the default reflection-based hash. Record the location (`file:line`).
+**FYI-P.** Legacy runtime args (RTAs) and common runtime args (CRTAs) are **positional** — read by index. The Metal 2.0 port converts them to **named** arguments, inferring each name from the kernel code (the variable a `get_arg_val` unpacks into: `uint32_t num_tiles = get_arg_val<uint32_t>(17)` → the binding `num_tiles`). Named args are **strongly preferred**; because legacy args are all positional, a lazy port could smuggle *everything* in as varargs, which we don't want. This subject flags the specific args that genuinely **can't** be named and so must be ported as varargs — sparing the porter that call.
 
-**Finding role: PORT WORK — delete it.** If the op has a custom `compute_program_hash`, the port **deletes it and reverts to the default TTNN hash.** This is a *sanctioned exception* to the rule that the device-operation class is off-limits during the port — parallel to the [pybind-deletion exception](port_op_to_metal2_recipe.md#host-side-stay-in-the-lane). The justification is structural:
+**Recognition:** a kernel pulls RTAs or CRTAs in a **counted loop, indexed by the loop variable** — `for (int i = 0; i < N; ++i) { get_arg_val<uint32_t>(i); ... }`, or the common-arg form `get_common_arg_val<uint32_t>(i)`. Read positionally through a loop index (rather than as distinct `get_arg_val<T>(<constant>)` reads), there are no per-argument names to infer, so the block must become varargs. **This holds even when `N` is fixed at compile time** — the usual case: the kernel still consumes a variable-length indexed block that can't be expressed as named args.
 
-- **No Metal 2.0 factory concept reads the custom hash.** It has no role in the ported caching path.
-- **PD-ported custom hashes are frequently incorrect now.** Many were written against an earlier framework and silently omit `TensorSpec` from the key — which trips `UpdateTensorArgs` legality failures on fast-path cache hits (a cache hit on a `ProgramSpec` built for different inputs).
-- **The default is correct-by-construction.** The default hash keys on the op args that determine the program — its type, attributes, and tensor args (including each tensor's `TensorSpec`) — so a cache hit only happens for a genuinely equivalent invocation.
+**Non-signal — the common, preferred case:** a kernel that reads each arg with a *distinct constant* index (`get_arg_val<uint32_t>(17)`, `...(18)`, …) → the porter names each. Ordinary port work, not this subject; don't flag it.
 
-So this is neither "patch the custom hash" nor "wait and see if it bites at verification" — it is a deletion the porter performs as part of the port, recorded prominently in the port report (a device-op-class change). Do **not** try to repair a custom hash to include `TensorSpec`; that path leads to subtle bugs.
+Metal 2.0 **supports** both RTA and CRTA varargs via the kernel-side vararg mechanism, so this does **not** gate — it's a porter heads-up. The value is the auditor doing, unhurried, a classification the porter would otherwise have to: report the kernel and the recognition site (`file:line`) and note it's a genuine loop-indexed varargs case (RTA or CRTA), so the porter reaches for the vararg mechanism rather than trying to name each — per the recipe's [kernel-side whitelist rule 4](port_op_to_metal2_recipe.md#kernel-side-whitelist).
 
-**Before deleting — mine it for relaxation candidates (FYI-U, team-only, FALLIBLE).** A custom hash sometimes encodes which tensor properties the op *actually* depends on — a clue to where a `TensorParameter` relaxation (`dynamic_tensor_shape` / `match_padded_shape_only`) might be safe. Before the hash disappears, read it and record any such candidates for the team's relaxation roadmap. **This is fallible**: many custom hashes are themselves wrong, so a candidate mined from one is a *candidate to verify*, not a conclusion. The default remains strict (per the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md)); a relaxation is applied only on explicit user OK. These candidates never reach the porter brief — they feed the team record only.
+**Not to be confused with CTA varargs**, which **do** gate the port (caught by the [CTA varargs Appendix A entry](#variable-count-compile-time-arguments-cta-varargs--unsupported)): kernels that loop over `get_compile_time_arg_val(i)` with a **runtime-varying count**, or ops whose `tensor_args_t` carries a variable-count container like `std::vector<Tensor>`. The distinction that matters: a *runtime-varying count* is what makes **CTA** varargs unsupportable, whereas an **RTA/CRTA** loop needs varargs regardless of whether its count is fixed.
 
-### Other signals
+### Incidental anomalies
 
-A residual subject for signals that don't belong to any of the other subjects. Today it holds one check.
-
-**RTA varargs (FYI-P).** Recognition: a kernel reads `num_runtime_varargs > 0` from its `KernelDescriptor`, OR pulls arguments in a counted loop (`for (int i = 0; i < N; ++i) { get_arg_val<uint32_t>(i); ... }`) where `N` is itself runtime-known. Typical in ops with a runtime-variable input count.
-
-Metal 2.0 **supports** RTA varargs via the kernel-side vararg mechanism, so this does not gate — it is a porter heads-up. Report the kernel and the recognition site (`file:line`), and note that the port will choose between named RTAs (the recommended endpoint — one named RTA per legacy positional argument) and Metal 2.0's RTA vararg mechanism (only when the kernel genuinely loop-retrieves with a runtime-varying index, per the recipe's [kernel-side whitelist rule 4](port_op_to_metal2_recipe.md#kernel-side-whitelist)).
-
-**Not to be confused with CTA varargs**, which **do** gate the port (caught by the [CTA varargs Appendix A entry](#variable-count-compile-time-arguments-cta-varargs--unsupported)): kernels that loop over `get_compile_time_arg_val(i)` with a runtime-varying `i`, or ops whose `tensor_args_t` carries a variable-count container like `std::vector<Tensor>`.
-
-**Incidental code anomalies (FYI-U).** While reading the op you will sometimes notice latent issues that are neither audit findings nor the porter's to fix — a dead/unused RTA, an attribute the factory forces or ignores yet still feeds to `compute_program_hash`, a suspicious hardcoded constant. Record these in the report's **Misc anomalies** section: team-only, non-gating, *not* porter-actionable (they route to the op owner, never into the port diff). Don't go hunting for them — just note what you happen to see while auditing.
-
-### TTNN factory concept analysis
-
-**This subject is analysis, not a decision.** Ops port to a single Metal 2.0 factory concept (`MetalV2FactoryConcept`); this subject does **not** re-decide that and does **not** itself gate. Your job is to answer six questions about the op's TTNN-side shape and record each with `file:line` evidence; the downstream port (see [`port_op_to_metal2_ttnn_factory.md`](port_op_to_metal2_ttnn_factory.md)) consumes them to confirm the op fits that concept and to surface any residual blocker (genuine multi-program, op-owned `GlobalSemaphore`s). Run this subject **last**, after the other subjects have produced their findings — op-owned-tensor recognition draws on the [TensorAccessor-handling](#tensoraccessor-handling) per-binding inventory.
-
-**Cross-reference — Diego's readiness sheet.** Several of these questions map straight onto columns in Diego's [readiness sheet](../analyses/ttnn_op_porting_readiness.md): Q3/Q4 ↔ *Pybind descriptor*, Q5 ↔ *Custom hash*, Q6 ↔ *Runtime-args update*, plus *Concept*. If you fetched it at the start, cross-check your answers against it — but still record your own `file:line` evidence for each; the sheet is a prior, not a substitute for the check.
-
-**Scope reminder.** Throughout, *"does this op …"* means *"do **any** of this op's ProgramFactories …"* — inspect every ProgramFactory the op defines; a yes on any one is a yes for the op, and you attribute the finding to the factory (and DeviceOperation, when bundled) where it appears.
-
-Answer each question Yes/No with the evidence that decided it:
-
-1. **Op-owned tensors?** Does any ProgramFactory allocate and manage device tensors of its own — intermediate / scratch tensors beyond the op's declared input and output tensors? *Recognition:* a factory (or the device-operation's tensor plumbing) that creates a device tensor it owns — e.g. `create_device_tensor` / `allocate_tensor_on_device` in the factory or device-op `.cpp`, or an intermediate `Tensor` constructed and threaded into the program that is not in `tensor_args` / `tensor_return_value`. Record each owned-tensor site.
-
-2. **MeshWorkload concept needed?** Does any ProgramFactory *genuinely* require multi-program / MeshWorkload structure (true cross-program or cross-device coordination)? *Recognition:* the factory provides `create_mesh_workload` / `create_workload_descriptor`, or the device-operation carries `cached_mesh_workload_t`. **False-positive trap — read this before answering Yes.** A *legacy* op may sit on the MeshWorkload path only because the old framework couldn't carry op-owned tensors on the single-program path — a plumbing artifact, **not** a genuine MeshWorkload need. `MetalV2FactoryConcept` now carries op-owned tensors natively (`op_owned_tensors`), so such an op is morally single-program and **ports cleanly** — it is not blocked. Distinguish "needs MeshWorkload because the op is genuinely multi-program / cross-device-coordinated" (→ **Yes**) from "appears on the MeshWorkload path only because it has op-owned tensors" (→ **No**, and say so explicitly, naming Q1 as the cause). When you can't tell, mark it a question for the user rather than guessing Yes.
-
-3. **Pybind `create_descriptor`?** Does the op pybind the *innards of a ProgramFactory*? **Carve-out first:** every op pybinds the op *itself* — the user-facing function (`bind_function<"op_name">` / `mod.def("op_name", …)`), its program-config classes, its enums. **That normal surface is expected and is *not* a finding.** What this question targets is the surprise: a binding of the **ProgramFactory class** that reaches into `create_descriptor`. *Recognition:* an `nb::class_<…ProgramFactory>(…).def_static("create_descriptor", …)` (or `.def`) in the op's `*_nanobind.cpp`. The port deletes this (a sanctioned device-op-class edit — see `port_op_to_metal2_ttnn_factory.md`); record the binding site. *(Canonical example: layernorm's `bind_normalization_layernorm_program_factory` binds `create_descriptor` on both factory classes — note the extra `core_range_set` parameter that exists **only** to drive the pybind hook, the tell that this is factory-innards, not the normal op surface.)*
-
-4. **Other migration-risky pybind?** Does the op pybind anything *else* from the **ProgramFactory or DeviceOperation internals** that would interfere with the Metal 2.0 migration? *(Deliberately broad — and the Q3 carve-out applies again: the normal op-function / program-config / enum bindings don't count.)* The discriminator is *what the `nb::class_<>` wraps*: a `DeviceOperation` or factory/param class is the surprise. Look for the device-op's methods exposed to Python (`compute_program_hash`, `create_output_tensors`, `compute_output_specs`, `select_program_factory`), pybound attribute / input structs, a factory parameter that exists only to drive a pybind hook, or any introspection entry point returning `ProgramDescriptor`. When something looks like it could complicate the port, surface it with its site rather than deciding it's harmless. *(Canonical example: layernorm's `bind_normalization_layernorm_device_operation` and `..._params_and_inputs`.)*
-
-5. **Custom hash?** Does the op declare a custom `compute_program_hash`? Yes/No + `file:line`. *This is a presence check only* — the treatment (the port deletes it, reverting to the default) lives in the [Custom program hash](#custom-program-hash) subject; cross-reference it rather than re-deriving.
-
-6. **Custom override-runtime-args?** Does any ProgramFactory define a custom `override_runtime_arguments` (the cached-program override hook)? Yes/No + `file:line`. *Recognition:* a `static void <Factory>::override_runtime_arguments(...)` declaration / definition.
-
-**Finding roles.** None of these gate. Q1 and Q2 are **FYI-U** (team-only — they inform the port's TTNN ProgramFactory wiring). Q3, Q4, and Q6 are also **FYI-P** porter heads-ups, because each presages a device-op-class edit; Q5 (custom hash) is already carried as PORT WORK by the [Custom program hash](#custom-program-hash) subject, so here it's a presence cross-reference. Record all six in the team doc; surface Q3/Q4/Q6 in the porter brief.
-
-**Output.** Record the six answers in `METAL2_PREPORT_AUDIT.md`: the Yes/No summary fills the *TTNN Readiness* rows of the [Status summary](#output-the-two-documents), the full evidence lands under **TTNN factory analysis** in the Team-only section, and the porter-relevant items (Q3, Q4, Q6) are mirrored into **Heads-ups** (and thus the brief).
+**FYI-U — a standing, opportunistic instruction, not a scan.** While working the other subjects you will sometimes notice latent issues that are neither audit findings nor the porter's to fix — a dead/unused RTA, an attribute the factory forces or ignores yet still feeds to `compute_program_hash`, a suspicious hardcoded constant. Record these in the report's **Misc anomalies** section: team-only, non-gating, *not* porter-actionable (they route to the ops team, never into the port diff). **Don't go hunting** — just note what you happen to see. The auditor is the one agent that reads every line of the op's code, so this cheap capture surfaces latent bugs nobody else would catch.
 
 ### Output: the two documents
 
 The audit emits up to **two** files, by audience. Write them to the **op's root directory** — one level above `device/`, alongside the op's host-facing `.cpp` / `.hpp` files (e.g. `ttnn/cpp/ttnn/operations/<family>/<op>/`), **not** inside the `device/` subdir even though the program-factory `.cpp` files live there. They sit next to `METAL2_PORT_PLAN.md` and `METAL2_PORT_REPORT.md` (written later by the port recipe), so all generated docs for the port land in one spot.
 
-- **`METAL2_PREPORT_AUDIT.md`** — **team-facing, always emitted.** The complete record, and the source the cross-team readiness spreadsheet is filled from. Every finding lands here, regardless of role.
+- **`METAL2_PREPORT_AUDIT.md`** — **team-facing, always emitted.** The complete record — consumed downstream to track this op's porting readiness. Every finding lands here, regardless of role.
 - **`METAL2_PORT_BRIEF.md`** — **porter-facing, emitted when the audit clears every gate** — either fully GREEN, **or** YELLOW *only* on isolated Device-2.0 holdovers. (In the holdover case the op is feasible, so the brief issues — no point forcing a re-audit after a trivial cleanup — but it flags the holdovers **prominently as a blocker the porter must clear first**, on the Device 2.0 track, before porting.) The porter's actionable input, ordered by the porter's *workflow*: plan, then construct, then watch-for. On any **RED** there is no brief — there is no port yet.
 
 Findings route to these documents by role (per the [finding-roles routing table](#feasibility-audit) at the top of the audit): the **brief** carries GATE-cleared one-liners + all PORT WORK + all FYI-P; the **team doc** carries everything, including FYI-U.
@@ -391,13 +427,13 @@ If the command prints nothing, the docs aren't from a tracked doc-branch checkou
 
 **In chat, surface only the Result line plus the file path(s)** so the user can open the files when ready. Do not paste a full report inline — an audit of any non-trivial op runs to dozens or hundreds of lines, and chat-scrollback isn't the right home for it. Markdown formatting in the files is required, not optional: the headers, tables, and inline-`code` spans are what make a sizeable report skim-friendly.
 
-**Reassuring framing for the human reader.** A RED gates *this specific port attempt* but is **not** a permanent blocker — most REDs mean "Metal 2.0 hasn't implemented this yet," and the port becomes possible once the feature lands; a few (today: just `address_offset`) need a runtime-team consultation about a redesigned API. Surface the future path explicitly for every RED, so a colleague reads the path forward, not just the gate. In particular, a **ProgramDescriptor-prerequisite RED is the expected outcome** for any op still on the legacy imperative API — not an alarm — and the port unblocks once that op's `ProgramDescriptor` migration lands.
+**Reassuring framing for the human reader.** A RED gates *this specific port attempt* but is **not** a permanent blocker — most REDs mean "Metal 2.0 hasn't implemented this yet," and the port becomes possible once the feature lands; a few (today: just `address_offset`) need a runtime-team consultation about a redesigned API. Surface the future path explicitly for every RED, so a colleague reads the path forward, not just the gate. In particular, a **TTNN-factory-concept RED is the expected outcome** for any op still on the legacy imperative API (its concept isn't `descriptor`) — not an alarm — and the port unblocks once that op's `ProgramDescriptor` migration lands.
 
 **Code-path scope.** Blockers are often confined to specific code paths (e.g. a single factory's `if (use_width_sharding)` branch). When so, identify clean vs. blocked paths explicitly and offer a scoped-subset port — "interleaved-only paths, omitting the sharded path." A partial port that delivers value now may beat waiting for the full gate to clear; reflect it in the Result (`RED at op level; subset <X> is clear`). **If no clean path exists — the blocking shape is unconditional/structural, not one branch among siblings — say so explicitly (`RED at op level; no portable subset`) rather than leaving it to be inferred from silence.**
 
 #### `METAL2_PREPORT_AUDIT.md` — team-facing (always emitted)
 
-Opens with a **status summary that mirrors the cross-team readiness spreadsheet 1:1** — one field per spreadsheet column, grouped Prereqs / Feature Support / TTNN Readiness — so a parsing reader does straight field→column copies. The detail sections follow. (Extend any cell, row, or paragraph with multi-line context where it improves clarity.)
+Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readiness / Port work — a compact, skim-first snapshot a downstream reader consumes to track this op's porting readiness. The detail sections follow. (Extend any cell, row, or paragraph with multi-line context where it improves clarity.)
 
 ````markdown
 # Metal 2.0 Audit Findings — `<op path>`
@@ -422,73 +458,73 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 | **Op directory** | `<path>` |
 | **Overall** | GREEN / YELLOW / RED |
 | **DOps / Factories** | `<DeviceOperation>` → `<factory list>` |
-| *Prereqs* — ProgramDescriptor | Yes / No |
 | *Prereqs* — Device 2.0 (every kernel used) | Yes / Yes-with-holdovers (YELLOW — fix on D2.0 track first) / No |
 | *Prereqs* — Cross-op escapes | Ok / issue |
 | *Feature Support* — overall | GREEN / RED |
 | *Feature Support* — Variadic-CTA | Ok / Unsupported |
+| *TTNN Readiness* — `Is able to port?` (the gate) | Yes / No: `<failing conjunct>` |
+| *TTNN Readiness* — Concept (current) | `descriptor` / `WorkloadDescriptor` / `legacy device-op` / `MetalV2` (already ported) |
+| *TTNN Readiness* — Secretly SPMD (WorkloadDescriptor only) | N/A / Yes / No (genuine multi-program → gate) |
+| *TTNN Readiness* — Is safe to port? | Yes / warning: `<site>` / No (→ readiness-sheet owner) |
+| *TTNN Readiness* — Custom hash | No / Yes (gate) |
+| *TTNN Readiness* — Runtime-args update | No / Yes (gate): `<factory + site>` |
+| *TTNN Readiness* — Pybind `create_descriptor` | No / Yes (gate): `<nanobind site>` |
 | *TTNN Readiness* — Op-owned tensors | No / Yes: `<factory + site>` |
-| *TTNN Readiness* — MeshWorkload needed | No / No (op-owned tensors — carried natively, single-program) / Yes (genuine): `<reason>` |
-| *TTNN Readiness* — Pybind `create_descriptor` | No / Yes: `<nanobind site>` |
-| *TTNN Readiness* — Other risky pybind | None / `<description + site>` |
-| *TTNN Readiness* — Custom hash | No / Yes → delete (see Custom program hash) |
-| *TTNN Readiness* — Custom override-RTA | No / Yes: `<factory + site>` |
-| *Ops readiness* — Sync-free CBs (address-only) | None / present: `<(CB, endpoint) sites>` (interim workaround) |
+| *TTNN Readiness* — Target concept | `MetalV2FactoryConcept` (+ op-owned tensors, if any) |
+| *Port work* — Tensor bindings (per binding) | clean / Case 1 / Case 2 |
+| *Port work* — TensorParameter relaxation | none / `<relaxation>` |
+| *Port work* — TensorAccessor 3rd arg | drop (Class 1/2) / **flag → GATE** (Class 3/4/Special) |
+| *Port work* — CB endpoints | legal / self-loop / multi-binding flag / dead-CB drop |
 
-**Sync-free CBs** = CBs used purely as an address source (the kernel grabs the base pointer and walks the memory, no FIFO ops). **Litmus: does any kernel drive the FIFO machinery — a FIFO producer *and* consumer — or is it pointer-only?** (Same core may be both endpoints.) No FIFO producer–consumer pair → sync-free: a Metal 2.0 DFB needs ≥1 of each, so it can't be expressed as a DFB — the port resolves it with the sanctioned interim workaround (see the porting recipe), so it's an **FYI-P heads-up, not a gate**. Granularity is the **(CB, endpoint) edge** — the same CB can be a synchronized LLK operand on one binding and pointer-only on another; record each pointer-only edge.
+**CB endpoints** are dispositions, not gates (see [CB endpoints](#cb-endpoints)): every out-of-window CB has a port-time resolution — a **self-loop** (single-ended / sync-free), the **multi-binding advanced-option flag** (≥2 of one kind on a node), or a **dead-CB drop** (zero endpoints). Record the disposition per `(CB, config)`, and classify per instantiation — the same CB is often single-ended under one config and multi-binding under another.
 
 ## Result
 
-**GREEN → brief issued** · **RED → blocked on `<gate>`**, routed to the `<ProgramDescriptor / Device 2.0 / wait-for-feature>` team · **YELLOW → open questions (see below)**. State the primary blocker(s) in plain language; if localized, name a clean subset (`RED at op level; subset <X> is clear`).
+**GREEN → brief issued** · **RED → blocked on `<gate>`**, routed to the owning team (`Device 2.0` / `TTNN-or-PD-migration` / feature / `ops` / `readiness-sheet owner`) · **YELLOW → open questions (see below)**. State the primary blocker(s) in plain language; if localized, name a clean subset (`RED at op level; subset <X> is clear`).
 
 ## Gate detail
 
-- **ProgramDescriptor:** <GREEN — or — RED with the imperative-API calls that disqualify, plus the "separate ongoing effort; expected outcome for legacy ops; unblocks when the migration lands" framing.>
+- **TTNN factory concept (`Is able to port?`):** <GREEN — the sheet's `Is able to port?` == `yes`, cross-check clean — or — RED: name the failing conjunct and route it. A **shape** failure (`Concept` non-`descriptor` / `Custom hash` / `Runtime-args update` / `Pybind`) → the TTNN / ProgramDescriptor-migration team (the gate lifts when support lands; for a `legacy device-op` concept, add the "separate ongoing effort; expected outcome for legacy ops; unblocks when the `ProgramDescriptor` migration lands" framing). A **`safe`** failure → the readiness-sheet owner. A **spreadsheet-broken / missing-op** conflict → the readiness-sheet owner to reconcile.>
 - **Device 2.0 (every kernel used):** <GREEN — or — YELLOW (isolated CB-index holdovers; routed to the Device 2.0 effort, *not* folded into the port; table below) — or — RED with exact violations @ `file:line`, routed to the Device 2.0 team. Name the kernel file and, for a borrowed/donor kernel, its owning family.>
 
   | File | Line | Call | Wrapper in scope |
   |---|---|---|---|
   | `<path>` | `<n>` | `<call>` | `<wrapper>` |
 
-- **Feature compatibility:** every Appendix A entry, in order. Per-row status: `N/A` when the feature category is absent — *including an UNSUPPORTED feature the op doesn't use* (not a vacuous GREEN); `GREEN` only for a LANDED feature actually in use and clean; `RED` for an UNSUPPORTED feature in use. UNSUPPORTED hits (incl. CTA varargs) get an H4 detail block with signal, `file:line` sites, and expected resolution. For `address_offset`, surface the runtime-team-consultation message verbatim per the entry's Action field.
+- **Feature compatibility:** every Appendix A entry, in order. Every entry is UNSUPPORTED, so per-row status is `N/A` when the feature is absent (not a vacuous GREEN) or `RED` when it is in use — there is no `GREEN` row. UNSUPPORTED hits get an H4 detail block with signal, `file:line` sites, and expected resolution. For `address_offset`, surface the runtime-team-consultation message verbatim per the entry's Action field.
 
   | Feature | Status | Notes |
   |---|---|---|
-  | GlobalCircularBuffer | GREEN / RED / N/A | |
-  | Dynamic CircularBuffer (borrowed memory) | GREEN / N/A | port uses `borrowed_from` |
-  | CBDescriptor `address_offset` (non-zero) | GREEN / RED / N/A | |
-  | Aliased Circular Buffers | GREEN / N/A | port uses `advanced_options.alias_with` |
-  | GlobalSemaphore | GREEN / RED / N/A | |
-  | Non-zero semaphore initial value | GREEN / N/A | `[[deprecated]]`, Gen2-unsupported — heads-up |
-  | Dynamic TensorAccessor (`ArgConfig::Runtime*`) | GREEN / N/A | UNSAFE relaxation opt-in — heads-up |
-  | `UpdateCircularBuffer*` | GREEN / RED / N/A | |
-  | Variable-count compile-time arguments (CTA varargs) | GREEN / RED / N/A | |
+  | GlobalCircularBuffer | RED / N/A | config-scoped — RED the offending factory, name the clean subset |
+  | CBDescriptor `address_offset` (non-zero) | RED / N/A | runtime-team consultation (verbatim message) |
+  | GlobalSemaphore | RED / N/A | |
+  | Variable-count compile-time arguments (CTA varargs) | RED / N/A | |
 
-- **DFB endpoint legality (SPSC):** <GREEN — every CB in the legal (1 producer, 1 consumer) window or a port-handled sync-free / single-ended CB — or — RED (config-scoped): each SPSC violation as `(CB, config)` @ `file:line`, its face (hidden 2nd writer / multi-reader), and the op-owner pre-port fix; **and any DM single-ended *producer*** (a single-ended FIFO on a DM kernel — no port-time bridge; op-owner rewrites to a direct tensor write) as `(CB, config)` @ `file:line`; plus the clean subset to port. List any dead CBs for pre-port drop. **Deferred** (re-evaluate post–Device 2.0) if the Device 2.0 gate is RED.>
+- **CB endpoints (GATE-free):** <every CB is either legal (1 producer, 1 consumer) or carries a port-time disposition — **self-loop** (single-ended / sync-free, legal on Gen1 for compute *and* DM), **multi-binding advanced-option flag** (≥2 of one kind on a node; hidden-2nd-writer or multi-reader face) with its `(CB, config)` list, or **dead-CB drop** (zero endpoints) @ `file:line`. Nothing here blocks a Gen1 port. **Deferred** (re-evaluate post–Device 2.0) if the Device 2.0 gate is RED.>
+- **TensorAccessor 3rd argument:** <GREEN — every site Class 1/2 (redundant → drop; Class 1 also sets `dynamic_tensor_shape`) — or — RED: Class 3/4 (wrong-magnitude page size @ `file:line` → the ops team fixes it first) / Special (an override the binding model can't express @ `file:line` → the ops team ports by hand). Defers to the 3rd-arg triage analysis.>
 
 ## Port-work summary  *(mirrors the brief)*
 
-- **Tensor bindings** (per binding): `<name>` Case 1 (`TensorAccessor`) / Case 2 (raw pointer → bridge; **blocked in a compute kernel**) / clean (borrowed-DFB).
-- **Custom hash:** delete custom `compute_program_hash` → default (sanctioned exception) | none.
+- **Tensor bindings** (per binding): `<name>` Case 1 (`TensorAccessor`) / Case 2 (raw pointer → `get_bank_base_address` bridge) / clean (borrowed-DFB).
+- **TensorParameter relaxation:** `<relaxation>` on `<binding>` (confirm the custom hash matches) | none.
+- **TensorAccessor 3rd arg:** drop the redundant page-size arg @ `<sites>` (Class 1 also sets `dynamic_tensor_shape`) | none.
+- **CB endpoints:** self-loop `<CB, config>` / multi-binding advanced-option flag `<CB, config>` / dead-CB drop `<CB @ file:line>` | all legal.
 
 ## Heads-ups  *(mirrors the brief)*
 
-- **Notable LANDED constructs:** aliased CB / borrowed-mem DFB / dynamic TA / non-zero sem init — with `file:line` and the construct the port uses.
-- **Sync-free CBs (address-only):** each CB used purely as an address source — no FIFO producer + consumer pair — at the `(CB, endpoint)` edge with `file:line`. The port resolves it with the interim workaround (see the porting recipe); it does **not** gate.
-- **Dead CBs (zero endpoints):** each allocated-but-unreferenced CB @ `file:line` — the op owner drops the allocation (and any dead CTA carrying its index) pre-port; a functional change, not port work.
+- **CB endpoints (multi-binding shapes to watch):** each multi-binding CB the porter flags — hidden-2nd-writer (a raw co-fill, semaphore-gated) or multi-reader — with `(CB, config)` @ `file:line`. (Self-loop and dead-CB dispositions live in Port-work.)
 - **Cross-op / shared kernels:** borrowed kernel files + shared-kernel coupling.
 - **RTA varargs:** kernel + recognition site.
-- **TTNN factory analysis (porter-relevant):** pybind `create_descriptor` to delete · other migration-risky pybind · custom `override_runtime_arguments` — each with `file:line`.
 
 ## Team-only
 
 - **Out-of-directory coupling & donor shape:** the full by-shape inventory (op-level roll-up, summary table, per-call detail, borrowed kernel files).
-- **Relaxation candidates** (mined from the custom hash before deletion): **FALLIBLE — candidates to verify**, default strict.
-- **TTNN factory analysis:** the six-question answers — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, custom `override_runtime_arguments` — with `file:line` evidence. Informs the port's TTNN ProgramFactory wiring; does not gate.
+- **Relaxation candidates** (mined from a custom hash on a gated op): **FALLIBLE — candidates to verify**, default strict.
+- **TTNN factory analysis:** the sheet-derived facts, with `file:line` evidence — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, custom `override_runtime_arguments`. Several are **gate conjuncts** (custom hash, pybind `create_descriptor`, custom `override_runtime_arguments`, genuine multi-program) recorded in the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite); op-owned tensors and the target concept are the non-gating facts that inform the port's TTNN ProgramFactory wiring.
 
 ## Misc anomalies  *(omit if none; team-only, non-gating)*
 
-<Latent code issues noticed while auditing that are neither audit gates nor porter work — dead/unused RTAs, attributes forced or ignored in the factory yet still fed to `compute_program_hash`, suspicious hardcoded constants, and the like. One bullet each with `file:line`. These route to the op owner; the port does not act on them.>
+<Latent code issues noticed while auditing that are neither audit gates nor porter work — dead/unused RTAs, attributes forced or ignored in the factory yet still fed to `compute_program_hash`, suspicious hardcoded constants, and the like. One bullet each with `file:line`. These route to the ops team; the port does not act on them.>
 
 ## Per-DeviceOperation attribution  *(when bundled)*
 
@@ -512,7 +548,7 @@ Ordered by the porter's workflow: plan → construct → watch-for. Issued when 
 
 > Audit cleared all gates. This is your actionable input; the full record is in `METAL2_PREPORT_AUDIT.md`.
 
-**Gates cleared:** ProgramDescriptor ✓ · Device 2.0 ✓ *(or ▲ if holdovers — see Blocked-until)* · Features ✓
+**Gates cleared:** Device 2.0 ✓ *(or ▲ if holdovers — see Blocked-until)* · Features ✓ · TTNN factory concept ✓ · TensorAccessor 3rd arg ✓
 
 **Recipe docs:** `<hash> <date> <subject>` *(carry this line into the port report's Provenance section)*
 
@@ -523,44 +559,45 @@ Ordered by the porter's workflow: plan → construct → watch-for. Issued when 
 
 These facts feed the port's TTNN ProgramFactory wiring (→ `port_op_to_metal2_ttnn_factory.md`); the op ports to `MetalV2FactoryConcept`. Carry them forward:
 
-- **Op-owned tensors:** <none | `<factory + site>`>
-- **MeshWorkload:** <not needed | genuine multi-program need | op-owned tensors only (carried natively — not a real need)>
-- **Pybind `create_descriptor`:** <none | delete at `<nanobind site>`>
-- **Other risky pybind:** <none | `<description + site>`>
-- **Custom `override_runtime_arguments`:** <none | `<factory + site>`>
+- **Current concept:** <`descriptor` | `WorkloadDescriptor` (secretly SPMD — collapses to single-program)>
+- **Op-owned tensors:** <none | `<factory + site>` — carried natively by the target concept>
+- **Target concept:** `MetalV2FactoryConcept`<, with op-owned tensors, if any>
+- **Gate-cleared, confirmed absent** (each would have blocked the brief): custom hash · custom `override_runtime_arguments` · pybind `create_descriptor` — all gate conjuncts — plus **other migration-risky pybind**, which surfaces as a `safe` warning that also fails the gate. All `no` on a cleared op.
 
 ## Construct — to do
 
 **Tensor bindings** (per binding):
 
 - `<name>` — **Case 1** (via `TensorAccessor`) → express as `TensorParameter` / `TensorBinding`; kernel uses `TensorAccessor(ta::name)`.
-- `<name>` — **Case 2** (raw pointer) → bind the tensor, pull the base via `get_bank_base_address`, raw walk unchanged. *(Compute kernel → blocked: fail the port pending the compute-kernel `TensorBinding` fix.)*
+- `<name>` — **Case 2** (raw pointer) → bind the tensor, pull the base via `get_bank_base_address`, raw walk unchanged.
 
-**Custom hash:** <delete custom `compute_program_hash` → default (sanctioned exception) | none>
+**TensorParameter relaxation:** <`<relaxation>` on `<binding>` — confirm the custom hash excludes exactly the relaxed property | none>
+
+**TensorAccessor 3rd arg:** <drop the redundant page-size arg @ `<sites>`; Class 1 sites also set `dynamic_tensor_shape` | none>
+
+**CB endpoints:** <self-loop `<CB, config>` (single-ended / sync-free) · set the multi-binding advanced option on `<CB, config>` · drop dead CB `<CB @ file:line>` (and any dead CTA carrying its index) | all legal>
 
 ## Watch for
 
-- **Notable constructs:** <aliased CB @ loc → [pattern] · borrowed-mem DFB → [recipe] · dynamic TA → [pointer] · non-zero sem init → deprecated, expected | none>
-- **Cross-op / shared kernels:** <path → caution per [pattern] | none>
+- **CB endpoints (multi-binding):** <each multi-binding CB → hunt the hidden 2nd writer (a raw co-fill, semaphore-gated) before setting the flag; `(CB, config)` | none>
+- **Cross-op / shared kernels:** <path → caution per [pattern]; port the shared kernel as one unit | none>
 - **RTA varargs:** <kernel → prefer named RTAs | none>
-- **Dead CBs:** <each allocated-but-unreferenced CB → op owner drops it pre-port; don't bind it if still present | none>
 ````
 
-#### N/A vs. GREEN
+#### Per-row feature status: N/A vs. RED
 
-Per row, the status is one of three:
+Every Appendix A entry is UNSUPPORTED, so a per-row status is one of two — there is no `GREEN` row:
 
-- **`N/A`** — the feature's precondition is absent from the op (the op uses no semaphores, so `Non-zero semaphore initial value` cannot fire; the op has no variable-count CTAs, so the CTA-varargs entry cannot fire; etc.). **An UNSUPPORTED feature the op simply doesn't use is `N/A`, *not* `GREEN`** — the gate didn't fire because the feature is *absent*, so there is nothing to "pass." This is the common mismark: don't GREEN an absent gate-feature.
-- **`GREEN`** — a **LANDED** feature *is* present and clean (e.g. a borrowed-memory DFB in use, translated via `borrowed_from`).
-- **`RED`** — an UNSUPPORTED feature is present.
+- **`N/A`** — the feature is absent from the op (the op uses no `GlobalSemaphore`, so that entry cannot fire; it has no variable-count CTAs, so the CTA-varargs entry cannot fire; etc.). Since every entry is a gate-feature, an absent one is `N/A` — the gate didn't fire because the feature is *absent*, so there is nothing to "pass."
+- **`RED`** — an UNSUPPORTED feature is present → the port is gated.
 
-In short: reserve `GREEN` for a feature actually *in use* and supported; an absent feature is `N/A`, whatever its tier. (The *subject's* overall roll-up may still read "GREEN — no gate fired"; that's the subject verdict, distinct from these per-row labels.)
+A clean feature scan is therefore all-`N/A`. (The *subject's* overall roll-up may still read "GREEN — no gate fired"; that's the subject verdict, distinct from these per-row labels.)
 
 For UNSUPPORTED feature-detail blocks, the **Expected resolution** is usually a short paraphrase of the entry's Status field — e.g. "not yet supported in Metal 2.0; port will be possible once GlobalCircularBuffer support lands on `KernelSpec` / `DataflowBufferSpec`." For the `address_offset` entry specifically, surface the runtime-team-consultation message verbatim per the entry's Action field.
 
-#### RED short-circuit: the ProgramDescriptor prerequisite fires
+#### RED short-circuit: the op is still on the legacy imperative API
 
-When the ProgramDescriptor gate fails, the later subjects become moot — there is no point doing a full audit of an op that cannot be ported in this state. **Do not stop with a one-line report.** Instead, fill in the remaining subjects on a best-effort basis (the user benefits from knowing what they'll face *after* the migration clears) and mark each subsequent finding `(observed-but-moot until the ProgramDescriptor prereq clears)`. Don't block the report on completing them; if a subject is impractical to evaluate without the translation, mark it `(deferred — re-evaluate after the prereq clears)` and move on. The Result and Gate detail still emphasize the prerequisite as the primary blocker; the moot-with-caveat findings are forward-looking context.
+When the [TTNN factory concept gate](#ttnn-factory-concept-prerequisite) fails because the op isn't on the `ProgramDescriptor` API yet (a `legacy device-op` concept), the later subjects become moot — there is no point doing a full audit of an op that cannot be ported in this state. **Do not stop with a one-line report.** Instead, fill in the remaining subjects on a best-effort basis (the user benefits from knowing what they'll face *after* the migration clears) and mark each subsequent finding `(observed-but-moot until the ProgramDescriptor migration lands)`. Don't block the report on completing them; if a subject is impractical to evaluate without the translation, mark it `(deferred — re-evaluate after the migration lands)` and move on. The Result and Gate detail still emphasize the concept gate as the primary blocker; the moot-with-caveat findings are forward-looking context. (This short-circuit is for the legacy-API case specifically — a concept-gate failure on a *`descriptor`* op, e.g. a custom hash, leaves the op nearly portable, so audit it fully.)
 
 Save the file(s) and surface the path(s) with the Result line. **Stop here.** The audit file(s) are the complete deliverable of this document.
 
@@ -568,21 +605,18 @@ Save the file(s) and surface the path(s) with the Result line. **Stop here.** Th
 
 - **On RED**: this op cannot be ported in its current state. Surface the `METAL2_PREPORT_AUDIT.md` path and Result; stop. No brief is written, and the recipe is not loaded.
 - **On YELLOW**: surface the path, the Result, and the open questions. Wait for the user's decisions. On resolution, update the team doc in place and confirm GREEN before any handoff.
-- **On GREEN + explicit user go-ahead**: both files are written (the team doc and the brief). Load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port, passing the audit files as context — the recipe needs the cleared gates and decisions, *including the TTNN factory analysis*. Do not load the recipe on your own initiative; the user must explicitly approve.
+- **On GREEN**: both files are written (the team doc and the brief) and you STOP — that is the audit deliverable. **Then, only on explicit user go-ahead**, load [`port_op_to_metal2_recipe.md`](port_op_to_metal2_recipe.md) to perform the port, passing the audit files as context — the recipe needs the cleared gates and decisions, *including the TTNN factory analysis*. Do not load the recipe on your own initiative; the user must explicitly approve.
 - **On GREEN with isolated Device 2.0 holdovers**: both files are written — the brief carries the **Blocked-until** notice. Surface the brief, the team doc, and the holdover list. The path forward: the holdovers are fixed **first**, on the Device 2.0 track (*not* as part of the port), after which the porter proceeds with the already-issued brief — **no re-audit**. The recipe loads once the holdovers are clean and the user gives go-ahead.
 
 ---
 
 ## Appendix A: Metal 2.0 feature compatibility
 
-This appendix lists legacy-API features relevant to the port. Each entry falls into one of two tiers, declared in the entry's header:
-
-- **UNSUPPORTED** — Metal 2.0 does not currently support this feature. Action: refuse the port and report (a GATE / RED). Each entry's **Status** field describes the future path: most entries will be supported as-is when implemented; a few will only be addressable via a redesigned, semantically different construct (and may require a runtime-team consultation before re-attempting). Always check the Status field before telling the user "wait and revisit."
-- **LANDED** — Metal 2.0 supports the feature today; no port gate. The entry's **Status** field names the Metal 2.0 construct that replaces the legacy form. A handful of LANDED features translate via a non-obvious construct or carry a caveat (aliased CBs, borrowed-memory DFB, dynamic `TensorAccessor`, non-zero semaphore initial value) — surface those as porter heads-ups (**FYI-P**) per the [Feature compatibility](#feature-compatibility) subject; they still do not gate.
+This appendix lists legacy-API features that **Metal 2.0 does not yet support** — every entry is **UNSUPPORTED**. If the op uses one, refuse the port and report (a GATE / RED). Each entry's **Status** field describes the future path: most features will be supported as-is when implemented; a few are addressable only via a redesigned, semantically different construct (and may need a runtime-team consultation before re-attempting) — so always check the Status field before telling the user "wait and revisit." (Legacy features Metal 2.0 *does* support are translated mechanically by the porting recipe and are not listed here.)
 
 ### Maintenance: keeping Appendix A current
 
-Appendix A is actively maintained as Metal 2.0's feature surface evolves. When framework changes touch a feature listed here, the doc maintainer updates the relevant entry — typically changing the tier (e.g., from `UNSUPPORTED` to `LANDED`) and rewriting the Status / Action paragraphs to reference the new construct.
+Appendix A is actively maintained as Metal 2.0's feature surface evolves. When a feature listed here gains Metal 2.0 support, the doc maintainer **removes its entry** — it becomes a mechanical porting-recipe translation, not an audit gate — rather than reclassifying it in place.
 
 **Staleness override for porting AIs.** If during the audit you observe a feature in the codebase whose Appendix A entry is marked `UNSUPPORTED` but the framework headers clearly show the API has landed (e.g., the spec/field/method the legacy construct would need to translate to is *visibly present* in `tt_metal/api/tt-metalium/experimental/metal2_host_api/`), this likely means the audit doc is stale. Do not refuse the port reflexively. Instead:
 
@@ -597,13 +631,13 @@ When scanning during the [Feature compatibility](#feature-compatibility) subject
 > **For maintainers adding new entries — skim if you're applying the recipe, not editing it.** Features whose underlying *functionality* Metal 2.0 will *never* support are handled differently: they are either reclassified as a prereq fix (the legacy use is replaced before porting) or get a dedicated fix-up recipe in the port recipe. They do *not* live here, because the action for them is not "wait" or "ask" — it is "transform." (Features whose *current API form* will not be supported but whose *underlying functionality* will be — via a different construct — do belong here as UNSUPPORTED entries; the entry's Status field calls out the redesign requirement.) If you are about to add an entry and the underlying functionality has no planned support, route it to the prereq-fix path or to a port-recipe fix-up entry instead — not here.
 
 Each entry follows this uniform format:
-- **Status** — support state and tier framing.
+- **Status** — the (UNSUPPORTED) support state and the future path.
 - **Recognition — definitely this feature** — signals that, if matched, mean the feature is in use. Trigger the entry's action.
 - **Recognition — false-positive guard** — superficially similar constructs that are *not* this feature. Do not trigger the action on these.
-- **Action** — what to do when the rule fires (refuse, or — for LANDED features — note the construct / heads-up).
+- **Action** — what to do when the rule fires (refuse the port and report).
 - **Examples in the wild** — real op locations using this feature, for ground-truthing your match.
 
-If your op uses something not listed here and you are unsure of its support status, treat as yellow and ask the user. Do not assume support from API surface alone.
+This list is **authoritative**: if a construct isn't here, it's supported — don't reverse-engineer its status from the API surface.
 
 ### GlobalCircularBuffer — UNSUPPORTED
 
@@ -631,54 +665,24 @@ Plain `CircularBuffer`, `CBHandle`, `CBDescriptor`, or `CBFormatDescriptor` *wit
 - `ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/dram_prefetcher_device_operation.cpp`
 - `ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/`
 
-### Dynamic CircularBuffer (CB built on borrowed Buffer memory) — LANDED
-
-**Status**: Supported in Metal 2.0. The legacy "dynamic circular buffer" pattern — `CBDescriptor::buffer = <some_buffer>` placing a CB on top of an existing `Buffer`'s memory — translates to Metal 2.0 as a **borrowed-memory DFB** via `DataflowBufferSpec::borrowed_from`. See `tt_metal/api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp:95` for the spec field.
-
-**Recognition — definitely this feature** (no port gate; use borrowed-memory DFB):
-
-- **Descriptor-API** (the in-scope path): a `CBDescriptor` literal or struct assignment with its `.buffer` field set to a non-null `Buffer*` (any expression that is not statically `nullptr`). The type token does not appear at the assignment site — look for the **field name** `buffer` on a `CBDescriptor`. The companion field `.address_offset` is meaningful only when `.buffer` is set; it is not an independent signal.
-- **Imperative-API** (an op on the imperative `host_api.hpp` builder API also trips the ProgramDescriptor prerequisite RED; these signals additionally catch usage that leaks in via shared utility code — e.g. `cb_utils.hpp` — that the op calls):
-  - `CircularBufferConfig::set_globally_allocated_address(buffer)`
-  - `CircularBufferConfig::set_globally_allocated_address_and_total_size(buffer, total_size)`
-  - The three-argument constructor `CircularBufferConfig(total_size, data_format_spec, buffer)`
-
-**Recognition — false-positive guard**:
-
-- A `CBDescriptor` with `.buffer = nullptr` (or with `.buffer` simply not set) is a regular CB → standard `DataflowBufferSpec` (no `borrowed_from`). Do not require the borrowed-memory path for these.
-- The `.global_circular_buffer` field on `CBDescriptor` is a *different* feature, covered by the GlobalCircularBuffer rule above. Do not conflate the two — `.buffer` and `.global_circular_buffer` are independent fields on `CBDescriptor` with different meanings.
-- A `CircularBufferConfig` constructed via the one-argument form `CircularBufferConfig(total_size)` followed by `set_page_size(...)` calls (no `set_globally_allocated_address`, no three-arg constructor) is a regular static CB → standard `DataflowBufferSpec`.
-
-**Action**: Proceed with the port. On the Metal 2.0 side, declare the affected `DataflowBufferSpec` with `borrowed_from = <tensor_parameter_name>` naming the `TensorParameter` whose buffer backs the DFB. The DFB's handle (`dfb::name`) resolves to the borrowed L1 address at runtime; the kernel-side code that previously read from the borrowed-memory CB continues to work via the DFB wrapper.
-
-**Examples in the wild** (op locations whose port exercises this construct):
-- Descriptor-API form (`CBDescriptor::buffer` set):
-  - `ttnn/cpp/ttnn/operations/normalization/layernorm/device/layernorm_op_multi_core.cpp`
-  - `ttnn/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_*_program_factory.cpp` (sharded, mcast, no_mcast)
-  - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_*_program_factory.cpp`
-- Imperative-API form (`set_globally_allocated_address`, often via shared utilities):
-  - `ttnn/cpp/ttnn/operations/cb_utils.hpp` (utility; called from many ops)
-  - `ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp`
-  - `ttnn/cpp/ttnn/operations/experimental/plusone/device/plusone_program_factory.cpp`
-
 ### CBDescriptor `address_offset` set to non-zero — UNSUPPORTED (current form not planned)
 
 **Status**: Not supported in Metal 2.0, and **not slated for support in its current form**. The `address_offset` field on `CBDescriptor` is a recently introduced interim mechanism for placing a CB at a non-zero offset within a `Buffer` (or at an absolute address, when used without a `buffer`). Metal 2.0 will not carry this construct forward as-is. The functional capability the field provides will be available in a **semantically different way** in Metal 2.0; a direct translation is not possible. The user must consult the runtime team about their actual use case before this op can be ported.
 
-This rule will most often fire together with the Dynamic CircularBuffer rule above (offset is most often used with a Buffer-backed CB), but it is checked separately because:
+This offset is most often used with a Buffer-backed CB (the legacy borrowed-memory pattern — now a mechanical porting-recipe translation, no longer an Appendix A entry), but `address_offset` gets its own entry because:
 - It is severable: a CB can use a non-zero `address_offset` without a Buffer-backed CB (placing the CB at an absolute L1 address — the "manually placed CB" mode documented in `ttnn/api/ttnn/tensor/tensor_utils.hpp`).
 - It carries a stronger signal than dynamic CB alone — the form is being phased out, not just "not yet implemented."
 
 **Recognition — definitely this feature** (refuse and report; flag prominently):
 
 - A `CBDescriptor` literal or struct assignment with `.address_offset` set to a non-zero literal or any expression that is not statically `0`.
-- `CircularBufferConfig::set_address_offset(non_zero)` (imperative API; an op using it directly also trips the ProgramDescriptor prerequisite, but record matches here too — including any leaking in via shared utility code).
+- `CircularBufferConfig::set_address_offset(non_zero)` (imperative API; an op using it directly is still on the legacy imperative API, so it also fails the TTNN factory concept gate — but record matches here too, including any leaking in via shared utility code).
 - `UpdateDynamicCircularBufferAddress(program, cb_handle, buffer, offset)` — the four-argument overload — when `offset` is non-zero.
 - Calls to helpers like `cb_descriptor_from_sharded_tensor(cb_index, tensor, address_offset, ...)` in `ttnn/api/ttnn/tensor/tensor_utils.hpp` where the third argument (`address_offset`) is passed a non-zero value.
 
 **Recognition — false-positive guard**:
 
-- `.address_offset = 0` or `.address_offset` not set (default zero) is fine for *this* rule → green. (The Dynamic CircularBuffer rule may still fire if `.buffer` is set; check independently.)
+- `.address_offset = 0` or `.address_offset` not set (default zero) is fine for *this* rule → green.
 - `UpdateDynamicCircularBufferAddress(program, cb_handle, buffer)` — three-argument form with no offset → not this rule.
 - Kernel-side `bank_address_offset` parameters on calls like `get_noc_addr_from_bank_id<...>(bank_id, bank_address_offset)` are an unrelated kernel-side feature → not this rule.
 
@@ -705,42 +709,6 @@ Do not invent a workaround. Do not propose an alternative implementation. Do not
 
 If you find no concrete non-zero usage in the op being ported, this rule is green — that is the expected outcome for most ops today.
 
-### Aliased Circular Buffers (CBs sharing backing memory) — LANDED
-
-**Status**: Supported in Metal 2.0. The legacy aliased-CB pattern — a single `CBDescriptor` whose `format_descriptors` contains multiple `CBFormatDescriptor` elements (each at a distinct `buffer_index`, sharing backing memory) — translates to Metal 2.0 as **aliased DFBs** via `DataflowBufferSpec::advanced_options.alias_with`. Note: aliasing is an **advanced/ninja feature** — the field lives on `DFBAdvancedOptions` (see [`advanced_options.hpp`](../../../../../../../tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp)), with a CAUTION header documenting that aliased DFBs offer no clobbering guarantees. See the migration guide's "Aliased DFBs" note in the [DataflowBufferSpec section](../metal2_migration_guide.md#dataflowbufferspec) for the porting shape.
-
-The term "aliased CB" is descriptive — it does not appear in the legacy API surface. The legacy expression of this feature lives in the array-shape of certain `CircularBufferConfig` fields (sized `NUM_CIRCULAR_BUFFERS`, almost always populated with one entry) and in the `SmallVector<CBFormatDescriptor, 1>` shape of `CBDescriptor::format_descriptors`. The signal is the cardinality of those collections, not any named field.
-
-**Recognition — definitely this feature** (no port gate; use aliased DFBs):
-
-- **Descriptor API** (the in-scope path): a `CBDescriptor` whose `format_descriptors` initializer contains **more than one** `CBFormatDescriptor` element. Concretely:
-  - Single-element (normal): `format_descriptors = {{CBFormatDescriptor{...}}}` → standard `DataflowBufferSpec`.
-  - Multi-element (aliased): `format_descriptors = {{CBFormatDescriptor{...}, CBFormatDescriptor{...}}}` (or three+) → one `DataflowBufferSpec` per buffer index, mutually declared via `advanced_options.alias_with`.
-  - The differing element is typically `buffer_index` — two distinct indices sharing the same backing storage.
-- **Imperative API** (an op on the imperative `host_api.hpp` builder API also trips the ProgramDescriptor prerequisite RED; these signals additionally catch usage that leaks in via shared utility code):
-  - `CircularBufferConfig(total_size, data_format_spec)` where `data_format_spec` is a `std::map<uint8_t, tt::DataFormat>` with **more than one** key (e.g. `{{idx1, fmt1}, {idx2, fmt2}}`).
-  - Two or more `.set_page_size(buffer_index, ...)` calls **with different `buffer_index` values** chained on the same `CircularBufferConfig` instance.
-  - Companion signal: `.set_tile_dims(buffer_index, ...)` chained with multiple distinct `buffer_index` values on the same config.
-
-**Recognition — false-positive guard**:
-
-- A file that creates *many* CBs, each with a single buffer index, is **not** aliased — aliased means a *single* config has multiple indices. Confirm the multiple `set_page_size` calls are on the *same* `CircularBufferConfig` instance, not on different ones.
-- Single-element initializers (`{{CBFormatDescriptor{...}}}` for the descriptor form, single-key `{{idx, fmt}}` map for the imperative form) are the dominant pattern by a wide margin → standard DFB for this rule.
-- The `CBDescriptor::remote_format_descriptors` field is a *different* concept (relates to remote DFBs, a separate planned feature) and is not covered by this rule. Multi-element values there have a different meaning; do not conflate.
-
-**Action**: Proceed with the port. Declare one `DataflowBufferSpec` per buffer index, each with `advanced_options.alias_with` mutually naming the other(s). All aliased DFBs must have the same `num_entries * entry_size` and must be bound to the same kernels. The `DFBAdvancedOptions` header comments capture the legality constraints; the migration guide section linked above shows the porting shape. **Do not** "split" the aliased CB into independent DFBs — that changes the L1 footprint and breaks the kernel's assumption that the indices share an address.
-
-**Examples in the wild** (op locations whose port exercises this construct):
-- Descriptor-API form: currently not exercised by any checked-in ttnn op (every `format_descriptors` initializer in current op factories is single-element).
-- Imperative-API form (these ops trip the ProgramDescriptor prerequisite RED in addition to this entry — record both):
-  - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp` (around line 840 — output + interim sharing memory; has the comment "share buffer")
-  - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp`
-  - `ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_program_factory.cpp`
-  - `ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp`
-  - `ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.cpp` (multiple sites — cos/sin interim/sync pairs)
-  - `ttnn/cpp/ttnn/operations/kv_cache/device/update_cache_multi_core_program_factory.cpp`
-  - `ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_1d_mm_fusion.cpp`
-
 ### GlobalSemaphore — UNSUPPORTED
 
 **Status**: Not yet supported in Metal 2.0. The Metal 2.0 source confirms this with a TODO at `tt_metal/api/tt-metalium/experimental/metal2_host_api/kernel_spec.hpp` (search for `TODO -- GlobalSemaphore bindings`).
@@ -760,106 +728,6 @@ Plain `Semaphore` / `CreateSemaphore(program, core_spec, initial_value)` is the 
 
 **Examples in the wild** (for ground-truthing your match):
 - Most CCL ops under `ttnn/cpp/ttnn/operations/experimental/ccl/`, e.g. `llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp`, `all_gather_concat_heads_fused/device/`, `llama_all_gather_matmul_async/device/`.
-
-### Non-zero semaphore initial value — LANDED (deprecated; FYI-P heads-up)
-
-**Status**: Supported by Metal 2.0 on Gen1 today, but **explicitly deprecated**. The legacy path lets you create a semaphore with a non-zero initial value via `CreateSemaphore(program, core_spec, initial_value)` (where `initial_value != 0`) or by setting `SemaphoreDescriptor::initial_value` to a non-zero value. The Metal 2.0 destination is `SemaphoreSpec::advanced_options.initial_value` (on `SemaphoreAdvancedOptions`) — which carries a `[[deprecated]]` attribute. The translation works on Gen1, but the field is **unsupported on Gen2** and will be removed when the planned **Remote DFB** feature lands and supplants the use case. Use of non-zero initial values today is therefore a porter heads-up (**FYI-P**), not a gate: it is supported on Gen1 so the port proceeds; the porter just needs to know the field is deprecated and Gen2-unsupported.
-
-**Recognition — definitely this feature** (LANDED — surface as a heads-up):
-
-- `CreateSemaphore(program, core_spec, initial_value)` calls where `initial_value` is:
-  - A non-zero integer literal (`1`, `2`, etc.).
-  - A constant or symbol whose value is **not self-evidently zero** (e.g. `INVALID`, `INVALID_SEM`, project-specific sentinel constants). When in doubt, treat it as in use and flag the heads-up — do not assume the symbol is zero. If you can resolve the constant's definition and it is in fact zero, no flag.
-- `SemaphoreDescriptor` literals or struct assignments where `.initial_value` is set to a non-zero literal or a not-evidently-zero symbol.
-
-**Recognition — false-positive guard**:
-
-- `CreateSemaphore(program, core_spec, 0)` — explicit zero literal → green, no action.
-- `SemaphoreDescriptor{ ..., .initial_value = 0 }` — explicit zero literal → green.
-- `GlobalSemaphore` is a separate type, covered by its own rule above. Do not match this rule against `GlobalSemaphore` constructions or `experimental::CreateGlobalSemaphore(...)` calls.
-
-**Action**: Surface as a **heads-up (FYI-P)** in the audit. Include in the report:
-- The semaphore creation site (`file:line`).
-- The initial-value expression as written.
-- A note that the construct is supported on Gen1 today but deprecated and Gen2-unsupported.
-
-**This does not gate the port.** The translation is direct — set `SemaphoreSpec::advanced_options.initial_value` to the same value used in the legacy code (acknowledging the `[[deprecated]]` warning and the Gen2 unsupported status). The port's mechanical work is unaffected.
-
-**Examples in the wild** (for ground-truthing your match):
-- `ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp` (`INVALID` sentinel)
-- `ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_program_factory.cpp` (`INVALID` sentinel)
-- `ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp` (literal `1`)
-- `ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/moe_gpt_program_factory.cpp` (`INVALID` / `INVALID_SEM` sentinels)
-
-### Dynamic TensorAccessor (`ArgConfig::Runtime*` flavors: RuntimeTensorShape, RuntimeRank, RuntimeNumBanks, RuntimeShardShape, RuntimeBankCoords) — LANDED (UNSAFE opt-in; FYI-P heads-up)
-
-**Status**: Supported by Metal 2.0 today via two opt-ins on `TensorParameter::advanced_options` — but their use carries caveats that make this a porter heads-up (**FYI-P**) rather than a silent green.
-
-- `TensorParameterAdvancedOptions::dynamic_tensor_shape = true` — full relaxation. The bound `MeshTensor`'s `logical_shape` *and* `padded_shape` may differ from the `TensorParameter`'s declared spec. For interleaved tensors the `TensorAccessor` configuration is unchanged; for sharded tensors the accessor reflects the argument's actual shape (shape becomes an implicit runtime argument). This is the translation path for the legacy `ArgConfig::RuntimeTensorShape` (and the closely related `RuntimeShardShape` / `RuntimeBankCoords` flavors).
-- `TensorParameterAdvancedOptions::match_padded_shape_only = true` — weaker relaxation. The bound tensor's `logical_shape` may vary, but its `padded_shape` must match the declared spec exactly. `TensorAccessor` configuration is completely unchanged.
-
-Both options are documented **UNSAFE** in the framework header: most kernels will not function correctly if the tensor argument's spec deviates from the declared spec. Adopting them also has structural implications for how the op's factory interacts with the framework's per-dispatch caching path — implications that warrant discussion before a port commits to either opt-in.
-
-The remaining `ArgConfig::Runtime*` flavors — `RuntimeRank`, `RuntimeNumBanks` — do not have a clean translation via these options. Both have ~zero user sites outside tests, so in practice this rarely matters; flag them in the audit for the user's awareness if they appear.
-
-**Recognition — definitely this feature** (LANDED — surface as a heads-up):
-
-- Any reference to one of the following enumerators in op host code:
-  - `tensor_accessor::ArgConfig::RuntimeTensorShape`
-  - `tensor_accessor::ArgConfig::RuntimeRank`
-  - `tensor_accessor::ArgConfig::RuntimeNumBanks`
-  - `tensor_accessor::ArgConfig::RuntimeShardShape`
-  - `tensor_accessor::ArgConfig::RuntimeBankCoords`
-- A canonical grep target that catches all five: `ArgConfig::Runtime`. If this token appears in op host code (not in `tt_metal/impl/buffers/tensor_accessor_args.cpp`, which is the implementation file), the rule fires.
-- Calls of the form `TensorAccessorArgs(buffer, tensor_accessor::ArgConfig::Runtime*)` — i.e. the two-argument form of `TensorAccessorArgs` whose second argument is one of the `Runtime*` flavors. The most common appearance is `.append_to(...)` or `.get_common_runtime_args()` immediately after.
-
-In practice, `RuntimeTensorShape` is the dominant flavor; the other four have ~zero user sites outside tests. A grep for `ArgConfig::Runtime` will surface all of them in one pass.
-
-**Recognition — false-positive guard**:
-
-The single-argument form `TensorAccessorArgs(buffer)` (with no second arg, or with a non-`Runtime*` `ArgConfig` value) is the standard path → supported in Metal 2.0 via `TensorParameter` + `TensorBinding`. Do not refuse these. The disambiguator is the literal token `Runtime` on an `ArgConfig::` qualifier.
-
-**Action**: Surface as a **heads-up (FYI-P)** in the audit. Include in the report:
-- Each site of `ArgConfig::Runtime*` use (`file:line`) and the flavor in use.
-- A note that Metal 2.0 supports the runtime-shape capability via `TensorParameterAdvancedOptions::dynamic_tensor_shape` (or the weaker `match_padded_shape_only`), but the options are marked **UNSAFE** in the framework header and adopting them has structural implications for the factory's interaction with per-dispatch caching. The default remains **strict**; applying a relaxation is an explicit user-OK decision (see the [TTNN integration doc](port_op_to_metal2_ttnn_factory.md)), not an automatic port step.
-- If any of the niche flavors (`RuntimeRank`, `RuntimeNumBanks`) appear, surface them separately: those do not have a clean advanced-options translation today.
-
-**This does not gate the port.** When a relaxation is applied, the translation is: set `TensorParameter::advanced_options.dynamic_tensor_shape = true` (full relaxation) or `match_padded_shape_only = true` (padded-shape-only relaxation) on the affected `TensorParameter`(s). The recognition-signal sites — the `ArgConfig::Runtime*` tokens in the legacy code — are the porter's anchor for which `TensorParameter`s need the opt-in.
-
-**Examples in the wild** (for ground-truthing your match):
-- `ttnn/cpp/ttnn/operations/data_movement/transpose/device/transpose_hc_tiled_interleaved_program_factory.cpp`
-- `ttnn/cpp/ttnn/operations/data_movement/transpose/device/transpose_wh_program_factory.cpp`
-- `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp`
-- `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
-- `ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_program_factory.cpp`
-
-### Per-execution CircularBuffer size updates (UpdateCircularBufferTotalSize, UpdateCircularBufferPageSize, UpdateDynamicCircularBufferAddressAndTotalSize) — UNSUPPORTED via the PD-concept port (legacy factory concept)
-
-**Status**: The legacy per-execution CB-size mutation maps 1:1 to the `ProgramRunArgs` `dfb_run_overrides` fields (`entry_size` / `num_entries`), which Metal 2.0 *does* support at the host-API level. **The catch is the port path:** per-execution CB sizing is **not reachable through the ProgramDescriptor-concept port** this recipe set targets. A PD-concept op (`create_descriptor()` + framework cache-hit patching) cannot mutate CB sizes per execution — the framework patcher re-patches only buffer addresses and hash-excluded scalar RTAs, never `total_size` / `page_size`, which are baked into the descriptor at construction (cache-miss) time. Per-execution CB sizing exists **only through the legacy `create()` + `override_runtime_arguments()` factory concept**, where a hand-rolled override hook calls `UpdateCircularBufferTotalSize` / `UpdateCircularBufferPageSize` directly. An op that does this is therefore a **legacy-factory-concept op** — even if it populates a `ProgramDescriptor` internally as a data structure — and so is **not a clean PD-concept port**. This is a Check-1-class prerequisite gap (see [Check 1](#prerequisites)); it GATEs.
-
-`UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, buffer, total_size)` folds the per-execution total-size mutation onto a dynamic-CB address rebind — the address-rebind half maps to borrowed-memory DFBs (supported), but its presence in an override hook is the same legacy-concept signal.
-
-**Recognition — definitely this feature** (refuse and report):
-
-- Calls to `UpdateCircularBufferTotalSize(program, cb_handle, total_size)`.
-- Calls to `UpdateCircularBufferPageSize(program, cb_handle, buffer_index, page_size)`.
-- Calls to `UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, buffer, total_size)` — the 4-arg "Address And Total Size" combo form. The address-rebind half maps to borrowed-memory DFB; the total-size half is the per-execution CB-sizing this rule catches — its presence in an override hook is the legacy-concept signal. Distinguished from `UpdateDynamicCircularBufferAddress` (3-arg, address only) by the `AndTotalSize` suffix in the function name.
-- A canonical grep target that catches all three: `UpdateCircularBuffer`. (See guard below for one false positive.)
-- Typical call site: cached-program override hooks (e.g. `override_runtime_arguments` and similar callbacks), where CB sizing is re-tuned per shape between executions of the same Program.
-
-**Recognition — false-positive guard**:
-
-`UpdateDynamicCircularBufferAddress` (the **3-arg** form — `(program, cb_handle, buffer)` or `(program, cb_handle, global_cb)`) is a different function with different semantics — do not refuse based on the `UpdateCircularBuffer` substring matching it. The 4-arg form **with an `address_offset` argument** (`UpdateDynamicCircularBufferAddress(program, cb_handle, buffer, offset)`) is covered by the `address_offset` rule above. The 4-arg form with `AndTotalSize` in the name is **caught by this rule**, not exempted.
-
-**Action**: STOP — GATE. Report (with `file:line` for each `UpdateCircularBuffer*` call) that this op does per-execution CB sizing through a legacy `override_runtime_arguments()` hook, which means it is on the **legacy factory concept**, not the ProgramDescriptor-concept the port requires — a Check-1 prerequisite gap. Do not attempt to port it and do not invent a workaround; route it for a proper ProgramDescriptor-concept migration first. Note for that migration: because the PD concept cannot express per-execution CB sizing, the size variation has to be restructured to be cache-key-driven (a distinct shape → a distinct cached descriptor, sizes computed at construction) — as the already-migrated ops did — *not* preserved via `dfb_run_overrides` (that host-API field exists but is unreachable from the PD-concept port path). In particular, do not "fix" this by recreating the Program from scratch on every execution.
-
-**Examples in the wild** (for ground-truthing your match):
-- `ttnn/cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/device/deepseek_moe_gate_program_factory.cpp` (per-execution `UpdateCircularBufferTotalSize` / `UpdateCircularBufferPageSize` in the override hook)
-- `ttnn/cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/device/generalized_moe_gate_program_factory.cpp`
-
-(Earlier examples — `slice_program_factory_rm`, `transpose_wh_sharded_program_factory`, `attn_matmul` / `group_attn_matmul`, `generic_op_program_factory` — have since been migrated to the PD-concept factory and no longer carry these calls. That is the expected outcome of the prerequisite migration, and is why a live match is now rare.)
-
----
 
 ### Variable-count compile-time arguments (CTA varargs) — UNSUPPORTED
 
