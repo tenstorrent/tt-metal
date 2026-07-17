@@ -25,7 +25,7 @@ sampler share/steady e2e         ~8.6%
 steady decode                 287.018 t/s/u
 token host refreshes          0
 full-logit readbacks          0
-sampled-token readbacks       1 (final only)
+sampled-token readbacks       1 (prefill-to-decode request boundary)
 ```
 
 `tt-perf-report` attributes 56.25% of reduced device time to the local vocab-sharded LM head and 9.68% to the custom sampler local winner, so canonical sampling is not the dominant operation. The earlier 17:38 profile predates alignment/stride fixes and is retained only as historical evidence.

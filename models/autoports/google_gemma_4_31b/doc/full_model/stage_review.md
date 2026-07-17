@@ -1,5 +1,13 @@
 # Stage 06 Independent Review
 
+Historical review record. The 2026-07-17 capacity and non-greedy RNG
+remediation is independently reviewed in
+`stage_review_remediation_2026-07-17.md` with verdict `clean-pass`. That report,
+the current README, work log, and `full_model_plan` contain the authoritative
+post-remediation physical KV arithmetic and 23-test contract result; the
+pre-remediation figures and 19-test result below are retained only as evidence
+of the original Stage 06 checkpoint.
+
 Final verdict: `clean-pass`
 
 The first independent review returned `more-work-needed` for five evidence or implementation gaps:

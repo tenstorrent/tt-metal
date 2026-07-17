@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 import torch
@@ -106,6 +107,25 @@ def test_full_model_preserves_tp4_decoder_and_context_defaults():
     assert "BFP8" in MultichipDecoder.mesh_profile["kv_cache"]
 
 
+def test_full_model_context_contract_counts_physical_bfloat8_kv_bytes():
+    contract_path = Path(__file__).parents[1] / "doc/context_contract.json"
+    plan = json.loads(contract_path.read_text(encoding="utf-8"))["full_model_plan"]
+    values = plan["per_device_kv_cache_values_batch1_advertised_context"]
+    kv_bytes = values * 17 // 16
+    assert plan["per_device_kv_cache_bfloat8_physical_bytes_per_value"] == 1.0625
+    assert plan["per_device_kv_cache_bytes_batch1_advertised_context"] == kv_bytes == 2_963_537_920
+    assert plan["per_device_physical_weight_plus_kv_payload_bytes"] == (
+        plan["per_device_physical_weight_payload_bytes"] + kv_bytes
+    )
+    assert (
+        plan["per_device_accounted_dram_total_bytes"] + plan["per_device_accounted_dram_margin_bytes"]
+        == plan["per_device_usable_dram_bytes"]
+    )
+    assert plan["per_device_full_context_batch3_accounted_dram_margin_bytes"] > 0
+    assert plan["per_device_full_context_batch4_shortfall_bytes"] > 0
+    assert plan["per_device_batch32_kv_cache_bytes"] == 32 * kv_bytes
+
+
 def test_sharded_lm_head_tiles_arbitrary_logical_prefill_rows(expect_error):
     expected = {
         1: ((0, 1),),
@@ -180,6 +200,7 @@ def test_low_level_api_exposes_explicit_external_state():
             "page_table_generations",
             "prompt_lengths",
             "active_batch_size",
+            "seed",
         },
         "decode_next_token_traced": {"page_table", "kv_cache", "page_table_generations"},
     }.items():
@@ -241,6 +262,18 @@ def test_split_sampling_is_canonical_and_trace_owned():
     assert "get_device_tensors" not in steady_source
     assert "execute_decode_trace" in steady_source
     assert "_execute_sampling_trace" in steady_source
+    assert "_initialize_non_greedy_rng" not in steady_source
+    assert "copy_host_to_device_tensor" not in steady_source
+
+    seed_source = inspect.getsource(Gemma4Generator._initialize_non_greedy_rng)
+    assert seed_source.index("ttnn.manual_seed") < seed_source.index("_SAMPLING_SEED_SKIP")
+    assert "ttnn.synchronize_device" in seed_source
+    assert "sampling_seed_initializations" in seed_source
+    prepare_source = inspect.getsource(Gemma4Generator.prepare_token_out_decode)
+    assert "self._sampling_trace_key != requested_key" in prepare_source
+    assert "self._release_all_decode_traces()" in prepare_source
+    assert "if state.trace_id is not None" in prepare_source
+    assert "self._initialize_non_greedy_rng(sampling_seeds)" in prepare_source
 
     hardware_source = Path(__file__).with_name("test_full_model.py").read_text(encoding="utf-8")
     reduced_source = hardware_source.split("def test_reduced_full_model_prefill_split_greedy_and_trace", 1)[1]

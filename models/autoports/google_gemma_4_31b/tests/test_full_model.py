@@ -13,7 +13,7 @@ import torch
 from tracy import signpost
 
 import ttnn
-from models.autoports.google_gemma_4_31b.tt.generator import Gemma4GreedyTP4Sampler, build_generator
+from models.autoports.google_gemma_4_31b.tt.generator import Gemma4Generator, Gemma4GreedyTP4Sampler, build_generator
 from models.autoports.google_gemma_4_31b.tt.model import (
     ROPE_POSITION_INACTIVE_SENTINEL,
     Gemma4FullModel,
@@ -213,6 +213,109 @@ def test_tp_vocab_row_materialization_and_sampler_boundaries():
         ttnn.release_trace(mesh, trace_id)
         assert traced_value == 262_143
     finally:
+        close_readiness_mesh_device(mesh, "FABRIC_1D")
+
+
+@pytest.mark.timeout(600)
+def test_tp4_non_greedy_sampling_rng_trace_replay():
+    """A traced non-greedy request seeds once, then advances RNG state on device."""
+    if os.environ.get("GEMMA4_31B_FULL_MODEL_RUN_NON_GREEDY_RNG") != "1":
+        pytest.skip("set GEMMA4_31B_FULL_MODEL_RUN_NON_GREEDY_RNG=1 to run the isolated RNG probe")
+
+    mesh = open_readiness_mesh_device("P150_X4", "FABRIC_1D")
+    trace_id = None
+    try:
+        # Keep the physical Gemma TP4 contract while making the candidate CDF
+        # constant across every replay.  Re-seeding on each replay therefore
+        # produces one repeated token; preserving RNG state produces a stream.
+        logits = ttnn.from_torch(
+            torch.zeros((1, 1, 1, 262_144), dtype=torch.bfloat16),
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
+        )
+        sampler = Sampling1D.from_config(
+            Sampling1DConfig(
+                vocab_size=262_144,
+                mesh_device=mesh,
+                max_batch_size=1,
+                max_top_k=32,
+                allow_force_argmax=False,
+                pad_to_power_of_2=False,
+                ag_topology=ttnn.Topology.Linear,
+                num_gather_links=2,
+                sampling_cluster_axis=1,
+                use_broadcast_all_gather=True,
+                gather_values_dtype=ttnn.float32,
+            )
+        )
+        sampler.load_device_buffers()
+        generator = Gemma4Generator.__new__(Gemma4Generator)
+        generator.mesh_device = mesh
+        generator.max_batch_size = 1
+        generator.sampler = sampler
+        generator.trace_lifecycle_counters = {
+            "sampling_seed_initializations": 0,
+            "sampling_seed_host_copies": 0,
+        }
+        k = _replicated_device_tensor(mesh, torch.tensor([32], dtype=torch.int32), ttnn.uint32)
+        p = _replicated_device_tensor(mesh, torch.tensor([1.0], dtype=torch.bfloat16), ttnn.bfloat16)
+        temp = _replicated_device_tensor(mesh, torch.tensor([1.0], dtype=torch.bfloat16), ttnn.bfloat16)
+        output = _replicated_device_tensor(mesh, torch.zeros((1, 1, 1, 1), dtype=torch.int32), ttnn.uint32)
+
+        # Compile the exact graph before capture.
+        sampler.decode_forward(logits, k=k, p=p, temp=temp, tt_out_tok=output)
+        ttnn.synchronize_device(mesh)
+
+        def copy_seeds(values):
+            host = ttnn.from_torch(
+                torch.tensor(values, dtype=torch.int64).to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+            ttnn.copy_host_to_device_tensor(host, sampler._seeds)
+
+        def capture_and_replay(count):
+            nonlocal trace_id
+            trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+            sampler.decode_forward(logits, k=k, p=p, temp=temp, tt_out_tok=output)
+            ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+            values = []
+            for _ in range(count):
+                ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=True)
+                values.append(int(ttnn.to_torch(ttnn.get_device_tensors(output)[0]).reshape(-1)[0]))
+            ttnn.release_trace(mesh, trace_id)
+            trace_id = None
+            return values
+
+        # Verify the diagnosed failure first: a real seed left in the captured
+        # buffer resets rand_tile on every replay.
+        copy_seeds([17])
+        repeated = capture_and_replay(12)
+        assert len(set(repeated)) == 1, repeated
+
+        # Intended lifecycle: initialize once at the request boundary, then
+        # leave UINT32_MAX in the trace-bound buffer so manual_seed is a no-op.
+        generator._initialize_non_greedy_rng([17])
+        assert int(ttnn.to_torch(ttnn.get_device_tensors(sampler._seeds)[0]).reshape(-1)[0]) == 2**32 - 1
+        advancing = capture_and_replay(12)
+        assert len(set(advancing)) > 1, advancing
+
+        # A fresh request using the same explicit seed reproduces the stream.
+        generator._initialize_non_greedy_rng([17])
+        reproduced = capture_and_replay(12)
+        assert reproduced == advancing
+        assert int(ttnn.to_torch(ttnn.get_device_tensors(sampler._seeds)[0]).reshape(-1)[0]) == 2**32 - 1
+        assert generator.trace_lifecycle_counters == {
+            "sampling_seed_initializations": 2,
+            "sampling_seed_host_copies": 4,
+        }
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh, trace_id)
         close_readiness_mesh_device(mesh, "FABRIC_1D")
 
 

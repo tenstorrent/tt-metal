@@ -4,7 +4,9 @@ Stage: full-model (Stage 06)
 Model: `google/gemma-4-31B` at revision `d77cb0be8ad40327cc1c6b70eff4b3f0be35bee3`
 Target: four Blackhole P150b devices, `MeshShape(1,4)`, TP4, `FABRIC_1D`
 Implementation: `tt/model.py`, `tt/generator.py`
-Status: complete; independent `$stage-review` verdict `clean-pass`.
+Status: complete; fresh 2026-07-17 independent `$stage-review` verdict
+`clean-pass` after the capacity and non-greedy RNG remediation. See
+`stage_review_remediation_2026-07-17.md`.
 
 ## Headline performance
 
@@ -14,7 +16,7 @@ Status: complete; independent `$stage-review` verdict `clean-pass`.
 | Traced token-out | 693.70 ms | 24.97 t/s/u | includes first-token trace setup |
 | Traced token-out, steady | — | 33.87 t/s/u | device greedy sample feeds the next replay directly |
 
-Teacher forcing and token-out are deliberately reported separately. Teacher forcing reads one prediction and writes one ground-truth token per step. The measured token-out path uses cooperating model and sampler traces, performs no per-token token readback or Python token-feedback loop, and reads only the final sampled token.
+Teacher forcing and token-out are deliberately reported separately. Teacher forcing reads one prediction and writes one ground-truth token per step. The measured no-readback token-out benchmark uses cooperating model and sampler traces, performs no per-token token readback or Python token-feedback loop, and reads one prefill-sampled token at the request boundary to seed decode. The high-level generator may read emitted tokens for caller-visible output or teacher-forcing decisions, but those reads never reconstruct the next device input.
 
 The TTFT rows are not like-for-like cache states: the teacher-forcing readiness process includes its own cold/warmup sequence, while the token-out result is collected after persistent tensor-cache materialization in the qualitative runner. They characterize their named harnesses, not a claimed 2.6x prefill optimization.
 
@@ -50,16 +52,16 @@ Low-level prefill/decode expose explicit cache, page-table, page-table generatio
 `doc/context_contract.json` retains the full 262,144-token HF context. Per-device accounting is:
 
 - physical decoder, embedding, final-norm, and LM-head weights: 10,908,115,456 bytes;
-- batch-1 KV cache: 2,789,212,160 bytes;
-- weights plus KV: 13,697,327,616 bytes;
+- batch-1 KV cache: 2,963,537,920 physical bytes (2,789,212,160 values at 1.0625 bytes/value for tiled BFP8);
+- weights plus KV: 13,871,653,376 bytes;
 - replicated RoPE, sampler state, page/trace inputs, 256 MiB trace region, and retained 12 GiB allocator reserve included in total;
-- accounted total: 27,672,814,984 bytes;
+- accounted total: 27,847,140,744 bytes;
 - usable descriptor DRAM: 34,225,520,640 bytes;
-- remaining margin: 6,552,705,656 bytes/device.
+- remaining margin: 6,378,379,896 bytes/device.
 
 The cache total retains 50 physical-1,024 sliding layers and 10 physical-262,144 full-attention layers. No context reduction is physically necessary; exact-context and non-aligned guards remain 262,144.
 
-Production full-context accuracy and performance are batch one. The largest hardware-tested full-model batch is two at context 128, covering mixed prompt lengths and inactive fixed slots. The full-context accounting upper bound is batch three: 33,251,239,304 bytes/device, leaving 974,281,336 bytes. Batch four would require 36,040,451,464 bytes/device, a 1,814,930,824-byte shortfall; batch-32 KV alone would be 89,254,789,120 bytes/device. Thus batch 32 at full context is a hard physical impossibility, while batch three is a capacity upper bound rather than an advertised tested serving mode.
+Production full-context accuracy and performance are batch one. The largest hardware-tested full-model batch is two at context 128, covering mixed prompt lengths and inactive fixed slots. The full-context accounting upper bound is batch three: 33,774,216,584 bytes/device, leaving 451,304,056 bytes. Batch four would require 36,737,754,504 bytes/device, a 2,512,233,864-byte shortfall; batch-32 KV alone would be 94,833,213,440 bytes/device. Thus batch 32 at full context is a hard physical impossibility, while batch three is a capacity upper bound rather than an advertised tested serving mode.
 
 ## Sampling decision and rejection ledger
 
@@ -73,6 +75,8 @@ Both common samplers were evaluated before custom code was accepted:
 
 The selected `Gemma4GreedyTP4Sampler` is intentionally narrow: greedy-only, TP4, BF16 tiled logits. Eight cores per device compute tile-local `(score, global_token)` winners with an explicit lower-token tie rule; a tiny two-link Linear TP all-gather exchanges pairs; the final reducer writes into the pre-existing persistent token tensor. Non-greedy compatibility continues to use the common `Sampling1D` path.
 
+The non-greedy path owns RNG state explicitly. A focused AutoFix found that leaving `Sampling1D`'s default real seed in the captured graph reset `rand_tile` to the same quantile on every replay. The generator now seeds active request slots once outside capture, synchronizes that request boundary, then writes TTNN's `UINT32_MAX` skip sentinel into the persistent seed tensor. Captured `manual_seed` is therefore a no-op and sampling advances the device PRNG without per-token host seed copies. Inactive fixed slots remain at the sentinel. Explicit seeds reproduce the same stream; an entropy-derived seed is used when omitted. The isolated Gemma-physical TP4 constant-logit A/B proves the old repeated draw, advancing replay after the fix, and exact same-seed replay reproducibility. See `AUTODEBUG_NON_GREEDY_SAMPLING.md` and `AUTOFIX_NON_GREEDY_SAMPLING.md`.
+
 Hardware boundary evidence covers global IDs `[0, 32767, 32768, 65535, 65536, 262143]`, the 177-versus-192 equal-score tie, batch two, and three trace replays. Watcher exposed and drove fixes for the reducer's DRAM write alignment and 8-byte-versus-16-byte pair-page stride.
 
 The final post-fix reduced profile flushes setup traffic before a four-replay signposted window. `tt-perf-report` measures the local-winner kernel at a 299.464 µs median and final reducer at 0.4205 µs; all-gather/concat is single-digit microseconds. Sampling is 9.68% of reduced device-op time and about 8.6% of the 3.484 ms steady end-to-end token time, so it does not dominate. The LM head is the dominant 56.25% of device-op time. Reduced steady token-out is 287.02 t/s/u under profiling. See `sampler_profile_summary.md` and `perf/final_report.md`.
@@ -84,7 +88,7 @@ Two cooperating traces run on one command queue:
 1. model trace: embedding, 60 optimized decoder layers, final norm, sharded LM head, softcap, and device position updates;
 2. sampler trace: exact TP4 greedy reduction into the persistent token tensor consumed by the next model replay.
 
-The 100-token full-stack run records 99 model trace replays, zero token host refreshes, zero full-logit readbacks, two initial position/RoPE host writes, three synchronizations, and one final sampled-token readback. Unchanged page tables cause no copies. A changed identity/generation uses one distributed mesh copy, and repeating the same identity/generation performs no copy. Reset and prefill release both traces before cache or input buffer churn.
+The 100-token full-stack no-readback benchmark records 99 model trace replays, zero token host refreshes, zero full-logit readbacks, two initial position/RoPE host writes, three synchronizations, and one request-boundary readback of the prefill-sampled token used to start decode. Non-greedy requests additionally perform two seed-buffer copies and one synchronization once at the request boundary; `decode_next_token_traced()` has no seed copy, synchronization, or host RNG work. Unchanged page tables cause no copies. A changed identity/generation uses one distributed mesh copy, and repeating the same identity/generation performs no copy. Reset and prefill release both traces before cache or input buffer churn.
 
 Registering the second trace region emits TT Metal's conservative warning because the model trace is already registered. The application no longer allocates sampler data in that interval: token output, local pairs, gathered pairs, parameters, and logits are persistent and preallocated; regular all-gather writes to `output_tensor=self.gathered_pairs`. The warning is therefore attributed to the second `begin_trace_capture` region allocation required by the canonical split-trace contract. Repeated replay, reset/recreate, changed tables, watcher, and source-current profile all pass; sampler tensors are explicitly released at teardown. `AUTOTRIAGE.md` records the resolved disposition.
 
@@ -145,6 +149,8 @@ Primary compact artifacts:
 - `reduced_token_out_custom_greedy_perf.json`
 - `reduced_token_out_final_perf.json`, `sampler_profile_summary.md`, and `perf/`
 - `triage/`, repo-root `AUTOTRIAGE.md`, and the focused JUnit XML files in `doc/`
+- `AUTODEBUG_NON_GREEDY_SAMPLING.md` and `AUTOFIX_NON_GREEDY_SAMPLING.md`
+- `stage_review_remediation_2026-07-17.md`: fresh independent `clean-pass`
 - `doc/full_model_reduced_final_watcher.xml`: source-current mixed-prefill/split-trace watcher closure
 
 No vLLM integration was started. The `vllm_qualitative_outputs.json` filename is only the established readiness artifact schema.

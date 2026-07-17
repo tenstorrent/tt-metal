@@ -20,15 +20,17 @@ Capacity was recomputed from the full wrapper rather than copied from the decode
 
 ```text
 weights/device                 10,908,115,456
-KV cache/device                 2,789,212,160
-weights + KV                   13,697,327,616
-all accounted DRAM             27,672,814,984
+KV cache/device                 2,963,537,920
+weights + KV                   13,871,653,376
+all accounted DRAM             27,847,140,744
 usable DRAM                    34,225,520,640
-margin                          6,552,705,656
+margin                          6,378,379,896
 supported context                     262,144
 ```
 
-No context capability reduction was required.
+The cache contains 2,789,212,160 logical values. Physical tiled BFP8 storage is
+1.0625 bytes/value, matching the Stage 05 accounting, so the physical cache is
+2,963,537,920 bytes/device. No context capability reduction was required.
 
 ### Runtime-autofix findings
 
@@ -98,7 +100,7 @@ position host refreshes     2
 RoPE host refreshes         2
 page-table refreshes        0
 synchronizations            3
-sampled-token readbacks      1 (final result only)
+sampled-token readbacks      1 (prefill-to-decode request boundary)
 ```
 
 Focused reduced testing also changed a page table once, observed one distributed copy, then repeated the same identity/generation with no copy. The sampler output and next model input are the same persistent tensor.
@@ -161,3 +163,34 @@ The first independent `$stage-review` returned `more-work-needed`. Its findings 
 A fresh independent rereview returned `clean-pass` with no required work and no blocking hard-check gaps.
 
 Stage implementation checkpoint: `cc5b46623f0` (`Complete Gemma 4 31B full-model stage`). The following audit-only commit records this checkpoint; no push was performed.
+
+## 2026-07-17 remediation audit
+
+Independent contract audits found and repaired two Stage 06 issues without touching vLLM code or later-stage evidence:
+
+1. Capacity accounting had recorded the 2,789,212,160 BFP8 KV value count as bytes. Tiled BFP8 uses 1.0625 bytes/value, so the corrected physical cache is 2,963,537,920 bytes/device. Accounted batch-1 DRAM is 27,847,140,744 bytes with 6,378,379,896 bytes margin. Full context still fits; batch three remains the physical upper bound with 451,304,056 bytes margin, while batch four is short 2,512,233,864 bytes.
+2. Non-greedy `Sampling1D` replay captured `manual_seed` with unchanged real seeds, resetting the device PRNG to the same quantile each token. `$autodebug` proved the causal chain. `$autofix` first verified the failure with constant logits, then added request-boundary seed initialization followed by the `UINT32_MAX` skip sentinel so traced sampling advances device state with no per-token host seed update.
+
+Focused verification:
+
+```bash
+LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH \
+GEMMA4_31B_FULL_MODEL_RUN_NON_GREEDY_RNG=1 \
+pytest -q -s \
+  models/autoports/google_gemma_4_31b/tests/test_full_model.py::test_tp4_non_greedy_sampling_rng_trace_replay
+# 1 passed in 4.41s (delivered helper)
+
+LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH \
+pytest -q models/autoports/google_gemma_4_31b/tests/test_full_model_contract.py
+# 23 passed in 7.28s (post-format final rerun)
+```
+
+The TP4 A/B showed fixed-real-seed replay returning one repeated draw for all 12 replays, seed-once plus sentinel producing multiple tokens, and resetting seed 17 reproducing the exact 12-token stream. The persistent trace seed was the sentinel before and after replay. Counters recorded two initializations and four request-boundary copies across two requests; `decode_next_token_traced()` performs no seed copy or synchronization.
+
+Artifacts: `AUTODEBUG_NON_GREEDY_SAMPLING.md`, `AUTOFIX_NON_GREEDY_SAMPLING.md`, and the durable focused test in `tests/test_full_model.py`.
+
+A fresh inspection-only `$stage-review` independently cross-checked the live
+source, common sampler/manual-seed kernel semantics, physical capacity math,
+accuracy, qualitative output, trace counters, and compact performance evidence.
+It returned `clean-pass` with no P1/P2 required work. Report:
+`stage_review_remediation_2026-07-17.md`.

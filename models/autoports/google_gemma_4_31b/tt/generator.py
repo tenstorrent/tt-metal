@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -27,6 +28,7 @@ from models.common.readiness_check.contract import Generator, NextInputFn
 
 _ARGMAX_TILE_KERNEL = "models/autoports/google_gemma_4_31b/tt/kernels/gemma4_argmax_tile_local_winner.cpp"
 _ARGMAX_PAIR_REDUCE_KERNEL = "models/autoports/google_gemma_4_31b/tt/kernels/gemma4_argmax_pair_reduce.cpp"
+_SAMPLING_SEED_SKIP = 2**32 - 1
 
 
 def _read_first_mesh_token(token_tensor: ttnn.Tensor) -> int:
@@ -358,6 +360,8 @@ class Gemma4Generator(Generator):
         self.trace_lifecycle_counters = {
             "release_calls": 0,
             "release_synchronizations": 0,
+            "sampling_seed_initializations": 0,
+            "sampling_seed_host_copies": 0,
         }
 
     def _new_token_buffer(self, batch_size: int) -> ttnn.Tensor:
@@ -454,6 +458,71 @@ class Gemma4Generator(Generator):
             device(torch.full((batch_size,), temperature, dtype=torch.bfloat16), ttnn.bfloat16),
         )
 
+    def _normalize_sampling_seeds(
+        self,
+        seed: int | Sequence[int] | torch.Tensor | None,
+        *,
+        active_slots: Sequence[bool],
+        physical_batch_size: int,
+    ) -> list[int]:
+        """Resolve request seeds while keeping inactive fixed slots at the skip sentinel."""
+        if physical_batch_size > self.max_batch_size or len(active_slots) != physical_batch_size:
+            raise ValueError("sampling seed slots must match the physical decode batch")
+        if seed is None:
+            requested = [secrets.randbelow(_SAMPLING_SEED_SKIP) for _ in range(sum(active_slots))]
+        elif isinstance(seed, (int, torch.Tensor)) and (not isinstance(seed, torch.Tensor) or seed.numel() == 1):
+            base = int(seed if isinstance(seed, int) else seed.reshape(-1)[0].item())
+            if not 0 <= base < _SAMPLING_SEED_SKIP:
+                raise ValueError("sampling seeds must be uint32 values other than UINT32_MAX")
+            requested = [(base + index) % _SAMPLING_SEED_SKIP for index in range(sum(active_slots))]
+        else:
+            requested = [int(value) for value in torch.as_tensor(seed, dtype=torch.int64).reshape(-1).tolist()]
+            if len(requested) not in (sum(active_slots), physical_batch_size):
+                raise ValueError("sampling seeds must contain one value per active row or fixed slot")
+            if len(requested) == physical_batch_size:
+                requested = [value for value, active in zip(requested, active_slots) if active]
+            if any(value < 0 or value >= _SAMPLING_SEED_SKIP for value in requested):
+                raise ValueError("sampling seeds must be uint32 values other than UINT32_MAX")
+
+        values = []
+        active_index = 0
+        for active in active_slots:
+            if active:
+                values.append(requested[active_index])
+                active_index += 1
+            else:
+                values.append(_SAMPLING_SEED_SKIP)
+        values.extend([_SAMPLING_SEED_SKIP] * (self.max_batch_size - physical_batch_size))
+        return values
+
+    def _copy_sampler_seeds(self, sampler: Sampling1D, values: Sequence[int]) -> None:
+        if len(values) != int(sampler.config.max_batch_size):
+            raise ValueError("sampler seed values must match the sampler's fixed slot count")
+        host = ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int64).to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, sampler._seeds)
+        self.trace_lifecycle_counters["sampling_seed_host_copies"] += 1
+
+    def _initialize_non_greedy_rng(self, values: Sequence[int], *, sampler: Sampling1D | None = None) -> None:
+        """Seed once at a request boundary, then make traced manual_seed a device-side no-op."""
+        sampler = self.sampler if sampler is None else sampler
+        self._copy_sampler_seeds(sampler, values)
+        ttnn.manual_seed(
+            seeds=sampler._seeds,
+            user_ids=sampler._user_ids,
+            sub_core_grids=sampler.config.sub_core_grids,
+        )
+        # The real seed values must be consumed before their persistent buffer
+        # is replaced with the skip sentinel. This synchronization is once per
+        # request, never in the steady token loop.
+        ttnn.synchronize_device(self.mesh_device)
+        self.trace_lifecycle_counters["sampling_seed_initializations"] += 1
+        self._copy_sampler_seeds(sampler, [_SAMPLING_SEED_SKIP] * int(sampler.config.max_batch_size))
+
     def _release_all_decode_traces(self) -> None:
         """Release both trace programs before freeing either trace's buffers."""
         self.trace_lifecycle_counters["release_calls"] += 1
@@ -514,6 +583,7 @@ class Gemma4Generator(Generator):
         top_p: float = 0.0,
         temperature: float = 1.0,
         force_argmax: bool = False,
+        seed: int | Sequence[int] | torch.Tensor | None = None,
     ):
         if self.model.trace_state.trace_id is not None or self._sampling_trace_id is not None:
             raise RuntimeError("eager sampling is not allowed while decode traces are live")
@@ -526,6 +596,12 @@ class Gemma4Generator(Generator):
             return sampler.decode_forward(logits, tt_out_tok=tt_out_tok)
         if self._is_semantic_greedy(top_k=top_k, top_p=top_p, temperature=temperature):
             return self.greedy_tp4_sampler.decode_forward(logits, tt_out_tok=tt_out_tok)
+        seeds = self._normalize_sampling_seeds(
+            seed,
+            active_slots=[True] * batch_size,
+            physical_batch_size=batch_size,
+        )
+        self._initialize_non_greedy_rng(seeds[:batch_size], sampler=sampler)
         params = self._make_sampling_params(batch_size=batch_size, top_k=top_k, top_p=top_p, temperature=temperature)
         try:
             return sampler.decode_forward(logits, k=params[0], p=params[1], temp=params[2], tt_out_tok=tt_out_tok)
@@ -736,6 +812,7 @@ class Gemma4Generator(Generator):
         top_p: float = 0.0,
         temperature: float = 1.0,
         force_argmax: bool = False,
+        seed: int | Sequence[int] | torch.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, Any]:
         tokens = torch.as_tensor(first_input_tokens, dtype=torch.int32).reshape(-1, 1)
         positions = torch.as_tensor(start_positions, dtype=torch.int32).reshape(-1)
@@ -749,6 +826,11 @@ class Gemma4Generator(Generator):
             tokens = torch.cat((tokens, torch.zeros((padding, 1), dtype=torch.int32)))
             positions = torch.cat((positions, torch.full((padding,), -1, dtype=torch.int32)))
             normalized_prompt_lengths += (0,) * padding
+        sampling_seeds = self._normalize_sampling_seeds(
+            seed,
+            active_slots=[value >= 0 for value in positions.tolist()],
+            physical_batch_size=int(tokens.shape[0]),
+        )
         page_tables_raw, resolved_kv_cache, external_state = self._resolve_cache_pair(page_table, kv_cache)
         page_tables = self.model._normalize_page_tables(page_tables_raw)
         if external_state and page_table_generations is None:
@@ -782,6 +864,8 @@ class Gemma4Generator(Generator):
         )
         if state.trace_id is not None:
             self.model.refresh_trace_page_tables(page_tables, generations=page_table_generations)
+            if not force_argmax and not self._is_semantic_greedy(top_k=top_k, top_p=top_p, temperature=temperature):
+                self._initialize_non_greedy_rng(sampling_seeds)
             self._validate_next_trace_position()
             logits = self.model.execute_decode_trace()
             return self._execute_sampling_trace()
@@ -800,6 +884,11 @@ class Gemma4Generator(Generator):
             use_greedy_tp4=use_greedy_tp4,
             force_argmax=force_argmax,
         )
+        if not force_argmax and not use_greedy_tp4:
+            # Prewarm may consume RNG state. Reinitialize the requested stream
+            # exactly once, then leave UINT32_MAX in the trace-bound buffer so
+            # every replay advances rand_tile() without host seed traffic.
+            self._initialize_non_greedy_rng(sampling_seeds)
         self.model.capture_decode_trace(kv_cache=resolved_kv_cache)
         if self.model.trace_state.logits is None:
             raise RuntimeError("model trace capture did not retain persistent logits")
@@ -894,6 +983,7 @@ class Gemma4Generator(Generator):
         top_k: int = 1,
         top_p: float = 0.0,
         temperature: float = 1.0,
+        seed: int | None = None,
         **kwargs: Any,
     ) -> list[int]:
         if max_new_tokens < 0:
@@ -906,6 +996,9 @@ class Gemma4Generator(Generator):
             raise ValueError("optimized token-out generation requires enable_trace=True")
 
         self.reset()
+        request_seed = secrets.randbelow(_SAMPLING_SEED_SKIP) if seed is None else int(seed)
+        if not 0 <= request_seed < _SAMPLING_SEED_SKIP:
+            raise ValueError("sampling seeds must be uint32 values other than UINT32_MAX")
         prompt = torch.tensor([prompt_token_ids], dtype=torch.long)
         start = time.perf_counter()
         if use_host_sampling:
@@ -931,6 +1024,7 @@ class Gemma4Generator(Generator):
                 top_k=top_k,
                 top_p=top_p,
                 temperature=temperature,
+                seed=request_seed,
             )
             predicted = self.read_sampled_token(sampled)
             logits.deallocate(True)
@@ -960,6 +1054,7 @@ class Gemma4Generator(Generator):
                     top_k=top_k,
                     top_p=top_p,
                     temperature=temperature,
+                    seed=(request_seed + 1) % _SAMPLING_SEED_SKIP,
                 )
                 predicted = self.read_sampled_token(sampled)
                 outputs.append(predicted)
