@@ -113,6 +113,60 @@ validated **manual RoPE** (so RoPE numerics are unchanged). For batch=1 single-c
 - **e2e audio parity** (rewritten, reliable): `pytest .../test_e2e_generate_pcc.py -x -s` → forced-token replay, gate on **first-frame PCC 0.9957 ≥ 0.90** + RMS-ratio 1.05 + sanity. ✅ (gate values verified against the real saved audio `/tmp/vv_e2e_audio.pt`).
 - **Demo** (the deliverable): `VV_PROFILE=1 .../demo_ttnn.py --demo 4p_climate_45min --output_dir /tmp/vv_climate_new --max_new_tokens 64` → **pos_lm_step 202→55 ms (3.65×)**, flat in context, proper speech audio. Baselines: `/tmp/vv_climate_base/` (old), `/tmp/vv_climate_new/` (new). ✅
 
+## PREFILL OPTIMIZATION (session 2 — dispatch/op-count campaign, all bit-exact)
+Target: speed up the one-time `prefill_embeds` fp32-manual path (follow-up #2 below) **without any
+PCC/audio regression**. Kept fp32 attention (the 0.99 gate has a thin margin — prefill overall 0.9966,
+per-position min 0.9903).
+
+**Regime finding (the key to the whole campaign):** a warm single-chunk forward is **~64 % dispatch-bound**
+— measured **112 ms wall vs ~40 ms device** (256-tok chunk); going 256→1024 tok (4× tokens) only added
+~30 % wall, so the ~112 ms base is **fixed per-forward dispatch overhead ∝ op count**, not token count.
+⇒ **op-count reduction is the lever, not matmul fidelity.** (Confirmed: HiFi4→HiFi2 on the FFN/QKVO gave
+only −1.3 % device — those matmuls are **DRAM-BW-bound**, w1/w3 at ~67 % of peak BW; fidelity is the wrong
+knob and it costs PCC, so it was reverted. `ttnn.repeat_interleave` for the GQA expand was also reverted —
+it untilizes→concats→tilizes internally and was *slower* than the in-TILE slice+concat.)
+
+**Landed (all in `tt/ttnn_vibevoice_lm.py`, all bit-exact — prefill PCC stays 0.996597, decode 0.999889):**
+1. **Fused QKV projection + `nlp_create_qkv_heads` / `nlp_concat_heads`.** One fused `wqkv` matmul (concat
+   of wq|wk|wv on the output dim, built in `preprocess_lm_weights`) + one `nlp_create_qkv_heads` replaces
+   3 linears + 3 bias-adds + 3 reshapes + 3 permutes; `nlp_concat_heads` replaces the output permute+reshape.
+   Matmul count 253→197. **Decode path unchanged** (keeps separate wq for its width-sharded fast config).
+2. **TILE-native head reshape** (`_reshape_heads` = plain `ttnn.reshape`) — the old `_reshape_tt` did
+   untilize→reshape→tilize; validated bit-exact (PCC 1.0) for split & merge, S==1 & S>1. Removed **all**
+   Tilize/Untilize/TilizeWithValPadding/UntilizeWithUnpadding ops from attention.
+3. **Hoisted the RoPE cos/sin slice** out of the 28-layer loop into `forward` (was re-sliced identically
+   per layer) — −54 slice ops.
+4. **Skip lm_head on non-final prefill chunks** (`forward(compute_logits=...)`, set by `prefill_embeds`) —
+   only the last chunk's logits are consumed by the sampler; saves one vocab-151936 matmul (~1.7 ms) per
+   intermediate chunk (≈ 51 chunks × 1.7 ms ≈ 87 ms on the 13k climate prefill).
+
+**Result:** warm 256-tok forward **112.4 → 82.6 ms (−26.5 %)**; 1024-tok **145.7 → 125.3 ms (−14 %)**;
+tracy device 39.6 → ~37 ms. Validated: `test_lm_pcc` prefill **0.996597** (identical to baseline) / decode
+**0.999889** (≥ old 0.9997); ISL sweep 32–1024 all PASS; `demo_ttnn.py` (1p_CH2EN) runs clean, valid audio.
+The warm per-chunk win is what matters for the long (13k/64k) prefills; the 478-tok demo prefill is
+compile-dominated so shows little.
+
+**Investigated, no safe win (don't re-explore):**
+- **Best matmul program configs (M=256):** swept auto vs tuned 2D-mcast (grid/in0_block_w/subblock)
+  for qkv 1536→2048, o_proj 1536→1536, gate/up 1536→8960, down 8960→1536, lm_head 1536→151936
+  (`tests/perf/matmul_prefill_sweep.py`). **Auto wins every shape** — hand-tuned 2D configs were up to
+  10× slower (auto picks a much better grid than the naive per_core split). Keep `program_config=None`.
+  These matmuls are DRAM-BW-bound (gate/up ~67 % of peak), so fidelity/subblock knobs don't move them.
+- **L1-resident I/O:** per-op sweep showed gate/up ~16 % faster writing to L1, but **in the full FFN chain
+  it's neutral at the real chunk size (256: 82.6→83.2 ms) and *regresses* badly at 1024 (125→381 ms)** —
+  the isolation win doesn't survive the chain and L1 scales poorly at larger M (matches the older
+  `matmul_l1_probe`). Kept DRAM. (Real prefill is chunked at 256, so per-forward S never exceeds 256.)
+- **RoPE q-typecast dedup** (keep prefill Q fp32 out of RoPE, skip the re-cast): tiny PCC *regression*
+  (0.996597→0.996358) not an improvement, for only ~2 ops/layer — reverted.
+
+**Next prefill lever (not done — risk):** RoPE is the biggest remaining op-count sink (~18 ops/layer:
+typecast + rotate_half slice/neg/concat + muls, ×q,k). `ttnn.experimental.rotary_embedding_llama` fuses it
+to ~1 op but uses the **interleaved (GPT-J) trans_mat convention**, while Qwen2 uses **NeoX rotate-half** —
+needs the cos/sin cache rebuilt to match + full-depth PCC re-validation (thin margin). Deferred to protect
+the 0.99 gate. (e2e_generate_pcc is currently broken by a pre-existing transformers-version TypeError in the
+CPU reference `_prepare_generation_config` — unrelated to these changes; confirmed identical failure on the
+clean tree. Gate on `test_lm_pcc` + demo instead until that's fixed.)
+
 ## TRACE INVESTIGATION (done — findings, so it isn't repeated)
 - **Diffusion-loop trace: investigated and rejected.** Captured the 10-step CFG diffusion loop as a device trace (had to remove host-writes from the captured region first: `ttnn.full` in the scheduler's scalar mul/add → scalar-operand `ttnn.mul/add`; `ttnn.ones_like` in the diffusion head → `+1.0`; precompute the per-step timestep tensors outside capture — all numerically identical, validated by a scalar probe). Result: **diffusion is COMPUTE-bound** (batch-2 matmuls over hidden 1536 / ffn 4608 × 10 steps), so trace gave only **~9%** (26.5 ms traced vs 29 ms eager) — not worth the complexity (and the first replay impl had an output-buffer-reuse bug → corrupted audio). Reverted to the committed state. **Lesson: trace only helps the dispatch-bound regions** (tiny tensors, many ops).
 - **The dispatch-bound win is the LM DECODE** (single-token, batch-1, tiny matmuls × 28 layers × 2 forwards/frame). Tracing it is the real decode win but needs the full tt_transformers-style sharded-decode rewrite: fused-QKV → `nlp_create_qkv_heads_decode` (sharded) → `rotary_embedding_llama` (position-tensor RoPE, re-validate numerics) → `paged_update_cache(update_idxs_tensor=cur_pos)` (sharded input) → `scaled_dot_product_attention_decode(cur_pos_tensor)` → `nlp_concat_heads_decode`, with `cur_pos`/token as persistent device tensors incremented in-graph (`ttnn.plus_one`) + a trace harness + `trace_region_size` on every device that runs `generate`. Substantial; numerical re-validation required. Refs: `tt_transformers/tt/attention.py:651-743`, `generator.py:_capture_decode_trace_text` / `model.py:_increment_decode_positions_device`.
