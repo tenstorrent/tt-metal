@@ -159,17 +159,23 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
         workers_per_dir = 2;
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
-        // More workers only help when the op is bandwidth-bound, which needs both large NOC transactions
-        // (page size) and enough steady-state bytes. Small-page tensors (e.g. block-float) stay
-        // per-page-overhead-bound even at tens of MB, so extra workers add only mux cost.
+        // workers_per_dir (dominant knob): the optimum tracks fabric-link demand (per_link_bytes)
+        // gated by NOC txn size. Big page + enough bytes/link -> more workers raise aggregate NOC
+        // bandwidth (saturates ~8-12); a small page is per-transaction-bound and a tiny tensor is
+        // op-overhead-bound, so both want few workers.
+        // workers_per_dir in {3,4,5} is a reproducible NOC/core-placement pessimum -- worse than
+        // 2 and than >=6 -- so the ramp jumps 2->8->12 and must never emit them.
         const uint32_t txn_bytes = std::min(input_page_size, output_page_size);  // NOC transaction size
-        const uint64_t total_output_bytes =
-            (uint64_t)output_tensor.buffer()->num_pages() * output_tensor.buffer()->aligned_page_size();
+        const uint64_t total_output_bytes = output_tensor.buffer()->num_pages() * output_page_size;
         const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
-        constexpr uint32_t bw_bound_txn_bytes = 1536;         // between block-float (<=1088) and bf16 (2048)
-        constexpr uint64_t bw_bound_link_bytes = 4500000ULL;  // gathered bytes/link where fabric link saturates
+        constexpr uint32_t bw_bound_txn_bytes = 1536;              // NOC txn size needed to benefit from >2 workers
+        constexpr uint64_t bw_bound_link_bytes = 4000000ULL;       // bytes/link where fabric link starts saturating
+        constexpr uint64_t link_saturated_bytes = 20000000ULL;     // bytes/link where 12 workers beat 8
+        constexpr uint64_t overhead_bound_link_bytes = 750000ULL;  // below this the op is fixed-overhead-bound
         if (txn_bytes >= bw_bound_txn_bytes && per_link_bytes >= bw_bound_link_bytes) {
-            workers_per_dir = 4;
+            workers_per_dir = (per_link_bytes >= link_saturated_bytes) ? 12 : 8;
+        } else if (per_link_bytes < overhead_bound_link_bytes) {
+            workers_per_dir = 1;
         } else {
             workers_per_dir = 2;
         }
