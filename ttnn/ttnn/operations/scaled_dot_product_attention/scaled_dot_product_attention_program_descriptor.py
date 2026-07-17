@@ -503,12 +503,236 @@ def _create_mcast_program_descriptor(query, key, value, output_tensor, scale, co
     return descriptor, [query, key, value]
 
 
+# ===========================================================================
+# Q-OUTER LOCKSTEP multicast — the PRIORITY variant (built per team-lead refinement).
+# ===========================================================================
+# Unlike the KV-outer variant above, this KEEPS the Q-outer loop (one q-chunk +
+# one (m,l,O) state per core at a time) and REUSES the shipped optimized compute
+# kernel VERBATIM — so the ~4.888 ms compute floor is untouched. The only changes
+# from baseline: (1) work is head-grouped (each head's q-chunks live on one grid
+# row), and (2) the KV stream is delivered by ONE injector per row (Mcast1D PerRow)
+# while the row marches its KV index in lockstep (the mcast handshake is the
+# barrier). Reads drop ~cores_per_row-fold (once per wave, not per q-chunk).
+# OPT-IN: SDPA_LOCKSTEP=1 (default off; measured result in perf_findings.md).
+
+
+def _lockstep_eligible(query, key, value, attn_mask, is_causal, compute_kernel_config):
+    """Return params dict if the Q-outer lockstep path applies, else None."""
+    if os.environ.get("SDPA_LOCKSTEP") != "1":
+        return None
+    q = list(query.shape)
+    k = list(key.shape)
+    B, H, S_q, D = q
+    H_kv, S_kv = k[1], k[-2]
+    if attn_mask is not None or is_causal:
+        return None
+    if query.dtype != ttnn.bfloat16 or key.dtype != ttnn.bfloat16:
+        return None
+    if query.layout != ttnn.TILE_LAYOUT:
+        return None
+    if S_q != S_kv or H_kv != H:  # self-attn, MHA
+        return None
+    if S_q % TILE_DIM != 0 or D % TILE_DIM != 0:  # tile-aligned
+        return None
+    if bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True)):
+        return None  # throughput regime (matches the flagged shape); reuses the fused compute
+    device = query.device()
+    grid = device.compute_with_storage_grid_size()
+    gx, gy = grid.x, grid.y
+    if gx < 2 or (B * H) > gy:
+        return None
+    return {"B": B, "H": H, "H_kv": H_kv, "S_q": S_q, "S_kv": S_kv, "D": D, "gx": gx}
+
+
+def _create_lockstep_program_descriptor(query, key, value, output_tensor, scale, compute_kernel_config, p):
+    B, H, H_kv = p["B"], p["H"], p["H_kv"]
+    S_q, S_kv, D, gx = p["S_q"], p["S_kv"], p["D"], p["gx"]
+    num_groups = B * H
+    cores_per_row = gx
+
+    Sq_t = _ceil_div(S_q, TILE_DIM)
+    Skv_t = _ceil_div(S_kv, TILE_DIM)
+    Dt = _ceil_div(D, TILE_DIM)
+
+    # Block knobs + precision — IDENTICAL to the baseline (this reuses the baseline
+    # compute), so the compute floor is the baseline's. fp32_dest is False here.
+    fp32_dest = False
+    in_bytes = ttnn.tile_size(query.dtype)
+    out_bytes = ttnn.tile_size(output_tensor.dtype)
+    interm_format = ttnn.bfloat16
+    interm_bytes = ttnn.tile_size(interm_format)
+    Sq_chunk_t, Skv_chunk_t, KV_DEPTH, OUT_DEPTH = _fit_l1(
+        Sq_t, Skv_t, Dt, False, False, in_bytes, out_bytes, interm_bytes
+    )
+    n_q_chunks = _ceil_div(Sq_t, Sq_chunk_t)
+    n_kv_chunks = _ceil_div(Skv_t, Skv_chunk_t)
+    num_waves = _ceil_div(n_q_chunks, cores_per_row)
+
+    fuse_rowsum = 1
+    fuse_oaccum = (Sq_t % Sq_chunk_t) == 0  # informational; the compute derives it identically
+    dest_limit = 8
+    fast_exp = 1
+    grow_subblock_h = 1 if os.environ.get("SDPA_PV_SB_H") == "1" else 0
+    mcast_bcast = 0 if os.environ.get("SDPA_MCAST_NO_BCAST") == "1" else 1
+    ablate_reader = 1 if os.environ.get("SDPA_MCAST_ABLATE_READER") == "1" else 0
+    ablate_writer = 1 if os.environ.get("SDPA_MCAST_ABLATE_WRITER") == "1" else 0
+
+    device = query.device()
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, num_groups - 1))])
+    sender_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_groups - 1))])
+    recv_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(gx - 1, num_groups - 1))])
+
+    mc = ttnn.Mcast1D(device, all_cores, ttnn.Mcast1DShape.PerRow, 0, ttnn.McastConfig(handshake=True, base_sem_id=0))
+    semaphores = mc.owned_semaphores()
+
+    bf16 = ttnn.tile_size(ttnn.bfloat16)
+    in_page = query.buffer_page_size()
+    out_page = output_tensor.buffer_page_size()
+
+    # ---- Circular buffers: the BASELINE compute CB layout (mask-free path) ----
+    cbs = [
+        _cb(CB_Q_IN, in_page, Sq_chunk_t * Dt, query.dtype, all_cores),
+        _cb(CB_K_IN, in_page, Skv_chunk_t * Dt * KV_DEPTH, query.dtype, all_cores),
+        _cb(CB_V_IN, in_page, Skv_chunk_t * Dt * KV_DEPTH, query.dtype, all_cores),
+        _cb(CB_SCALER, bf16, 1, ttnn.bfloat16, all_cores),
+        _cb(CB_SCALE, bf16, 1, ttnn.bfloat16, all_cores),
+        _cb(CB_M_NEW, interm_bytes, Sq_chunk_t, interm_format, all_cores),
+        _cb(CB_SUM_CHUNK, interm_bytes, Sq_chunk_t, interm_format, all_cores),
+        _cb(CB_OUT, out_page, Sq_chunk_t * Dt * OUT_DEPTH, output_tensor.dtype, all_cores),
+        _cb(CB_Q_SCALED, bf16, Sq_chunk_t * Dt, ttnn.bfloat16, all_cores),
+        _cb(CB_SCORES, interm_bytes, Sq_chunk_t * Skv_chunk_t, interm_format, all_cores),
+        _cb(CB_EXP, interm_bytes, Sq_chunk_t * Skv_chunk_t, interm_format, all_cores),
+        _cb(CB_ROW_MAX, interm_bytes, Sq_chunk_t, interm_format, all_cores),
+        _cb(CB_ROW_SUM, interm_bytes, Sq_chunk_t, interm_format, all_cores),
+        _cb(CB_OUT_ACCUM, interm_bytes, Sq_chunk_t * Dt, interm_format, all_cores),
+        _cb(CB_CORR, interm_bytes, Sq_chunk_t, interm_format, all_cores),
+    ]
+    if not fuse_oaccum:
+        cbs.append(_cb(CB_PV, interm_bytes, Sq_chunk_t * Dt, interm_format, all_cores))
+
+    # ---- Reader (lockstep; sender + receiver via IS_SENDER) ----
+    def reader_ct(is_sender):
+        ct = [
+            Dt,
+            Sq_chunk_t,
+            Skv_chunk_t,
+            n_kv_chunks,
+            Sq_t,
+            Skv_t,
+            H,
+            H_kv,
+            _f32_bits(scale),
+            1 if is_sender else 0,
+            mcast_bcast,
+            ablate_reader,
+            num_waves,
+            cores_per_row,
+            n_q_chunks,
+        ]
+        ct += list(mc.compile_time_args())  # 5 words at index 15
+        ct += ttnn.TensorAccessorArgs(query).get_compile_time_args()
+        ct += ttnn.TensorAccessorArgs(key).get_compile_time_args()
+        ct += ttnn.TensorAccessorArgs(value).get_compile_time_args()
+        return ct
+
+    sender_rt = ttnn.RuntimeArgs()
+    recv_rt = ttnn.RuntimeArgs()
+    compute_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+    q_addr, k_addr, v_addr, o_addr = (
+        query.buffer_address(),
+        key.buffer_address(),
+        value.buffer_address(),
+        output_tensor.buffer_address(),
+    )
+    for y in range(num_groups):
+        b, h = y // H, y % H
+        for x in range(gx):
+            core = ttnn.CoreCoord(x, y)
+            mc_rt = list(mc.runtime_args(core))
+            base_rt = [q_addr, k_addr, v_addr, b, h, x]
+            if x == 0:
+                sender_rt[x][y] = base_rt + mc_rt
+            else:
+                recv_rt[x][y] = base_rt + mc_rt
+            compute_rt[x][y] = [num_waves, 0]  # (num_wu, start_wu); qc-independent for tile-aligned
+            writer_rt[x][y] = [o_addr, b, h, x]
+
+    kdir = str(KERNEL_DIR)
+    sender_kernel = ttnn.KernelDescriptor(
+        kernel_source=kdir + "/scaled_dot_product_attention_lockstep_reader.cpp",
+        core_ranges=sender_cores,
+        compile_time_args=reader_ct(True),
+        runtime_args=sender_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    receiver_kernel = ttnn.KernelDescriptor(
+        kernel_source=kdir + "/scaled_dot_product_attention_lockstep_reader.cpp",
+        core_ranges=recv_cores,
+        compile_time_args=reader_ct(False),
+        runtime_args=recv_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    # REUSED baseline compute kernel — identical CT layout as create_program_descriptor.
+    compute_ct = [
+        Dt,
+        Sq_chunk_t,
+        Skv_chunk_t,
+        n_kv_chunks,
+        0,
+        0,
+        Sq_t,
+        n_q_chunks,
+        Skv_t,
+        dest_limit,
+        fast_exp,
+        fuse_rowsum,
+        0,
+        grow_subblock_h,
+        0,
+        0,
+    ]
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=kdir + "/scaled_dot_product_attention_compute.cpp",
+        core_ranges=all_cores,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=getattr(compute_kernel_config, "math_fidelity", ttnn.MathFidelity.HiFi2),
+            fp32_dest_acc_en=False,
+            math_approx_mode=bool(getattr(compute_kernel_config, "math_approx_mode", False)),
+            dst_full_sync_en=bool(getattr(compute_kernel_config, "dst_full_sync_en", False)),
+        ),
+    )
+    writer_ct = [Dt, Sq_chunk_t, H, Sq_t, ablate_writer, num_waves, cores_per_row, n_q_chunks]
+    writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=kdir + "/scaled_dot_product_attention_lockstep_writer.cpp",
+        core_ranges=all_cores,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    descriptor = ttnn.ProgramDescriptor(
+        kernels=[sender_kernel, receiver_kernel, compute_kernel, writer_kernel],
+        semaphores=list(semaphores),
+        cbs=cbs,
+    )
+    return descriptor, [query, key, value]
+
+
 def create_program_descriptor(
     query, key, value, output_tensor, *, attn_mask=None, is_causal=False, scale=1.0, compute_kernel_config=None
 ):
-    # GUARDED NoC-multicast (KV read-once + broadcast) path. Only for the shape
-    # class it is valid for; every other shape falls through to the shipped
-    # Q-outer path below unchanged. Opt-out via SDPA_MCAST=0.
+    # GUARDED multicast paths, both OPT-IN (default off → shipped Q-outer path for
+    # every shape, zero regression). Q-outer LOCKSTEP (SDPA_LOCKSTEP=1) is the
+    # priority variant (reuses the optimized compute, floor untouched); the KV-outer
+    # variant (SDPA_MCAST=1) is the measured +44% comparison point.
+    lockstep_params = _lockstep_eligible(query, key, value, attn_mask, is_causal, compute_kernel_config)
+    if lockstep_params is not None:
+        return _create_lockstep_program_descriptor(
+            query, key, value, output_tensor, scale, compute_kernel_config, lockstep_params
+        )
     mcast_params = _mcast_eligible(query, key, value, attn_mask, is_causal, compute_kernel_config)
     if mcast_params is not None:
         return _create_mcast_program_descriptor(
