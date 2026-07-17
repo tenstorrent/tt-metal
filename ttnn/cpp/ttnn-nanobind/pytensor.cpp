@@ -1802,10 +1802,15 @@ void pytensor_module(nb::module_& mod) {
                 per_shard_bytes);
 
             auto* dst_base = static_cast<std::byte*>(dest.data());
-            // get_mesh_buffer_leak_ownership() is the public accessor for the
-            // underlying shared_ptr<MeshBuffer>; we don't need to touch the
-            // MeshTensorImpl (which is only forward-declared in this TU).
-            auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+            // MeshTensor now retains sole ownership of its MeshBuffer
+            // (get_mesh_buffer_leak_ownership was removed in #47291). The public
+            // accessor returns a const MeshBuffer&; enqueue_read_shards only
+            // borrows the buffer for the duration of this (blocking) call and
+            // device_tensor outlives it, so we wrap the reference in a
+            // non-owning aliasing shared_ptr (empty control block, no deleter).
+            const auto& mesh_buffer_ref = device_tensor.device_storage().get_mesh_tensor().mesh_buffer();
+            auto mesh_buffer = std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>(
+                std::shared_ptr<void>{}, const_cast<tt::tt_metal::distributed::MeshBuffer*>(&mesh_buffer_ref));
             auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
 
             // Build one ShardDataTransfer per coord, each pointing into the right
