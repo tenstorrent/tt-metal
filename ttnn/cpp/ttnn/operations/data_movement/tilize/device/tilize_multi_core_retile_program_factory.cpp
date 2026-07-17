@@ -90,8 +90,11 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
 
     auto* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
+    CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    CoreRangeSet default_grid(default_cores);
+    const CoreRangeSet available_grid = operation_attributes.sub_core_grids.value_or(default_grid);
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
-        ttnn::split_blocks_for_tilize(grid_size, num_split_units);
+        ttnn::split_blocks_for_tilize(available_grid, num_split_units);
 
     // Double-buffer when a core processes more than one block so reader/compute/writer overlap.
     const uint32_t cb_num_pages_per_block = tiles_per_block;
