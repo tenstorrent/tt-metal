@@ -268,7 +268,7 @@ def run_strided_all_gather_impl(
         (
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(4096),
+                "fabric_router_config": create_fabric_router_config(8192),
                 "trace_region_size": 90112,
             },
             ttnn.Topology.Ring,
