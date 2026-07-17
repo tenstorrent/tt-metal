@@ -91,7 +91,7 @@ The barrier is `llk_profiler::sync_point` — the **same epoch barrier the NC (p
 
 Before any TRISC kernel runs, BRISC executes `configure_and_arm_from_brisc()` once (called from `brisc.cpp` when the WC build flag is set). This:
 
-- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (130 slots on WH, 169 on BH) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the canonical metal inventory — see [Counter inventory single source](#counter-inventory-single-source).
+- Writes the per-architecture `BUILTIN_COUNTER_CONFIG` (126 slots on WH, 155 on BH) into the shared L1 config buffer at `0x169000`. That array is built at compile time from the canonical metal inventory — see [Counter inventory single source](#counter-inventory-single-source).
 - Clears every per-zone data area and sync word.
 - Clears `DBG_FEATURE_DISABLE` to `0` — see [DBG_FEATURE_DISABLE scrub](#dbg_feature_disable-scrub) below.
 - Programs each bank's reference-period and mode registers, sets `PERF_CNT_MUX_CTRL` for L1, and does an initial global arm (later overridden by the first `MEASURE_PERF_COUNTERS` zone).
@@ -100,7 +100,7 @@ After BRISC releases the TRISCs, the shared config is read-only for the rest of 
 
 ##### `DBG_FEATURE_DISABLE` scrub
 
-`DBG_FEATURE_DISABLE` is a 16-bit debug/chicken-bit register whose bits toggle low-level behaviors — notably randomized L1 arbitration (`DBG_FEAT_L1_ARB_LFSR_EN`, `0x8`), L1 atomic serialization, and L1 read-enable override. It resets to `0` (all normal), but HW register state **leaks between tests** run back-to-back on an un-reset device, so a prior test that set one of these bits would silently perturb — and make nondeterministic — the ~80 L1 counters. BRISC writes `0` here to guarantee a clean baseline regardless of leaked state; the blanket write (rather than clearing one bit) is deliberate because any of the bits, not just LFSR, would skew the measurement. Verified: with a leaked `0x8` present, the L1 metrics jitter 40–98 % run-to-run without this scrub and are byte-identical with it. Note this scrub is WC-only (it lives in the counter path); the NC path has no equivalent.
+`DBG_FEATURE_DISABLE` is a 16-bit debug/chicken-bit register whose bits toggle low-level behaviors — notably randomized L1 arbitration (`DBG_FEAT_L1_ARB_LFSR_EN`, `0x8`), L1 atomic serialization, and L1 read-enable override. It resets to `0` (all normal), but HW register state **leaks between tests** run back-to-back on an un-reset device, so a prior test that set one of these bits would silently perturb — and make nondeterministic — the ~70 L1 counters. BRISC writes `0` here to guarantee a clean baseline regardless of leaked state; the blanket write (rather than clearing one bit) is deliberate because any of the bits, not just LFSR, would skew the measurement. Verified: with a leaked `0x8` present, the L1 metrics jitter 40–98 % run-to-run without this scrub and are byte-identical with it. Note this scrub is WC-only (it lives in the counter path); the NC path has no equivalent.
 
 ### Reading results from host
 
@@ -140,19 +140,17 @@ Without the flag the suite still runs the same sources but builds the NC variant
 | Flag | Implies `--enable-perf-counters` | Effect |
 |------|----------------------------------|--------|
 | `--enable-perf-counters` | — | Build the WC variant and collect raw counters per zone |
-| `--dump-raw-counters` | yes | Print raw HW counter values to the console per variant |
-| `--dump-raw-metrics` | yes | Print derived efficiency metrics (utilisation, stall, BP %) to the console |
-| `--dump-csv-counters` | yes | Export raw counter values to a separate `<test>.counters.csv` alongside the main results CSV |
+| `--dump-perf-counters` | yes | Export raw counter values to a separate `<test>.counters.csv` alongside the main results CSV |
 
-Any of `--dump-raw-counters`, `--dump-raw-metrics`, or `--dump-csv-counters` implicitly enables counter collection; you don't need to specify `--enable-perf-counters` separately.
+`--dump-perf-counters` implicitly enables counter collection; you don't need to specify `--enable-perf-counters` separately. Derived efficiency metrics are always written to the main results CSV whenever counters are collected. All output is CSV — there is no console dump.
 
 ### Output
 
 For each test variant, the WC build emits:
 
 - A row per `(zone, bank, counter_id, l1_mux)` in the main results DataFrame, with raw `cycles` and `count` columns.
-- A `*.counters.csv` file if `--dump-csv-counters` was passed.
-- A merged metrics summary (Min / Median / Max / Avg of every derived metric across variants) if `--dump-raw-metrics` was passed.
+- A `*.counters.csv` file if `--dump-perf-counters` was passed.
+- The derived efficiency metrics (percentages) per zone in the main results CSV.
 
 The NC build emits per-zone wall-clock cycle counts in the same results DataFrame so a single run with both builds (different pytest invocations) can be merged off-line to compare wall-clock cycles against counter-derived cycle counts.
 
@@ -162,11 +160,11 @@ The NC build emits per-zone wall-clock cycle counts in the same results DataFram
 |---|---|---|
 | INSTRN_THREAD slots in inventory | 59 | 59 |
 | FPU slots | 3 | 3 |
-| TDMA_UNPACK slots | 22 | 22 |
+| TDMA_UNPACK slots | 18 | 18 |
 | TDMA_PACK slots | 14 | 5 |
 | L1 mux positions (Tensix) | 2 | 5 |
-| L1 slots in inventory | 32 (16 × 2 mux) | 80 (16 × 5 mux) |
-| Total slots in `BUILTIN_COUNTER_CONFIG` | 130 | 169 |
+| L1 slots in inventory | 32 (16 × 2 mux) | 70 (16+16+16+16+6) |
+| Total slots in `BUILTIN_COUNTER_CONFIG` | 126 | 155 |
 | Total config words in L1 | 200 (rest are zero-padded) | 200 |
 
 **Wormhole** has `PACK_COUNT = 4` (per-engine packer busy signals are live in RTL), so `TDMA_PACK` exposes counters 11–18 for per-engine busy and 267–272 for per-engine dest-read availability and grant counts. The L1 mux is 1-bit wide: position 0 covers NoC Ring 0 plus L1 arbitration, position 1 covers NoC Ring 1 plus TDMA-extended signals.
@@ -275,9 +273,16 @@ The mux is latched at counter-start time. The macro path re-writes it before eac
 
 ## Derived Metrics Reference
 
-Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. The metric set mirrors the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) — the same catalogue applies to **both Wormhole and Blackhole** (architecture differences are confined to a few WH-only or BH-only counters, called out per-metric). The LLK driver operates on per-zone snapshots rather than per-op aggregates, so all derived values appear in the merged CSV and the `--dump-raw-metrics` console output.
+Derived metrics are computed in `tests/python_tests/helpers/metrics.py` from the raw counter DataFrame. The metric **formulas** themselves are single-sourced in the shared module [`tt_metal/tools/profiler/perf_metrics_common.py`](../../../../tt_metal/tools/profiler/perf_metrics_common.py) (`compute_metrics`), consumed by both this LLK harness (`metrics.py`) and the metal Tracy tool (`tools/tracy/perf_counter_analysis.py`), so both sides compute identical metrics. The metric set mirrors the metal-level [PerfCounters tech report](../../../../tech_reports/PerfCounters/perf-counters.md) — the same catalogue applies to **both Wormhole and Blackhole** (architecture differences are confined to a few WH-only or BH-only counters, called out per-metric). The LLK driver operates on per-zone snapshots rather than per-op aggregates, so all derived values appear in the merged CSV.
 
-> **Full catalogue.** Metrics #1–#47 in `tech_reports/PerfCounters/perf-counters.md` are the authoritative list. The sections below document the ones the LLK driver surfaces directly; raw counters for every other upstream metric are present in the per-zone CSV, so any upstream formula can be re-evaluated on LLK data without code changes.
+> **Full catalogue.** Metrics #1–#47 in `tech_reports/PerfCounters/perf-counters.md` are the authoritative list. The sections below document the ones the LLK driver surfaces directly; raw counters for every other upstream metric are present in the per-zone CSV, so any upstream formula can be re-evaluated on LLK data without code changes. `compute_metrics` currently returns 106 metrics in total.
+
+> **Two metric families — percentages vs ratios.** Derived values split into two families, distinguished by their key suffix and display unit:
+>
+> - **Bounded percentages** (`*_pct` keys, unit `(%)`, value 0–100). A fraction of a reference count within one measurement domain — utilisations (busy/ref), stall/wait/availability rates, same-bank efficiencies (done/attempted, grant/req), back-pressures (1−grant/req), and shares (x/(x+y)). The numerator can never exceed the denominator, so these stay ≤100%. **This includes the per-thread instruction-issue rates** (`T0/T1/T2 Instrn Issue Rate`): Tensix is single-issue, so ≤1 instruction/cycle ⇒ ≤100%, shown as a percentage.
+> - **Unbounded ratios** (`*_ratio` keys, unit `(ratio)`, value is the RAW fraction — NOT ×100 — and may exceed 1.0 by design). The numerator and denominator measure *different* quantities (cross-bank) or a sum can exceed its reference, so >1.0 is meaningful, not a bug. The seven: `math_to_pack_handoff_ratio` (available-math per busy-packer cycle; >1 ⇒ packer is the bottleneck), `compute_to_unpack_ratio` (math/SFPU ops per unpacker-busy cycle; >1 ⇒ compute-bound — a unary SFPU op can reach several ×), `unpacker_l1_eff_ratio` / `packer_l1_eff_ratio` (L1-bank grant cycles per compute-bank busy cycle — cross-domain, >1 ⇒ L1 grants exceed engine-busy, e.g. Wormhole's multi-packer), and `stall_overlap_t0/1/2_ratio` (summed per-resource wait cycles / instruction cycles; >1 ⇒ several waits overlap in the same cycle). These are reported as a bare ratio (e.g. `1.41`), never clamped.
+
+> **Arch isolation.** A metric whose underlying counters are absent on the current architecture returns **N/A (None), not 0** — e.g. Packer Engine 0/1/2 Util are Wormhole-only (a single packer on Blackhole ⇒ N/A), and the *L1 Ext Packer* / *L1 Tag Search* back-pressures below (#48–#49, L1 banks 3–4) are Blackhole-only (⇒ N/A on Wormhole). Note *L1 Ext Unpacker Backpressure* (#47) uses L1 bank 1, which exists on both arches, so it is NOT Wormhole-N/A.
 
 ---
 
@@ -412,7 +417,7 @@ Ratio of math-output availability to packer consumption.
 | **Counter group** | TDMA_PACK |
 
 ```
-Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY * 100
+Math-to-Pack Handoff = AVAILABLE_MATH / PACKER_BUSY
 ```
 
 - **>100%**: Math produces output faster than packer can consume (packer is the bottleneck).
@@ -470,7 +475,7 @@ Thread mapping: T0 = UNPACK, T1 = MATH, T2 = PACK.
 
 **10. Thread N Issue Rate**
 
-Average instructions issued per cycle, per thread.
+Percentage of cycles in which the thread issued an instruction. Tensix is single-issue (≤1 instruction/cycle), so this is bounded 0–100% and presented as a **percentage** (unit `(%)`), not a raw instructions-per-cycle rate.
 
 | | |
 |---|---|
@@ -478,11 +483,11 @@ Average instructions issued per cycle, per thread.
 | **Counter group** | INSTRN_THREAD |
 
 ```
-TN Issue Rate = THREAD_INSTRUCTIONS_N / INSTRN_OUT_L
+TN Issue Rate = THREAD_INSTRUCTIONS_N / INSTRN_OUT_L * 100
 ```
 
-- **High (~1.0)**: Thread issues an instruction nearly every cycle.
-- **Low (<0.1)**: Thread is idle or blocked.
+- **High (~100%)**: Thread issues an instruction nearly every cycle.
+- **Low (<10%)**: Thread is idle or blocked.
 
 **Use case:** Detects threads that look "busy" by stall-rate but actually never issue work.
 
@@ -797,7 +802,7 @@ Computed per port and per NoC channel.
 
 **26. Stall Cause Overlap Factor per Thread**
 
-Ratio of summed per-thread stall reasons to total thread stalls.
+Summed per-resource wait rate for a thread — an **unbounded ratio** (may exceed 100% by design).
 
 | | |
 |---|---|
@@ -805,11 +810,13 @@ Ratio of summed per-thread stall reasons to total thread stalls.
 | **Counter group** | INSTRN_THREAD |
 
 ```
-Stall Overlap TN = sum(all WAITING_FOR_*_N) / THREAD_STALLS_N
+Stall Overlap TN = sum(all 9 WAITING_FOR_*_N) / INSTRN_OUT_L
 ```
 
-- **~1.0×**: Single dominant stall reason at any given cycle.
-- **>2.0×**: Multiple HW units busy simultaneously when the thread stalls.
+Normalised by **instruction cycles** (`INSTRN_OUT_L`), *not* by `THREAD_STALLS_N`. `THREAD_STALLS_N` counts a narrower "thread fully stalled" event that is incommensurate with the per-resource `WAITING_FOR_*` cycles; dividing by it produced absurd >1000% values (e.g. 1210 wait-cycles / 48 stall-cycles = 2521%). With instruction cycles the value only exceeds 100% when several waits overlap in the same cycle (that overlap is the signal, so it is intentionally not clamped).
+
+- **<100%**: Little or no overlap — one wait reason dominates at a time.
+- **>100%**: Multiple HW units block the thread in the same cycles.
 
 **Use case:** Tells you whether to chase a single bottleneck or a set of interacting ones.
 
@@ -825,7 +832,7 @@ Whether the zone is compute-bound or memory-bound.
 | **Counter group** | FPU + TDMA_UNPACK |
 
 ```
-Compute-to-Unpack = FPU_OR_SFPU_INSTRN / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_THREAD0) * 100
+Compute-to-Unpack = FPU_OR_SFPU_INSTRN / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_THREAD0)
 ```
 
 - **>100%**: Compute-bound.
@@ -835,68 +842,9 @@ Compute-to-Unpack = FPU_OR_SFPU_INSTRN / (UNPACK0_BUSY_THREAD0 + UNPACK1_BUSY_TH
 
 ---
 
-### Fidelity
-
-**28. Fidelity Stall Rate**
-
-Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | TDMA_UNPACK |
-
-```
-Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
-```
-
-- **0%**: Pure LoFi (every math instruction completes in 1 HF cycle).
-- **>0%**: HiFi2 or HiFi4 active — multi-cycle math contributes to wall time.
-
-> **Known issue:** On HiFi variants this metric can exceed 100% because the formula's numerator counts every HF cycle of multi-HF instructions while the denominator counts only the issued instructions. The math is being re-calibrated; treat values >100% as "fidelity is the dominant cost" rather than a literal percentage.
-
-**Use case:** Detects whether fidelity is contributing to the cycle budget.
-
----
-
-**29. HiFi Fraction**
-
-Fraction of issued math instructions that took more than 1 HF cycle.
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | TDMA_UNPACK |
-
-```
-HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) /
-                (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100
-```
-
-**Use case:** Quick check of fidelity mix in a workload. 0% = pure LoFi, 100% = pure HiFi.
-
----
-
-**30. Avg HF Cycles Per Instrn**
-
-Weighted average of HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | TDMA_UNPACK |
-
-```
-Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
-```
-
-**Use case:** Single-number summary of fidelity impact on math execution.
-
----
-
 ### TDMA / Math Stall (cont.)
 
-**31. Math Dest Write Port Stall Rate**
+**28. Math Dest Write Port Stall Rate**
 
 Fraction of math cycles stalled by destination register write port contention.
 
@@ -921,7 +869,7 @@ The metric is skipped when `MATH_NOT_STALLED_DEST_WR_PORT` reads 0 across the wh
 
 ### Additional Idle Waits
 
-**32. MMIO / SFPU / THCON / MOVE Idle Wait**
+**29. MMIO / SFPU / THCON / MOVE Idle Wait**
 
 Fraction of total cycles each thread spent waiting for specific hardware units.
 
@@ -946,7 +894,7 @@ MOVE Idle Wait T0  = WAITING_FOR_MOVE_IDLE_0  / INSTRN_OUT_L * 100
 
 ### L1 Memory and NoC (cont.)
 
-**33. L1 TDMA Bundle Util**
+**30. L1 TDMA Bundle Util**
 
 Average utilisation of the two TDMA/RISC L1 ports.
 
@@ -963,7 +911,7 @@ L1 TDMA Bundle Util = avg(L1_0_TDMA_BUNDLE_0_RISC, L1_0_TDMA_BUNDLE_1_TRISC) / L
 
 ---
 
-**34. NoC Ring 0/1 Outgoing/Incoming Util**
+**31. NoC Ring 0/1 Outgoing/Incoming Util**
 
 Average utilisation of NoC channels per ring direction.
 
@@ -981,9 +929,10 @@ NoC Ring 0 Incoming Util = avg(L1_0_NOC_RING0_INCOMING_0, L1_0_NOC_RING0_INCOMIN
 
 ---
 
-**35. RISC Core L1 Util**
+**32. Packer L1 Write Util**
 
-RISC core L1 memory access utilisation.
+TDMA packer write-interface-0 L1 access utilisation (BH mux-1 port 8). Note: RTL wires this port to
+the packer write interface, not the RISC core (the earlier `L1_1_RISC_CORE` name was incorrect).
 
 | | |
 |---|---|
@@ -991,19 +940,19 @@ RISC core L1 memory access utilisation.
 | **Counter group** | L1 (mux 1) |
 
 ```
-RISC Core L1 Util = L1_1_RISC_CORE / L1_OUT_L * 100
+Packer L1 Write Util = L1_1_TDMA_PACKER_0 / L1_OUT_L * 100
 ```
 
-- **High (>10%)**: RISC core is actively touching L1 — firmware memory overhead.
-- **Low (~0%)**: Minimal RISC L1 traffic.
+- **High**: packer is actively writing results to L1.
+- **Low (~0%)**: minimal packer L1 write traffic.
 
-**Use case:** Quantifies firmware memory access overhead on BH. Requires the L1 mux-1 slot enabled.
+**Use case:** Quantifies packer L1 write bandwidth on BH. Requires the L1 mux-1 slot enabled.
 
 ---
 
 ### L1 Backpressure
 
-**36. NoC Ring 0/1 Outgoing/Incoming Backpressure**
+**33. NoC Ring 0/1 Outgoing/Incoming Backpressure**
 
 Fraction of NoC transaction cycles where L1 was not ready.
 
@@ -1023,7 +972,7 @@ NoC Ring 0 Outgoing BP = (req0 + req1 - grant0 - grant1) / (req0 + req1) * 100
 
 ---
 
-**37. L1 Unpacker / Packer Port Backpressure**
+**34. L1 Unpacker / Packer Port Backpressure**
 
 L1 port contention for unpacker and packer.
 
@@ -1048,7 +997,7 @@ L1 Packer Port BP = (L1_0_PORT1     - L1_0_PORT1_GRANT)      / L1_0_PORT1 * 100
 
 ### L1 Composite
 
-**38. L1 Total Bandwidth Util**
+**35. L1 Total Bandwidth Util**
 
 Overall L1 bandwidth saturation across all 8 mux-0 ports.
 
@@ -1069,7 +1018,7 @@ L1 Total BW Util = sum(all 8 port req counts) / (8 * L1_OUT_L) * 100
 
 ---
 
-**39. L1 Read vs Write Ratio**
+**36. L1 Read vs Write Ratio**
 
 Balance between read and write traffic on L1.
 
@@ -1092,7 +1041,7 @@ Read ports: unpacker, NoC outgoing. Write ports: packer, NoC incoming.
 
 ---
 
-**40. NoC Ring Asymmetry**
+**37. NoC Ring Asymmetry**
 
 Balance between outgoing and incoming NoC traffic.
 
@@ -1113,7 +1062,7 @@ NoC Asymmetry = NoC_Outgoing / (NoC_Outgoing + NoC_Incoming) * 100
 
 ---
 
-**41. L1 Contention Index**
+**38. L1 Contention Index**
 
 Average backpressure across active L1 ports.
 
@@ -1134,7 +1083,7 @@ L1 Contention Index = avg(BP of Unpacker, NoC Out 0, NoC Out 1, NoC In 0, NoC In
 
 ---
 
-**42. Unpacker L1 Efficiency**
+**39. Unpacker L1 Efficiency**
 
 When the unpacker is busy, how often does L1 actually serve it.
 
@@ -1144,7 +1093,7 @@ When the unpacker is busy, how often does L1 actually serve it.
 | **Counter group** | L1 (mux 0) + TDMA_UNPACK |
 
 ```
-Unpacker L1 Efficiency = L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0 * 100
+Unpacker L1 Efficiency = L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0
 ```
 
 - **High (>50%)**: L1 serves unpacker requests efficiently.
@@ -1154,7 +1103,7 @@ Unpacker L1 Efficiency = L1_0_UNPACKER_0_GRANT / UNPACK0_BUSY_THREAD0 * 100
 
 ---
 
-**43. Packer L1 Efficiency**
+**40. Packer L1 Efficiency**
 
 When the packer is busy, how often does L1 serve it.
 
@@ -1164,7 +1113,7 @@ When the packer is busy, how often does L1 serve it.
 | **Counter group** | L1 (mux 0) + TDMA_PACK |
 
 ```
-Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY * 100
+Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY
 ```
 
 - **High (>100%)**: L1 port has headroom (shared with ECC/other clients).
@@ -1174,7 +1123,7 @@ Packer L1 Efficiency = L1_0_PORT1_GRANT / PACKER_BUSY * 100
 
 ---
 
-**44. NoC vs Compute Balance**
+**41. NoC vs Compute Balance**
 
 Whether the operation is NoC-bound or compute-bound.
 
@@ -1195,7 +1144,7 @@ NoC vs Compute = (NoC_Out + NoC_In) / (FPU_COUNTER + NoC_Out + NoC_In) * 100
 
 ---
 
-**45. TDMA vs NoC L1 Share**
+**42. TDMA vs NoC L1 Share**
 
 Fraction of L1 bandwidth used by RISC/TDMA versus NoC.
 
@@ -1217,7 +1166,7 @@ TDMA vs NoC = (TDMA_Bundle_0 + TDMA_Bundle_1) / (TDMA + NoC_Out + NoC_In) * 100
 
 ### Wormhole-only (per-engine packer)
 
-**46. Packer Load Imbalance**
+**43. Packer Load Imbalance**
 
 Spread between the most and least utilised packer engines.
 
@@ -1237,7 +1186,7 @@ Packer Load Imbalance = (max(BUSY_0..3) - min(BUSY_0..3)) / max(BUSY_0..3) * 100
 
 ---
 
-**47. Packer Engine N Util**
+**44. Packer Engine N Util**
 
 Per-engine packer utilisation.
 
@@ -1251,6 +1200,272 @@ Packer Engine N Util = PACKER_BUSY_N / TDMA_PACK_OUT_L * 100
 ```
 
 **Use case:** WH only. On BH the per-engine `PACKER_BUSY_N` signals are tied off; only the aggregate `PACKER_BUSY` is exposed.
+
+---
+
+### NoC Grant Efficiency (cont.)
+
+**45. NOC Ring 1 Grant Efficiency**
+
+Fraction of NoC ring-1 requests that were granted (mirror of NOC Ring 0 Grant Efficiency).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | L1 |
+
+```
+NOC Ring 1 Grant Efficiency = sum(RING1_*_GRANT) / sum(RING1_*) * 100
+```
+
+Bounded 0–100% (grant ≤ request). Low values indicate ring-1 NoC requests are frequently stalled by L1.
+
+**Use case:** Ring-1 counterpart to the ring-0 grant efficiency; compare the two to spot per-ring imbalance.
+
+---
+
+### Thread Analysis (cont.)
+
+**46. Any-Thread Stall Rate**
+
+Fraction of cycles where *any* thread was stalled — a single indicator distinct from the per-thread Thread N Stall Rate.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | INSTRN_THREAD |
+
+```
+Any-Thread Stall Rate = ANY_THREAD_STALL / INSTRN_OUT_L * 100
+```
+
+Bounded 0–100%. Unlike the summed per-thread `THREAD_STALLS_*`, this fires once per cycle if at least one thread stalled.
+
+**Use case:** One-number "was the pipeline ever stalled" gauge before drilling into per-thread rates.
+
+---
+
+### L1 Extended-Port Backpressure
+
+**47. L1 Ext Unpacker Backpressure**
+
+Back-pressure over the extended unpacker L1 ports.
+
+| | |
+|---|---|
+| **Architectures** | Both — the L1 bank-1 extended unpacker ports (`L1_1_EXT_UNPACKER_1/2/3`) exist on Wormhole and Blackhole; Blackhole adds bank-2 ports (`L1_2_EXT_UNPACKER_4-7`) that are folded into the same metric. |
+| **Counter group** | L1 |
+
+```
+L1 Ext Unpacker BP = (req - grant) / req * 100   over the present extended unpacker L1 ports
+```
+
+Bounded 0–100%. Populated on both arches (verified ~10% on Wormhole); the divisor includes only the ports present on the current arch.
+
+**Use case:** Extends unpacker L1 contention analysis to the BH extended interfaces.
+
+---
+
+**48. L1 Ext Packer Backpressure**
+
+Back-pressure over the extended TDMA packer L1 ports.
+
+| | |
+|---|---|
+| **Architectures** | Blackhole only (N/A on Wormhole) |
+| **Counter group** | L1 |
+
+```
+L1 Ext Packer BP = (req - grant) / req * 100   over the extended TDMA packer L1 ports
+```
+
+Bounded 0–100%. Returns N/A on Wormhole.
+
+**Use case:** Detects write-side L1 contention on the BH extended packer interfaces.
+
+---
+
+**49. L1 Tag Search Backpressure**
+
+Back-pressure over the tag-search / packer-1 L1 port.
+
+| | |
+|---|---|
+| **Architectures** | Blackhole only (N/A on Wormhole) |
+| **Counter group** | L1 |
+
+```
+L1 Tag Search BP = (req - grant) / req * 100   over the tag-search/packer1 L1 port
+```
+
+Bounded 0–100%. Returns N/A on Wormhole.
+
+**Use case:** Isolates tag-search port contention on BH.
+
+---
+
+### Per-Thread Unpacker / Source-Write Distribution
+
+**50. Unpacker0 T1 Share**
+
+Fraction of unpacker-0 busy cycles driven by the math thread (T1) rather than the unpack thread (T0).
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+Unpacker0 T1 Share = UNPACK0_BUSY_THREAD1 / (UNPACK0_BUSY_THREAD0 + UNPACK0_BUSY_THREAD1) * 100
+```
+
+Bounded 0–100%. High values mean the math thread issues most unpacker-0 traffic (e.g. dest-to-src moves).
+
+**Use case:** Attributes unpacker-0 load between the unpack and math threads.
+
+---
+
+**51. Unpacker1 T1 Share**
+
+Same as #50 for unpacker-1.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+Unpacker1 T1 Share = UNPACK1_BUSY_THREAD1 / (UNPACK1_BUSY_THREAD0 + UNPACK1_BUSY_THREAD1) * 100
+```
+
+Bounded 0–100%.
+
+**Use case:** Attributes unpacker-1 load between the unpack and math threads.
+
+---
+
+**52. SrcA Write T0 Share**
+
+Fraction of SrcA register writes issued from thread 0.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+SrcA Write T0 Share = SRCA_WRITE_THREAD0 / (SRCA_WRITE_THREAD0 + SRCA_WRITE_THREAD1) * 100
+```
+
+Bounded 0–100%.
+
+**Use case:** Shows which thread drives SrcA writes; a large T1 contribution flags math-issued source writes.
+
+---
+
+**53. SrcB Write T0 Share**
+
+Same as #52 for SrcB.
+
+| | |
+|---|---|
+| **Architectures** | Wormhole, Blackhole |
+| **Counter group** | TDMA_UNPACK |
+
+```
+SrcB Write T0 Share = SRCB_WRITE_THREAD0 / (SRCB_WRITE_THREAD0 + SRCB_WRITE_THREAD1) * 100
+```
+
+Bounded 0–100%.
+
+**Use case:** Shows which thread drives SrcB writes.
+
+---
+
+### Complete Derived-Metric Coverage
+
+The numbered entries above document the most-used metrics in depth. The entries below complete the full **106-metric catalogue** emitted by `compute_metrics` (`METRIC_LABELS` in `perf_metrics_common.py`); each is named exactly as it appears in the CSV/console output, with its formula in brief. All are bounded 0-100% unless flagged **UNBOUNDED ratio**; arch-specific metrics read N/A where their counters are absent on the current architecture.
+
+**FPU bank**
+
+- **MATH Util** — MATH_COUNTER (FPU-or-SFPU active) / FPU ref cycles — combined math-unit utilization.
+
+**TDMA_PACK bank**
+
+- **Packer Utilization** — PACKER_BUSY / pack ref cycles — fraction of cycles the packer was busy.
+- **Pack Dest Grant Efficiency** — DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE — dest-read requests granted.
+- **Math Pipeline Utilization** — MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE — available math instructions that issued.
+- **Math-to-Pack Handoff Efficiency** — AVAILABLE_MATH / PACKER_BUSY (falls back to /pack cycles when packer idle) — UNBOUNDED ratio; >100% = packer is the bottleneck.
+- **Packer Engine 0 Util** — PACKER_BUSY_0 / pack cycles — per-engine packer 0 utilization (Wormhole-only; N/A on Blackhole).
+- **Packer Engine 1 Util** — PACKER_BUSY_1 / pack cycles — per-engine packer 1 utilization (Wormhole-only; N/A on Blackhole).
+- **Packer Engine 2 Util** — PACKER_BUSY_2 / pack cycles — per-engine packer 2 utilization (Wormhole-only; N/A on Blackhole).
+- **Packer Engine 3 Util** — PACKER_BUSY / pack cycles — engine-3 packer utilization (uses the aggregate PACKER_BUSY; present on both arches).
+
+**TDMA_UNPACK bank**
+
+- **Unpacker0 Write Efficiency** — SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0 — unpacker-0 busy cycles that completed a srcA write.
+- **Unpacker1 Write Efficiency** — SRCB_WRITE_ACTUAL / UNPACK1_BUSY_THREAD0 — unpacker-1 busy cycles that completed a srcB write.
+- **Unpacker Write Efficiency** — mean of Unpacker0/Unpacker1 Write Efficiency.
+- **Unpacker-to-Math Data Flow (srcA)** — SRCA_WRITE_AVAILABLE / UNPACK0_BUSY_THREAD0 — srcA leg of the unpacker-to-math flow.
+- **Unpacker-to-Math Data Flow (srcB)** — SRCB_WRITE_AVAILABLE / UNPACK1_BUSY_THREAD0 — srcB leg of the unpacker-to-math flow.
+- **Math Src Data Stall Rate** — 1 − MATH_SRC_DATA_READY / MATH_INSTRN_AVAILABLE — math-available cycles where src data was not ready.
+- **SrcA Write Port Blocked Rate** — 1 − SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE — srcA writes blocked by the DMA port.
+- **SrcA Write Overwrite Blocked Rate** — 1 − SRCA_WRITE_NOT_BLOCKED_OVR / SRCA_WRITE_AVAILABLE — srcA writes blocked by overwrite protection.
+- **SrcB Write Overwrite Blocked Rate** — 1 − SRCB_WRITE_ACTUAL / SRCB_WRITE_AVAILABLE — srcB writes blocked by overwrite protection.
+- **SrcB Write Port Blocked Rate** — 1 − SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE — srcB writes blocked by the DMA port.
+
+**INSTRN_THREAD bank**
+
+- **Thread 0 Stall Rate** — THREAD_STALLS_0 / instrn ref cycles — stall rate of thread 0 (unpack).
+- **Thread 1 Stall Rate** — THREAD_STALLS_1 / instrn ref cycles — stall rate of thread 1 (math).
+- **Thread 2 Stall Rate** — THREAD_STALLS_2 / instrn ref cycles — stall rate of thread 2 (pack).
+- **Math Waiting on Unpack (T1)** — WAITING_FOR_UNPACK_IDLE_1 / instrn ref cycles — math thread (T1) blocked on the unpacker.
+- **Pack Waiting on Math (T2)** — WAITING_FOR_MATH_IDLE_2 / instrn ref cycles — pack thread (T2) blocked on math.
+- **Unpack Waiting on Pack (T0)** — WAITING_FOR_PACK_IDLE_0 / instrn ref cycles — unpack thread (T0) blocked on the packer.
+- **Semaphore Zero Wait T1** — WAITING_FOR_NONZERO_SEM_1 / instrn ref cycles — math thread waiting on a non-zero semaphore.
+- **Semaphore Zero Wait T2** — WAITING_FOR_NONZERO_SEM_2 / instrn ref cycles — pack thread waiting on a non-zero semaphore.
+- **Semaphore Zero Wait T0** — WAITING_FOR_NONZERO_SEM_0 / instrn ref cycles — thread 0 waiting on a non-zero semaphore.
+- **Semaphore Full Wait T0** — WAITING_FOR_NONFULL_SEM_0 / instrn ref cycles — thread 0 waiting on a non-full semaphore.
+- **Semaphore Full Wait T1** — WAITING_FOR_NONFULL_SEM_1 / instrn ref cycles — thread 1 waiting on a non-full semaphore.
+- **Semaphore Full Wait T2** — WAITING_FOR_NONFULL_SEM_2 / instrn ref cycles — thread 2 waiting on a non-full semaphore.
+- **CFG Instrn Avail Rate T0** — CFG_INSTRN_AVAILABLE_0 / instrn ref cycles — CFG instructions pending on thread 0.
+- **SYNC Instrn Avail Rate T0** — SYNC_INSTRN_AVAILABLE_0 / instrn ref cycles — SYNC instructions pending on thread 0.
+- **THCON Instrn Avail Rate T0** — THCON_INSTRN_AVAILABLE_0 / instrn ref cycles — THCON instructions pending on thread 0.
+- **MOVE Instrn Avail Rate T0** — MOVE_INSTRN_AVAILABLE_0 / instrn ref cycles — MOVE instructions pending on thread 0.
+- **MATH Instrn Avail Rate T1** — FPU_INSTRN_AVAILABLE_1 / instrn ref cycles — math instructions pending on thread 1.
+- **UNPACK Instrn Avail Rate T0** — UNPACK_INSTRN_AVAILABLE_0 / instrn ref cycles — UNPACK instructions pending on thread 0.
+- **PACK Instrn Avail Rate T2** — PACK_INSTRN_AVAILABLE_2 / instrn ref cycles — PACK instructions pending on thread 2.
+- **T0 Instrn Issue Rate** — THREAD_INSTRUCTIONS_0 / instrn ref cycles * 100 — % of thread-0 cycles that issued an instruction (single-issue ⇒ bounded 0-100%).
+- **T1 Instrn Issue Rate** — THREAD_INSTRUCTIONS_1 / instrn ref cycles * 100 — % of thread-1 cycles that issued an instruction (single-issue ⇒ bounded 0-100%).
+- **T2 Instrn Issue Rate** — THREAD_INSTRUCTIONS_2 / instrn ref cycles * 100 — % of thread-2 cycles that issued an instruction (single-issue ⇒ bounded 0-100%).
+- **Stall Overlap T0** — sum(9 WAITING_FOR_*_0) / instrn ref cycles — UNBOUNDED ratio; >100% = overlapping waits on thread 0.
+- **Stall Overlap T1** — sum(9 WAITING_FOR_*_1) / instrn ref cycles — UNBOUNDED ratio; >100% = overlapping waits on thread 1.
+- **Stall Overlap T2** — sum(9 WAITING_FOR_*_2) / instrn ref cycles — UNBOUNDED ratio; >100% = overlapping waits on thread 2.
+
+**L1 bank**
+
+- **L1 Unpacker Port Util** — mean per-port util of the L1_0 unpacker ports (UNPACKER_0 + arch port-1) / L1 cycles.
+- **L1 Packer Port Util** — L1_0 port-1 (packer/ECC client) / L1 cycles — packer L1 port utilization.
+- **L1 Ext Unpacker Util** — mean per-port util of the extended unpacker L1 ports (bank 1 on both arches, bank 2 on Blackhole).
+- **L1 Ext Packer Util** — mean per-port util of the extended TDMA packer L1 ports (banks 3-4; Blackhole-only).
+- **L1 Tag Search Util** — tag-search / packer-1 L1 port util (bank 4; Blackhole-only).
+- **L1 Mean Client Util** — mean per-port util across every present L1 client port — single L1-activity summary.
+- **RISC Core L1 Util** — L1_0_TDMA_BUNDLE_0_RISC / L1 cycles — RISC-core L1 access utilization.
+- **NOC Ring 0 Util** — mean per-port util of the Ring-0 NoC ports / L1 cycles.
+- **NOC Ring 1 Util** — mean per-port util of the Ring-1 NoC ports (L1 bank 1; both arches) / L1 cycles.
+- **NOC Ring 0 Outgoing Util** — mean per-port util of the Ring-0 outgoing NoC ports.
+- **NOC Ring 0 Incoming Util** — mean per-port util of the Ring-0 incoming NoC ports.
+- **NOC Ring 1 Outgoing Util** — mean per-port util of the Ring-1 outgoing NoC ports.
+- **NOC Ring 1 Incoming Util** — mean per-port util of the Ring-1 incoming NoC ports.
+- **L1 Unpacker Backpressure** — 1 − UNPACKER_0_GRANT / UNPACKER_0 — L1 unpacker-port back-pressure.
+- **L1 Packer Port Backpressure** — 1 − PORT1_GRANT / PORT1 — L1 packer-port back-pressure.
+- **NOC Ring 0 Outgoing Backpressure** — (req − grant)/req over the Ring-0 outgoing NoC ports.
+- **NOC Ring 0 Incoming Backpressure** — (req − grant)/req over the Ring-0 incoming NoC ports.
+- **NOC Ring 1 Outgoing Backpressure** — (req − grant)/req over the Ring-1 outgoing NoC ports.
+- **NOC Ring 1 Incoming Backpressure** — (req − grant)/req over the Ring-1 incoming NoC ports.
+- **NOC Ring 0 Asymmetry** — NoC_out / (NoC_out + NoC_in) on Ring-0 — send/receive balance.
+- **TDMA vs NOC L1 Share** — TDMA bundle / (TDMA + NoC_out + NoC_in) on L1_0 — firmware vs NoC L1 share.
+- **NOC vs Compute Balance** — NoC ring-0 traffic / (FPU_COUNTER + NoC ring-0 traffic) — NoC-bound (>50%) vs compute-bound.
 
 ---
 
