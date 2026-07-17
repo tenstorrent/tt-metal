@@ -46,7 +46,8 @@
   - `git diff --check` -> clean.
   - Compact rescore proof:
     `.exp_run/tti-release/gemma4-31b-20260716/meta_accuracy_gpqa_corrected.json`.
-- **Verdict:** Verified and fixed in the TTI checkout; not committed.
+- **Verdict:** Verified and fixed in the TTI checkout; subsequently committed as
+  `b803374e04c2460ea3bfabec4bfed832f2af532a`.
 
 ### 3. Existing evidence can provide an unwaived exact-checkpoint reference
 
@@ -108,5 +109,6 @@ code guess:
 The Google model card's benchmark table is explicitly instruction-tuned and
 cannot grade `google/gemma-4-31B`.  Switching to `google/gemma-4-31B-it` would
 change the requested checkpoint and require a new bringup.  No waiver or
-threshold was invented, no copied release report was mutated, and no commit was
-created.
+threshold was invented.  After this autofix completed, the parent workflow
+regenerated the copied release report as readiness-fail and committed this
+parser repair at the TTI SHA above.

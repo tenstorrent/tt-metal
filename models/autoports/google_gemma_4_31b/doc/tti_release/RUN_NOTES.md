@@ -30,6 +30,7 @@
 - tt-metal Stage 11 model-fix commit: `97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f` (`Fix Gemma 4 dynamic decode head grids`).
 - tt-metal Stage 11 release-evidence commit: `56340a0e2a0` (`Record Gemma 4 TTI release handoff`).
 - tt-metal Stage 11 handoff-metadata commit: `98de8fd3c6f98387da50726de4678e2bbe703aec` (`Complete Gemma 4 TTI handoff metadata`).
+- tt-metal Stage 11 readiness-blocker commit: `6425539564d` (`Record Gemma 4 release readiness blockers`).
 
 ## Commands and environment
 
