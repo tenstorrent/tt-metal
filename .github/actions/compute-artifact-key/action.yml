@@ -94,12 +94,42 @@ runs:
   steps:
     - id: compute
       shell: bash
+      env:
+        # Hardening: every caller-supplied value is passed through env vars
+        # and read back as quoted "$VAR" shell expansions below, never spliced
+        # into the script body via textual ${{ }} substitution. This action is
+        # the shared source of truth slated for reuse-lookup consumption in a
+        # follow-up PR, so its own input handling must not assume today's
+        # callers (all repo-controlled literals/matrix values/github.sha) are
+        # the only ones it will ever see.
+        INPUT_KIND: ${{ inputs.kind }}
+        INPUT_REF: ${{ inputs.ref }}
+        INPUT_BUILD_TYPE: ${{ inputs.build-type }}
+        INPUT_BUILD_IMAGE: ${{ inputs.build-image }}
+        INPUT_TRACY: ${{ inputs.tracy }}
+        INPUT_ENABLE_LTO: ${{ inputs.enable-lto }}
+        INPUT_DISTRO: ${{ inputs.distro }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_ARCHITECTURE: ${{ inputs.architecture }}
+        INPUT_TOOLCHAIN: ${{ inputs.toolchain }}
+        INPUT_DISTRIBUTED: ${{ inputs.distributed }}
+        INPUT_SKIP_TT_TRAIN: ${{ inputs.skip-tt-train }}
+        INPUT_BUILD_UMD_TESTS: ${{ inputs.build-umd-tests }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_BUILD_TTNN_IMPORT_ARTIFACT: ${{ inputs.build-ttnn-import-artifact }}
+        INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
       run: |
         set -eu
 
-        SANITIZED_REF=$(echo "${{ inputs.ref }}" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+        SANITIZED_REF=$(echo "$INPUT_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
         SHA12="${SANITIZED_REF:0:12}"
-        KIND="${{ inputs.kind }}"
+        KIND="$INPUT_KIND"
+
+        # Random per-run delimiter: guards against a build-affecting input
+        # value that happens to contain the literal delimiter line, which
+        # could otherwise terminate the GITHUB_OUTPUT heredoc early and let
+        # forged key=value pairs after it be parsed as extra step outputs.
+        OUTPUT_DELIM="ARTIFACT_KEY_MANIFEST_EOF_${RANDOM}${RANDOM}_$$"
 
         # Defensive boolean normalization: some of these inputs are only
         # declared under this workflow's `workflow_call.inputs` and NOT under
@@ -111,22 +141,22 @@ runs:
         # field to a real "true"/"false" so the manifest is always valid
         # JSON and the hash is stable regardless of which trigger fired.
         norm_bool() { [ "$1" = "true" ] && echo "true" || echo "false"; }
-        TRACY=$(norm_bool "${{ inputs.tracy }}")
-        ENABLE_LTO=$(norm_bool "${{ inputs.enable-lto }}")
+        TRACY=$(norm_bool "$INPUT_TRACY")
+        ENABLE_LTO=$(norm_bool "$INPUT_ENABLE_LTO")
 
         if [ "$KIND" = "wheel" ]; then
           # wheels.yaml (cibuildwheel-based) has no distro/toolchain/distributed/
           # skip-tt-train/build-umd-tests/profile concept -- only the fields
           # that actually affect its compiled output go in the tuple/manifest.
-          PYVER_NODOT=$(echo "${{ inputs.python-version }}" | tr -d '.')
+          PYVER_NODOT=$(echo "$INPUT_PYTHON_VERSION" | tr -d '.')
 
           CANONICAL=$(cat <<EOF
         ref=${SANITIZED_REF}
-        build-type=${{ inputs.build-type }}
-        build-image=${{ inputs.build-image }}
+        build-type=${INPUT_BUILD_TYPE}
+        build-image=${INPUT_BUILD_IMAGE}
         tracy=${TRACY}
         enable-lto=${ENABLE_LTO}
-        python-version=${{ inputs.python-version }}
+        python-version=${INPUT_PYTHON_VERSION}
         EOF
           )
           CANONICAL_SORTED=$(echo "$CANONICAL" | sort)
@@ -141,11 +171,11 @@ runs:
           "schema-version": 1,
           "kind": "wheel",
           "ref": "${SANITIZED_REF}",
-          "build-type": "${{ inputs.build-type }}",
-          "build-image": "${{ inputs.build-image }}",
+          "build-type": "${INPUT_BUILD_TYPE}",
+          "build-image": "${INPUT_BUILD_IMAGE}",
           "tracy": ${TRACY},
           "enable-lto": ${ENABLE_LTO},
-          "python-version": "${{ inputs.python-version }}",
+          "python-version": "${INPUT_PYTHON_VERSION}",
           "cfg-hash": "${CFGHASH}"
         }
         JSON
@@ -153,31 +183,31 @@ runs:
 
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           {
-            echo "manifest-json<<ARTIFACT_KEY_MANIFEST_EOF"
+            echo "manifest-json<<${OUTPUT_DELIM}"
             echo "$MANIFEST"
-            echo "ARTIFACT_KEY_MANIFEST_EOF"
+            echo "${OUTPUT_DELIM}"
           } >> "$GITHUB_OUTPUT"
           echo "Computed artifact key: $NAME"
           exit 0
         fi
 
-        TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-        DISTRIBUTED=$(norm_bool "${{ inputs.distributed }}")
-        SKIP_TT_TRAIN=$(norm_bool "${{ inputs.skip-tt-train }}")
-        BUILD_UMD_TESTS=$(norm_bool "${{ inputs.build-umd-tests }}")
-        PROFILE=$(norm_bool "${{ inputs.profile }}")
-        BUILD_TTNN_IMPORT_ARTIFACT=$(norm_bool "${{ inputs.build-ttnn-import-artifact }}")
+        TOOLCHAIN_CLEANED=$(echo "$INPUT_TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+        DISTRIBUTED=$(norm_bool "$INPUT_DISTRIBUTED")
+        SKIP_TT_TRAIN=$(norm_bool "$INPUT_SKIP_TT_TRAIN")
+        BUILD_UMD_TESTS=$(norm_bool "$INPUT_BUILD_UMD_TESTS")
+        PROFILE=$(norm_bool "$INPUT_PROFILE")
+        BUILD_TTNN_IMPORT_ARTIFACT=$(norm_bool "$INPUT_BUILD_TTNN_IMPORT_ARTIFACT")
 
         # Canonical, order-independent parameter tuple. Every field that
         # affects compiled output must be listed here.
         CANONICAL=$(cat <<EOF
         ref=${SANITIZED_REF}
-        distro=${{ inputs.distro }}
-        version=${{ inputs.version }}
-        architecture=${{ inputs.architecture }}
-        build-type=${{ inputs.build-type }}
+        distro=${INPUT_DISTRO}
+        version=${INPUT_VERSION}
+        architecture=${INPUT_ARCHITECTURE}
+        build-type=${INPUT_BUILD_TYPE}
         toolchain=${TOOLCHAIN_CLEANED}
-        build-image=${{ inputs.build-image }}
+        build-image=${INPUT_BUILD_IMAGE}
         tracy=${TRACY}
         distributed=${DISTRIBUTED}
         enable-lto=${ENABLE_LTO}
@@ -204,7 +234,7 @@ runs:
             NAME="TTMetal_build_any${TRACY_SUFFIX}_${SHA12}_${CFGHASH}"
             ;;
           ttnn-import)
-            NAME="ttnn-import-${{ inputs.build-type }}-${SHA12}-${CFGHASH}"
+            NAME="ttnn-import-${INPUT_BUILD_TYPE}-${SHA12}-${CFGHASH}"
             ;;
           *)
             echo "::error::compute-artifact-key: unknown kind '$KIND'"
@@ -217,14 +247,14 @@ runs:
         MANIFEST=$(cat <<JSON
         {
           "schema-version": 1,
-          "kind": "${{ inputs.kind }}",
+          "kind": "${INPUT_KIND}",
           "ref": "${SANITIZED_REF}",
-          "distro": "${{ inputs.distro }}",
-          "version": "${{ inputs.version }}",
-          "architecture": "${{ inputs.architecture }}",
-          "build-type": "${{ inputs.build-type }}",
+          "distro": "${INPUT_DISTRO}",
+          "version": "${INPUT_VERSION}",
+          "architecture": "${INPUT_ARCHITECTURE}",
+          "build-type": "${INPUT_BUILD_TYPE}",
           "toolchain": "${TOOLCHAIN_CLEANED}",
-          "build-image": "${{ inputs.build-image }}",
+          "build-image": "${INPUT_BUILD_IMAGE}",
           "tracy": ${TRACY},
           "distributed": ${DISTRIBUTED},
           "enable-lto": ${ENABLE_LTO},
@@ -238,9 +268,9 @@ runs:
         )
 
         {
-          echo "manifest-json<<ARTIFACT_KEY_MANIFEST_EOF"
+          echo "manifest-json<<${OUTPUT_DELIM}"
           echo "$MANIFEST"
-          echo "ARTIFACT_KEY_MANIFEST_EOF"
+          echo "${OUTPUT_DELIM}"
         } >> "$GITHUB_OUTPUT"
 
         echo "Computed artifact key: $NAME"
