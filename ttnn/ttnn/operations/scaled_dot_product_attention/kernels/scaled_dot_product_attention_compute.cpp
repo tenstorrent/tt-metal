@@ -178,34 +178,47 @@ FORCE_INLINE void fused_exp_dual_pack(uint32_t sq_valid, uint32_t skv_valid) {
     // below never accumulate.
     ckernel::reconfig_data_format(cb_scores, cb_row_max);
     ckernel::sub_bcast_cols_init_short(cb_scores, cb_row_max);
-    ckernel::exp_tile_init<true>();
+    ckernel::exp_tile_init<true, 0x3F800000, ckernel::InputClamping::None>();
     ckernel::pack_reconfig_data_format(cb_exp);
     ckernel::pack_reconfig_l1_acc(0);
+    // SUPER-FAST exp (InputClamping::None skips the very-negative-input clamp). For inputs
+    // below ~-88.5 (masked -1e9, and scores far below the row-max) it emits NEGATIVE garbage
+    // instead of ~0. Since exp is always >=0, a packer ZERO_RELU (max(x,0)) clamps that to 0 =
+    // the correct exp(-large)~=0, for FREE on the packer (no MATH/SFPU pass). Set once for all
+    // packs in the row loop; restored to NO_RELU before return so no downstream pack inherits it.
+    ckernel::pack_relu_config(ckernel::ReluConfig::zero());
 
     for (uint32_t i = 0; i < sq_valid; ++i) {
         ckernel::tile_regs_acquire();
-        for (uint32_t j = 0; j < skv_valid; ++j) {
-            // DEST[j] = scores[i,j] - m[i]  (per-row max broadcast across columns)
-            ckernel::sub_tiles_bcast_cols(cb_scores, cb_row_max, i * skv_valid + j, i, j);
-            ckernel::exp_tile<true>(j);
-        }
+        {
+            SDPA_ZONE("P06a_SUBEXP");
+            for (uint32_t j = 0; j < skv_valid; ++j) {
+                // DEST[j] = scores[i,j] - m[i]  (per-row max broadcast across columns)
+                ckernel::sub_tiles_bcast_cols(cb_scores, cb_row_max, i * skv_valid + j, i, j);
+                ckernel::exp_tile<true, false, ckernel::InputClamping::None>(j);
+            }
+        }  // P06a_SUBEXP
         ckernel::tile_regs_commit();
         ckernel::tile_regs_wait();
-        // (a) normal pack: exp -> cb_exp[i*skv_valid + j] (l1_acc still 0).
-        for (uint32_t j = 0; j < skv_valid; ++j) {
-            ckernel::pack_tile<true>(j, cb_exp, i * skv_valid + j);
-        }
-        // (b) L1-accumulate the row's skv_valid column tiles into cb_sum_chunk[i]:
-        // seed with the first column (l1_acc=0 => overwrite), accumulate the rest
-        // (l1_acc=1). DEST is unchanged by the (a) packs, so it is re-read here.
-        ckernel::pack_tile<true>(0, cb_sum_chunk, i);
-        ckernel::pack_reconfig_l1_acc(1);
-        for (uint32_t j = 1; j < skv_valid; ++j) {
-            ckernel::pack_tile<true>(j, cb_sum_chunk, i);
-        }
-        ckernel::pack_reconfig_l1_acc(0);  // reset before next row / downstream ops
+        {
+            SDPA_ZONE("P06b_PACK");
+            // (a) normal pack: exp -> cb_exp[i*skv_valid + j] (l1_acc still 0).
+            for (uint32_t j = 0; j < skv_valid; ++j) {
+                ckernel::pack_tile<true>(j, cb_exp, i * skv_valid + j);
+            }
+            // (b) L1-accumulate the row's skv_valid column tiles into cb_sum_chunk[i]:
+            // seed with the first column (l1_acc=0 => overwrite), accumulate the rest
+            // (l1_acc=1). DEST is unchanged by the (a) packs, so it is re-read here.
+            ckernel::pack_tile<true>(0, cb_sum_chunk, i);
+            ckernel::pack_reconfig_l1_acc(1);
+            for (uint32_t j = 1; j < skv_valid; ++j) {
+                ckernel::pack_tile<true>(j, cb_sum_chunk, i);
+            }
+            ckernel::pack_reconfig_l1_acc(0);  // reset before next row / downstream ops
+        }  // P06b_PACK
         ckernel::tile_regs_release();
     }
+    ckernel::pack_relu_config(ckernel::ReluConfig::none());  // restore: no ReLU for downstream packs
     cb_push_back(cb_exp, sq_skv);
     cb_push_back(cb_sum_chunk, sq_valid);
     cb_pop_front(cb_scores, sq_skv);

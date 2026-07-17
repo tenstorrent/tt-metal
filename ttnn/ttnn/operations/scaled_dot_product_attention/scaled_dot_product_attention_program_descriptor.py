@@ -172,9 +172,338 @@ def _cb(index, page_size, num_pages, data_format, core_grid):
     )
 
 
+# ===========================================================================
+# NoC-multicast (KV read-once + broadcast) variant — GUARDED, opt-out via env.
+# ===========================================================================
+# The roofline predicted this a no-win (reads ~93% hidden behind compute); this
+# path was BUILT and MEASURED anyway (perf_findings.md § NoC-multicast). It is a
+# SCHEME-CHANGE off the Blocking Model: Q-outer -> KV-outer, with each (b,h)
+# grouped onto one ROW of the grid so ONE injector (column 0) reads each KV chunk
+# once from DRAM and Mcast1D-broadcasts it across the row (10 groups x 11 cores on
+# Blackhole = 110). Cuts DRAM K/V read volume ~cores_per_row-fold. Guarded to the
+# shape class it is valid for; every other shape uses the shipped Q-outer path.
+#
+# Env knobs (measurement):
+#   SDPA_MCAST=0            force the shipped Q-outer path even when eligible.
+#   SDPA_MCAST_NO_BCAST=1   KV-outer WITHOUT broadcast (every core re-reads its own
+#                           K/V from DRAM) — isolates the broadcast's effect (A/B).
+#   SDPA_MCAST_ABLATE_READER=1 / SDPA_MCAST_ABLATE_WRITER=1
+#                           NoC stubs for the KV-outer compute-floor probe.
+MCAST_MAX_SUBCHUNK = 4  # resident q-chunk state sets the compute kernel allocates
+MCAST_SQ_CHUNK_CAP = 8  # scores block height cap (keeps cb_scores/cb_exp small)
+MCAST_SKV_CHUNK_CAP = 8
+L1_BUDGET_MCAST = 1_450_000
+MCAST_KV_DEPTH = 2  # double-buffer K/V so the injector prefetches chunk j+1
+MCAST_OUT_DEPTH = 1  # outputs emitted once after the KV loop; no overlap needed
+
+# mcast CB indices — must match the three mcast kernels.
+MC_Q_STAGE = 0
+MC_K_IN = 1
+MC_V_IN = 2
+MC_SCALER = 3
+MC_SCALE = 4
+MC_SCORES = 5
+MC_EXP = 6
+MC_CORR = 7
+MC_M_NEW = 8
+MC_SUM_CHUNK = 9
+MC_Q_SCALED_0 = 10  # 10..13 (read-only, one per sub-chunk)
+MC_PV = 14
+MC_L_TMP = 15
+MC_OUT = 16
+MC_ROW_MAX = 17  # ROTATING: MAX_SUBCHUNK blocks (running m)
+MC_ROW_SUM = 18  # ROTATING: MAX_SUBCHUNK blocks (running l)
+MC_OUT_ACCUM = 19  # ROTATING: MAX_SUBCHUNK blocks (running O)
+MC_O_TMP = 20
+MC_M_OLD = 21  # depth-1 scratch (old max popped off the rotating ring)
+
+
+def _mcast_pick_sq_chunk(sq_t, gx):
+    """Largest Sq_chunk_t in [1, cap] dividing Sq_t s.t. n_q_chunks in
+    [gx, gx*MAX_SUBCHUNK] (every row core active AND subchunk count <= cap)."""
+    for c in range(min(MCAST_SQ_CHUNK_CAP, sq_t), 0, -1):
+        if sq_t % c != 0:
+            continue
+        n_q = sq_t // c
+        if gx <= n_q <= gx * MCAST_MAX_SUBCHUNK:
+            return c, n_q
+    return None, None
+
+
+def _mcast_working_set(sq_chunk_t, skv_chunk_t, dt, in_bytes, out_bytes, interm_bytes):
+    bf16 = ttnn.tile_size(ttnn.bfloat16)
+    t = 0
+    t += sq_chunk_t * dt * in_bytes  # q_stage (depth 1)
+    t += skv_chunk_t * dt * MCAST_KV_DEPTH * in_bytes  # k_in
+    t += skv_chunk_t * dt * MCAST_KV_DEPTH * in_bytes  # v_in
+    t += 2 * bf16  # scaler + scale
+    t += sq_chunk_t * skv_chunk_t * interm_bytes  # scores
+    t += sq_chunk_t * skv_chunk_t * interm_bytes  # exp
+    t += 3 * sq_chunk_t * interm_bytes  # corr, m_new, sum_chunk
+    t += sq_chunk_t * dt * interm_bytes  # pv
+    t += sq_chunk_t * dt * interm_bytes  # o_tmp
+    t += sq_chunk_t * interm_bytes  # l_tmp
+    t += sq_chunk_t * interm_bytes  # m_old
+    t += sq_chunk_t * dt * MCAST_OUT_DEPTH * out_bytes  # out
+    t += MCAST_MAX_SUBCHUNK * sq_chunk_t * dt * interm_bytes  # q_scaled (4 CBs)
+    t += MCAST_MAX_SUBCHUNK * sq_chunk_t * dt * interm_bytes  # out_accum (rotating ring)
+    t += MCAST_MAX_SUBCHUNK * sq_chunk_t * interm_bytes  # row_max (rotating ring)
+    t += MCAST_MAX_SUBCHUNK * sq_chunk_t * interm_bytes  # row_sum (rotating ring)
+    return t
+
+
+def _mcast_pick_skv_chunk(skv_t, sq_chunk_t, dt, in_bytes, out_bytes, interm_bytes):
+    """Largest Skv_chunk_t in [1, cap] dividing Skv_t whose working set fits L1."""
+    for c in range(min(MCAST_SKV_CHUNK_CAP, skv_t), 0, -1):
+        if skv_t % c != 0:
+            continue
+        if _mcast_working_set(sq_chunk_t, c, dt, in_bytes, out_bytes, interm_bytes) <= L1_BUDGET_MCAST:
+            return c
+    return None
+
+
+def _mcast_eligible(query, key, value, attn_mask, is_causal, compute_kernel_config):
+    """Return (params dict) if the mcast KV-outer path applies, else None."""
+    if os.environ.get("SDPA_MCAST") == "0":
+        return None
+    q = list(query.shape)
+    k = list(key.shape)
+    B, H, S_q, D = q
+    H_kv, S_kv = k[1], k[-2]
+    # Shape-class guard (the shape class the variant is valid for).
+    if attn_mask is not None or is_causal:
+        return None  # mask none only
+    if query.dtype != ttnn.bfloat16 or key.dtype != ttnn.bfloat16:
+        return None  # bf16 only (target dtype)
+    if query.layout != ttnn.TILE_LAYOUT:
+        return None
+    if S_q != S_kv:
+        return None  # self-attn only
+    if H_kv != H:
+        return None  # MHA only (each head reads distinct K/V)
+    if S_q % TILE_DIM != 0 or D % TILE_DIM != 0:
+        return None  # tile-aligned only
+    fp32_dest = bool(getattr(compute_kernel_config, "fp32_dest_acc_en", True))
+    if fp32_dest:
+        return None  # throughput (bf16-intermediate) regime only; fp32 interm won't fit
+
+    device = query.device()
+    grid = device.compute_with_storage_grid_size()
+    gx, gy = grid.x, grid.y
+    if gx < 2:
+        return None
+    num_groups = B * H
+    if num_groups > gy:
+        return None  # one (b,h) per row
+
+    Sq_t = _ceil_div(S_q, TILE_DIM)
+    Skv_t = _ceil_div(S_kv, TILE_DIM)
+    Dt = _ceil_div(D, TILE_DIM)
+
+    sq_chunk_t, n_q_chunks = _mcast_pick_sq_chunk(Sq_t, gx)
+    if sq_chunk_t is None:
+        return None
+
+    in_bytes = ttnn.tile_size(query.dtype)
+    out_bytes = ttnn.tile_size(query.dtype)
+    interm_bytes = ttnn.tile_size(ttnn.bfloat16)
+    skv_chunk_t = _mcast_pick_skv_chunk(Skv_t, sq_chunk_t, Dt, in_bytes, out_bytes, interm_bytes)
+    if skv_chunk_t is None:
+        return None
+
+    return {
+        "B": B,
+        "H": H,
+        "H_kv": H_kv,
+        "Sq_t": Sq_t,
+        "Skv_t": Skv_t,
+        "Dt": Dt,
+        "sq_chunk_t": sq_chunk_t,
+        "skv_chunk_t": skv_chunk_t,
+        "n_q_chunks": n_q_chunks,
+        "n_kv_chunks": _ceil_div(Skv_t, skv_chunk_t),
+        "gx": gx,
+        "num_groups": num_groups,
+    }
+
+
+def _split_row(n_q_chunks, ncores):
+    """Contiguous split of n_q_chunks across ncores -> [(q_start, q_cnt), ...]."""
+    base = n_q_chunks // ncores
+    rem = n_q_chunks % ncores
+    out = []
+    start = 0
+    for i in range(ncores):
+        cnt = base + (1 if i < rem else 0)
+        out.append((start, cnt))
+        start += cnt
+    return out
+
+
+def _create_mcast_program_descriptor(query, key, value, output_tensor, scale, compute_kernel_config, p):
+    B, H, H_kv = p["B"], p["H"], p["H_kv"]
+    Sq_t, Skv_t, Dt = p["Sq_t"], p["Skv_t"], p["Dt"]
+    Sq_chunk_t, Skv_chunk_t = p["sq_chunk_t"], p["skv_chunk_t"]
+    n_q_chunks, n_kv_chunks = p["n_q_chunks"], p["n_kv_chunks"]
+    gx, num_groups = p["gx"], p["num_groups"]
+
+    mcast_bcast = 0 if os.environ.get("SDPA_MCAST_NO_BCAST") == "1" else 1
+    ablate_reader = 1 if os.environ.get("SDPA_MCAST_ABLATE_READER") == "1" else 0
+    ablate_writer = 1 if os.environ.get("SDPA_MCAST_ABLATE_WRITER") == "1" else 0
+    dest_limit = 8  # fp32_dest_acc_en=False throughput regime
+    fast_exp = 1
+
+    device = query.device()
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, num_groups - 1))])
+    sender_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_groups - 1))])
+    recv_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(gx - 1, num_groups - 1))])
+
+    # One Mcast1D row-family: sender in column 0, broadcasts across each row.
+    mc = ttnn.Mcast1D(device, all_cores, ttnn.Mcast1DShape.PerRow, 0, ttnn.McastConfig(handshake=True, base_sem_id=0))
+    semaphores = mc.owned_semaphores()
+
+    bf16 = ttnn.tile_size(ttnn.bfloat16)
+    in_page = query.buffer_page_size()
+    out_page = output_tensor.buffer_page_size()
+    interm = ttnn.bfloat16
+    q_tiles = Sq_chunk_t * Dt
+    kv_tiles = Skv_chunk_t * Dt
+    score_tiles = Sq_chunk_t * Skv_chunk_t
+
+    # ---- Circular buffers (on every participating core) ----
+    # Rotating rings (row_max/row_sum/out_accum) hold MAX_SUBCHUNK blocks; the
+    # compute kernel rotates them one block per sub-chunk. q_scaled stays as
+    # MAX_SUBCHUNK separate CBs (read-only, read via In0SourceFn).
+    cbs = [
+        _cb(MC_Q_STAGE, in_page, q_tiles, query.dtype, all_cores),
+        _cb(MC_K_IN, in_page, kv_tiles * MCAST_KV_DEPTH, query.dtype, all_cores),
+        _cb(MC_V_IN, in_page, kv_tiles * MCAST_KV_DEPTH, query.dtype, all_cores),
+        _cb(MC_SCALER, bf16, 1, ttnn.bfloat16, all_cores),
+        _cb(MC_SCALE, bf16, 1, ttnn.bfloat16, all_cores),
+        _cb(MC_SCORES, bf16, score_tiles, interm, all_cores),
+        _cb(MC_EXP, bf16, score_tiles, interm, all_cores),
+        _cb(MC_CORR, bf16, Sq_chunk_t, interm, all_cores),
+        _cb(MC_M_NEW, bf16, Sq_chunk_t, interm, all_cores),
+        _cb(MC_SUM_CHUNK, bf16, Sq_chunk_t, interm, all_cores),
+        _cb(MC_PV, bf16, q_tiles, interm, all_cores),
+        _cb(MC_L_TMP, bf16, Sq_chunk_t, interm, all_cores),
+        _cb(MC_OUT, out_page, q_tiles * MCAST_OUT_DEPTH, output_tensor.dtype, all_cores),
+        _cb(MC_ROW_MAX, bf16, Sq_chunk_t * MCAST_MAX_SUBCHUNK, interm, all_cores),
+        _cb(MC_ROW_SUM, bf16, Sq_chunk_t * MCAST_MAX_SUBCHUNK, interm, all_cores),
+        _cb(MC_OUT_ACCUM, bf16, q_tiles * MCAST_MAX_SUBCHUNK, interm, all_cores),
+        _cb(MC_O_TMP, bf16, q_tiles, interm, all_cores),
+        _cb(MC_M_OLD, bf16, Sq_chunk_t, interm, all_cores),
+    ]
+    for s in range(MCAST_MAX_SUBCHUNK):
+        cbs.append(_cb(MC_Q_SCALED_0 + s, bf16, q_tiles, interm, all_cores))
+
+    # ---- Reader CT (sender + receiver share the scalar prefix; IS_SENDER differs) ----
+    def reader_ct(is_sender):
+        ct = [
+            Dt,
+            Sq_chunk_t,
+            Skv_chunk_t,
+            n_kv_chunks,
+            Sq_t,
+            Skv_t,
+            H,
+            H_kv,
+            _f32_bits(scale),
+            1 if is_sender else 0,
+            mcast_bcast,
+            ablate_reader,
+        ]
+        ct += list(mc.compile_time_args())  # 5 words at index 12
+        ct += ttnn.TensorAccessorArgs(query).get_compile_time_args()
+        ct += ttnn.TensorAccessorArgs(key).get_compile_time_args()
+        ct += ttnn.TensorAccessorArgs(value).get_compile_time_args()
+        return ct
+
+    # ---- Per-core runtime args ----
+    sender_rt = ttnn.RuntimeArgs()
+    recv_rt = ttnn.RuntimeArgs()
+    compute_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+
+    q_addr = query.buffer_address()
+    k_addr = key.buffer_address()
+    v_addr = value.buffer_address()
+    o_addr = output_tensor.buffer_address()
+    split = _split_row(n_q_chunks, gx)
+
+    for y in range(num_groups):
+        b = y // H
+        h = y % H
+        for x in range(gx):
+            q_start, q_cnt = split[x]
+            core = ttnn.CoreCoord(x, y)
+            mc_rt = list(mc.runtime_args(core))
+            base_rt = [q_addr, k_addr, v_addr, b, h, q_start, q_cnt]
+            if x == 0:
+                sender_rt[x][y] = base_rt + mc_rt
+            else:
+                recv_rt[x][y] = base_rt + mc_rt
+            compute_rt[x][y] = [q_cnt]
+            writer_rt[x][y] = [o_addr, b, h, q_start, q_cnt]
+
+    kdir = str(KERNEL_DIR)
+    sender_kernel = ttnn.KernelDescriptor(
+        kernel_source=kdir + "/scaled_dot_product_attention_mcast_reader.cpp",
+        core_ranges=sender_cores,
+        compile_time_args=reader_ct(True),
+        runtime_args=sender_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    receiver_kernel = ttnn.KernelDescriptor(
+        kernel_source=kdir + "/scaled_dot_product_attention_mcast_reader.cpp",
+        core_ranges=recv_cores,
+        compile_time_args=reader_ct(False),
+        runtime_args=recv_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    compute_ct = [Dt, Sq_chunk_t, Skv_chunk_t, n_kv_chunks, MCAST_MAX_SUBCHUNK, dest_limit, fast_exp]
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=kdir + "/scaled_dot_product_attention_mcast_compute.cpp",
+        core_ranges=all_cores,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=getattr(compute_kernel_config, "math_fidelity", ttnn.MathFidelity.HiFi2),
+            fp32_dest_acc_en=False,
+            math_approx_mode=bool(getattr(compute_kernel_config, "math_approx_mode", False)),
+            dst_full_sync_en=bool(getattr(compute_kernel_config, "dst_full_sync_en", False)),
+        ),
+    )
+    writer_ct = [Dt, Sq_chunk_t, H, Sq_t, ablate_writer]
+    writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=kdir + "/scaled_dot_product_attention_mcast_writer.cpp",
+        core_ranges=all_cores,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    descriptor = ttnn.ProgramDescriptor(
+        kernels=[sender_kernel, receiver_kernel, compute_kernel, writer_kernel],
+        semaphores=list(semaphores),
+        cbs=cbs,
+    )
+    return descriptor, [query, key, value]
+
+
 def create_program_descriptor(
     query, key, value, output_tensor, *, attn_mask=None, is_causal=False, scale=1.0, compute_kernel_config=None
 ):
+    # GUARDED NoC-multicast (KV read-once + broadcast) path. Only for the shape
+    # class it is valid for; every other shape falls through to the shipped
+    # Q-outer path below unchanged. Opt-out via SDPA_MCAST=0.
+    mcast_params = _mcast_eligible(query, key, value, attn_mask, is_causal, compute_kernel_config)
+    if mcast_params is not None:
+        return _create_mcast_program_descriptor(
+            query, key, value, output_tensor, scale, compute_kernel_config, mcast_params
+        )
+
     q_shape = list(query.shape)
     k_shape = list(key.shape)
 

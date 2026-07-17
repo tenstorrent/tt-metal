@@ -223,6 +223,13 @@ void kernel_main() {
     //   batch_q  = (Sq_t % Sq_chunk_t) == 0;   batch_kv = (Skv_t % Skv_chunk_t) == 0;
     // (they slot-align every multi-page reserve in the KV_DEPTH-slot ring), then re-run
     // the full golden suite under --dev to confirm no intermittent hang before banking.
+    // R3 batching PARKED at per-tile default. Re-enabling it (straddle-safe divisor predicates)
+    // was MEASURED a REGRESSION now that the op is read-bound: flagged e2e 5.275 -> 7.352 ms
+    // (+39%), reads-visible 7.18% -> 33.4%. Batching front-loads a whole-KV-chunk read burst per
+    // chunk that congests the NoC across 110 cores and overlaps WORSE with compute than the
+    // per-tile trickle under the KV_DEPTH=2 double-buffer. => bandwidth/congestion-bound, not
+    // latency-bound; batching is the wrong lever. Reduce BYTES (bf8 K/V) or redundant re-reads
+    // (mcast) instead. Kept parked.
     constexpr bool batch_q = false;
     constexpr bool batch_kv = false;
     constexpr bool batch_mask = batch_q && batch_kv;
