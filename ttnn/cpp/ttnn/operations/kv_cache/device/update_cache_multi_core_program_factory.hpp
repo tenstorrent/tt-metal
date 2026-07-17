@@ -24,10 +24,8 @@ struct UpdateCacheMultiCoreProgramFactory {
 // Runtime-arg values that derive from operation_attributes (update_idx, batch_offset) which
 // UpdateKVCacheOperation::compute_program_hash deliberately EXCLUDES from the program-cache key
 // (so two updates that differ only in those cache-hit), yet are baked into reader/writer runtime
-// args — so they must be re-patched on every cache hit via
-// UpdateKVCacheOperation::get_dynamic_runtime_args. compute_update_cache_dynamic_args is the single
-// source of truth for the work-split + formulas: both create_descriptor (cache miss) and
-// get_dynamic_runtime_args (cache hit) call it, so the two paths cannot drift.
+// args. create_descriptor re-derives them from the current attrs on every dispatch (cache miss and,
+// via override_runtime_arguments, cache hit), so they never freeze.
 //   - cache_start_ids: per-core, in the SAME core order create_descriptor emits runtime args.
 //   - tile_update_offset / batch_read_offset: identical on every core (op-wide scalars).
 struct UpdateCacheDynamicArgs {
