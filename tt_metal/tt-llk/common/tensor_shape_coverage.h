@@ -35,6 +35,7 @@ namespace ckernel::coverage
 // entry only when a harvested shape needs a named constant.
 constexpr TensorShape TENSOR_SHAPE_FR1_NF1x1  = {1, MAX_FACE_C_DIM, 1, 1};  ///<  1x16
 constexpr TensorShape TENSOR_SHAPE_FR1_NF1x2  = {1, MAX_FACE_C_DIM, 1, 2};  ///<  1x32
+constexpr TensorShape TENSOR_SHAPE_FR2_NF1x1  = {2, MAX_FACE_C_DIM, 1, 1};  ///<  2x16
 constexpr TensorShape TENSOR_SHAPE_FR2_NF1x2  = {2, MAX_FACE_C_DIM, 1, 2};  ///<  2x32
 constexpr TensorShape TENSOR_SHAPE_FR4_NF1x2  = {4, MAX_FACE_C_DIM, 1, 2};  ///<  4x32
 constexpr TensorShape TENSOR_SHAPE_FR8_NF1x1  = {8, MAX_FACE_C_DIM, 1, 1};  ///<  8x16
