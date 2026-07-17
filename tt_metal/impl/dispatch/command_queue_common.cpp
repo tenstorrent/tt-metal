@@ -66,8 +66,8 @@ uint32_t read_cq_host_ptr(
 
 template <bool addr_16B>
 uint32_t get_cq_issue_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t issue_q_rd_ptr = MetalContext::instance().dispatch_mem_map(cq_id).get_host_command_queue_addr(
-        CommandQueueHostAddrType::ISSUE_Q_RD);
+    uint32_t issue_q_rd_ptr =
+        MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
     const SystemMemoryManager& sysmem_manager =
         MetalContext::instance().device_manager()->get_active_device(chip_id)->sysmem_manager();
     uint32_t recv = read_cq_host_ptr<true>(sysmem_manager, chip_id, cq_id, cq_size, issue_q_rd_ptr);
@@ -82,8 +82,8 @@ template uint32_t get_cq_issue_rd_ptr<false>(ChipId chip_id, uint8_t cq_id, uint
 
 template <bool addr_16B>
 uint32_t get_cq_issue_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t issue_q_wr_ptr = MetalContext::instance().dispatch_mem_map(cq_id).get_host_command_queue_addr(
-        CommandQueueHostAddrType::ISSUE_Q_WR);
+    uint32_t issue_q_wr_ptr =
+        MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
     const SystemMemoryManager& sysmem_manager =
         MetalContext::instance().device_manager()->get_active_device(chip_id)->sysmem_manager();
     uint32_t recv = read_cq_host_ptr<false>(sysmem_manager, chip_id, cq_id, cq_size, issue_q_wr_ptr);
@@ -98,7 +98,7 @@ template uint32_t get_cq_issue_wr_ptr<false>(ChipId chip_id, uint8_t cq_id, uint
 
 template <bool addr_16B>
 uint32_t get_cq_completion_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t completion_q_wr_ptr = MetalContext::instance().dispatch_mem_map(cq_id).get_host_command_queue_addr(
+    uint32_t completion_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_WR);
     const SystemMemoryManager& sysmem_manager =
         MetalContext::instance().device_manager()->get_active_device(chip_id)->sysmem_manager();
@@ -114,7 +114,7 @@ template uint32_t get_cq_completion_wr_ptr<false>(ChipId chip_id, uint8_t cq_id,
 
 template <bool addr_16B>
 uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map(cq_id).get_host_command_queue_addr(
+    uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_RD);
     const SystemMemoryManager& sysmem_manager =
         MetalContext::instance().device_manager()->get_active_device(chip_id)->sysmem_manager();
@@ -146,8 +146,8 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
     CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
     uint32_t dev_dispatch_progress_ptr =
         MetalContext::instance()
-            .dispatch_mem_map(dispatch_core_type, cq_id)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
+            .dispatch_mem_map(dispatch_core_type)
+            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, cq_id);
 
     // read_core expects TRANSLATED (virtual) coordinates
     // dispatcher_core_manager stores logical coordinates, so convert LOGICAL -> TRANSLATED (virtual)

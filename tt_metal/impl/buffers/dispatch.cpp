@@ -462,7 +462,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
     buf_dispatch_constants.max_prefetch_cmd_size =
-        MetalContext::instance().dispatch_mem_map(cq_id).max_prefetch_command_size();
+        MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
 
     return buf_dispatch_constants;
 }
@@ -727,9 +727,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                MetalContext::instance()
-                    .dispatch_mem_map(dispatch_params.cq_id)
-                    .get_dispatch_stream_index(offset_index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index],
                 dispatch_params.cq_id);
         }
@@ -977,9 +975,7 @@ void issue_buffer_dispatch_command_sequence(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
                 0,
-                MetalContext::instance()
-                    .dispatch_mem_map(dispatch_params.cq_id)
-                    .get_dispatch_stream_index(offset_index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
                 dispatch_params.expected_num_workers_completed[offset_index],
                 dispatch_params.cq_id);
         }
@@ -1493,9 +1489,7 @@ void issue_read_buffer_dispatch_command_sequence(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            MetalContext::instance(context_id)
-                .dispatch_mem_map(dispatch_params.cq_id)
-                .get_dispatch_stream_index(offset_index),
+            MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
             dispatch_params.expected_num_workers_completed[offset_index],
             dispatch_params.cq_id);
     }
@@ -1503,9 +1497,7 @@ void issue_read_buffer_dispatch_command_sequence(
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
-        MetalContext::instance(context_id)
-            .dispatch_mem_map(dispatch_params.cq_id)
-            .get_dispatch_stream_index(offset_index),
+        MetalContext::instance(context_id).dispatch_mem_map().get_dispatch_stream_index(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index],
         dispatch_params.cq_id);
 

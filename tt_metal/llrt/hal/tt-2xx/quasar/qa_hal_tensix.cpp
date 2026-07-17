@@ -40,7 +40,7 @@ HalCoreInfoType create_tensix_mem_map() {
     uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
     std::vector<DeviceAddr> mem_map_bases;
-    const uint32_t default_l1_kernel_config_size = 75 * 1024;
+    const uint32_t default_l1_kernel_config_size = 100 * 1024;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_L1_BASE;

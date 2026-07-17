@@ -12,7 +12,6 @@
 #include <tt_stl/assert.hpp>
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
-#include "dispatch/dispatch_query_manager.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
 #include "dispatch_settings.hpp"
@@ -115,10 +114,9 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
     // completion counter address from the stream index.
     if (!MetalContext::instance().hal().has_stream_registers() &&
         (flags & (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM))) {
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(cq_id);
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map();
         const uint32_t first_stream = mem_map.get_dispatch_stream_index(0);
-        const uint32_t completion_counter_base =
-            MetalContext::instance().get_dispatch_query_manager().completion_counter_base(cq_id);
+        const uint32_t completion_counter_base = mem_map.completion_counter_base(cq_id);
         address = mem_map.get_dispatch_message_addr_start() +
                   completion_counter_base * MetalContext::instance().hal().get_alignment(HalMemType::L1) +
                   mem_map.get_sync_offset(stream - first_stream);

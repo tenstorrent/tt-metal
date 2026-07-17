@@ -104,16 +104,16 @@ void DispatchKernel::GenerateStaticConfigs() {
 
     // May be zero if not using dispatch on fabric
     static_config_.fabric_header_rb_base =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB);
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB, cq_id_);
     static_config_.fabric_header_rb_entries = DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
     static_config_.my_fabric_sync_status_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS, cq_id_);
     static_config_.realtime_profiler_msg_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG);
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, cq_id_);
     static_config_.dispatch_telemetry_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
-    static_config_.dispatch_telemetry_control_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL);
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, cq_id_);
+    static_config_.dispatch_telemetry_control_addr = my_dispatch_constants.get_device_command_queue_addr(
+        CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, cq_id_);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -128,7 +128,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
         uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
 
-        static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
+        static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
@@ -144,8 +144,8 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.packed_write_max_unicast_sub_cmds =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
-        static_config_.dispatch_s_sync_sem_base_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
+        static_config_.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
         static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
@@ -156,16 +156,16 @@ void DispatchKernel::GenerateStaticConfigs() {
                 : 0;
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
-        static_config_.completion_counter_base = get_dispatch_query_manager_ref().completion_counter_base(cq_id_);
+        static_config_.completion_counter_base = my_dispatch_constants.completion_counter_base(cq_id_);
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
         static_config_.dev_completion_q_wr_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, cq_id_);
         static_config_.dev_completion_q_rd_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id_);
         static_config_.dev_dispatch_progress_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, cq_id_);
     } else if (static_config_.is_h_variant.value()) {
         // DISPATCH_H services a remote chip, and so has a different channel
         channel = descriptor_.cluster().get_assigned_channel_for_device(servicing_device_id_);
@@ -181,7 +181,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
         uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
 
-        static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
+        static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
@@ -208,13 +208,13 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
         static_config_.dev_completion_q_wr_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, cq_id_);
         static_config_.dev_completion_q_rd_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id_);
         static_config_.dev_dispatch_progress_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, cq_id_);
     } else if (static_config_.is_d_variant.value()) {
-        static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
+        static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.dispatch_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
@@ -230,8 +230,8 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.packed_write_max_unicast_sub_cmds =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
-        static_config_.dispatch_s_sync_sem_base_addr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
+        static_config_.dispatch_s_sync_sem_base_addr = my_dispatch_constants.get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
         static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
@@ -242,16 +242,16 @@ void DispatchKernel::GenerateStaticConfigs() {
                 : 0;
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
-        static_config_.completion_counter_base = get_dispatch_query_manager_ref().completion_counter_base(cq_id_);
+        static_config_.completion_counter_base = my_dispatch_constants.completion_counter_base(cq_id_);
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
         static_config_.dev_completion_q_wr_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, cq_id_);
         static_config_.dev_completion_q_rd_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id_);
         static_config_.dev_dispatch_progress_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS);
+            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, cq_id_);
     } else {
         TT_FATAL(false, "DispatchKernel must be one of (or both) H and D variants");
     }
@@ -616,7 +616,7 @@ void DispatchKernel::ConfigureCore() {
     std::vector<uint32_t> zero = {0x0};
     const auto& my_dispatch_constants = *this->dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
     uint32_t dispatch_s_sync_sem_base_addr =
-        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
     for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
         uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_sync_offset(i);
         detail::WriteToDeviceL1(device_, logical_core_, dispatch_s_sync_sem_addr, zero, GetCoreType());
@@ -624,10 +624,10 @@ void DispatchKernel::ConfigureCore() {
 
     // For DISPATCH_D, need to clear completion q events
     if (!static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
-        uint32_t completion_q0_last_event_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-        uint32_t completion_q1_last_event_ptr =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
+        uint32_t completion_q0_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT, cq_id_);
+        uint32_t completion_q1_last_event_ptr = my_dispatch_constants.get_device_command_queue_addr(
+            CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT, cq_id_);
         detail::WriteToDeviceL1(device_, logical_core_, completion_q0_last_event_ptr, zero, GetCoreType());
         detail::WriteToDeviceL1(device_, logical_core_, completion_q1_last_event_ptr, zero, GetCoreType());
     }

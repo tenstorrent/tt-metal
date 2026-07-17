@@ -120,13 +120,7 @@ public:
         for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
             const auto& layout = get_dispatch_query_manager_ref().cq_dispatch_layout(core_type);
             dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-                core_type,
-                descriptor.num_cqs(),
-                descriptor.hal(),
-                is_galaxy_cluster,
-                layout,
-                descriptor.rtoptions(),
-                cq_id_);
+                core_type, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster, layout, descriptor.rtoptions());
         }
     }
     virtual ~FDKernel() = default;

@@ -64,8 +64,8 @@ void write_go_signal(
         dev_msgs::RUN_MSG_GO,
         dispatch_core.x,
         dispatch_core.y,
-        MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_message_update_offset(sub_device_index) +
-            MetalContext::instance().get_dispatch_query_manager().completion_counter_base(cq_id));
+        MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index) +
+            MetalContext::instance().dispatch_mem_map().completion_counter_base(cq_id));
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent
@@ -85,7 +85,7 @@ void write_go_signal(
     go_signal_cmd_sequence.add_dispatch_go_signal_mcast(
         expected_num_workers_completed,
         go_msg_u32_val,
-        MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(sub_device_index),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
         (send_mcast && mesh_device->impl().has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
                                                                               : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
         send_unicasts ? mesh_device->impl().num_virtual_eth_cores(sub_device_id) : 0,
@@ -109,8 +109,7 @@ void write_rt_profiler_flush(
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
     HugepageDeviceCommand flush_cmd_sequence(cmd_region, cmd_sequence_sizeB);
-    const uint32_t wait_stream =
-        MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(*sub_device_id);
+    const uint32_t wait_stream = MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id);
     flush_cmd_sequence.add_dispatch_rt_profiler_flush(wait_count, wait_stream);
 
     TT_ASSERT(flush_cmd_sequence.size_bytes() == flush_cmd_sequence.write_offset_bytes());

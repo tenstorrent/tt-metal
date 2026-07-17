@@ -37,6 +37,14 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     UNRESERVED = 14,
 };
 
+// Address types whose L1 region is shared across CQs co-located on the same dispatch core,
+// rather than replicated per CQ at a `cq_id * cq_zone_stride` offset.
+constexpr bool is_cq_shared(CommandQueueDeviceAddrType addr_type) {
+    return addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES ||
+           addr_type == CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT ||
+           addr_type == CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT;
+}
+
 // likely only used in impl
 enum class CommandQueueHostAddrType : uint8_t {
     ISSUE_Q_RD = 0,

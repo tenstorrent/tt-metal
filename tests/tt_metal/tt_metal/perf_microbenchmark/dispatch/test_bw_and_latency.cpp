@@ -455,9 +455,8 @@ int main(int argc, char** argv) {
             vec.resize(page_size_g / sizeof(uint32_t));
 
             uint32_t dispatch_l1_unreserved_base =
-                MetalContext::instance()
-                    .dispatch_mem_map(std::nullopt)
-                    .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+                MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
+                    CommandQueueDeviceAddrType::UNRESERVED, cq.id());
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(

@@ -46,12 +46,8 @@ public:
     const std::vector<CoreCoord>& get_logical_dispatch_cores_on_user_chips() const;
     tt_cxy_pair get_dispatch_core(uint8_t cq_id) const;
 
-    // How command queues share a physical dispatch core of core_type (see CommandQueueDispatchLayout).
+    // How command queues share a dispatch core of core_type
     const CommandQueueDispatchLayout& cq_dispatch_layout(CoreType core_type) const;
-
-    // Index of the first worker-completion counter reserved for cq_id's workers, on the dispatch
-    // core type actually hosting dispatch.
-    uint8_t completion_counter_base(uint8_t cq_id) const;
 
 private:
     void reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);

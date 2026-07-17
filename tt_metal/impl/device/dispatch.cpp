@@ -22,8 +22,7 @@ uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& /*dispatch_core_
     auto padded_commands_size = tt::align(sizeof(CQPrefetchCmd), host_alignment) +
                                 (num_subdevices * tt::align(sizeof(CQDispatchCmd), host_alignment)) +
                                 tt::align(sizeof(CQDispatchCmdLarge), host_alignment);
-    return tt::tt_metal::MetalContext::instance().dispatch_mem_map(std::nullopt).max_prefetch_command_size() -
-           padded_commands_size;
+    return tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() - padded_commands_size;
 }
 
 namespace device_dispatch {
@@ -87,9 +86,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            tt::tt_metal::MetalContext::instance()
-                .dispatch_mem_map(dispatch_params.cq_id)
-                .get_dispatch_stream_index(offset_index),
+            tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
             dispatch_params.expected_num_workers_completed[offset_index],
             dispatch_params.cq_id);
     }
@@ -195,9 +192,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
-            tt::tt_metal::MetalContext::instance()
-                .dispatch_mem_map(dispatch_params.cq_id)
-                .get_dispatch_stream_index(offset_index),
+            tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
             dispatch_params.expected_num_workers_completed[offset_index],
             dispatch_params.cq_id);
     }
@@ -205,9 +200,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
-        tt::tt_metal::MetalContext::instance()
-            .dispatch_mem_map(dispatch_params.cq_id)
-            .get_dispatch_stream_index(offset_index),
+        tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(offset_index),
         dispatch_params.expected_num_workers_completed[offset_index],
         dispatch_params.cq_id);
 

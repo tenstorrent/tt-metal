@@ -114,9 +114,9 @@ void issue_trace_commands(
                 dev_msgs::RUN_MSG_REPLAY_TRACE,
                 dispatch_core.x,
                 dispatch_core.y,
-                MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_message_update_offset(index) +
-                    MetalContext::instance().get_dispatch_query_manager().completion_counter_base(cq_id)),
-            MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index) +
+                    MetalContext::instance().dispatch_mem_map().completion_counter_base(cq_id)),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
@@ -142,7 +142,7 @@ void issue_trace_commands(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(index),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
                 expected_num_workers,
                 cq_id,
                 1);
@@ -150,7 +150,7 @@ void issue_trace_commands(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(index),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
             expected_num_workers,
             cq_id);
     }

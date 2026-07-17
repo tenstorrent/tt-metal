@@ -183,9 +183,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
             .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 2,
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
         experimental::ProgramSpec spec{
@@ -194,7 +192,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_KERNEL,
-            .runtime_arg_values = {{node, {{"address", address}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
             .common_runtime_arg_values = {{"value", value}},
         }};
         experimental::SetProgramRunArgs(program, params);

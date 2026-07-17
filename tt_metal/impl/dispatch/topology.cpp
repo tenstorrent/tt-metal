@@ -432,16 +432,8 @@ DispatchTopology::DispatchTopology(
     const bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
         const auto& layout = this->get_dispatch_query_manager_().cq_dispatch_layout(core_type);
-        for (uint8_t cq_id = 0; cq_id < layout.num_cqs_per_core; ++cq_id) {
-            dispatch_mem_map_[enchantum::to_underlying(core_type)][cq_id] = std::make_unique<DispatchMemMap>(
-                core_type,
-                descriptor_.num_cqs(),
-                descriptor_.hal(),
-                is_galaxy_cluster,
-                layout,
-                descriptor_.rtoptions(),
-                cq_id);
-        }
+        dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
+            core_type, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster, layout, descriptor_.rtoptions());
     }
 }
 
@@ -794,16 +786,10 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = this->dispatch_core_manager_.get_dispatch_core_type();
-    const auto& mem_map_slot0 = *this->dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)][0];
-    uint32_t cq_start = mem_map_slot0.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+    const auto& mem_map = *this->dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)];
+    uint32_t cq_start = mem_map.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
-    // COMPLETION_Q[0/1]_LAST_EVENT addresses are identical for every cq_id, so slot 0's map already has the right
-    // answer
-    uint32_t completion_q0_last_event_ptr =
-        mem_map_slot0.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-    uint32_t completion_q1_last_event_ptr =
-        mem_map_slot0.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
 
     // Need to set up for all devices serviced by an mmio chip
     TT_ASSERT(device_manager_ != nullptr, "DeviceManager required for configure_dispatch_cores");
@@ -814,15 +800,14 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
                 tt_cxy_pair completion_q_writer_location =
                     this->dispatch_core_manager_.completion_queue_writer_core(serviced_device_id, channel, cq_id);
                 IDevice* mmio_device = device_manager_->get_active_device(completion_q_writer_location.chip);
-                const uint8_t slot =
-                    this->get_dispatch_query_manager_().cq_dispatch_layout(dispatch_core_type).num_cqs_per_core > 1
-                        ? cq_id
-                        : 0;
-                const auto& mem_map = *dispatch_mem_map_[enchantum::to_underlying(dispatch_core_type)][slot];
-                uint32_t completion_q_wr_ptr =
-                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-                uint32_t completion_q_rd_ptr =
-                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+                const uint32_t completion_q_wr_ptr =
+                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, cq_id);
+                const uint32_t completion_q_rd_ptr =
+                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id);
+                const uint32_t completion_q0_last_event_ptr =
+                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT, cq_id);
+                const uint32_t completion_q1_last_event_ptr =
+                    mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT, cq_id);
                 // Initialize completion queue write pointer and read pointer copy
                 uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
                 uint32_t completion_queue_start_addr;

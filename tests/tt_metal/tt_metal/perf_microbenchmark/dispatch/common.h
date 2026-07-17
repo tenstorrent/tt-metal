@@ -1059,7 +1059,7 @@ protected:
 
         // Initialize common HW properties
         host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
-        max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map(fdcq_->id()).max_prefetch_command_size();
+        max_fetch_bytes_ = tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
 
         // Arch selection gate: on Quasar only the QuasarSimulatorVariant runs; on WH/BH only the default fixture runs.
         if (Common::is_quasar_sim() != quasar_simulator_variant_) {
@@ -1357,17 +1357,23 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"HOST_COMPLETION_Q_WR_PTR",
          std::to_string(memmap.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR))},
         {"DEV_COMPLETION_Q_WR_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR, /*cq_id=*/0))},
         {"DEV_COMPLETION_Q_RD_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, /*cq_id=*/0))},
         {"DEV_DISPATCH_PROGRESS_PTR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_PROGRESS, /*cq_id=*/0))},
         {"REALTIME_PROFILER_MSG_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY))},
+         std::to_string(
+             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_CONTROL_ADDR",
-         std::to_string(memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL))},
+         std::to_string(memmap.get_device_command_queue_addr(
+             CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_DISABLED", "1"},
         {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
         {"COMPLETION_COUNTER_BASE", "0"},

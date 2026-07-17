@@ -235,10 +235,8 @@ void MetalContext::initialize(
     const bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
         const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout(core_type);
-        for (uint8_t cq_id = 0; cq_id < cq_dispatch_layout.num_cqs_per_core; ++cq_id) {
-            dispatch_mem_map_[enchantum::to_underlying(core_type)][cq_id] = std::make_unique<DispatchMemMap>(
-                core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions(), cq_id);
-        }
+        dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
+            core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
     }
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
@@ -503,10 +501,8 @@ void MetalContext::register_handlers_locked() {
 }
 
 void MetalContext::teardown_dispatch_state() {
-    for (auto& mem_maps_for_core_type : dispatch_mem_map_) {
-        for (auto& mem_map : mem_maps_for_core_type) {
-            mem_map.reset();
-        }
+    for (auto& mem_map : dispatch_mem_map_) {
+        mem_map.reset();
     }
     device_manager_->reset_dispatch_topology();
     dispatch_query_manager_.reset();
@@ -580,15 +576,13 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
     return *dispatch_query_manager_;
 }
 
-const DispatchMemMap& MetalContext::dispatch_mem_map(std::optional<uint8_t> cq_id) const {
-    return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_), cq_id);
+const DispatchMemMap& MetalContext::dispatch_mem_map() const {
+    return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_));
 }
 
-const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type, std::optional<uint8_t> cq_id) const {
-    const uint8_t slot =
-        dispatch_query_manager_->cq_dispatch_layout(core_type).num_cqs_per_core > 1 ? cq_id.value_or(0) : 0;
-    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)][slot];
-    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} cq_id {} before initializing it.", core_type, slot);
+const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
+    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
+    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
     return *mem_map;
 }
 

@@ -182,7 +182,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     prefetcher_dram_aligned_block_size_(
         MetalContext::instance(mesh_device->impl().get_context_id()).hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(MetalContext::instance(mesh_device->impl().get_context_id())
-                                .dispatch_mem_map(this->dispatch_core_type_, std::nullopt)
+                                .dispatch_mem_map(this->dispatch_core_type_)
                                 .ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
     prefetcher_cache_manager_size_(

@@ -451,7 +451,7 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx].add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        MetalContext::instance().dispatch_mem_map(std::nullopt).get_dispatch_stream_index(*sub_device_id),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
         0,
         /*cq_id=*/0);
     // Empty wait command initialized here. Will get updated when program is enqueued.
@@ -460,7 +460,7 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     program_command_sequence.stall_command_sequences[CachedStallSequenceIdx].add_dispatch_wait(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
         0,
-        MetalContext::instance().dispatch_mem_map(std::nullopt).get_dispatch_stream_index(*sub_device_id),
+        MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
         0,
         /*cq_id=*/0);
 }
@@ -1438,7 +1438,7 @@ public:
         bool using_prefetcher_cache) {
         const auto& hal = MetalContext::instance().hal();
         const uint32_t max_length_per_sub_cmd =
-            MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type, std::nullopt).scratch_db_size() / 2;
+            MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
 
@@ -2185,10 +2185,10 @@ public:
                 0,
                 0,
                 MetalContext::instance()
-                    .dispatch_mem_map(constants.dispatch_core_type, std::nullopt)
+                    .dispatch_mem_map(constants.dispatch_core_type)
                     .get_dispatch_message_update_offset(sub_device_index)),
             MetalContext::instance()
-                .dispatch_mem_map(constants.dispatch_core_type, std::nullopt)
+                .dispatch_mem_map(constants.dispatch_core_type)
                 .get_dispatch_stream_index(sub_device_index),
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
@@ -2204,7 +2204,7 @@ public:
             num_noc_unicast_txns,
             noc_data_start_idx,
             MetalContext::instance()
-                .dispatch_mem_map(constants.dispatch_core_type, std::nullopt)
+                .dispatch_mem_map(constants.dispatch_core_type)
                 .get_dispatch_stream_index(sub_device_index));
 
         program_command_sequence.mcast_go_signal_cmd_ptr =
@@ -2235,9 +2235,8 @@ void assemble_device_commands(
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     constants.noc_index = k_dispatch_downstream_noc;
-    constants.max_prefetch_command_size = MetalContext::instance()
-                                              .dispatch_mem_map(constants.dispatch_core_type, std::nullopt)
-                                              .max_prefetch_command_size();
+    constants.max_prefetch_command_size =
+        MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).max_prefetch_command_size();
     constants.packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(mesh_device);
     BatchedTransfers batched_transfers =
         assemble_runtime_args_commands(program_command_sequence, program, mesh_device, constants);
@@ -2511,11 +2510,10 @@ void update_program_dispatch_commands(
     // insert_stall_cmds baked in a placeholder wait.addr; patch in the real completion address for cq_id here. Unused
     // when this arch waits via a NOC stream register instead of an L1 address.
     if (!MetalContext::instance().hal().has_stream_registers()) {
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(dispatch_core_type, cq_id);
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map(dispatch_core_type);
         const uint32_t wait_addr =
             mem_map.get_dispatch_message_addr_start() +
-            MetalContext::instance().get_dispatch_query_manager().completion_counter_base(cq_id) *
-                MetalContext::instance().hal().get_alignment(HalMemType::L1) +
+            mem_map.completion_counter_base(cq_id) * MetalContext::instance().hal().get_alignment(HalMemType::L1) +
             mem_map.get_sync_offset(*sub_device_id);
         cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
             wait_addr_offset, &wait_addr, sizeof(uint32_t));
@@ -2668,9 +2666,9 @@ void update_program_dispatch_commands(
         dispatch_core.x,
         dispatch_core.y,
         MetalContext::instance()
-                .dispatch_mem_map(dispatch_core_type, cq_id)
+                .dispatch_mem_map(dispatch_core_type)
                 .get_dispatch_message_update_offset(*sub_device_id) +
-            MetalContext::instance().get_dispatch_query_manager().completion_counter_base(cq_id));
+            MetalContext::instance().dispatch_mem_map(dispatch_core_type).completion_counter_base(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
@@ -2730,12 +2728,10 @@ void update_traced_program_dispatch_commands(
     // insert_stall_cmds baked in a placeholder wait.addr; patch in the real completion address for cq_id here. Unused
     // when this arch waits via a NOC stream register instead of an L1 address.
     if (!hal.has_stream_registers()) {
-        const auto& mem_map = MetalContext::instance().dispatch_mem_map(dispatch_core_type, cq_id);
-        const uint32_t wait_addr =
-            mem_map.get_dispatch_message_addr_start() +
-            MetalContext::instance().get_dispatch_query_manager().completion_counter_base(cq_id) *
-                hal.get_alignment(HalMemType::L1) +
-            mem_map.get_sync_offset(*sub_device_id);
+        const auto& mem_map = MetalContext::instance().dispatch_mem_map(dispatch_core_type);
+        const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
+                                   mem_map.completion_counter_base(cq_id) * hal.get_alignment(HalMemType::L1) +
+                                   mem_map.get_sync_offset(*sub_device_id);
         cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
             wait_addr_offset, &wait_addr, sizeof(uint32_t));
     }
@@ -2879,9 +2875,9 @@ void update_traced_program_dispatch_commands(
         dispatch_core.x,
         dispatch_core.y,
         MetalContext::instance()
-                .dispatch_mem_map(dispatch_core_type, cq_id)
+                .dispatch_mem_map(dispatch_core_type)
                 .get_dispatch_message_update_offset(*sub_device_id) +
-            MetalContext::instance().get_dispatch_query_manager().completion_counter_base(cq_id));
+            MetalContext::instance().dispatch_mem_map(dispatch_core_type).completion_counter_base(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
@@ -2917,9 +2913,8 @@ void write_program_command_sequence(
     // Check if it's possible to write all commands in a single fetch queue entry
     uint32_t one_shot_fetch_size =
         program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
-    bool one_shot =
-        one_shot_fetch_size <=
-        MetalContext::instance().dispatch_mem_map(dispatch_core_type, command_queue_id).max_prefetch_command_size();
+    bool one_shot = one_shot_fetch_size <=
+                    MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
 
     LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
     if (one_shot) {
@@ -3195,9 +3190,9 @@ void reset_worker_dispatch_state_on_device(
                     dev_msgs::RUN_MSG_RESET_READ_PTR,
                     dispatch_core.x,
                     dispatch_core.y,
-                    MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_message_update_offset(i) +
-                        MetalContext::instance().get_dispatch_query_manager().completion_counter_base(cq_id)),
-                MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(i),
+                    MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i) +
+                        MetalContext::instance().dispatch_mem_map().completion_counter_base(cq_id)),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 mesh_device->impl().num_noc_unicast_txns(sub_device_id),
                 mesh_device->impl().noc_data_start_index(sub_device_id),
@@ -3218,7 +3213,7 @@ void reset_worker_dispatch_state_on_device(
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
-                MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(i),
+                MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 expected_num_workers,
                 cq_id,
                 1);
@@ -3226,7 +3221,7 @@ void reset_worker_dispatch_state_on_device(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(i),
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
             expected_num_workers,
             cq_id);
     }
@@ -3299,7 +3294,7 @@ void reset_expected_num_workers_completed_on_device(
         command_sequence.add_dispatch_wait(
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
             0,
-            tt::tt_metal::MetalContext::instance().dispatch_mem_map(cq_id).get_dispatch_stream_index(*sub_device_id),
+            tt::tt_metal::MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
             num_expected_workers,
             cq_id,
             dispatcher_type);
@@ -3356,7 +3351,7 @@ void set_core_go_message_mapping_on_device(
     auto dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     uint32_t noc_index = k_dispatch_downstream_noc;
     uint32_t max_prefetch_command_size =
-        MetalContext::instance().dispatch_mem_map(dispatch_core_type, cq_id).max_prefetch_command_size();
+        MetalContext::instance().dispatch_mem_map(dispatch_core_type).max_prefetch_command_size();
     uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
 
     for (const auto& [core_range_set, go_msg_offset] : core_go_message_mapping) {
