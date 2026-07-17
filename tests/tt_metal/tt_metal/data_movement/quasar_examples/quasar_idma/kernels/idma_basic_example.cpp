@@ -12,7 +12,7 @@
 //   4. Wait for IDMA ack
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include <cstdint>
@@ -28,20 +28,28 @@ void kernel_main() {
     constexpr uint32_t dst_addr = get_arg(args::dst_addr);
 
     reset_cmdbuf_0();
+    DEVICE_PRINT("HERE \n");
 
     /* CMD Misc register, only difference to NOC*/
     idma_setup_as_copy_cmdbuf_0(false);
+    DEVICE_PRINT("HERE 2\n");
     /* Vcs = IDMA channel*/
     setup_vcs_cmdbuf_0(false);
+    DEVICE_PRINT("HERE 3\n");
 
     set_src_cmdbuf_0(src_addr);
+    DEVICE_PRINT("HERE 4\n");
     set_dest_cmdbuf_0(dst_addr);
+    DEVICE_PRINT("HERE 5\n");
     set_len_cmdbuf_0(total_bytes);
+    DEVICE_PRINT("HERE 6\n");
 
     issue_cmdbuf_0();
+    DEVICE_PRINT("HERE 7\n");
 
     /* wait on IDMA to finish */
-    while (!idma_acked_cmdbuf_0());
+    while (!idma_acked_cmdbuf_0()) {
+    }
 
-    DPRINT << "IDMA basic done: " << DEC() << num_elements << " elements (" << total_bytes << " B)" << ENDL();
+    DEVICE_PRINT("IDMA 1D strided done: {} elements", num_elements);
 }

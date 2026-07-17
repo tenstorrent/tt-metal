@@ -77,13 +77,13 @@ void kernel_main() {
     // Dispatcher Kernel is able to finish.
     // Device::close() requires fast-dispatch kernels to finish.
     volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-#if defined(COMPILE_FOR_DM)
+    // #if defined(COMPILE_FOR_DM)
     // SD signaling: Quasar DM requires RUN_MSG_DONE. TODO: remove once FD is enabled on Quasar.
     go_message_in->signal = RUN_MSG_DONE;
-#else
-    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-    notify_dispatch_core_done(dispatch_addr, noc_index);
-#endif
+    // #else
+    //     uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
+    //     notify_dispatch_core_done(dispatch_addr, noc_index);
+    // #endif
 
     if (l1_overflow_addr) {
         CoreLocalMem<std::uint32_t> l1_overflow_buffer(l1_overflow_addr);
