@@ -134,10 +134,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), cfg);
         if (fp32_dest_acc_en) {
             std::visit(
-                [&](auto& c) {
-                    c.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                },
-                compute_hw);
+                [&](auto& c) { c.unpack_modes.emplace(IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
         return compute_hw;
     };
