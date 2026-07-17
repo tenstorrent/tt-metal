@@ -78,6 +78,7 @@ class LlamaMLP(AbstractModuleBase):
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         self.use_tp = use_tp
+        self.sequence_parallel = sequence_parallel
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
@@ -153,7 +154,8 @@ class LlamaMLP(AbstractModuleBase):
         x = self.w2(gated)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            x = ttml.ops.dropout.dropout(x, self.dropout_prob)
+            # SP: per-device seed so each sequence shard is masked independently.
+            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=self.sequence_parallel)
 
         return x
 

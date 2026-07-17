@@ -133,13 +133,6 @@ class LlamaConfig:
                 )
 
         if self.tp_strategy.sequence_parallel:
-            # Dropout in the sequence-sharded regions would need per-TP-rank RNG
-            # (each rank holds different positions); not wired yet, so gate it off.
-            if self.attention_dropout > 0.0 or self.mlp_dropout > 0.0:
-                raise NotImplementedError(
-                    "sequence_parallel does not support dropout>0 yet "
-                    f"(attention_dropout={self.attention_dropout}, mlp_dropout={self.mlp_dropout})"
-                )
             # Each TP rank owns S/tp_size sequence positions and the sequence
             # reduce-scatter requires the per-shard tile count to divide the ring:
             # (S/32) % tp_size == 0, i.e. S % (32*tp_size) == 0.
@@ -325,10 +318,16 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
-        # In TP mode the LM head output stays vocab-sharded; the trailing
-        # padded columns are handled by vocab_parallel_cross_entropy_loss.
-        # The non-TP path returns full-vocab logits, so we still need to drop
-        # the tile-alignment padding before handing them off to the caller.
+        # Both paths pad the vocab to a tile multiple, so padded_vocab_size may
+        # exceed vocab_size -- but only the non-TP path drops that padding here:
+        #   - non-TP: `fc` is a plain LinearLayer returning the full-vocab logits
+        #     [B,1,S,padded_V] to the caller, which feeds an ordinary
+        #     cross_entropy_loss expecting exactly vocab_size columns -> slice.
+        #   - TP: `fc` is ColumnParallelLinear(gather_output=False), so the logits
+        #     stay vocab-sharded ([B,1,S,padded_V/tp] per rank). The padding lives
+        #     only in the last rank's shard and is handled inside
+        #     vocab_parallel_cross_entropy_loss; a uniform last-dim slice would be
+        #     meaningless on a sharded tensor. So do NOT slice under TP.
         if not self.config.tp_strategy.tensor_parallel and self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits

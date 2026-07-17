@@ -12,10 +12,6 @@ from enum import Enum
 class TPStrategy(Enum):
     """How tensor parallelism is applied to a model.
 
-    Replaces the old ``use_tp`` + ``sequence_parallel`` boolean pair with a single value,
-    which makes the illegal combination (sequence parallelism without tensor parallelism)
-    unrepresentable.
-
     - ``NONE``            -- no tensor parallelism (single device / DP / FSDP only).
     - ``TENSOR``          -- Megatron tensor parallelism: activations are replicated across
       the ``tp`` axis between the sharded matmuls (all-reduce / broadcast).
