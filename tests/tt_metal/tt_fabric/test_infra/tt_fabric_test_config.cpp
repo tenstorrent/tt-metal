@@ -797,13 +797,44 @@ static bool check_mesh_scope_filter(ParsedTestConfig& test_config, const std::op
     return checker;
 }
 
+// gtest-style glob match: '*' matches any (possibly empty) sequence, '?' matches any single
+// character. Used for --filter name.<glob> when the value contains a '*'; otherwise callers do an
+// exact string comparison so e.g. `name.Mesh` never silently matches `MeshLooped_short`.
+static bool name_glob_match(const std::string& pattern, const std::string& str) {
+    size_t p = 0, s = 0;
+    size_t star = std::string::npos, s_after_star = 0;
+    while (s < str.size()) {
+        if (p < pattern.size() && (pattern[p] == '?' || pattern[p] == str[s])) {
+            ++p;
+            ++s;
+        } else if (p < pattern.size() && pattern[p] == '*') {
+            star = p++;
+            s_after_star = s;
+        } else if (star != std::string::npos) {
+            p = star + 1;
+            s = ++s_after_star;
+        } else {
+            return false;
+        }
+    }
+    while (p < pattern.size() && pattern[p] == '*') {
+        ++p;
+    }
+    return p == pattern.size();
+}
+
 bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_grained) {
     if (!filter_type.has_value()) {
         return true;
     }
     const std::string& type = filter_type.value();
     if (type == "name" || type == "Name") {
-        return test_config.name == filter_value;
+        // Exact match unless the filter value contains an explicit '*' (gtest-style glob).
+        const std::string& value = filter_value.value();
+        if (value.find('*') != std::string::npos) {
+            return name_glob_match(value, test_config.name);
+        }
+        return test_config.name == value;
     }
     if (type == "topology" || type == "Topology") {
         return check_topology_filter(test_config, filter_value);
@@ -932,7 +963,11 @@ void CmdlineParser::print_help() {
         LogTest,
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
-    log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
+    log_info(
+        LogTest,
+        "  --filter <type>.<value>                      Filter tests, e.g. name.LinearLooped_short, "
+        "topology.Mesh. For 'name', <value> is an exact match unless it contains a '*' (gtest-style "
+        "glob), e.g. name.'*_short', name.'FlowControl*'.");
     log_info(LogTest, "");
     log_info(LogTest, "Display Options:");
     log_info(
