@@ -48,12 +48,12 @@ class DeepSeekConfig:
     score_func: str = "sigmoid"
     route_scale: float = 2.5
     # MoE FFN variant:
-    #   dense     — on-device masked experts (no token grouping)
-    #   sparse    — moe_group/ungroup, single-chip (no MoE parallelism)
-    #   sparse_ep — sparse + expert-parallel (partition the expert list)
-    # sparse_ep shards across the "tp" axis (use_tp) or moe_axis_name;
-    # with no such axis it falls back to plain sparse.
-    moe_type: Literal["dense", "sparse", "sparse_ep"] = "sparse"
+    #   dense     — on-device masked experts, reference/debug path (no grouping)
+    #   sparse_ep — moe_group/ungroup sparse dispatch with expert-parallel experts
+    # sparse_ep partitions the expert list across the "tp" axis (use_tp) or
+    # moe_axis_name; with no such axis (single chip) it degenerates to
+    # single-device sparse (EP size 1) via SparseMoE.
+    moe_type: Literal["dense", "sparse_ep"] = "sparse_ep"
     # MLA (q_lora_rank=0 means direct Q projection without LoRA bottleneck)
     q_lora_rank: int = 256
     kv_lora_rank: int = 128

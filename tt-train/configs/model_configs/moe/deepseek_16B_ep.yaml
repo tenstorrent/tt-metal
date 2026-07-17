@@ -25,7 +25,7 @@ transformer_config:
   # first_k_dense_replace=1 in HF config means first 1 layer is dense
   n_dense_layers: 1
   inter_dim: 10944
-  # DeepSeek MoE FFN variant: dense | sparse | sparse_ep
+  # DeepSeek MoE FFN variant: dense | sparse_ep
   # (no group routing — n_expert_groups=1)
   moe_type: "sparse_ep"
   moe_hyperparam:

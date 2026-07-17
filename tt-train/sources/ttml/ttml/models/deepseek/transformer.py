@@ -83,12 +83,12 @@ class DeepSeekBlock(AbstractModuleBase):
         if layer_id < config.n_dense_layers:
             self.ffn = DeepSeekMLP(config.dim, config.inter_dim, tp_axis_name="tp" if use_tp else None)
         else:
-            moe_type = str(getattr(config, "moe_type", "sparse")).lower()
+            moe_type = str(getattr(config, "moe_type", "sparse_ep")).lower()
             if moe_type == "dense":
                 self.ffn = MoE(config)
-            elif moe_type in ("sparse", "sparse_ep"):
-                # Resolve the MoE axis: full-model TP → "tp", else moe_axis_name
-                # if it points at a real axis with size > 1, else no MoE axis.
+            elif moe_type == "sparse_ep":
+                # Resolve the EP axis: full-model TP → "tp", else moe_axis_name
+                # if it points at a real axis with size > 1, else no EP axis.
                 mesh = _ttml.maybe_mesh()
                 if use_tp:
                     moe_axis_name = "tp"
@@ -105,16 +105,16 @@ class DeepSeekBlock(AbstractModuleBase):
                         else None
                     )
 
-                if moe_type == "sparse" or moe_axis_name is None:
-                    # Plain sparse, or sparse_ep with no usable MoE axis
-                    # (single-chip / pure replication) — SparseMoE.
+                if moe_axis_name is None:
+                    # No usable EP axis (single chip / pure replication):
+                    # sparse_ep degenerates to single-device SparseMoE (EP size 1).
                     self.ffn = SparseMoE(config)
-                else:  # sparse_ep
+                else:
                     self.ffn = SparseMoEEP(config, axis_name=moe_axis_name)
             else:
                 raise ValueError(
                     f"DeepSeekBlock: unknown moe_type={moe_type!r}; expected one of "
-                    f"'dense', 'sparse', 'sparse_ep' (from DeepSeekConfig.moe_type)"
+                    f"'dense', 'sparse_ep' (from DeepSeekConfig.moe_type)"
                 )
             self.ffn._debug_layer_id = layer_id
         self.attn_norm = RMSNormLayer(config.dim)

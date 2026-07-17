@@ -77,12 +77,12 @@ class _DeepSeekSpec:
     qk_rope_head_dim: int = 32
     v_head_dim: int = 64
     # MoE FFN variant (applies to layers >= n_dense_layers):
-    #   dense     — on-device masked experts (no token grouping)
-    #   sparse    — moe_group/ungroup, single-chip (no MoE parallelism)
-    #   sparse_ep — sparse + expert-parallel (partition the expert list)
-    # sparse_ep shards across the "tp" axis (full-model TP) or the mesh axis
-    # named by device_config.moe_axis; with no such axis it degrades to plain sparse.
-    moe_type: Literal["dense", "sparse", "sparse_ep"] = "sparse"
+    #   dense     — on-device masked experts, reference/debug path (no grouping)
+    #   sparse_ep — moe_group/ungroup sparse dispatch with expert-parallel experts
+    # sparse_ep partitions the expert list across the "tp" axis (full-model TP) or
+    # the mesh axis named by device_config.moe_axis; with no such axis (single chip)
+    # it degenerates to single-device sparse (EP size 1).
+    moe_type: Literal["dense", "sparse_ep"] = "sparse_ep"
     moe_hyperparam: MoEParams = field(default_factory=MoEParams)
     # Resolved MoE-parallel mesh axis name, filled from device_config.moe_axis in
     # train.py:main() (not parsed from YAML). None => no MoE-only TP axis.
@@ -237,7 +237,7 @@ def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
     return spec
 
 
-_MOE_TYPES = ("dense", "sparse", "sparse_ep")
+_MOE_TYPES = ("dense", "sparse_ep")
 
 
 def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:

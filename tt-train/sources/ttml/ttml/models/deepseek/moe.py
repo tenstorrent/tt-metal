@@ -151,7 +151,7 @@ class MoE(AbstractModuleBase):
         # moe_type decides how routed experts are sharded across moe_axis_name:
         #   sparse_ep — partition the expert list across the axis. Otherwise
         #   (dense / plain sparse / no axis) build replicated dense Expert modules.
-        moe_type = str(getattr(config, "moe_type", "sparse")).lower()
+        moe_type = str(getattr(config, "moe_type", "sparse_ep")).lower()
         ep_sharded = moe_axis_name is not None and moe_type == "sparse_ep"
 
         if ep_sharded:
