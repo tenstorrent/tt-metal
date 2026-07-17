@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <string>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
@@ -72,6 +73,9 @@ hash_t hash_objects(hash_t seed, const Types&... args) noexcept;
 
 template <typename... Types>
 hash_t hash_objects_with_default_seed(const Types&... args) noexcept;
+
+template <typename... Types>
+std::string canonical_key(const Types&... args);
 
 template <typename T>
 void hash_combine(std::size_t& seed, const T& value);
@@ -309,10 +313,142 @@ inline hash_t hash_object(const T& object) noexcept {
     }
 }
 
+// Fold one value's hash into a running seed with the splitmix64 finalizer (David Stafford's
+// "variant 13"), a strong 64-bit mixer. Shared by every combiner in this header (hash_objects and
+// hash_combine) so their mixing behavior is identical.
+//
+// The previous combiner was the classic boost::hash_combine
+// (`seed ^= h + 0x9e3779b9 + (seed << 6) + (seed >> 2)`). Its avalanche is poor for the small,
+// structured integers that dominate our cache keys (tensor shapes, dtypes), so distinct sequences
+// collided in 64 bits -- e.g. shapes [3, 17, 1, 1] and [1, 152, 1, 1] hashed identically, causing
+// wrong program-cache hits (issue #45821).
+//
+// The multiply-xorshift finalizer is the state of the art for 64-bit hash mixing (boost >=1.81 and
+// abseil use mixers of the same family, with different constants); we inline it with only <cstdint>
+// arithmetic so tt_stl pulls in no extra dependency. 0x9e3779b97f4a7c15 is the 64-bit golden-ratio
+// increment (the 64-bit analog of the old 0x9e3779b9), which keeps the fold order-dependent and
+// gives a non-trivial result for an all-zero input.
+inline hash_t mix_into(hash_t seed, hash_t value_hash) noexcept {
+    hash_t x = seed + 0x9e3779b97f4a7c15ULL + value_hash;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+
 template <typename... Types>
 inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
-    ([&seed](const auto& arg) { seed ^= hash_object(arg) + 0x9e3779b9 + (seed << 6) + (seed >> 2); }(args), ...);
+    ([&seed](const auto& arg) { seed = mix_into(seed, hash_object(arg)); }(args), ...);
     return seed;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Canonical key encoding (collision-free companion to hash_objects).
+//
+// hash_objects folds a key down to 64 bits, which can collide (issue #45821). For a cache that
+// must NEVER return a wrong entry, the 64-bit hash selects a bucket and an EXACT comparison of
+// the key resolves collisions -- the textbook hash-map contract. append_canonical builds that
+// exact key: a byte string whose traversal mirrors hash_object branch-for-branch, so it
+// distinguishes precisely the inputs the hash combines (same coverage => no spurious misses, no
+// missed collisions) and contains no volatile data (addresses, buffers) -- only the structural
+// values, just like the hash.
+//
+// Encoding is exact for every type on the op-key path: integers, enums, floating point,
+// std::string, the compile-time-attribute / reflect aggregates, and the standard containers
+// (length-prefixed; unordered_map sorted by key to stay order-invariant, mirroring hash_object).
+// The one lossy leaf is a type exposing ONLY to_hash(): its 8 hash bytes are appended, so for
+// such a type equality degrades to hash equality -- no worse than today, and none occur on the
+// tensor/shape path (TensorSpec is walked structurally down to the shape integers).
+inline void append_bytes(std::string& out, const void* p, std::size_t n) { out.append(static_cast<const char*>(p), n); }
+
+template <typename T>
+inline void append_canonical(std::string& out, const T& object);
+
+template <typename... Types>
+inline void append_canonical_all(std::string& out, const Types&... args) {
+    (append_canonical(out, args), ...);
+}
+
+template <typename T>
+inline void append_canonical(std::string& out, const T& object) {
+    out.push_back('\x1f');  // unit separator: disambiguates adjacent leaves/fields
+    if constexpr (std::numeric_limits<T>::is_integer) {
+        append_bytes(out, &object, sizeof(object));
+    } else if constexpr (std::is_enum_v<T>) {
+        const auto v = static_cast<std::underlying_type_t<T>>(object);
+        append_bytes(out, &v, sizeof(v));
+    } else if constexpr (std::is_floating_point_v<T>) {
+        append_bytes(out, &object, sizeof(object));
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        append_bytes(out, object.data(), object.size());
+    } else if constexpr (ttsl::reflection::detail::supports_compile_time_attributes_v<T>) {
+        std::apply([&out](const auto&... a) { (append_canonical(out, a), ...); }, object.attribute_values());
+    } else if constexpr (is_specialization_v<T, std::tuple>) {
+        std::apply([&out](const auto&... a) { (append_canonical(out, a), ...); }, object);
+    } else if constexpr (is_specialization_v<T, std::pair>) {
+        append_canonical(out, object.first);
+        append_canonical(out, object.second);
+    } else if constexpr (is_specialization_v<T, std::optional>) {
+        const char has = object.has_value() ? 1 : 0;
+        out.push_back(has);
+        if (object.has_value()) {
+            append_canonical(out, object.value());
+        }
+    } else if constexpr (is_specialization_v<T, std::variant>) {
+        const std::uint64_t index = object.index();
+        append_bytes(out, &index, sizeof(index));
+        std::visit([&out](const auto& value) { append_canonical(out, value); }, object);
+    } else if constexpr (is_specialization_v<T, std::reference_wrapper>) {
+        append_canonical(out, object.get());
+    } else if constexpr (std::is_same_v<T, std::vector<bool>>) {
+        // std::vector<bool> is a bit-packed specialization: iterating yields a proxy reference
+        // (not bool&), so it can't go through the generic vector branch.
+        // (hash_object never reaches its own vector branch for this type because
+        // std::hash<std::vector<bool>> exists and the is_std_hashable_v branch wins first.)
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (bool element : object) {
+            append_canonical(out, element);
+        }
+    } else if constexpr (is_specialization_v<T, std::vector> || is_specialization_v<T, std::set> || is_span_v<T>) {
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (const auto& element : object) {
+            append_canonical(out, element);
+        }
+    } else if constexpr (is_specialization_v<T, std::map>) {
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (const auto& [key, value] : object) {
+            append_canonical(out, key);
+            append_canonical(out, value);
+        }
+    } else if constexpr (is_specialization_v<T, std::unordered_map>) {
+        // Sort by key so the encoding is order-invariant, mirroring hash_object.
+        std::vector<typename T::const_iterator> iterators;
+        iterators.reserve(object.size());
+        for (auto it = object.begin(); it != object.end(); ++it) {
+            iterators.push_back(it);
+        }
+        std::sort(iterators.begin(), iterators.end(), [](const auto& a, const auto& b) { return a->first < b->first; });
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (const auto& it : iterators) {
+            append_canonical(out, it->first);
+            append_canonical(out, it->second);
+        }
+    } else if constexpr (ttsl::concepts::Reflectable<T>) {
+        reflect::for_each([&out, &object](auto I) { append_canonical(out, reflect::get<I>(object)); }, object);
+    } else if constexpr (detail::supports_to_hash_v<T>) {
+        const hash_t h = object.to_hash();  // lossy leaf (see note above)
+        append_bytes(out, &h, sizeof(h));
+    } else if constexpr (detail::is_std_hashable_v<T>) {
+        const std::size_t h = std::hash<T>{}(object);  // lossy fallback
+        append_bytes(out, &h, sizeof(h));
+    } else {
+        static_assert(ttsl::concepts::always_false_v<T>, "Type doesn't support ttsl::hash::canonical_key");
+    }
 }
 
 }  // namespace detail
@@ -327,11 +463,24 @@ inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
     return detail::hash_objects(DEFAULT_SEED, args...);
 }
 
-// Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
+// Exact, collision-free encoding of `args` for use as a program-cache key alongside the 64-bit
+// hash: two argument packs produce the same string iff the hash traversal cannot distinguish
+// them. See detail::append_canonical.
+template <typename... Types>
+inline std::string canonical_key(const Types&... args) {
+    std::string out;
+    detail::append_canonical_all(out, args...);
+    return out;
+}
+
+// std::hash-based combiner used by the hand-written program-descriptor hashers (generic_op,
+// program_descriptors, fd_kernel, ...). Uses the same strong mixer as hash_objects so these
+// program-cache-relevant hashes get the same collision resistance (issue #45821).
 template <typename T>
 void hash_combine(std::size_t& seed, const T& value) {
     std::hash<T> hasher;
-    seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed = static_cast<std::size_t>(
+        detail::mix_into(static_cast<ttsl::hash::hash_t>(seed), static_cast<ttsl::hash::hash_t>(hasher(value))));
 }
 
 }  // namespace hash
