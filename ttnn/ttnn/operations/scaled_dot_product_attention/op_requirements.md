@@ -392,7 +392,7 @@ phases (exp/reduce/sub/mul over S² tiles) run serially with the QKᵀ/PV matmul
 helper owns all 3 TRISCs), so the FPU idles during the softmax — a **scheme-change** to
 overlap them, not a knob-turn. Filed as **R3c**.
 
-### [ ] Refinement 3c — Overlap the softmax vector phases with the matmul (lift FPU util past ~0.08)
+### [~] Refinement 3c — Overlap the softmax vector phases with the matmul (lift FPU util past ~0.08)
 
 **Type**: perf
 
@@ -424,6 +424,68 @@ re-measure — it may finally win.
 
 **Done when**: measured device-ns improves further on the flagged shape beyond R3a
 (toward the 0.35 util goal), soft `pcc_threshold=0.997` holds, golden green, no
+regression across the config-spanning guard set.
+
+**Landed (R3c, partial)**: the named **overlap scheme was NOT implemented** — it is
+architecturally infeasible with the helper library (FPU and SFPU are both driven by
+the single MATH RISC + share DST, so consecutive helpers serialize on MATH; the design's
+own CB rationale states cb_scores/cb_exp are depth-1 because "consecutive helpers cannot
+pipeline"; `FlashAttention.md` §5 lists cross-unit matmul/softmax pipelining as
+**unimplemented future work** needing FA-3 warp-specialization — the same raw-LLK
+dual-DST-bank restructure that failed the gate in the two prior R3c attempts). Instead
+achieved the heading's **titular measurable goal** (lift FPU util past ~0.08) with a
+different, **winning, non-regressing** lever: the **fast/approximate SFPU exp**
+(`Exp<Approx::Fast>`) for the dominant P=exp phase, **gated (compile-time
+`fast_exp = !fp32_dest`) to the fp32_dest_acc_en=False throughput regime**. Evidence:
+**DeviceZoneScopedN clock-invariant zone profiling** showed the exact exp is **54% of
+per-chunk compute** (QKᵀ 12.6%, PV 16.3%, reduces 8.4%+8.4%); the fast exp is ~75%
+cheaper. **Flagged `1×10×9472×128` (fp32_dest_acc_en=False): 9.006 → 5.796 ms = 1.55×,
+FPU util 0.084 → 0.131** (past the ~0.08 goal; short of the aspirational 0.35). Soft
+PCC≥0.997 held; **golden 1181/1181 (0 fail, no hang), zero regression**; guard set 8/8.
+The unconditional fast exp first regressed 201 tight-tolerance cells (fp32 RMS 0.02,
+bf16+fp32-DEST 0.05) → gated to fp32_dest_acc_en=False (loose 0.12; the max-precision
+regime keeps exact exp, byte-identical). `[~]` because the named overlap scheme was not
+built and the 0.35 aspiration has large headroom — filed as **Refinement 3d**.
+
+### [ ] Refinement 3d — Close the flagged-shape util gap after the fast-exp win (matmul + reduce, or FA-3 overlap)
+
+**Type**: perf
+
+**Goal** (sharper follow-up from R3c): after R3c's fast-exp lever the flagged
+`1×10×9472×128` shape is at **FPU util 0.131 / 5.796 ms** (was 0.084 / 9.006 ms), still
+short of the aspirational 0.35. R3c's DeviceZoneScopedN profiling shows the **new**
+per-chunk cost split (fast-exp in effect): QKᵀ matmul 21%, row-max reduce 15%, exp 23%,
+row-sum reduce 14%, PV matmul+accum 28% — so the two **matmuls (~49%)** and the two
+**reduces (~29%)** now dominate; the exp is no longer the bottleneck. Concrete next levers,
+in priority order:
+1. **Fold the row-sum into the PV matmul (V-ones-column trick).** Append a ones column to
+   V so `O_augmented[:, D] = rowsum(P)` falls out of the PV matmul on the FPU — this
+   **eliminates the separate row-sum reduce pass (~14%)** and moves that work onto the
+   already-running matmul engine (a genuine "lift FPU util" move). Touches reader (V
+   augmentation), the PV matmul N (Dt→Dt+1), and normalize (read the extra column instead
+   of cb_row_sum). Moderate restructure; validate PCC across the golden suite.
+2. **Short-K matmul efficiency.** QKᵀ (K=Dt=4) and PV (K=Skv_chunk_t=8) are operand-load-
+   bound (per `matmul_output_subblock`: short-K matmuls can't hide the per-tile operand
+   load); subblocks are already maxed (R3a). Investigate `num_k_blocks`/in0-reuse or a
+   larger effective K (e.g. process multiple KV chunks' PV in one matmul) to raise matmul
+   efficiency.
+3. **True FPU∥SFPU overlap (the original R3c scheme).** Only reachable via raw-LLK FA-3
+   warp-specialization (async matmul on one DST bank while the SFPU softmax runs on the
+   other) — abandons the helper library, T3-advanced, gate-risky (failed twice as the
+   prior R3c approach). Deprioritized behind (1)/(2) until the safer levers are exhausted.
+4. **Re-measure the parked R3 DM batching** at the faster (5.8 ms) compute level — R3a
+   found reads still hidden at 9.0 ms; at 5.8 ms they may start to surface. Flip the
+   `batch_q`/`batch_kv` predicates and re-run the full golden suite under `--dev` (confirm
+   no intermittent hang) before measuring.
+
+**Verifier notes**: no SUPPORTED change (perf). Reuse the fast-exp gating pattern
+(fp32_dest_acc_en=False) if any lever trades precision for speed. Gate on `/perf-measure`
+(clock-invariant DeviceZoneScopedN cycles — the box's AICLK drifts ~1.8× between fresh
+invocations, so ns A/B across separate runs is invalid; use same-process back-to-back or
+zone cycles) and the soft `pcc_threshold=0.997`.
+
+**Done when**: measured device-ns improves further on the flagged shape beyond R3c's
+5.796 ms (toward the 0.35 util goal), soft `pcc_threshold=0.997` holds, golden green, no
 regression across the config-spanning guard set.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode = causal)

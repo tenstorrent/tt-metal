@@ -353,3 +353,74 @@
 - Tests added: none (the flagged-shape perf harness + R3 guard set from R3, and the
   coarse-chunk suite from R1b, cover the coarsen + the regression fix; the fix is
   validated by the previously-failing `Q1x8x4096x128` golden cells now passing).
+
+## Refinement 3c — Overlap the softmax vector phases with the matmul (lift FPU util past ~0.08) (partial)
+- Date: 2026-07-17
+- What was done: **Did NOT implement the named "overlap" scheme** (pipeline QKᵀ[j+1]
+  against softmax[j] / deepen cb_scores/cb_exp for FPU∥SFPU concurrency) — proved by
+  measurement + architecture that it cannot win with the helper library. Instead
+  landed a **different, winning, non-regressing lever** that achieves the heading's
+  titular goal (lift FPU util past ~0.08): the **fast/approximate SFPU exp**
+  (`Exp<Approx::Fast>`) for the dominant P=exp softmax phase, **gated to the
+  fp32_dest_acc_en=False throughput regime** (a single compile-time arg
+  `fast_exp = !fp32_dest`).
+  * **Bottleneck, measured clock-invariantly (DeviceZoneScopedN cycles, NOT ns).**
+    Instrumented per-KV-chunk zones on the MATH thread. Per-chunk median cycles:
+    **P=exp 54%**, QKᵀ matmul 12.6%, PV matmul+accum 16.3%, row-max reduce 8.4%,
+    row-sum reduce 8.4%. So the softmax vector work IS the dominant cost (R3c's
+    premise holds), and within it the **exp alone is 54%** — the single biggest lever.
+    (An earlier ns-based ablation was discarded: the box's AICLK drifts ~1.8× between
+    fresh pytest invocations — byte-identical R3a measured 5.04 ms cold-boost vs
+    9.006 ms steady-state — so ns A/B across separate runs is invalid. All perf
+    numbers below are either clock-invariant zone cycles or same-process back-to-back
+    ns A/B at a fixed 1.35 GHz.)
+  * **The fast exp.** `ckl::Exp<>` defaults to `exp_tile<false>` (exact); the first
+    template param routes to the LLK, so `Exp<Approx::Fast>` = `exp_tile<true>` (the
+    fast SFPU exp). It cut the exp zone 38548 → 9513 cyc (**~75% cheaper**), dropping
+    per-chunk compute 71079 → 41851 cyc. Softmax normalization absorbs the exp's
+    relative error (production SDPA uses the fast exp).
+  * **Regression found + gated.** Applied unconditionally, the fast exp regressed
+    **201 golden cells** — it adds ~0.003–0.02 normalized-RMS, which the TIGHT
+    tolerances (fp32 0.02, bf16+fp32-DEST 0.05) fail (PCC still ~0.9998; the precision
+    matrix missed it because it is PCC-only). Root cause: only the fp32_dest_acc_en=
+    True (max-precision) cells have tight RMS gates. **Gated the fast exp to
+    fp32_dest_acc_en=False** (16-bit-DEST throughput regime; loose 0.12 tolerances;
+    **includes the flagged perf shape**). The max-precision regime keeps the exact exp
+    → **byte-identical → zero regression**. The alpha-correction exp (phase 5, small,
+    over Sq_chunk_t tiles) stays exact regardless to protect the online-softmax running
+    (m, l, O) across chunks.
+- Perf measured (Blackhole, 110 cores, 1.35 GHz; device FW ns, warm median of 5, fresh
+  cache; same-process back-to-back A/B to control the clock drift): flagged
+  `1×10×9472×128` (bf16, fp32_dest_acc_en=False) **9.006 ms → 5.796 ms = 1.55×**;
+  **FPU util 0.084 → 0.131** (past the titular ~0.08 goal; short of the aspirational
+  0.35). No SUPPORTED change (perf refinement).
+- Accuracy achieved: flagged-shape soft PCC≥0.997 held. **Golden 1181 passed / 1088
+  xfailed / 0 failed** (ran to completion in 107 s, no hang — identical to R2/R3a).
+  Precision matrix **272 passed / 112 skipped** (all dtypes/fidelities/acc, PCC-gated —
+  unchanged). Unit dir **343 passed / 112 skipped**. R3 guard set **8/8**.
+  `test_regression.py` byte-identical (it calls the op with the default config,
+  fp32_dest_acc_en=True → exact exp).
+- Issues encountered: (1) AICLK drift ~1.8× between fresh invocations invalidated
+  ns-based ablation — switched to clock-invariant DeviceZoneScopedN cycles + same-
+  process A/B. (2) unconditional fast exp regressed 201 tight-tolerance cells — gated
+  to fp32_dest_acc_en=False.
+- Why **[~] partial**:
+  * The **named scheme (overlap FPU∥SFPU) was NOT implemented** — it is architecturally
+    infeasible with the helper library: FPU (matrix) and SFPU (vector) are both driven
+    by the single MATH RISC (TRISC1) and share DST, so consecutive helpers serialize on
+    MATH (op_design.md's own CB rationale states cb_scores/cb_exp are depth-1 because
+    "consecutive helpers each own all 3 TRISCs and cannot pipeline"). `FlashAttention.md`
+    §5 lists "pipelining matmul and softmax on different compute units" as **unimplemented
+    future work** requiring FA-3 warp-specialization (async execution on disjoint DST
+    banks). True overlap needs raw-LLK dual-DST-bank hand-scheduling (abandons the helper
+    library) — the same restructure that failed the gate in the two prior R3c attempts.
+    Rather than re-attempt an infeasible/gate-fatal scheme, achieved the heading's
+    measurable goal (lift util past 0.08) via the fast-exp lever.
+  * The **aspirational util 0.35 has large headroom** (0.131 measured). After the fast
+    exp the per-chunk split is QKᵀ 21%, row-max 15%, exp 23%, row-sum 14%, PV 28% — the
+    two matmuls (49%, short-K K=4/8, subblocks already maxed at R3a) + the two reduces
+    (29%) now dominate. Filed as **Refinement 3d** with the exact next levers.
+- Tests added: none new — the flagged-shape perf harness + R3 guard set (R3) and the
+  precision matrix (R2) cover the win + the tight-tolerance-regression gate. The 201-cell
+  regression is caught by the existing golden suite (`test_golden.py`), which is the net
+  that forced the fp32_dest_acc_en gate.
