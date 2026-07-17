@@ -15,7 +15,7 @@ This tool validates the manifest up-front so problems can be fixed locally
 before launching a test run. It runs independently of ``pytest`` and never
 imports ``ttnn`` (``torch`` is imported lazily and only for shape checks).
 
-Manifest schema (see ``phase1_record_ops.py``):
+Manifest schema (see ``phase1_record_ops.py`` and ``tools/bringup/README.md``):
     {
       "input_shape": [B, C, H, W],
       "num_records": N,
@@ -29,6 +29,10 @@ Manifest schema (see ``phase1_record_ops.py``):
       ]
     }
 
+Artifact path contract (Option 1): all artifact paths (``in_path`` /
+``out_path`` / ``w_path`` / ``b_path``) are resolved relative to the directory
+containing the manifest file. Absolute paths are used as-is.
+
 Checks performed:
   1. Top-level structure (``records`` list; consistent ``num_records`` /
      ``input_shape`` when present).
@@ -36,7 +40,7 @@ Checks performed:
   3. Supported ``kind`` values; ``Conv2d`` carries the params the harness needs.
   4. ``in_shape`` / ``out_shape`` are length-4 lists of positive ints.
   5. Artifact existence (``in_path`` / ``out_path`` / ``w_path`` / ``b_path``),
-     resolved the same way the runtime harness resolves them.
+     resolved manifest-relative the same way the runtime harness resolves them.
   6. Shape consistency: the on-disk tensor shape matches the recorded shape.
   7. Optional: print resolved artifact paths for the first N records.
 
@@ -44,7 +48,6 @@ Usage:
     python tools/bringup/validate_trace_manifest.py --manifest <manifest.json>
     python tools/bringup/validate_trace_manifest.py --manifest <manifest.json> --print-resolved 5
     python tools/bringup/validate_trace_manifest.py --manifest <manifest.json> --no-shape-check
-    python tools/bringup/validate_trace_manifest.py --manifest <manifest.json> --tensor-root <root>
 
 Exit codes:
     0  Manifest is valid (no errors)
@@ -55,7 +58,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Tuple
@@ -129,43 +131,18 @@ class Report:
         return not self.errors
 
 
-def resolve_artifact_path(manifest_path: Path, artifact_path: str, tensor_root: Optional[str] = None) -> Path:
+def resolve_artifact_path(manifest_path: Path, artifact_path: str) -> Path:
     """Resolve an artifact path exactly as the runtime harness does.
 
-    Mirrors ``tracer_test_harness._resolve_artifact_path`` so this preflight
-    predicts what the harness will actually load:
+    Mirrors ``tracer_test_harness._resolve_artifact_path`` (Option 1:
+    manifest-relative) so this preflight predicts what the harness will load:
       1. Absolute paths are used as-is.
-      2. ``tensor_root`` (or ``$TT_TENSOR_ROOT``) is tried as a repo root, then
-         as a tensors root (the tail after a ``tensors/`` component).
-      3. Otherwise the manifest directory and each of its parents is searched
-         for the first existing candidate (handles repo-relative paths written
-         by the tracer, avoiding duplicated prefixes).
-      4. Fallback: ``manifest_dir / artifact_path`` (may not exist; the caller
-         reports it as missing).
+      2. Relative paths are resolved against the manifest's directory.
     """
     p = Path(str(artifact_path).strip())
     if p.is_absolute():
         return p
-
-    root = tensor_root or os.environ.get("TT_TENSOR_ROOT")
-    if root:
-        root_p = Path(root).expanduser().resolve()
-        cand = root_p / p
-        if cand.exists():
-            return cand
-        if "tensors" in p.parts:
-            tail = Path(*p.parts[p.parts.index("tensors") + 1 :])
-            cand2 = root_p / tail
-            if cand2.exists():
-                return cand2
-
-    manifest_dir = Path(manifest_path).resolve().parent
-    for anchor in (manifest_dir, *manifest_dir.parents):
-        cand = anchor / p
-        if cand.exists():
-            return cand
-
-    return manifest_dir / p
+    return Path(manifest_path).resolve().parent / p
 
 
 def _default_shape_loader(path: Path) -> Tuple[int, ...]:
@@ -202,7 +179,6 @@ def _validate_artifact(
     key: str,
     context: str,
     report: Report,
-    tensor_root: Optional[str],
     expected_shape: Optional[list],
     shape_loader: Optional[ShapeLoader],
 ) -> None:
@@ -215,7 +191,7 @@ def _validate_artifact(
         return
 
     report.artifacts_checked += 1
-    resolved = resolve_artifact_path(manifest_path, value, tensor_root)
+    resolved = resolve_artifact_path(manifest_path, value)
     if not resolved.exists():
         report.error(context, f"artifact '{key}' not found: {value!r} (resolved: {resolved})")
         return
@@ -243,7 +219,6 @@ def _validate_record(
     position: int,
     record: Any,
     report: Report,
-    tensor_root: Optional[str],
     shape_loader: Optional[ShapeLoader],
 ) -> None:
     context = f"record[{position}]"
@@ -291,16 +266,15 @@ def _validate_record(
     out_shape = _validate_shape_field(record, "out_shape", context, report)
 
     # 5/6) Artifact existence + shape consistency.
-    _validate_artifact(manifest_path, record, "in_path", context, report, tensor_root, in_shape, shape_loader)
-    _validate_artifact(manifest_path, record, "out_path", context, report, tensor_root, out_shape, shape_loader)
-    _validate_artifact(manifest_path, record, "w_path", context, report, tensor_root, None, shape_loader)
-    _validate_artifact(manifest_path, record, "b_path", context, report, tensor_root, None, shape_loader)
+    _validate_artifact(manifest_path, record, "in_path", context, report, in_shape, shape_loader)
+    _validate_artifact(manifest_path, record, "out_path", context, report, out_shape, shape_loader)
+    _validate_artifact(manifest_path, record, "w_path", context, report, None, shape_loader)
+    _validate_artifact(manifest_path, record, "b_path", context, report, None, shape_loader)
 
 
 def validate_manifest(
     manifest_path: Any,
     *,
-    tensor_root: Optional[str] = None,
     check_shapes: bool = True,
     shape_loader: Optional[ShapeLoader] = None,
 ) -> Report:
@@ -308,7 +282,6 @@ def validate_manifest(
 
     Args:
         manifest_path: Path to ``manifest.json``.
-        tensor_root: Optional artifact root (overrides ``$TT_TENSOR_ROOT``).
         check_shapes: When True, compare on-disk tensor shapes to recorded ones.
         shape_loader: Optional callable ``(path) -> shape`` (used for testing and
             to avoid importing torch). Defaults to a ``torch.load``-based loader.
@@ -357,12 +330,12 @@ def validate_manifest(
     active_loader = shape_loader if check_shapes else None
 
     for position, record in enumerate(records):
-        _validate_record(manifest_path, position, record, report, tensor_root, active_loader)
+        _validate_record(manifest_path, position, record, report, active_loader)
 
     return report
 
 
-def print_resolved(manifest_path: Path, limit: int, tensor_root: Optional[str] = None) -> None:
+def print_resolved(manifest_path: Path, limit: int) -> None:
     """Print resolved artifact paths for the first ``limit`` records."""
     try:
         data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
@@ -386,7 +359,7 @@ def print_resolved(manifest_path: Path, limit: int, tensor_root: Optional[str] =
             value = record.get(key)
             if value is None:
                 continue
-            resolved = resolve_artifact_path(Path(manifest_path), str(value), tensor_root)
+            resolved = resolve_artifact_path(Path(manifest_path), str(value))
             marker = "OK " if resolved.exists() else "MISSING"
             print(f"        {key:8} [{marker}] {resolved}")
 
@@ -423,11 +396,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Path to the Phase-1 tracer manifest.json to validate.",
     )
     parser.add_argument(
-        "--tensor-root",
-        default=None,
-        help="Artifact root used to resolve relative paths (overrides $TT_TENSOR_ROOT).",
-    )
-    parser.add_argument(
         "--print-resolved",
         type=int,
         metavar="N",
@@ -443,7 +411,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     report = validate_manifest(
         args.manifest,
-        tensor_root=args.tensor_root,
         check_shapes=not args.no_shape_check,
     )
 
@@ -453,7 +420,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print("=" * 60)
 
     if args.print_resolved > 0:
-        print_resolved(args.manifest, args.print_resolved, args.tensor_root)
+        print_resolved(args.manifest, args.print_resolved)
 
     return 1 if report.errors else 0
 

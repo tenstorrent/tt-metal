@@ -10,7 +10,6 @@ Covers the fail-fast guarantees the manifest validator provides:
   §4  Non-4D / non-positive shapes fail
   §5  Missing artifacts fail with the resolved path
   §6  Tensor shape consistency (injected loader + torch-gated real tensors)
-  §7  Larger-context path resolution (repo-relative duplicated prefix + TT_TENSOR_ROOT)
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ import pytest
 # importable under pytest's importlib import mode regardless of rootdir.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from validate_trace_manifest import main, resolve_artifact_path, validate_manifest
+from validate_trace_manifest import main, validate_manifest
 
 
 # ── Fixtures / builders ────────────────────────────────────────────────────
@@ -289,69 +288,3 @@ def test_shape_check_without_torch_errors(tmp_path, monkeypatch, capsys):
     path = _write_manifest(tmp_path, [_valid_record(tmp_path, with_weight=False)])
     assert main(["--manifest", str(path)]) == 1
     assert "torch is required" in capsys.readouterr().out
-
-
-# ── §7 Larger-context path resolution ─────────────────────────────────────────
-
-
-def test_repo_relative_duplicated_prefix_resolves(tmp_path):
-    # Reproduce the real tracer layout: manifest at <root>/bringup/artifacts/phase1,
-    # artifacts written with repo-relative paths that share that prefix.
-    manifest_dir = tmp_path / "bringup" / "artifacts" / "phase1"
-    tensors = manifest_dir / "tensors"
-    tensors.mkdir(parents=True)
-    in_rel = "bringup/artifacts/phase1/tensors/00000_relu_in.pt"
-    out_rel = "bringup/artifacts/phase1/tensors/00000_relu_out.pt"
-    _touch(tmp_path / in_rel)
-    _touch(tmp_path / out_rel)
-    rec = {
-        "idx": 0,
-        "name": "relu",
-        "kind": "ReLU",
-        "params": {},
-        "in_shape": [1, 3, 8, 8],
-        "out_shape": [1, 3, 8, 8],
-        "in_path": in_rel,
-        "out_path": out_rel,
-        "w_path": None,
-        "b_path": None,
-    }
-    path = _write_manifest(manifest_dir, [rec])
-
-    # The parent-walking resolver finds the real file...
-    resolved = resolve_artifact_path(path, in_rel)
-    assert resolved == (tmp_path / in_rel).resolve()
-    # ...whereas the naive manifest_dir / path (duplicated prefix) does not exist.
-    assert not (manifest_dir / in_rel).exists()
-
-    assert validate_manifest(path, check_shapes=False).ok
-
-
-def test_tensor_root_resolution(tmp_path):
-    external_root = tmp_path / "externalroot"
-    external_root.mkdir()
-    # Files live directly under the root (tail after a 'tensors/' component).
-    _touch(external_root / "00000_relu_in.pt")
-    _touch(external_root / "00000_relu_out.pt")
-    in_rel = "some/where/tensors/00000_relu_in.pt"
-    out_rel = "some/where/tensors/00000_relu_out.pt"
-    manifest_dir = tmp_path / "m"
-    manifest_dir.mkdir()
-    rec = {
-        "idx": 0,
-        "name": "relu",
-        "kind": "ReLU",
-        "params": {},
-        "in_shape": [1, 3, 8, 8],
-        "out_shape": [1, 3, 8, 8],
-        "in_path": in_rel,
-        "out_path": out_rel,
-        "w_path": None,
-        "b_path": None,
-    }
-    path = _write_manifest(manifest_dir, [rec])
-
-    resolved = resolve_artifact_path(path, in_rel, tensor_root=str(external_root))
-    assert resolved == (external_root / "00000_relu_in.pt").resolve()
-
-    assert main(["--manifest", str(path), "--no-shape-check", "--tensor-root", str(external_root)]) == 0

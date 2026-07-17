@@ -20,6 +20,10 @@ HARNESS_SOURCE = r'''\
 # - Inputs/outputs stored as torch tensors in NCHW.
 # - Runtime conversion to TTNN "activation" uses: NCHW -> [N, 1, H*W, C]
 #
+# Artifact path contract (see tools/bringup/README.md):
+# - All artifact paths in the manifest are resolved relative to the directory
+#   containing the manifest file. Absolute paths are used as-is.
+#
 from __future__ import annotations
 
 import json
@@ -67,6 +71,7 @@ def load_manifest(manifest_path: Path) -> List[Record]:
 
 
 def _resolve_artifact_path(manifest_path: Path, artifact_path: str) -> Path:
+    # Option 1: artifact paths are manifest-relative; absolute paths used as-is.
     p = Path(artifact_path)
     if p.is_absolute():
         return p

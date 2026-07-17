@@ -10,8 +10,10 @@
 # - Inputs/outputs stored as torch tensors in NCHW.
 # - Runtime conversion to TTNN "activation" uses: NCHW -> [N, 1, H*W, C]
 #
-
-TENSOR_ROOT_ENV = "TT_TENSOR_ROOT"
+# Artifact path contract (see tools/bringup/README.md):
+# - All artifact paths in the manifest are resolved relative to the directory
+#   containing the manifest file. Absolute paths are used as-is.
+#
 
 from __future__ import annotations
 
@@ -61,43 +63,15 @@ def load_manifest(manifest_path: Path) -> List[Record]:
 
 def _resolve_artifact_path(manifest_path: Path, artifact_path: str) -> Path:
     """
-    Resolution order:
-      1) If artifact_path is absolute -> use it
-      2) If TT_TENSOR_ROOT is set:
-           - treat it as repo root: root / artifact_path
-           - ALSO allow it to be tensors root: root / <tail after 'tensors/'>
-      3) Try manifest_dir and its parents: anchor / artifact_path
-      4) Fallback: manifest_dir / artifact_path
+    Resolve an artifact path against the manifest (Option 1: manifest-relative).
+
+      1) Absolute paths are used as-is.
+      2) Relative paths are resolved against the manifest's directory.
     """
     p = Path(str(artifact_path).strip())
     if p.is_absolute():
         return p
-
-    # 1) Optional explicit root (repo root OR tensors dir)
-    root = os.environ.get("TT_TENSOR_ROOT")
-    if root:
-        root_p = Path(root).expanduser().resolve()
-
-        # Treat as repo root first
-        cand = root_p / p
-        if cand.exists():
-            return cand
-
-        # Treat as tensors root if path contains ".../tensors/<file>"
-        if "tensors" in p.parts:
-            tail = Path(*p.parts[p.parts.index("tensors") + 1 :])
-            cand2 = root_p / tail
-            if cand2.exists():
-                return cand2
-
-    # 2) Existing behavior: try manifest dir and parents
-    manifest_dir = Path(manifest_path).resolve().parent
-    for anchor in (manifest_dir, *manifest_dir.parents):
-        cand = anchor / p
-        if cand.exists():
-            return cand
-
-    return manifest_dir / p
+    return Path(manifest_path).resolve().parent / p
 
 
 def _load_torch_tensor(path: Path) -> torch.Tensor:

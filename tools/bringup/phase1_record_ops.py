@@ -125,18 +125,21 @@ def main():
             x = inp[0].detach().cpu()
             y = out.detach().cpu()
 
-            in_path = str(tensors_dir / f"{idx:05d}_{name}_in.pt")
-            out_path = str(tensors_dir / f"{idx:05d}_{name}_out.pt")
-            torch.save(x, in_path)
-            torch.save(y, out_path)
+            # Artifact paths are stored manifest-relative (see tools/bringup/README.md).
+            # The manifest lives at out_dir/manifest.json, so "tensors/<file>" resolves
+            # against the manifest directory. Tensors are saved to the real location.
+            in_path = f"tensors/{idx:05d}_{name}_in.pt"
+            out_path = f"tensors/{idx:05d}_{name}_out.pt"
+            torch.save(x, out_dir / in_path)
+            torch.save(y, out_dir / out_path)
 
             w_path = b_path = None
             if hasattr(mod, "weight") and isinstance(getattr(mod, "weight"), torch.Tensor):
-                w_path = str(tensors_dir / f"{idx:05d}_{name}_w.pt")
-                torch.save(mod.weight.detach().cpu(), w_path)
+                w_path = f"tensors/{idx:05d}_{name}_w.pt"
+                torch.save(mod.weight.detach().cpu(), out_dir / w_path)
             if hasattr(mod, "bias") and isinstance(getattr(mod, "bias"), torch.Tensor) and mod.bias is not None:
-                b_path = str(tensors_dir / f"{idx:05d}_{name}_b.pt")
-                torch.save(mod.bias.detach().cpu(), b_path)
+                b_path = f"tensors/{idx:05d}_{name}_b.pt"
+                torch.save(mod.bias.detach().cpu(), out_dir / b_path)
 
             rec = OpRecord(
                 idx=idx,
