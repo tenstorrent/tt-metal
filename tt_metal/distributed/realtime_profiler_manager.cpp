@@ -1508,37 +1508,52 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
         return n;
     }
 
-    // DECODE the X280 stream (Tier-1 compact) and PUBLISH to the ring. No enrich/Tracy here -- a consumer
-    // thread does both off the receiver. The COLLECT hart ships each raw 2-word marker VERBATIM plus a
-    // packed identity word (16B, 4 per 64B page); it does NO field extraction on-device. Here we expand
-    // each compact record into the in-memory WorkerZoneWire the ring + consumer use: identity from the
-    // packed word (structural, from the mirror index -> no STICKY_META forward-fill / orphans), and
-    // timer_id/timestamp from the raw marker words. Validity: w0 bit31 (a real marker is 0x80000000|...);
-    // a padded/stale slot has w0=0 -> skip. `wz` persists across drain calls (single receiver thread).
+    // DECODE the X280 stream (Tier-2 sticky-header + bulk raw) and PUBLISH to the ring. No enrich/Tracy
+    // here -- a consumer thread does both off the receiver. The COLLECT hart no longer reshapes per marker:
+    // per productive mirror it writes ONE sticky (core,risc) HEADER slot then BULK-COPIES the raw 2-word
+    // markers verbatim. The stream is a sequence of 8B slots (8 per 64B page); we walk them keeping a
+    // sticky identity latched by the last header. Slot discriminator on w0:
+    //   bit31 set        -> raw marker [w0,w1]  (attribute to sticky ident; drop non-zone types)
+    //   bit31 clear,bit30 -> header  (latch ident = w0 & 0x3FFFFFFF: core_x[0:9]|core_y[10:19]|risc[20:23])
+    //   else (w0==0)     -> pad/stale slot -> skip
+    // sticky_ident/have_header persist across pages AND drain calls (single receiver thread), because a
+    // header in page N applies to markers that arrive in later pages/calls. `wz` likewise persists.
     static std::vector<exp::WorkerZoneWire> wz;
+    static uint32_t sticky_ident = 0;
+    static bool have_header = false;
     wz.clear();
-    ZoneScopedN("X280-DecodeWZW");         // compact records -> WorkerZoneWire -> ring
+    ZoneScopedN("X280-DecodeWZW");         // slot stream -> WorkerZoneWire -> ring
     constexpr uint16_t kWzValid = 0xA5A5;  // in-memory WorkerZoneWire validity (kept for the ring/consumer)
-    const uint32_t kRecPerPage = (page_words * sizeof(uint32_t)) / sizeof(exp::WorkerZoneWireCompact);  // 64/16 = 4
-    const auto* page_bytes = reinterpret_cast<const uint8_t*>(x280_page_buf.data());
+    const uint32_t kSlotsPerPage = (page_words * sizeof(uint32_t)) / 8;  // 64B / 8B = 8
+    const uint32_t* words = x280_page_buf.data();
     for (uint32_t pg = 0; pg < n; pg++) {
-        const uint8_t* page = page_bytes + static_cast<size_t>(pg) * page_words * sizeof(uint32_t);
-        for (uint32_t s = 0; s < kRecPerPage; s++) {
-            exp::WorkerZoneWireCompact c;
-            std::memcpy(&c, page + s * sizeof(exp::WorkerZoneWireCompact), sizeof(exp::WorkerZoneWireCompact));
-            if ((c.w0 & 0x80000000u) == 0) {
-                continue;  // padded/stale slot -> skip
+        const uint32_t* page = words + static_cast<size_t>(pg) * page_words;
+        for (uint32_t s = 0; s < kSlotsPerPage; s++) {
+            uint32_t w0 = page[s * 2 + 0];
+            uint32_t w1 = page[s * 2 + 1];
+            if (w0 & 0x80000000u) {  // raw marker slot
+                if (!have_header) {
+                    continue;  // no identity context yet (should not happen: header precedes markers)
+                }
+                uint32_t type = (w0 >> 28) & 0x7u;
+                if (type > 1u) {
+                    continue;  // keep only ZONE_START(0)/ZONE_END(1); drop STICKY_META etc.
+                }
+                exp::WorkerZoneWire rec;
+                rec.header.type = static_cast<uint16_t>(exp::ProfilerPacketType::WorkerZone);
+                rec.header.reserved = kWzValid;
+                rec.core_x = sticky_ident & 0x3FFu;
+                rec.core_y = (sticky_ident >> 10) & 0x3FFu;
+                rec.risc = (sticky_ident >> 20) & 0xFu;
+                rec.timer_id = (w0 >> 12) & 0x7FFFFu;  // (type<<16) | name-hash
+                rec.time_hi = w0 & 0xFFFu;             // 12 valid bits
+                rec.time_lo = w1;
+                wz.push_back(rec);
+            } else if (w0 & 0x40000000u) {  // sticky header slot
+                sticky_ident = w0 & 0x3FFFFFFFu;
+                have_header = true;
             }
-            exp::WorkerZoneWire rec;
-            rec.header.type = static_cast<uint16_t>(exp::ProfilerPacketType::WorkerZone);
-            rec.header.reserved = kWzValid;
-            rec.core_x = c.ident & 0x3FFu;
-            rec.core_y = (c.ident >> 10) & 0x3FFu;
-            rec.risc = (c.ident >> 20) & 0xFu;
-            rec.timer_id = (c.w0 >> 12) & 0x7FFFFu;  // (type<<16) | name-hash
-            rec.time_hi = c.w0 & 0xFFFu;             // 12 valid bits
-            rec.time_lo = c.w1;
-            wz.push_back(rec);
+            // else: pad/stale slot -> skip
         }
     }
     if (!wz.empty()) {
@@ -1703,6 +1718,27 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
                         "(zones will be unnamed). This also avoids a find()-on-empty SIGFPE.");
                 });
             }
+            // The device kernel_profiler mark_time() packs only the low 44 bits of WALL_CLOCK
+            // (12 high bits + 32 low); the top ~20 bits are dropped on-device by fixed format, so a
+            // raw marker is (full_device_time mod 2^44). The Tracy context is calibrated against the
+            // FULL device time (dev->first_timestamp, from our host<->device sync), so a 44-bit marker
+            // would land ~2^44 ticks (~3.6h) off the timeline -> invisible. Reconstruct the full
+            // timestamp by grafting the anchor's high bits onto the marker's low 44 bits, picking the
+            // 2^44 epoch nearest the anchor (handles a marker straddling the boundary). This is the
+            // required reconstruction for raw kernel_profiler markers; the reserved-tensix RT profiler
+            // sidesteps it by shipping full start/end timestamps, which the X280 drain path can't.
+            constexpr uint64_t kEpoch = 1ull << 44;
+            constexpr uint64_t kMask44 = kEpoch - 1;
+            const uint64_t raw44 = (static_cast<uint64_t>(w.time_hi) << 32) | w.time_lo;
+            const uint64_t anchor = dev->first_timestamp;
+            uint64_t full_ts = (anchor & ~kMask44) | (raw44 & kMask44);
+            if (anchor != 0) {
+                if (anchor > full_ts && anchor - full_ts > kEpoch / 2) {
+                    full_ts += kEpoch;
+                } else if (full_ts > anchor && full_ts - anchor > kEpoch / 2) {
+                    full_ts -= kEpoch;
+                }
+            }
             exp::WorkerZonePacket pkt{
                 .chip_id = dev->chip_id,
                 .core_virtual_x = w.core_x,
@@ -1712,9 +1748,29 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
                 .risc = w.risc,
                 .timer_id = hash,
                 .name = name,
-                .timestamp = (static_cast<uint64_t>(w.time_hi) << 32) | w.time_lo,
+                .timestamp = full_ts,
                 .is_start = (ptype == kernel_profiler::ZONE_START),
             };
+            // DEBUG (TT_X280_ZONE_DEBUG=1): dump the first packets Tier 2 feeds Tracy, to check the
+            // decode produces sane virt/noc0 coords, risc, name and MONOTONIC timestamps with matched
+            // start/end (a zero/negative-duration zone renders invisible in the GUI).
+            static const bool zdbg = (std::getenv("TT_X280_ZONE_DEBUG") != nullptr);
+            static int zdbg_n = 0;
+            if (zdbg && zdbg_n < 24) {
+                log_info(
+                    tt::LogMetal,
+                    "[X280 zone dbg #{}] virt=({},{}) noc0=({},{}) risc={} id=0x{:x} name='{}' ts={} start={}",
+                    zdbg_n++,
+                    w.core_x,
+                    w.core_y,
+                    noc0_x,
+                    noc0_y,
+                    w.risc,
+                    hash,
+                    name,
+                    pkt.timestamp,
+                    pkt.is_start);
+            }
             exp::InvokeProfilerPacketCallbacks(exp::ProfilerPacketType::WorkerZone, &pkt);
         }
     };
