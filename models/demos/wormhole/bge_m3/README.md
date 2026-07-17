@@ -173,6 +173,16 @@ machine.
 
 ## Performance benchmarks
 
+### Optimization guidelines
+
+The [`GUIDELINES/`](./GUIDELINES/) folder documents the optimization work behind this
+demo: best practices for optimizing BGE-style encoder transformers (BERT / XLM-R) on
+Tenstorrent hardware (TT-NN). It covers normalization, QKV projection, attention/SDPA,
+MLP, fusion/residuals, profiling and op analysis, and the overall methodology — distilled
+from the BGE-M3 optimization campaign (B1 5.7→4.30 ms; B32 194.9→60.55 ms, 3.22×).
+Start with [`00_README.md`](./GUIDELINES/00_README.md) or
+[`AGENT_INDEX.md`](./GUIDELINES/AGENT_INDEX.md).
+
 Two benchmark scripts live in `models/demos/wormhole/bge_m3/tests/perf/`.
 
 ### `perf.py` — Latency and throughput
