@@ -30,8 +30,6 @@ from helpers.llk_params import MathOperation
 # ---------------------------------------------------------------------------
 WAIVED = {
     # -- covered through a non-unary / separate harness (not a gap) -----------
-    "left_shift": "unary form is a ttnn composite over the binary LSHFT kernel (covered in test_sfpu_binary.py)",
-    "right_shift": "unary form is a ttnn composite over the binary RSHFT/LOGICAL_RSHFT kernel (covered in test_sfpu_binary.py)",
     "div_int32_trunc": "exercised via binary DIV_INT32 (calculate_div_int32_trunc)",
     "reduce": "covered by the dedicated reduce harness (test_sfpu_reduce.py)",
     # -- dead / placeholder enum ---------------------------------------------
@@ -55,6 +53,13 @@ WAIVED = {
     "unary_min_int32": "gap(B): int32 unary min-with-scalar; needs int path",
     "unary_max_uint32": "gap(B): uint32 unary max-with-scalar; needs int path",
     "unary_min_uint32": "gap(B): uint32 unary min-with-scalar; needs int path",
+    # unary shift-by-immediate: real dedicated unary kernels (calculate_left_shift /
+    # calculate_right_shift in ckernel_sfpu_unary_shift.h, prod API left/right_shift_tile),
+    # but Int32/UInt32/UInt16-only. Same int-format blocker as the rest of group B: the
+    # shared UnarySFPUGolden path is float-only and the Int32 unary harness is skipped
+    # (fast-tilize, tt-llk#495), so they can't run bit-exact yet.
+    "left_shift": "gap(B): integer unary left shift; dedicated kernel, needs int-format golden+harness (#495)",
+    "right_shift": "gap(B): integer unary arithmetic right shift; dedicated kernel, needs int-format golden+harness (#495)",
     # -- GROUP C: quantization -----------------------------------------------
     "quant_int32": "gap(C): quantization; scalar scale/zero-point golden pending",
     "requant_int32": "gap(C): requantization; scalar scale/zero-point golden pending",
@@ -68,9 +73,6 @@ WAIVED = {
     "max_pool_with_indices": "gap(D): pooling+indices; needs dedicated driver",
     # -- GROUP E: non-deterministic; need a statistical (non-PCC) test -------
     "dropout": "gap(E): stochastic; needs distributional test (no PCC golden)",
-    # -- GROUP A leftovers: covered elsewhere / dead enum --------------------
-    "gelu_appx": "covered via Gelu(ApproximationMode.Yes): calculate_gelu approx path dispatches calculate_gelu_appx",
-    "exp_with_base": "dead/legacy enumerator: no kernel dispatch or production caller (WH+BH)",
 }
 
 
