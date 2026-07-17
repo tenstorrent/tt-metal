@@ -250,7 +250,8 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
 
     interactive = sys.stdout.isatty()
     cols = shutil.get_terminal_size().columns if interactive else 10000
-    env = {**os.environ, "COLUMNS": str(cols), "TT_TRIAGE_COLOR": "1" if interactive else "0"}
+    # ASCII table borders: multi-byte box-drawing chars corrupt mpirun's line buffer in multi-rank runs.
+    env = {**os.environ, "COLUMNS": str(cols), "TT_TRIAGE_COLOR": "1" if interactive else "0", "TT_TRIAGE_SIMPLE_TABLE": "1"}
 
     # Buffer the stderr/stdout lines and flush after progress stops so they don't fight the Live display.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
