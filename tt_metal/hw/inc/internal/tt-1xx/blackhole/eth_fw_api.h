@@ -541,67 +541,70 @@ inline void fabric_dbg_advance_resume_phase(uint32_t from, uint32_t to) {
 // This should only be run on ERISC0, and ERISC1 should not be sending/receiving traffic while this is called.
 static void recover_eth_link_if_down() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
-    // Per-core down/up edge state (single firmware TU -> one instance per eth core). Constant-
-    // initialized to false, so no static-init guard variable is emitted.
+    // Rising-edge state for a *completed* retrain: the link was seen DOWN, then UP again. Persists
+    // across context switches (single firmware TU -> one instance per eth core) so a recovery that
+    // spans several calls still fires the config restore exactly once, on the call the link comes back.
     static bool eth_link_was_down = false;
-    // [CONFIG-RESTORE] One-shot: armed on the retrain (down->up) edge, applied once AFTER the FW recovery
-    // call below to restore the eth-queue config regs that the retrain mutates back to their init values.
-    static bool restore_config_after_retrain = false;
-    // [WAS_RETRAINED] Independent rising-edge detector for a *successful* retrain: PCS link observed
-    // UP after having been seen DOWN. Reads PCS_STATUS directly (no is_link_up() debounce, whose
-    // ERISC0 down-path burns billions of cycles). Sets was_retrained=1 exactly once on the down->up
-    // edge; the guard on ==0 makes it a one-shot so a later drop won't re-arm the freeze.
-    {
-        const uint32_t pcs_status =
-            *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR);
-        static bool link_down_seen = false;
-        if (pcs_status != 1) {
-            link_down_seen = true;
-        } else if (link_down_seen) {
-            link_down_seen = false;
-            if (was_retrained == 0) {
-                was_retrained = 1;  // edge-triggered: retrain succeeded
-            }
-            // [CONFIG-RESTORE] Arm the one-shot restore. The retrain config snapshot is taken AFTER the
-            // restore (in the block below), not here, so init-vs-retrain directly verifies the fix.
-            restore_config_after_retrain = true;
-        }
-    }
-    if (true) {
+
+    // [#1] Always run the FW link-recovery entry point every context switch (formerly gated behind the
+    // `if (true)` debug hack -- now the permanent behavior). When the link is up this is a quick no-op
+    // in base FW; when it is down it drives the retrain. The entry point is optional in the FW API
+    // table (base/older FW may leave it null) -- gate on a non-zero pointer, since calling through null
+    // would jump to address 0 and hang the core.
+    const uint32_t eth_link_recovery_ptr =
+        (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr);
+
+    // Read PCS link status RAW (no is_link_up() debounce). Testing showed the debounce -- which on a
+    // down-read busy-waits ERISC0 ~5.4B cycles -- correlates with ~4-8 links freezing after retrain (the
+    // peer times out while ERISC0 is stalled and the link never re-establishes), whereas the raw-read
+    // baseline had 0 frozen. So we read PCS_STATUS directly here: value ==1 means link up.
+    const auto pcs_link_up = []() {
+        return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR) == 1;
+    };
+
+    // Detect the DOWN edge exactly once, BEFORE the recovery call. The `!eth_link_was_down` gate latches
+    // the down state on the first context switch that sees the link down, then short-circuits so we stop
+    // re-reading while it stays down. eth_link_was_down persists until the post-recovery check below
+    // confirms the link is back up. Kept BEFORE the recovery call so a blocking recovery (returns with
+    // the link already up in this same call) can't hide the down state and make us miss the edge.
+    if (!eth_link_was_down && !pcs_link_up()) {
         eth_link_was_down = true;
-        // The link-recovery entry point is optional in the FW API table: base/older FW may leave it
-        // null. Gate on a non-zero pointer -- calling through a null here would jump to address 0 and
-        // hang the core. When unsupported we still record the down edge above but take no action.
-        const uint32_t eth_link_recovery_ptr =
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr);
-        if (eth_link_recovery_ptr != 0) {
-            // Resume-phase: about to enter FW recovery. If the word stays here, we wedged in the call.
-            fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_ENTER);
-            reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
-            // Resume-phase: recovery returned (link retrained). The TX/RX paths advance from here.
-            fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_DONE);
-        }
-    } else if (eth_link_was_down) {
-        eth_link_was_down = false;
     }
-    // [CONFIG-RESTORE] Once per completed retrain (down->up edge), restore the eth-queue config bits the
-    // retrain mutated back to their init values. Applied AFTER the FW recovery call so this call's recovery
-    // can't clobber it. Starting with TXQ1 dest MAC LO (0xFFB98298): init writes 0x00000001; the retrain
-    // clears it to 0. Idempotent -- the (higher-id) end the retrain left untouched just re-writes 1.
-    if (restore_config_after_retrain) {
-        restore_config_after_retrain = false;
-        // [CONFIG-RESTORE] Re-apply full packet-mode config (MAC_DA_HI/LO, TXQ_CTRL, TXPKT_CFG_SEL,
-        // RXQ_CTRL, TX->RX queue map) in one shot. receiver_txq_id == 1 in the fabric router.
+
+    if (eth_link_recovery_ptr != 0) {
+        // Resume-phase: about to enter FW recovery. If the word stays here, we wedged in the call.
+        fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_ENTER);
+        reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
+        // Resume-phase: recovery returned (link retrained). The TX/RX paths advance from here.
+        fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_DONE);
+    }
+
+    // [#2] Immediately after recovery, if the link is now UP and we had seen it DOWN, restore the
+    // eth-queue config the retrain corrupted (MAC_DA_HI/LO, TXQ_CTRL incl. disable_remote_drop_
+    // notification, TXPKT_CFG_SEL, RXQ_CTRL, TX->RX queue map). Doing it here -- in the SAME context
+    // switch the link came back, before the main loop resumes traffic -- means no packet is ever
+    // sent/received over the freshly-retrained link under the corrupted config (the lost-in-flight
+    // window). Edge-triggered via eth_link_was_down (cleared here), so it fires exactly ONCE per
+    // retrain, not on every call the link is up (level-triggered).
+    //
+    // eth_link_was_down is checked first, so the link is polled here only once it has been seen down;
+    // this is the check that detects the link coming back up so the config restore can fire.
+    if (eth_link_was_down && pcs_link_up()) {
+        eth_link_was_down = false;
+        // Settle delay: wait 100ms after the link comes back up, before reconfiguring packet mode, to let
+        // the retrained link stabilize. Inside the if (edge-triggered -- eth_link_was_down is cleared
+        // above) so it fires exactly once per retrain, immediately before eth_enable_packet_mode(). The
+        // wait is inside the context switch (before the main loop resumes), so it does not reopen the
+        // lost-in-flight window. (A ~4.29s delay was tried earlier but WITH the is_link_up() debounce, so
+        // it was inconclusive; this retries a short settle now that the debounce -- the real freeze cause
+        // -- is gone, targeting the 2 residual freezes.)
+        eth_wait_cycles(100 * ETH_CLOCK_CYCLE_1MS);  // 100ms (ETH_CLOCK_CYCLE_1MS = 1e6 cycles = 1ms)
+        // receiver_txq_id == 1 in the fabric router (see static_assert in kernel_main). Hardcoded 1
+        // because receiver_txq_id is a kernel-TU constant not visible in this base header.
         eth_enable_packet_mode(1);
-        // [CONFIG-RESTORE] Clear disable_remote_drop_notification (TXQ_CTRL bit3) that the retrain sets on
-        // the lower-id end -> restore init value 0x1 (packet_resend on, dis_drop off) on both TX queues.
-        // Idempotent: the untouched (higher-id) end already reads 0x1 and just re-writes it.
-        // *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB90000) =
-        //     0x00000001;  // TXQ0_CTRL -> resend on, dis_drop off
-        // *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(0xFFB91000) =
-        //     0x00000001;  // TXQ1_CTRL -> resend on, dis_drop off
-        // [PKTMODE-PROBE] RETRAIN snapshot disabled -- back to TX/RX counter mode.
-        // fabric_dbg_ringbuf_push_pktmode_snapshot(FABRIC_DBG_PKTMODE_CODEWORD_RETRAIN);
+        if (was_retrained == 0) {
+            was_retrained = 1;  // edge-triggered freeze/debug flag; one-shot, matches WAS_RETRAINED gate
+        }
     }
 #endif
 }
