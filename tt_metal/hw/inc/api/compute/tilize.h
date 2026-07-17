@@ -122,11 +122,12 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // unpacker to <=1 DEST bank ahead of the packer; each thread flips its OWN DEST section base in lockstep (in
     // tilize_block). Deterministic: the unpacker provably cannot lap the packer. MATH issues NO DEST ops on this
     // path (no MOVA2D/datacopy MOP -> the FPU dest-dvalid ring is never advanced -> ERROR_TRISC1 0x19 cannot
-    // recur). SEMINIT runs on the otherwise-idle MATH thread (matches the matmul's proven llk_math_pack_sync_init
-    // location) so it is ordered before PACK's first wait by the compute prologue. The dvalid section scheme was
-    // insufficient: its masks came from the single-section reference test and the unpack side never flipped its
-    // DEST bank id, so it desynced from pack and lapped (hangs/corruption).
-    MATH((llk_math_tilize_dest_sync_init<DST_SYNC_MODE>()));
+    // recur). The SEMINIT is done by UNPACK inside llk_unpack_tilize_dest_sync_init (the PRODUCER thread), NOT
+    // MATH: UNPACK's acquire (SEMWAIT STALL_ON_MAX) latches the sem max at issue, so the SEMINIT (max=N) must be
+    // ordered before it on the SAME thread — SEMINIT-on-MATH raced -> acquire latched the reset max=0 -> waited
+    // for val<0 -> first-section deadlock (dprint_tr10). PACK only reads the value (reset 0), so it needs no
+    // SEMINIT ordering. MATH is idle (no init call). The dvalid section scheme was insufficient: its masks came
+    // from the single-section reference test and the unpack side never flipped its DEST bank id -> desync/lap.
     UNPACK((llk_unpack_tilize_dest_sync_init<DST_SYNC_MODE>()));
     PACK((llk_pack_tilize_dest_sync_init<DST_SYNC_MODE>()));
 #else

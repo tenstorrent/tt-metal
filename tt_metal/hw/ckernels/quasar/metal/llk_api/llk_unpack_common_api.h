@@ -134,9 +134,15 @@ inline void llk_unpack_teardown_dest_dvalid() {
 // MATH issues NO DEST op (no MOVA2D -> no 0x19). SEMINIT is on MATH (llk_math_tilize_dest_sync_init).
 // =====================================================================================================
 
-/** @brief UNPACK-side init: point UNPACK's DEST section base at bank 0 (mirror of llk_pack_tile_api init). */
+/** @brief UNPACK-side init: SEMINIT the UNPACK_MATH token AND point UNPACK's DEST section base at bank 0.
+ *  The SEMINIT lives HERE (on the producer thread), NOT on MATH: UNPACK's acquire (SEMWAIT STALL_ON_MAX) latches
+ *  the semaphore's max at issue time, so the SEMINIT (max=N) MUST be ordered before it — guaranteed only when
+ *  both run on the same thread. (SEMINIT-on-MATH raced the acquire -> acquire latched max=0 -> first-section
+ *  deadlock, dprint_tr10.) PACK only reads the value (starts 0 at reset), so it needs no ordering vs SEMINIT. */
 template <DstSync DST>
 inline void llk_unpack_tilize_dest_sync_init() {
+    constexpr std::uint32_t N = (DST == DstSync::SyncFull) ? 1 : 2;  // one token per DEST bank
+    _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
     if constexpr (DST == DstSync::SyncHalf) {
         _reset_dest_register_offset_();
         _set_dest_section_base_<ckernel::unpack::TRISC_ID>(_get_dest_buffer_base_());
