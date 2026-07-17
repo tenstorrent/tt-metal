@@ -127,22 +127,6 @@ Tensor GeluBackwardDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t GeluBackwardDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& grad_output = tensor_args.grad_output;
-    const auto& input_shape = input_tensor.padded_shape();
-    operation::Hash hash = operation::hash_operation<GeluBackwardDeviceOperation>(
-        args,
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        grad_output.dtype(),
-        grad_output.memory_config(),
-        input_shape.volume());
-
-    return hash;
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

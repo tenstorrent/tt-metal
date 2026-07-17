@@ -479,14 +479,15 @@ class VisionAttention(LightweightModule):
                 ),
             )
         else:
-            attn_output_84SD = ttnn.transformer.windowed_scaled_dot_product_attention(
+            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
-                cu_seqlens,
+                is_causal=False,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+                cu_window_seqlens=cu_seqlens,
             )
 
         # deallocate keys and values

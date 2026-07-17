@@ -69,7 +69,7 @@ def get_expected_metrics(mesh_device):
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 32768, "trace_region_size": 50000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 def test_sd35_new_pipeline_performance(

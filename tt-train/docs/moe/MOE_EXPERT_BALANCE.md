@@ -71,7 +71,7 @@ The sparse schedule (dense early, sampled later) keeps file size manageable whil
 ### Example invocation
 
 ```bash
-python tt-train/sources/examples/nano_gpt/train_nanogpt.py \
+python tt-train/sources/examples/train/train.py \
     --config configs/nano_deepseek.yaml \
     --log-expert-activations moe_activation.csv
 ```
@@ -145,7 +145,7 @@ Healthy routing looks like a roughly uniform color across all experts. A single 
 
 1. **Run training with logging enabled:**
    ```bash
-   python tt-train/sources/examples/nano_gpt/train_nanogpt.py \
+   python tt-train/sources/examples/train/train.py \
        --config configs/nano_deepseek.yaml \
        --log-expert-activations runs/exp1/moe_activation.csv \
        > runs/exp1/train.log 2>&1

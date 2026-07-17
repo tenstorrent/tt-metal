@@ -203,6 +203,7 @@ inline KernelActivation get_activation_type(ttnn::operations::unary::UnaryOpType
     using ttnn::operations::unary::UnaryOpType;
     switch (opType) {
         case UnaryOpType::GELU: return KernelActivation::GELU;
+        case UnaryOpType::GELU_TANH: return KernelActivation::GELU_TANH;
         case UnaryOpType::TANH: return KernelActivation::TANH;
         case UnaryOpType::SILU: return KernelActivation::SILU;
         case UnaryOpType::RELU6: return KernelActivation::RELU6;
@@ -254,6 +255,11 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
             result.type = KernelActivation::GELU;
             // param0 is vector mode (0=RC, 1=R, 2=C) or fast mode
             result.param0 = has_first ? static_cast<uint32_t>(params[0]) : 0;
+            break;
+
+        case UnaryOpType::GELU_TANH:
+            result.type = KernelActivation::GELU_TANH;
+            // No parameters
             break;
 
         case UnaryOpType::TANH:

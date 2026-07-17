@@ -6,6 +6,7 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/tilize.h"
+#include "api/dataflow/circular_buffer.h"
 
 // Print a subset of a row-major bfloat16 buffer.
 // BufferWidth: total number of columns (elements) per row
@@ -85,12 +86,17 @@ void kernel_main() {
     // Constants
     constexpr uint32_t one_page = 1;
 
+    // CircularBuffer typed wrappers
+    CircularBuffer cb_tilize_input(tilize_input_cb_id);
+    CircularBuffer cb_tilize_output(tilize_output_cb_id);
+    CircularBuffer cb_total_chunks(total_chunks_cb_id);
+
     // Setup
     compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);
     fast_tilize_init(tilize_input_cb_id, tiles_per_local_chunk, tilize_output_cb_id);
 
     // Wait for writer to push total_chunks via CB
-    cb_wait_front(total_chunks_cb_id, one_page);
+    cb_total_chunks.wait_front(one_page);
 
     // Read total_chunks from the CB
     uint32_t total_chunks = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_tile_address(total_chunks_cb_id, 0));
@@ -99,7 +105,7 @@ void kernel_main() {
     for (uint32_t chunk = 0; chunk < total_chunks; chunk++) {
         // Wait for reader to push tokens_per_chunk pages (row-major data)
         // Reader always reserves/pushes tokens_per_chunk for consistent synchronization
-        cb_wait_front(tilize_input_cb_id, tokens_per_chunk);
+        cb_tilize_input.wait_front(tokens_per_chunk);
 
         // DEBUG: Print subsets of input (row-major bfloat16)
         // Get CB address directly within UNPACK context (avoids mailbox sync issues with get_tile_address)
@@ -113,7 +119,7 @@ void kernel_main() {
 
         // we reserve the entire CB so that we treat it as single buffered
         // this is to allow us to gather into it before mcasting to the MM cores
-        cb_reserve_back(tilize_output_cb_id, shared_cb_num_pages);
+        cb_tilize_output.reserve_back(shared_cb_num_pages);
 
         fast_tilize_block(tilize_input_cb_id, tiles_per_local_chunk, tilize_output_cb_id);
 
@@ -124,12 +130,12 @@ void kernel_main() {
         //     // print_tile_rows(tilize_output_cb_id, tiles_per_local_chunk - 1, true, 0, 1, 0, 1);  // Last tile, 4x8
         // }));
 
-        cb_push_back(tilize_output_cb_id, shared_cb_num_pages);
+        cb_tilize_output.push_back(shared_cb_num_pages);
 
         // Pop input from reader (tokens_per_chunk pages)
-        cb_pop_front(tilize_input_cb_id, tokens_per_chunk);
+        cb_tilize_input.pop_front(tokens_per_chunk);
     }
 
     fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id, tiles_per_local_chunk);
-    cb_pop_front(total_chunks_cb_id, one_page);
+    cb_total_chunks.pop_front(one_page);
 }

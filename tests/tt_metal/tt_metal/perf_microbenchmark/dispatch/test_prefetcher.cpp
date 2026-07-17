@@ -93,7 +93,7 @@ void update_paged_dram_read(
     uint32_t bank_offset,
     uint32_t page_size_words) {
     for (uint32_t j = 0; j < page_size_words; j++) {
-        uint32_t datum = device_data.at(bank_core, bank_id, bank_offset + j);
+        uint32_t datum = device_data.at(bank_core, bank_id, bank_offset + j, tt::CoreType::DRAM);
         device_data.push_range(workers, datum, false);
     }
 }
@@ -114,11 +114,11 @@ void update_host_data(Common::DeviceData& device_data, const std::vector<uint32_
 
     uint32_t* cmd_as_words = reinterpret_cast<uint32_t*>(&expected_cmd);
     for (uint32_t i = 0; i < sizeof(CQDispatchCmd) / sizeof(uint32_t); i++) {
-        device_data.push_one(device_data.get_host_core(), 0, cmd_as_words[i]);
+        device_data.push_one(device_data.get_host_core(), 0, cmd_as_words[i], tt::CoreType::PCIE);
     }
 
     for (uint32_t i = 0; i < data_size_words; i++) {
-        device_data.push_one(device_data.get_host_core(), 0, data[i]);
+        device_data.push_one(device_data.get_host_core(), 0, data[i], tt::CoreType::PCIE);
     }
 }
 
@@ -131,9 +131,10 @@ void update_read(
     const CoreCoord& bank_core,
     uint32_t bank_id,
     uint32_t bank_offset,
-    uint32_t page_size_words) {
+    uint32_t page_size_words,
+    tt::CoreType bank_core_type) {
     for (uint32_t j = 0; j < page_size_words; j++) {
-        uint32_t datum = device_data.at(bank_core, bank_id, bank_offset + j);
+        uint32_t datum = device_data.at(bank_core, bank_id, bank_offset + j, bank_core_type);
         device_data.push_one(worker_core, datum);
     }
 }
@@ -150,8 +151,8 @@ void update_cross_device_read(
     Common::DeviceData& src_device_data,
     uint32_t size_words) {
     for (uint32_t j = 0; j < size_words; j++) {
-        uint32_t datum = src_device_data.at(src_core, src_bank_id, src_bank_offset + j);
-        dest_device_data.push_one(dest_core, dest_bank_id, datum);
+        uint32_t datum = src_device_data.at(src_core, src_bank_id, src_bank_offset + j, tt::CoreType::DRAM);
+        dest_device_data.push_one(dest_core, dest_bank_id, datum, tt::CoreType::DRAM);
     }
 }
 }  // namespace DeviceDataUpdater
@@ -207,7 +208,7 @@ HostMemDeviceCommand build_dispatch_prefetch_stall() {
     return cmd;
 }
 
-HostMemDeviceCommand build_dispatch_write_offset(tt::stl::Span<const uint32_t> write_offsets) {
+HostMemDeviceCommand build_dispatch_write_offset(ttsl::Span<const uint32_t> write_offsets) {
     DeviceCommandCalculator calc;
     calc.add_dispatch_set_write_offsets(write_offsets.size());
     const uint32_t command_size_bytes = calc.write_offset_bytes();
@@ -476,6 +477,16 @@ protected:
         num_iterations_ = params.num_iterations;
         dram_data_size_words_ = params.dram_data_size_words;
         use_exec_buf_ = params.use_exec_buf;
+
+        // On the Quasar simulator the command queue is the HAL-reserved DRAM-backed CQ, which lives below dram_base_;
+        // the exec buffer and bank data sit in the unreserved window [dram_base_, physical DRAM size).
+        // Skip only if the exec_buf base alone already overruns physical DRAM (the banked exec_buf top is checked
+        // precisely in build_and_write_exec_buf_to_dram, once num_pages is known).
+        if (Common::is_quasar_sim() && compute_exec_buf_base_addr() >= Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) {
+            GTEST_SKIP() << "exec_buf base " << compute_exec_buf_base_addr()
+                         << " overruns Quasar simulator physical DRAM size "
+                         << Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE;
+        }
     }
 
     void execute_generated_commands(
@@ -688,6 +699,16 @@ public:
         const uint32_t num_pages = static_cast<uint32_t>(padded_size_bytes) / page_size;
         log_info(tt::LogTest, "Total exec buf bytes: {} (padded: {})", size_bytes, padded_size_bytes);
 
+        if (Common::is_quasar_sim()) {
+            const uint32_t exec_buf_rows = (num_pages + num_banks_ - 1) / num_banks_;
+            const uint32_t exec_buf_top = exec_buf_base_addr + exec_buf_rows * page_size;
+            TT_FATAL(
+                exec_buf_top <= Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE,
+                "exec_buf top {:#x} overruns Quasar simulator physical DRAM size {:#x}",
+                exec_buf_top,
+                Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE);
+        }
+
         uint32_t data_idx = 0;
         for (uint32_t page_idx = 0; page_idx < num_pages; ++page_idx) {
             const uint32_t bank_id = page_idx % num_banks_;
@@ -756,6 +777,9 @@ private:
         const std::chrono::duration<double> elapsed = end - start;
         log_info(tt::LogTest, "Ran in {:.3f} ms (for {} iterations)", elapsed.count() * 1000.0, num_iterations);
 
+        // On the Quasar simulator the completion queue is DRAM-backed; sync the host staging mirror before validating.
+        fixture.refresh_completion_data();
+
         // Validate results
         const bool pass = device_data.validate(device_);
         EXPECT_TRUE(pass) << "Dispatcher test failed validation";
@@ -801,7 +825,6 @@ public:
                 const uint32_t bank_id = page_id % num_banks_;
                 uint32_t bank_offset = page_size_words * (page_id / num_banks_);
 
-                // Get the logical core for this bank
                 const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
                 const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -850,7 +873,6 @@ public:
                 const uint32_t page_id = absolute_start_page + page;
                 const uint32_t bank_id = page_id % num_banks_;
 
-                // Get the logical core for this bank
                 const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
                 const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -860,7 +882,7 @@ public:
 
                 // Update Common::DeviceData for paged write
                 Common::DeviceDataUpdater::update_paged_write(
-                    page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes);
+                    page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes, tt::CoreType::DRAM);
 
                 // Append page payload to chunk payload
                 chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
@@ -896,7 +918,6 @@ public:
                 // Add dram_data_size_words since we're reading after the pre-populated DRAM data
                 uint32_t bank_offset = dram_data_size_words_ + page_size_words * (page_id / num_banks_);
 
-                // Get the logical core for this bank
                 const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
                 const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -1062,7 +1083,6 @@ public:
             const uint32_t bank_id = page_id % info_.num_banks_;
             uint32_t bank_offset = base_addr_words + (page_size_words * (page_id / info_.num_banks_));
 
-            // Get the logical core for this bank
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -1137,7 +1157,8 @@ public:
         // Shadow model: copy existing L1 data from src offset
         const uint32_t words = length / sizeof(uint32_t);
         const uint32_t offset_words = offset_from_current / sizeof(uint32_t);
-        DeviceDataUpdater::update_read(worker, device_data_, worker, bank_id, offset_words, words);
+        DeviceDataUpdater::update_read(
+            worker, device_data_, worker, bank_id, offset_words, words, tt::CoreType::WORKER);
         device_data_.pad(worker, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 
         // Barrier/stall to avoid RAW hazards
@@ -1174,18 +1195,19 @@ public:
 class PrefetcherHostTestFixture : virtual public BasePrefetcherTestFixture {
 protected:
     void pad_host_data(Common::DeviceData& device_data) {
-        Common::one_core_data_t& host_data = device_data.get_data()[device_data.get_host_core()][0];
+        Common::one_core_data_t& host_data =
+            device_data.get_data()[{tt::CoreType::PCIE, device_data.get_host_core()}][0];
 
         int pad =
             dispatch_buffer_page_size_ - ((host_data.data.size() * sizeof(uint32_t)) % dispatch_buffer_page_size_);
         pad = pad % dispatch_buffer_page_size_;
 
         for (int i = 0; i < pad / sizeof(uint32_t); i++) {
-            device_data.push_one(device_data.get_host_core(), 0, HOST_DATA_DIRTY_PATTERN);
+            device_data.push_one(device_data.get_host_core(), 0, HOST_DATA_DIRTY_PATTERN, tt::CoreType::PCIE);
         }
     }
 
-    void dirty_host_completion_buffer(void* completion_queue_buffer, uint32_t size_bytes) {
+    virtual void dirty_host_completion_buffer(void* completion_queue_buffer, uint32_t size_bytes) {
         uint32_t* buffer = static_cast<uint32_t*>(completion_queue_buffer);
         uint32_t size_words = size_bytes / sizeof(uint32_t);
 
@@ -1390,7 +1412,7 @@ protected:
                 uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
 
                 DeviceDataUpdater::update_read(
-                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words);
+                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words, tt::CoreType::DRAM);
 
                 page_idx++;
             }
@@ -1695,7 +1717,8 @@ protected:
 
             EXPECT_LE(total_length + (device_data.size() * sizeof(uint32_t)), device_data_size_bytes);
 
-            const uint32_t dram_dest_addr = device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
+            const uint32_t dram_dest_addr =
+                device_data.get_result_data_addr(dest_dram_logical, dest_bank_id, tt::CoreType::DRAM);
 
             const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses);
 
@@ -1711,7 +1734,7 @@ protected:
                 const uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
                 const uint32_t length_words = lengths[i] / sizeof(uint32_t);
                 for (uint32_t j = 0; j < length_words; j++) {
-                    device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j);
+                    device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j, tt::CoreType::DRAM);
                 }
             }
 
@@ -1814,7 +1837,7 @@ public:
 
                 uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
                 DeviceDataUpdater::update_read(
-                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words);
+                    this->worker_start(), device_data, bank_core, dram_bank_id, bank_offset, words, tt::CoreType::DRAM);
 
                 page_idx++;
             }
@@ -2050,7 +2073,8 @@ public:
                 remaining_bytes);
 
             // Capture DRAM address before updating dest_device_data
-            uint32_t dram_addr = dest_device_data.get_result_data_addr(dest_dram_logical_core, dest_dram_bank_id);
+            uint32_t dram_addr =
+                dest_device_data.get_result_data_addr(dest_dram_logical_core, dest_dram_bank_id, tt::CoreType::DRAM);
 
             DeviceCommandCalculator calc;
             calc.add_dispatch_write_linear<false, false>(length);
@@ -2203,7 +2227,8 @@ public:
 
             EXPECT_LE(total_length + (remote_device_data.size() * sizeof(uint32_t)), DEVICE_DATA_SIZE_LARGE);
 
-            const uint32_t dram_dest_addr = remote_device_data.get_result_data_addr(dest_dram_logical, dest_bank_id);
+            const uint32_t dram_dest_addr =
+                remote_device_data.get_result_data_addr(dest_dram_logical, dest_bank_id, tt::CoreType::DRAM);
 
             const std::vector<CQPrefetchRelayLinearPackedSubCmd> sub_cmds = build_sub_cmds(lengths, addresses);
 
@@ -2237,7 +2262,7 @@ public:
                 const uint32_t offset_words = (addresses[i] - l1_base) / sizeof(uint32_t);
                 const uint32_t length_words = lengths[i] / sizeof(uint32_t);
                 for (uint32_t j = 0; j < length_words; j++) {
-                    remote_device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j);
+                    remote_device_data.push_one(dest_dram_logical, dest_bank_id, offset_words + j, tt::CoreType::DRAM);
                 }
             }
 
@@ -2284,7 +2309,8 @@ protected:
         // Shadow model: copy existing L1 data from src offset
         const uint32_t data_size_words = data_size_bytes / sizeof(uint32_t);
         const uint32_t offset_words = offset_bytes / sizeof(uint32_t);
-        DeviceDataUpdater::update_read(worker_core, device_data, worker_core, bank_id, offset_words, data_size_words);
+        DeviceDataUpdater::update_read(
+            worker_core, device_data, worker_core, bank_id, offset_words, data_size_words, tt::CoreType::WORKER);
         device_data.pad(worker_core, bank_id, MetalContext::instance().hal().get_alignment(HalMemType::L1));
 
         // Build command (dispatcher linear write (dest) + relay linear read (src))
@@ -2350,7 +2376,6 @@ protected:
             const uint32_t bank_id = page_idx % num_banks_;
             uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_banks_);
 
-            // Get the logical core for this bank
             const auto dram_channel = device_->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
             const CoreCoord bank_core = device_->logical_core_from_dram_channel(dram_channel);
 
@@ -2590,7 +2615,7 @@ template <typename FDFixture>
 class SDPrefetchTestBase : public FDFixture {
 public:
     void SetUp() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        if (tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->device_ = tt_metal::CreateDevice(0);
@@ -2726,9 +2751,9 @@ public:
 
         const uint32_t host_align = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);
 
-        // write_prefetcher_cmd: streaming-store cmd to hugepage (WH/BH) or DRAM (Quasar), then write one FetchQ entry
-        // via TLB. cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the pre-computed
-        // FetchQ value (may have MSB stall flag set for exec_buf).
+        // write_prefetcher_cmd: streaming-store cmd to hugepage (WH/BH) or DRAM (Quasar simulator), then write one
+        // FetchQ entry via TLB. cmd_size_bytes must be a multiple of 64 (host alignment) and cmd_size_entry is the
+        // pre-computed FetchQ value (may have MSB stall flag set for exec_buf).
         auto write_prefetcher_cmd = [&](const uint32_t* src, uint32_t cmd_size_bytes, uint32_t cmd_size_entry) {
             if (Common::is_quasar_sim()) {
                 TT_FATAL(
@@ -2927,8 +2952,9 @@ public:
         tt_metal::detail::LaunchProgram(this->device_, program);
         // Ensure host CPU sees any PCIe-written completion queue data before validating.
         tt_driver_atomics::mfence();
-        // On Quasar the completion queue lives in DRAM; read it back into the host staging buffer
-        // before validate() (which reads from get_completion_queue_buffer()).
+        // On the Quasar simulator the completion queue lives in DRAM (host hugepages are unavailable);
+        // read it back into the host staging buffer before validate() (which reads from
+        // get_completion_queue_buffer()).
         this->refresh_completion_data();
         EXPECT_TRUE(device_data.validate(this->device_)) << "SD prefetch test failed validation";
     }
@@ -2937,11 +2963,6 @@ public:
     // prefetch_terminate so LaunchProgram can return. The unified test bodies must not
     // re-append them, so this hook becomes a no-op in SD.
     void append_terminate_commands(std::vector<HostMemDeviceCommand>& /*cmds*/) override {}
-
-    // Called after LaunchProgram and before device_data.validate(). On Quasar the completion queue
-    // lives in DRAM bank 0 and must be read back into the host staging buffer before validation.
-    // Default no-op (WH/BH completion queue is in PCIe-mapped host memory — already visible).
-    virtual void refresh_completion_data() {}
 
 private:
     // Orchestrates exec_buf execution: builds DRAM payload, writes to DRAM, then issues the
@@ -3036,6 +3057,72 @@ private:
 
 class SDPrefetchLinearPackedReadTestFixture : public SDPrefetchTestBase<PrefetcherLinearPackedReadTestFixture> {};
 class SDPrefetchRingbufferReadTestFixture : public SDPrefetchTestBase<PrefetcherRingbufferReadTestFixture> {};
+
+// Quasar FD fixtures
+class BasePrefetcherQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<BasePrefetcherTestFixture> {};
+class PrefetcherPackedReadQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<PrefetcherPackedReadTestFixture> {};
+class PrefetcherLinearPackedReadQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<PrefetcherLinearPackedReadTestFixture> {};
+class PrefetcherHostQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<PrefetcherHostTestFixture> {
+public:
+    // On the Quasar simulator the completion queue is DRAM-backed. Validate against a host-side staging
+    // buffer that refresh_completion_data() fills from DRAM before validate().
+    void* get_completion_queue_buffer() override {
+        quasar_completion_buf_.resize(this->get_completion_queue_buffer_size());
+        return quasar_completion_buf_.data();
+    }
+
+    // On WH/BH the dirty pattern is written into the PCIe-mapped completion buffer, i.e. the real completion memory the
+    // dispatcher writes into. On the Quasar simulator that memory is DRAM, so dirty there too.
+    void dirty_host_completion_buffer(void* completion_queue_buffer, uint32_t size_bytes) override {
+        PrefetcherHostTestFixture::dirty_host_completion_buffer(completion_queue_buffer, size_bytes);
+        std::vector<uint32_t> dirty(size_bytes / sizeof(uint32_t), HOST_DATA_DIRTY_PATTERN);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
+            dirty.data(), size_bytes, this->device_->id(), completion_dram_channel(), completion_dram_addr());
+    }
+
+    // Read the dispatcher-written prefix of the DRAM completion queue into the staging buffer so
+    // device_data.validate() sees real data. Padding past the written span keeps its dirty fill.
+    void refresh_completion_data() override {
+        const uint8_t cq_id = fdcq_->id();
+        std::atomic<bool> exit_condition{false};
+        const uint32_t write_ptr_bytes = (mgr_->completion_queue_wait_front(cq_id, exit_condition) & 0x7fffffff) << 4;
+        const uint32_t read_ptr_bytes = mgr_->get_completion_queue_read_ptr(cq_id);
+        const uint32_t bytes_written = (write_ptr_bytes > read_ptr_bytes) ? (write_ptr_bytes - read_ptr_bytes) : 0;
+        if (bytes_written == 0) {
+            return;
+        }
+        TT_FATAL(
+            bytes_written <= quasar_completion_buf_.size(),
+            "Quasar completion readback {} B exceeds staging buffer {} B",
+            bytes_written,
+            quasar_completion_buf_.size());
+        tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
+            this->device_,
+            completion_dram_channel(),
+            completion_dram_addr(),
+            std::span<uint8_t>(quasar_completion_buf_.data(), bytes_written));
+    }
+
+private:
+    // DRAM address of the completion region base, matching SystemMemoryManager::get_completion_queue_ptr.
+    uint32_t completion_dram_addr() const {
+        const uint8_t cq_id = fdcq_->id();
+        const SystemMemoryCQInterface& cq_iface = mgr_->get_cq_interfaces()[cq_id];
+        return mgr_->get_dram_region_base_addr() + tt::tt_metal::get_relative_cq_offset(cq_id, mgr_->get_cq_size()) +
+               cq_iface.cq_start + cq_iface.command_issue_region_size;
+    }
+    int completion_dram_channel() const {
+        return this->device_->allocator_impl()->get_dram_channel_from_bank_id(mgr_->get_dram_region_bank_id());
+    }
+
+    std::vector<uint8_t> quasar_completion_buf_;
+};
+
+class PrefetcherRingbufferReadQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<PrefetcherRingbufferReadTestFixture> {};
+class RandomQuasarSimulatorTestFixture : public Common::QuasarSimulatorVariant<RandomTestFixture> {};
 
 // In this we, we test the terminate command by adding a linear write unicast
 // with a small payload followed by commands to terminate prefetcher and dispatcher.
@@ -3297,7 +3384,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
                 payload_generator_->generate_payload_with_page_id(page_size_words, page_id);
 
             Common::DeviceDataUpdater::update_paged_write(
-                page_payload, device_data, bank_core, bank_id, page_alignment_bytes);
+                page_payload, device_data, bank_core, bank_id, page_alignment_bytes, tt::CoreType::DRAM);
 
             chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
         }
@@ -3388,6 +3475,70 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
             EXPECT_GE(cmd_stream_bw_gib_s, min_bw) << "Command-stream throughput regression";
         }
     }
+}
+
+// Quasar simulator FD tests — the default FD fixtures skip on Quasar simulator and these skip on WH/BH.
+TEST_P(BasePrefetcherQuasarSimulatorTestFixture, TestTerminate) {
+    log_info(
+        tt::LogTest, "BasePrefetcherQuasarSimulatorTestFixture - TestTerminate (Quasar simulator FD) - Test Start");
+    run_test_terminate_test();
+}
+
+TEST_P(BasePrefetcherQuasarSimulatorTestFixture, DRAMToL1PagedRead) {
+    log_info(
+        tt::LogTest, "BasePrefetcherQuasarSimulatorTestFixture - DRAMToL1PagedRead (Quasar simulator FD) - Test Start");
+    run_dram_to_l1_paged_read_test();
+}
+
+TEST_P(BasePrefetcherQuasarSimulatorTestFixture, PagedReadWriteTest) {
+    log_info(
+        tt::LogTest,
+        "BasePrefetcherQuasarSimulatorTestFixture - PagedReadWriteTest (Quasar simulator FD) - Test Start");
+    run_paged_read_write_test();
+}
+
+TEST_P(PrefetcherHostQuasarSimulatorTestFixture, HostTest) {
+    log_info(tt::LogTest, "PrefetcherHostQuasarSimulatorTestFixture - HostTest (Quasar simulator FD) - Test Start");
+    run_host_test();
+}
+
+TEST_P(PrefetcherHostQuasarSimulatorTestFixture, HostSmokeTest) {
+    log_info(
+        tt::LogTest, "PrefetcherHostQuasarSimulatorTestFixture - HostSmokeTest (Quasar simulator FD) - Test Start");
+    run_host_smoke_test();
+}
+
+TEST_P(PrefetcherPackedReadQuasarSimulatorTestFixture, PackedReadTest) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherPackedReadQuasarSimulatorTestFixture - PackedReadTest (Quasar simulator FD) - Test Start");
+    run_packed_read_test();
+}
+
+TEST_P(PrefetcherPackedReadQuasarSimulatorTestFixture, SmokeTest) {
+    log_info(
+        tt::LogTest, "PrefetcherPackedReadQuasarSimulatorTestFixture - SmokeTest (Quasar simulator FD) - Test Start");
+    run_smoke_test();
+}
+
+TEST_P(PrefetcherLinearPackedReadQuasarSimulatorTestFixture, LinearPackedReadTest) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherLinearPackedReadQuasarSimulatorTestFixture - LinearPackedReadTest (Quasar simulator FD) - Test "
+        "Start");
+    run_linear_packed_read_test();
+}
+
+TEST_P(PrefetcherRingbufferReadQuasarSimulatorTestFixture, RingbufferReadTest) {
+    log_info(
+        tt::LogTest,
+        "PrefetcherRingbufferReadQuasarSimulatorTestFixture - RingbufferReadTest (Quasar simulator FD) - Test Start");
+    run_ringbuffer_read_test();
+}
+
+TEST_P(RandomQuasarSimulatorTestFixture, RandomTest) {
+    log_info(tt::LogTest, "RandomQuasarSimulatorTestFixture - RandomTest (Quasar simulator FD) - Test Start");
+    run_random_test();
 }
 
 TEST_P(SDPrefetchDRAMToL1TestFixture, DRAMToL1PagedRead) {
@@ -3663,6 +3814,78 @@ INSTANTIATE_TEST_SUITE_P(
             DEFAULT_ITERATIONS,
             Common::DRAM_DATA_SIZE_WORDS,
             false}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    BasePrefetcherQuasarSimulatorTestFixture,
+    ::testing::Values(
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    PrefetcherPackedReadQuasarSimulatorTestFixture,
+    ::testing::Values(
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    PrefetcherLinearPackedReadQuasarSimulatorTestFixture,
+    ::testing::Values(
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    PrefetcherHostQuasarSimulatorTestFixture,
+    ::testing::Values(
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    PrefetcherRingbufferReadQuasarSimulatorTestFixture,
+    ::testing::Values(
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedReadParams>& info) {
+        return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
+               std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
+               "words_" + (info.param.use_exec_buf ? "use_exec_buf_enabled" : "use_exec_buf_disabled");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorPrefetcherTests,
+    RandomQuasarSimulatorTestFixture,
+    ::testing::Values(
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, false},
+        PagedReadParams{DRAM_PAGE_SIZE_DEFAULT, DRAM_PAGES_TO_READ_DEFAULT, 1, Common::DRAM_DATA_SIZE_WORDS, true}),
     [](const testing::TestParamInfo<PagedReadParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +

@@ -82,13 +82,25 @@ ALWI void mul_reduce_scalar_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, uin
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
 
     // Populate srcB with the scaler value
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(
-        _calculate_fill_, RC_custom, APPROX, 2 /*ITERATIONS*/, 0 /*dst_index*/, scaler));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_fill_,
+        (APPROX, 2 /*ITERATIONS*/),
+        0 /*dst_index*/,
+        VectorMode::RC_custom,
+        scaler));
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
-    MATH(SFPU_UNARY_ONE_PARAM_KERNEL_EXTRA_PARAM(
-        _calculate_fill_, RC_custom, APPROX, 2 /*ITERATIONS*/, 0 /*dst_index*/, 0.0f));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_fill_,
+        (APPROX, 2 /*ITERATIONS*/),
+        0 /*dst_index*/,
+        VectorMode::RC_custom,
+        0.0f));
 
     // Step 5: Configure packer for scalar reduction
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));

@@ -35,6 +35,9 @@ on:
       measure-memory:
         type: string
         default: "false"
+      fail-on-test-failure:
+        type: string
+        default: "false"
       mesh-shape:
         type: string
         default: ""
@@ -121,6 +124,15 @@ jobs:
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export
+      - name: Clear stale kernel cache
+        # A stale/corrupt persisted kernel ELF (e.g. cq_prefetch) left in
+        # ~/.cache/tt-metal-cache from a prior build makes tt_elffile.cpp throw on
+        # load (observed: T3K all_gather FABRIC_2D configs 0256fe6b/0694284f fail
+        # "TT_THROW @ tt_elffile.cpp:405" / hang every retry, yet pass 207/207 on a
+        # runner with a fresh cache). Clear it so kernels JIT-rebuild cleanly.
+        run: |
+          rm -rf "${HOME}/.cache/tt-metal-cache" /github/home/.cache/tt-metal-cache 2>/dev/null || true
+          echo "Cleared tt-metal kernel cache"
       - name: Split sweep vectors by required dispatch axis
         run: |
           # Two-pass dispatch-axis design: lead_models traces include configs
@@ -135,6 +147,7 @@ jobs:
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
           SUITE_NAME="${{ matrix.suite_name }}"
+          MESH_DIMS="${{ matrix.mesh_dims }}"
 
           # Set skip-on-timeout flag
           SKIP_ON_TIMEOUT_FLAG=""
@@ -189,6 +202,15 @@ jobs:
             CMD+=(--suite-name "$SUITE_NAME")
           fi
 
+          # Fabric-family split: restrict this job to 1D- or 2D-mesh vectors so a
+          # single process never does a live FABRIC_1D->FABRIC_2D transition.
+          if [[ -n "$MESH_DIMS" ]]; then
+            CMD+=(--mesh-dims "$MESH_DIMS")
+          fi
+          if [[ "${{ inputs.fail-on-test-failure }}" == "true" ]]; then
+            CMD+=("--fail-on-test-failure")
+          fi
+
           # Two-pass run: COL first, then ROW. Skip a pass when the matching
           # partition has no vectors for any module in this batch (so we don't
           # trip "no vectors" errors on ops that are pure-COL or pure-ROW).
@@ -230,6 +252,9 @@ jobs:
           if [[ $rc_col -ne 0 ]]; then echo "[two-pass] col pass exited $rc_col"; exit $rc_col; fi
           if [[ $rc_row -ne 0 ]]; then echo "[two-pass] row pass exited $rc_row"; exit $rc_row; fi
       - name: Compute artifact suffix
+        # Must run even when the sweep step fails so the upload step gets a unique
+        # BATCH_SUFFIX; without it the artifact name is incomplete and results may collide.
+        if: ${{ always() }}
         shell: bash
         run: |
           DISPLAY_LABEL="${{ matrix.batch_display }}"

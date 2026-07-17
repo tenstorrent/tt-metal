@@ -6,21 +6,155 @@
 #   skus: A mapping of SKU names to their configuration.
 #     Each SKU entry contains:
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   category: Identifier to group tests for selective execution.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
 
-- name: tt-train run models
-  cmd: python tt-train/scripts/run_models.py
+# Python models
+- name: "NanoGPT Shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanogpt_shakespeare"
   skus:
     wh_n150_civ2:
-      timeout: 90
+      timeout: 25
     wh_n300_civ2:
-      timeout: 90
-    bh_p100a_civ2_viommu:
-      timeout: 90
+      timeout: 25
+    bh_p100:
+      timeout: 15
     bh_p150b_civ2:
-      timeout: 240
+      timeout: 15
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "NanoLlama3 Shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanollama_shakespeare"
+  skus:
+    wh_n150_civ2:
+      timeout: 25
+    wh_n300_civ2:
+      timeout: 25
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "Nano Deepseek (Char) Shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nano_deepseek_char_shakespeare"
+  skus:
+    wh_n150_civ2:
+      timeout: 55
+    wh_n300_civ2:
+      timeout: 55
+    bh_p100:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 35
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "Linear Regression"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "linear_regression"
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "TinyLlama Shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "tinyllama_shakespeare"
+  skus:
+    bh_p150b_civ2:
+      timeout: 40
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "Qwen 3 1.7B Shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "qwen3_1.7b_shakespeare"
+  skus:
+    bh_p150b_civ2:
+      timeout: 60
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "Tiny Deepseek (Char) Shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "tiny_deepseek_char_shakespeare"
+  skus:
+    bh_p150b_civ2:
+      timeout: 90
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+# C++ models
+- name: "NanoGPT Shakespeare (C++)"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanogpt_shakespeare_cpp"
+  skus:
+    wh_n150_civ2:
+      timeout: 25
+    wh_n300_civ2:
+      timeout: 25
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "NanoLlama3 Shakespeare (C++)"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanollama_shakespeare_cpp"
+  skus:
+    wh_n150_civ2:
+      timeout: 25
+    wh_n300_civ2:
+      timeout: 25
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "TinyLlama Shakespeare (C++)"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "tinyllama_shakespeare_cpp"
+  skus:
+    bh_p150b_civ2:
+      timeout: 40
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+# RL Examples
+- name: "Llama 3.2 1B on BoolQ GRPO Training"
+  cmd: python tt-train/sources/examples/grpo/boolq_training_example.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 45
+  category: finetuning
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+
+- name: "Llama 3.2 1B on BoolQ GRPO Accuracy"
+  cmd: python tt-train/sources/examples/grpo/boolq_accuracy_example.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+  category: finetuning
   owner_id: U07K00A281X # Kevin Wu
   team: train

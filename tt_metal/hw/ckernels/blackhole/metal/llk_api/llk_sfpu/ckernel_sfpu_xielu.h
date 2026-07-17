@@ -12,7 +12,7 @@
 namespace ckernel::sfpu {
 
 sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
-    sfpi::vFloat result = sfpi::vConst0;
+    sfpi::vFloat result = 0.0f;
 
     constexpr float UNDERFLOW_THRESHOLD = -126.5f;
 
@@ -21,8 +21,7 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     sfpi::vFloat z = val * sfpi::vConstFloatPrgm0;
 
     // Clamp z to -126.5: exp(x) underflows to 0 for large negative x
-    sfpi::vFloat underflow_bound = UNDERFLOW_THRESHOLD;
-    sfpi::vec_min_max(underflow_bound, z);
+    z = sfpi::max(z, UNDERFLOW_THRESHOLD);
 
     // Round z to nearest integer using round-to-nearest
     sfpi::vInt k_int;
@@ -64,8 +63,8 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // Coefficients in ascending order of powers: c0, c1, c2, c3, c4, c5, c6, c7
     sfpi::vFloat p = PolynomialEvaluator::eval(
         r,
-        sfpi::vConst1,  // c0 = 1
-        sfpi::vConst1,  // c1 = 1
+        1.0f,           // c0 = 1
+        1.0f,           // c1 = 1
         0.5f,           // c2 = 1/2!
         1.0f / 6.0f,    // c3 = 1/3!
         1.0f / 24.0f,   // c4 = 1/4!
@@ -77,8 +76,8 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // Step 4: Scale by 2^k using exponent manipulation
     // ldexp(p, k_int) = p * 2^k
     // We do this by adding k_int to the exponent of p
-    // Get the current exponent of p (without bias)
-    sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
+    // Get the biased exponent of p
+    sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::Biased);
     // Add k_int to get the new exponent
     sfpi::vInt new_exp = p_exp + k_int;
 
@@ -148,7 +147,7 @@ inline void calculate_xielu(const uint32_t param0, const uint32_t param1) {
             _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
         }
         v_else {  // large negative
-            sfpi::vFloat exp_term = _sfpu_neg_exp_f32_(x) - sfpi::vConst1 - x;
+            sfpi::vFloat exp_term = _sfpu_neg_exp_f32_(x) - 1.0f - x;
             _xielu_mad_<is_fp32_dest_acc_en>(alpha_n, exp_term, beta_mul_x);
         }
         v_endif;

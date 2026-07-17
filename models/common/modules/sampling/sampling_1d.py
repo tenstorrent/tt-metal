@@ -23,6 +23,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_buffer import LazyBuffer, resolve_lazy_buffer
 from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+from models.common.sampling.vocab_padding import (
+    build_invalid_vocab_mask,
+    build_tail_invalid_vocab_mask,
+    get_vocab_shard_dims,
+)
 
 # ---------------------------------------------------------------------------
 # Power-of-2 helpers (local copies; keep this TTTv2 module self-contained)
@@ -52,7 +57,8 @@ class Sampling1DConfig:
     k/p/temp are NOT stored here — they are per-call forward args.
     """
 
-    vocab_size: int  # Required. Caller pre-pads to be divisible by num_devices.
+    vocab_size: int  # Required. Padded logits width; caller pre-pads to be divisible by num_devices.
+    valid_vocab_size: Optional[int] = None  # Real token vocabulary size. Defaults to vocab_size.
     mesh_device: Optional[ttnn.MeshDevice] = None  # None → GetDefaultDevice()
     tt_ccl: Any = None  # None → get_tt_ccl(mesh_device) if multi-device
     max_batch_size: int = 32
@@ -77,6 +83,9 @@ class Sampling1DConfig:
     local_indices: LazyBuffer | ttnn.Tensor | None = (
         None  # [1,1,32,W], uint16, TILE (W=vocab for 1x1, per_dev_vocab otherwise)
     )
+    invalid_vocab_mask: LazyBuffer | ttnn.Tensor | None = None  # Full fallback mask, sharded like logits
+    invalid_vocab_tail_mask: LazyBuffer | ttnn.Tensor | None = None  # Compact [1,1,32,tail] local mask
+    invalid_vocab_tail_width: int = 0
     # Seed/ID buffers (seeds mutable via LazyBuffer.update(), user_ids static)
     seeds: LazyBuffer | ttnn.Tensor | None = None  # [32], uint32, ROW_MAJOR
     user_ids: LazyBuffer | ttnn.Tensor | None = None  # [32], uint32, ROW_MAJOR
@@ -94,9 +103,12 @@ class Sampling1DConfig:
             return False
         if self.mesh_device.get_num_devices() > 1 and self.tt_ccl is None:
             return False
-        return all(
-            self._buf_resolved(getattr(self, f)) for f in ("index_offsets", "local_indices", "seeds", "user_ids")
-        )
+        required_buffers = ["index_offsets", "local_indices", "seeds", "user_ids"]
+        if not all(self._buf_resolved(getattr(self, f)) for f in required_buffers):
+            return False
+        if self.valid_vocab_size is not None and self.valid_vocab_size < self.vocab_size:
+            return self._buf_resolved(self.invalid_vocab_mask) or self._buf_resolved(self.invalid_vocab_tail_mask)
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +196,11 @@ class Sampling1D(LightweightModule):
 
         self._index_offsets = _materialize(cfg.index_offsets)
         self._local_indices = _materialize(cfg.local_indices)
+        self._invalid_vocab_mask = _materialize(cfg.invalid_vocab_mask) if cfg.invalid_vocab_mask is not None else None
+        self._invalid_vocab_tail_mask = (
+            _materialize(cfg.invalid_vocab_tail_mask) if cfg.invalid_vocab_tail_mask is not None else None
+        )
+        self._invalid_vocab_tail_width = cfg.invalid_vocab_tail_width
         self._seeds = _materialize(cfg.seeds)
         self._user_ids = _materialize(cfg.user_ids)
         from models.common.utils import LogProbsCalculator  # lazy: transitively imports torch
@@ -257,14 +274,18 @@ class Sampling1D(LightweightModule):
     # -- Argmax path (port from tt_sampling.py:310-341) -----------------------
 
     def _sample_argmax(self, logits, tt_out_tok):
+        slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()
+        if not slice_valid_vocab:
+            logits = self._mask_invalid_vocab_logits(logits)
         logits = self._pre_argmax_gather(logits)
+        if slice_valid_vocab:
+            logits = self._slice_valid_vocab_for_argmax(logits)
         x_untilized = ttnn.untilize(logits, use_multicore=True)
         tt_out_tok = ttnn.argmax(
             x_untilized,
             dim=-1,
             output_tensor=tt_out_tok,
             keepdim=False,
-            use_multicore=True,
         )
         # Argmax path never emits logprobs (main's contract: force-argmax is disabled whenever
         # logprobs are requested). Return None unconditionally — do not call the calculator.
@@ -353,6 +374,7 @@ class Sampling1D(LightweightModule):
         cfg = self.config
 
         x_bf16 = ttnn.typecast(logits, dtype=ttnn.bfloat16, sub_core_grids=cfg.sub_core_grids)
+        x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         # Strategy-dispatched top-k
         topk_values, topk_indices = self._topk(x_bf16)
@@ -368,6 +390,7 @@ class Sampling1D(LightweightModule):
             topk_indices_int32,
             dtype=ttnn.int32,
             memory_config=cfg.sampling_memory_config,
+            sub_core_grids=cfg.sub_core_grids,
         )
         ttnn.deallocate(topk_indices_int32)
 
@@ -408,6 +431,90 @@ class Sampling1D(LightweightModule):
         else:
             log_probs = None
         return tt_out_tok, log_probs
+
+    def _mask_invalid_vocab_logits(self, logits):
+        if self._invalid_vocab_tail_mask is not None:
+            return self._mask_invalid_vocab_tail_logits(logits)
+        if self._invalid_vocab_mask is None:
+            return logits
+        return ttnn.add(
+            logits,
+            self._invalid_vocab_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.config.sub_core_grids,
+        )
+
+    def _mask_invalid_vocab_tail_logits(self, logits):
+        cfg = self.config
+        tail_width = self._invalid_vocab_tail_width
+        local_width = logits.shape[-1]
+        valid_width = local_width - tail_width
+        if tail_width <= 0 or valid_width < 0:
+            return self._mask_invalid_vocab_logits_fallback(logits)
+        if valid_width == 0:
+            return ttnn.add(
+                logits,
+                self._invalid_vocab_tail_mask,
+                memory_config=logits.memory_config(),
+                sub_core_grids=cfg.sub_core_grids,
+            )
+
+        valid_logits = ttnn.slice(
+            logits,
+            [0, 0, 0, 0],
+            [logits.shape[0], logits.shape[1], logits.shape[2], valid_width],
+            memory_config=logits.memory_config(),
+            sub_core_grids=cfg.sub_core_grids,
+        )
+        tail_logits = ttnn.slice(
+            logits,
+            [0, 0, 0, valid_width],
+            [logits.shape[0], logits.shape[1], logits.shape[2], local_width],
+            memory_config=logits.memory_config(),
+            sub_core_grids=cfg.sub_core_grids,
+        )
+        masked_tail_logits = ttnn.add(
+            tail_logits,
+            self._invalid_vocab_tail_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=cfg.sub_core_grids,
+        )
+        masked_logits = ttnn.concat(
+            [valid_logits, masked_tail_logits],
+            dim=3,
+            memory_config=logits.memory_config(),
+            sub_core_grids=cfg.sub_core_grids,
+        )
+        ttnn.deallocate(valid_logits)
+        ttnn.deallocate(tail_logits)
+        ttnn.deallocate(masked_tail_logits)
+        return masked_logits
+
+    def _mask_invalid_vocab_logits_fallback(self, logits):
+        if self._invalid_vocab_mask is None:
+            return logits
+        return ttnn.add(
+            logits,
+            self._invalid_vocab_mask,
+            memory_config=logits.memory_config(),
+            sub_core_grids=self.config.sub_core_grids,
+        )
+
+    def _can_slice_valid_vocab_for_argmax(self):
+        cfg = self.config
+        return cfg.valid_vocab_size < cfg.vocab_size and cfg.valid_vocab_size % ttnn.TILE_SIZE == 0
+
+    def _slice_valid_vocab_for_argmax(self, logits):
+        cfg = self.config
+        if not self._can_slice_valid_vocab_for_argmax() or logits.shape[-1] != cfg.vocab_size:
+            return logits
+        return ttnn.slice(
+            logits,
+            [0, 0, 0, 0],
+            [logits.shape[0], logits.shape[1], logits.shape[2], cfg.valid_vocab_size],
+            memory_config=logits.memory_config(),
+            sub_core_grids=cfg.sub_core_grids,
+        )
 
     # -- Top-k strategies (bound at init, no if-else in forward) --------------
 
@@ -536,6 +643,7 @@ class Sampling1D(LightweightModule):
             )
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
+        valid_vocab_size = getattr(args, "vocab_size", vocab_size)
 
         # Extract config from model_config dict
         mc = model_config or getattr(args, "model_config", {})
@@ -558,6 +666,7 @@ class Sampling1D(LightweightModule):
 
         config = Sampling1DConfig(
             vocab_size=vocab_size,
+            valid_vocab_size=valid_vocab_size,
             mesh_device=mesh_device,
             tt_ccl=tt_ccl,
             max_batch_size=getattr(args, "max_batch_size", 32),
@@ -598,6 +707,10 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
         to_set["tt_ccl"] = get_tt_ccl(mesh_device)
 
     # Phase 2: Scalar config defaults
+    valid_vocab_size = config.valid_vocab_size if config.valid_vocab_size is not None else config.vocab_size
+    if valid_vocab_size > config.vocab_size:
+        raise ValueError(f"valid_vocab_size ({valid_vocab_size}) must be <= vocab_size ({config.vocab_size})")
+    to_set["valid_vocab_size"] = valid_vocab_size
     if config.start_core is None:
         to_set["start_core"] = ttnn.CoreCoord(0, 0)
     if config.sampling_memory_config is None:
@@ -676,6 +789,43 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     to_set["local_indices"] = _resolve_buf(config.local_indices, local_idx_defaults, _make_local_indices)
+
+    vocab_shard_dims = get_vocab_shard_dims(cluster_shape)
+    invalid_vocab_defaults = dict(
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=vocab_shard_dims, mesh_shape=cluster_shape),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    invalid_vocab_tail_mask = build_tail_invalid_vocab_mask(
+        valid_vocab_size,
+        V,
+        B,
+        cluster_shape,
+        tile_size=ttnn.TILE_SIZE,
+    )
+    if config.invalid_vocab_mask is None and (
+        invalid_vocab_tail_mask is not None or config.invalid_vocab_tail_mask is not None
+    ):
+        to_set["invalid_vocab_tail_width"] = (
+            invalid_vocab_tail_mask.tail_width
+            if invalid_vocab_tail_mask is not None
+            else config.invalid_vocab_tail_width
+        )
+        to_set["invalid_vocab_tail_mask"] = _resolve_buf(
+            config.invalid_vocab_tail_mask,
+            invalid_vocab_defaults,
+            lambda: invalid_vocab_tail_mask.mask,
+        )
+    else:
+        invalid_vocab_mask = build_invalid_vocab_mask(valid_vocab_size, V, B)
+        if invalid_vocab_mask is not None or config.invalid_vocab_mask is not None:
+            to_set["invalid_vocab_mask"] = _resolve_buf(
+                config.invalid_vocab_mask,
+                invalid_vocab_defaults,
+                lambda: invalid_vocab_mask,
+            )
 
     # seeds and user_ids: [B], uint32, ROW_MAJOR
     seed_defaults = dict(

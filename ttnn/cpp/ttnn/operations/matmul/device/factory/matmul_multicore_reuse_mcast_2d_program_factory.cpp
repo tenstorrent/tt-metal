@@ -12,6 +12,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "tt-metalium/buffer_types.hpp"
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -120,6 +122,24 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     const bool in1_is_sharded = in1_is_width_sharded || in1_is_height_sharded;
     const bool output_is_sharded = out_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
 
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
+    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
+    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
+    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
+    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
+    // tensor buffer and keep their natural page size.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size =
+        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Bias is DRAM-interleaved; its CB pages must be padded to the DRAM alignment so the
+    // reader's L1 write stride matches the DRAM page stride (e.g. 64B on Blackhole for a
+    // 32B (1,16) bf16 bias tile). Without this, L1 dst and DRAM src alignment offsets
+    // disagree and the NOC rejects the transaction. Mirrors in0/in1 above and the
+    // dram_sharded factory. No-op on Wormhole and for tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
+
     bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
 
     uint32_t in0_block_h = out_block_h;
@@ -134,13 +154,13 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     if (B * num_blocks > 1) {
         in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
         in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
@@ -166,7 +186,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     uint32_t start_core_x = sub_device_start_core.x;
     uint32_t start_core_y = sub_device_start_core.y;
@@ -650,18 +670,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
     Note: This workaround should only be used for this specific alignment issue case.
     */
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            mm_kernel_in0_sender_interleaved_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-    }
 
     // Helper to convert std::map defines to KernelDescriptor::Defines (vector of pairs)
     auto map_to_defines = [](const std::map<std::string, std::string>& m) -> KernelDescriptor::Defines {
@@ -762,7 +770,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             {"cb_in0", tt::CBIndex::c_0},
             {"cb_in0_sharded", tt::CBIndex::c_2},
             {"cb_sparsity", tt::CBIndex::c_6},
-            {"cb_in0_intermediate", tt::CBIndex::c_8},
         };
         in0_sender_kernel_desc.config =
             DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
@@ -779,7 +786,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_sparsity", tt::CBIndex::c_7},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
     };
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
@@ -902,8 +908,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             {"cb_bias", tt::CBIndex::c_3},
             {"cb_out", tt::CBIndex::c_4},
             {"cb_intermed0", tt::CBIndex::c_5},
-            {"cb_in0_intermediate", tt::CBIndex::c_8},
-            {"cb_in1_intermediate", tt::CBIndex::c_9},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
         };
@@ -941,7 +945,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_0,
             .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
+            .page_size = in0_aligned_tile_size,
             .tile = in0_tile_desc});
         if (in0_height_sharded) {
             cb_desc.tensor = &in0_tensor;
@@ -957,7 +961,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_1,
             .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
+            .page_size = in1_aligned_tile_size,
             .tile = in1_tile_desc});
         if (in1_is_sharded and not in1_is_dram) {
             cb_desc.tensor = &in1_tensor;
@@ -1051,34 +1055,12 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_3,
             .data_format = bias_data_format,
-            .page_size = bias_single_tile_size,
+            .page_size = bias_aligned_tile_size,
             .tile = bias_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
 
     // Intermediate CB read
-    if (in1_needs_intermediate_cb_read) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in1_single_tile_size;
-        cb_desc.core_ranges = CoreRangeSet(all_cores);
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_9,
-            .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
-            .tile = in1_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
-    if (in0_needs_intermediate_cb_read) {
-        CBDescriptor cb_desc;
-        cb_desc.total_size = in0_single_tile_size;
-        cb_desc.core_ranges = CoreRangeSet(all_cores);
-        cb_desc.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_8,
-            .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
-            .tile = in0_tile_desc});
-        desc.cbs.push_back(std::move(cb_desc));
-    }
 
     if (in0_transpose_tile) {
         CBDescriptor cb_desc;
@@ -1087,7 +1069,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_10,
             .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
+            .page_size = in0_aligned_tile_size,
             .tile = in0_tile_desc});
         desc.cbs.push_back(std::move(cb_desc));
     }
@@ -1643,13 +1625,29 @@ create_program_mcast_in0_in1(
     if (B * num_blocks > 1) {
         in0_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on
+    // Blackhole's 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at
+    // the padded stride, so the in0/in1/bias CBs must hold pages at the aligned stride and the
+    // reader/unpacker walk tiles at the same stride. No-op when already aligned (all bf16 tiles,
+    // 32-wide bfp8, Wormhole). Replaces the staging-CB workaround. Sharded CBs are backed by the
+    // tensor buffer and keep their natural page size.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size =
+        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Bias CB pages must be padded to the DRAM alignment so the reader's L1 write stride
+    // matches the DRAM page stride (e.g. 64B on Blackhole for a 32B (1,16) bf16 bias tile).
+    // Mirrors in0/in1 above and the dram_sharded factory. No-op on Wormhole and for
+    // tiles already >= dram_alignment.
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
         in1_CB_tiles *= operations::matmul::utilities::MCAST_INPUT_BUFFERING_DEPTH;
     }
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
     uint32_t out_shard_tiles = per_core_M * per_core_N;
@@ -1675,7 +1673,7 @@ create_program_mcast_in0_in1(
 
     uint32_t in3_block_tiles = out_block_w;
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
-    uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
+    uint32_t in3_CB_size = in3_CB_tiles * bias_aligned_tile_size;
 
     uint32_t start_core_x = sub_device_start_core.x;
     uint32_t start_core_y = sub_device_start_core.y;
@@ -2159,18 +2157,6 @@ create_program_mcast_in0_in1(
 
     Note: This workaround should only be used for this specific alignment issue case.
     */
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            mm_kernel_in0_sender_interleaved_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-        }
-    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
@@ -2240,7 +2226,6 @@ create_program_mcast_in0_in1(
                     {"cb_in0", tt::CBIndex::c_0},
                     {"cb_in0_sharded", tt::CBIndex::c_2},
                     {"cb_sparsity", tt::CBIndex::c_6},
-                    {"cb_in0_intermediate", tt::CBIndex::c_8},
                 }});
     }
 
@@ -2258,7 +2243,6 @@ create_program_mcast_in0_in1(
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
-                {"cb_in1_intermediate", tt::CBIndex::c_9},
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
@@ -2374,8 +2358,6 @@ create_program_mcast_in0_in1(
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_intermed0", tt::CBIndex::c_5},
-        {"cb_in0_intermediate", tt::CBIndex::c_8},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
         {"cb_in0_transposed", tt::CBIndex::c_10},
         {"bias_ntiles", in1_per_core_w},
     };
@@ -2411,7 +2393,7 @@ create_program_mcast_in0_in1(
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_page_size(src0_cb_index, in0_aligned_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
     if (in0_height_sharded) {
         src0_cb_config.set_globally_allocated_address(in0_tensor);
@@ -2428,7 +2410,7 @@ create_program_mcast_in0_in1(
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_page_size(src1_cb_index, in1_aligned_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
     if (in1_is_sharded and not in1_is_dram) {
         src1_cb_config.set_globally_allocated_address(in1_tensor);
@@ -2527,40 +2509,24 @@ create_program_mcast_in0_in1(
         uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
-                .set_page_size(src3_cb_index, bias_single_tile_size)
+                .set_page_size(src3_cb_index, bias_aligned_tile_size)
                 .set_tile_dims(src3_cb_index, bias_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_src3_config);
         log_debug(
             LogOp,
             "CB {} :: PS = {}, NP = {}, TOTAL = {}",
             src3_cb_index,
-            bias_single_tile_size,
-            in3_CB_size / bias_single_tile_size,
+            bias_aligned_tile_size,
+            in3_CB_size / bias_aligned_tile_size,
             in3_CB_size);
     }
     // Intermediate CB read
-    if (in1_needs_intermediate_cb_read) {
-        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
-        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
-            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
-                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
-                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
-    }
-    if (in0_needs_intermediate_cb_read) {
-        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
-        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
-            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
-                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
-                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
-    }
 
     if (in0_transpose_tile) {
         uint32_t in0_transpose_cb_index = tt::CBIndex::c_10;
         auto in0_transpose_cb_config =
             tt_metal::CircularBufferConfig(in0_CB_size, {{in0_transpose_cb_index, in0_data_format}})
-                .set_page_size(in0_transpose_cb_index, in0_single_tile_size)
+                .set_page_size(in0_transpose_cb_index, in0_aligned_tile_size)
                 .set_tile_dims(in0_transpose_cb_index, in0_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, in0_transpose_cb_config);
     }

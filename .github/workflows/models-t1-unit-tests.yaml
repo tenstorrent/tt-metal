@@ -15,10 +15,18 @@ on:
           - all
           - llama3.1-8b
           - qwen3-32b-galaxy
+          - qwen3.6-27b
           - gpt-oss-120b
           - whisper
+          - gemma-4-12b
+          - gemma-4-26b-a4b
+          - gemma-4-31b
           - dit-common
+          - wan-2.2-t2v
+          - wan-2.2-i2v
           # llama3.3-70b-galaxy: disabled — see #42139
+          - flux.1-schnell
+          - flux.1-dev
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

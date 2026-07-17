@@ -70,7 +70,7 @@ CoreCoord from_flatbuffer(const distributed::flatbuffer::CoreCoord* fb_core_coor
 
 MeshCoordinate from_flatbuffer(const distributed::flatbuffer::MeshCoordinate* fb_mesh_coord) {
     const auto* flat_buf = fb_mesh_coord->values();
-    return MeshCoordinate(tt::stl::Span<const uint32_t>{flat_buf->data(), flat_buf->size()});
+    return MeshCoordinate(ttsl::Span<const uint32_t>{flat_buf->data(), flat_buf->size()});
 }
 
 MeshCoreCoord from_flatbuffer(const distributed::flatbuffer::MeshCoreCoord* fb_mesh_core_coord) {

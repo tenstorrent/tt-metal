@@ -5,6 +5,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -12,28 +13,84 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/dataflow/circular_buffer.h"
 
-void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    copy_tile_to_dst_init_short(in_cb);
+#ifdef FUSE_SWIGLU
+// Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
+// within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
+// weight was tile-pair interleaved on the host). Each pair emits one output tile = silu(gate)*up,
+// so the block shrinks from N_block_tiles to N_block_tiles/2 along N. No extra CB / DRAM
+// round-trip. N_block_tiles must be even (enforced host-side). silu and mul_binary are distinct
+// SFPU programs, so each is re-initialised right before use.
+//
+// With FUSE_BIAS: bias is interleaved identically (tile 2p = gate bias, 2p+1 = up bias)
+// and added via row-broadcast before silu/mul: out = silu(gate + bias_gate) * (up + bias_up).
+void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+#ifdef FUSE_BIAS
+    reconfig_data_format(in_cb, bias_cb);
+#else
     reconfig_data_format_srca(in_cb);
+#endif
     pack_reconfig_data_format(out_cb);
+
+    constexpr uint32_t GATE_DST = 0;
+    constexpr uint32_t UP_DST = 1;
+    const uint32_t out_N_block_tiles = N_block_tiles >> 1;
+
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        const uint32_t row_base = m * N_block_tiles;
+        for (uint32_t p = 0; p < out_N_block_tiles; p++) {
+            const uint32_t gate_n = p << 1;
+            const uint32_t up_n = gate_n + 1;
+            const uint32_t gate_tile_id = row_base + gate_n;
+            const uint32_t up_tile_id = gate_tile_id + 1;
+
+            tile_regs_acquire();
+#ifdef FUSE_BIAS
+            add_bcast_rows_init_short(in_cb, bias_cb);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
+#else
+            copy_tile_to_dst_init_short(in_cb);
+            copy_tile(in_cb, gate_tile_id, GATE_DST);
+            copy_tile(in_cb, up_tile_id, UP_DST);
+#endif
+            silu_tile_init();
+            silu_tile(GATE_DST);
+            mul_binary_tile_init();
+            mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(GATE_DST, out_cb);
+            tile_regs_release();
+        }
+        cb_push_back(out_cb, out_N_block_tiles);
+    }
+}
+#endif  // FUSE_SWIGLU
+
+void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    copy_tile_to_dst_init_short(in_cb.get_cb_id());
+    reconfig_data_format_srca(in_cb.get_cb_id());
+    pack_reconfig_data_format(out_cb.get_cb_id());
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
-            copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
+            copy_tile(in_cb.get_cb_id(), tile_id, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(fused_act_dst_id, out_cb);
+            pack_tile(fused_act_dst_id, out_cb.get_cb_id());
             tile_regs_release();
             tile_id++;
         }
-        cb_push_back(out_cb, N_block_tiles);
+        out_cb.push_back(N_block_tiles);
     }
 }
 
@@ -46,37 +103,43 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
  *   - true: Pushes tiles one row at a time (for intermediate output to next stage)
  *   - false: Pushes all tiles at end (for final output)
  */
-void add_bias_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    add_bcast_rows_init_short(in_cb, bias_cb);
-    reconfig_data_format(in_cb, bias_cb);
-    pack_reconfig_data_format(out_cb);
+void add_bias_block(
+    CircularBuffer& in_cb,
+    CircularBuffer& bias_cb,
+    CircularBuffer& out_cb,
+    uint32_t M_block_tiles,
+    uint32_t N_block_tiles) {
+    add_bcast_rows_init_short(in_cb.get_cb_id(), bias_cb.get_cb_id());
+    reconfig_data_format(in_cb.get_cb_id(), bias_cb.get_cb_id());
+    pack_reconfig_data_format(out_cb.get_cb_id());
     uint32_t fused_act_dst_id = 0;
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
-            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, tile_id, n, fused_act_dst_id /*dst*/);
+            add_tiles_bcast<BroadcastType::ROW>(
+                in_cb.get_cb_id(), bias_cb.get_cb_id(), tile_id, n, fused_act_dst_id /*dst*/);
 #ifdef SFPU_OP_INIT_ACTIVATION
             SFPU_OP_FUNC_ACTIVATION
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(fused_act_dst_id, out_cb);
+            pack_tile(fused_act_dst_id, out_cb.get_cb_id());
             tile_regs_release();
             tile_id++;
         }
-        cb_push_back(out_cb, N_block_tiles);
+        out_cb.push_back(N_block_tiles);
     }
 }
 
 void add_bias_and_addcmul_block(
-    uint32_t intermediate_cb,
-    uint32_t bias_cb,
-    uint32_t ternary_a_cb,
-    uint32_t ternary_b_cb,
+    CircularBuffer& intermediate_cb,
+    CircularBuffer& bias_cb,
+    CircularBuffer& ternary_a_cb,
+    CircularBuffer& ternary_b_cb,
     uint32_t scalar_value,
-    uint32_t out_cb,
+    CircularBuffer& out_cb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles,
     uint32_t broadcast_ternary_b) {
@@ -92,40 +155,40 @@ void add_bias_and_addcmul_block(
     // Read from intermediate_cb and write back to intermediate_cb
     // ============================================
 
-    add_bcast_rows_init_short(intermediate_cb, bias_cb);
-    reconfig_data_format(intermediate_cb, bias_cb);
-    pack_reconfig_data_format(intermediate_cb);
+    add_bcast_rows_init_short(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
+    reconfig_data_format(intermediate_cb.get_cb_id(), bias_cb.get_cb_id());
+    pack_reconfig_data_format(intermediate_cb.get_cb_id());
 
     // Wait for ALL input data ONCE at the beginning
-    cb_wait_front(bias_cb, N_block_tiles);
+    bias_cb.wait_front(N_block_tiles);
 
     // Unpacker waits for intermediate_cb to be ready
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
+    intermediate_cb.wait_front(out_block_num_tiles);
 
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             uint32_t tile_id = m * N_block_tiles + n;
 
             tile_regs_acquire();
-            add_tiles_bcast<BroadcastType::ROW>(intermediate_cb, bias_cb, tile_id, n, DST_ID);
+            add_tiles_bcast<BroadcastType::ROW>(intermediate_cb.get_cb_id(), bias_cb.get_cb_id(), tile_id, n, DST_ID);
 
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(DST_ID, intermediate_cb);
+            pack_tile(DST_ID, intermediate_cb.get_cb_id());
             tile_regs_release();
         }
     }
 
     // Pop input and push output ONCE at the end
-    // cb_wait_front(intermediate_cb, out_block_num_tiles); // Unpacker-Packer sync
-    // cb_pop_front(intermediate_cb, out_block_num_tiles);
-    cb_pop_front(bias_cb, N_block_tiles);
+    // intermediate_cb.wait_front(out_block_num_tiles); // Unpacker-Packer sync
+    // intermediate_cb.pop_front(out_block_num_tiles);
+    bias_cb.pop_front(N_block_tiles);
 
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
+    intermediate_cb.pop_front(out_block_num_tiles);
 
     // Restore intermediate_cb to ready (+ sync packer/unpacker)
-    cb_reserve_back(intermediate_cb, out_block_num_tiles);
-    cb_push_back(intermediate_cb, out_block_num_tiles);
+    intermediate_cb.reserve_back(out_block_num_tiles);
+    intermediate_cb.push_back(out_block_num_tiles);
 #endif  // FUSE_BIAS
 
     // ============================================
@@ -134,23 +197,23 @@ void add_bias_and_addcmul_block(
     // broadcast_ternary_b: 1 = single row broadcast, 0 = row-by-row streaming
     // ============================================
 
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
+    intermediate_cb.wait_front(out_block_num_tiles);
 
     uint32_t tile_id = 0;
 
     if (broadcast_ternary_b) {
         // === BROADCAST: single row, wait/pop once ===
-        cb_wait_front(ternary_b_cb, N_block_tiles);
+        ternary_b_cb.wait_front(N_block_tiles);
 
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_bcast_rows_init_short(intermediate_cb, ternary_b_cb);
+        mul_bcast_rows_init_short(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #else
-        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
+        unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
 #endif  // TERNARY_B_IS_FLOAT32
 
         binop_with_scalar_tile_init();
-        reconfig_data_format(intermediate_cb, ternary_b_cb);
-        pack_reconfig_data_format(intermediate_cb);
+        reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        pack_reconfig_data_format(intermediate_cb.get_cb_id());
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -165,14 +228,15 @@ void add_bias_and_addcmul_block(
                 // - mul_tiles_bcast for bfloat16 (LLK bug workaround).
 
                 // ternary_b_cb is [1, N], broadcast across M rows
-                mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
+                mul_tiles_bcast<BroadcastType::ROW>(
+                    intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb, intermediate_cb);
-                unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
+                unary_bcast_init<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), intermediate_cb.get_cb_id());
+                unary_bcast<BroadcastType::ROW>(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb);
-                copy_tile(intermediate_cb, tile_id, DST_ID);
+                copy_tile_to_dst_init_short(intermediate_cb.get_cb_id());
+                copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
 
                 mul_binary_tile_init();
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
@@ -182,37 +246,37 @@ void add_bias_and_addcmul_block(
 
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(DST_ID, intermediate_cb);
+                pack_tile(DST_ID, intermediate_cb.get_cb_id());
                 tile_regs_release();
                 tile_id++;
             }
         }
 
-        cb_pop_front(ternary_b_cb, N_block_tiles);
+        ternary_b_cb.pop_front(N_block_tiles);
     } else {
         // === NO BROADCAST: row-by-row, wait/pop per M row ===
 #ifndef TERNARY_B_IS_FLOAT32
-        mul_tiles_init(intermediate_cb, ternary_b_cb);
+        mul_tiles_init(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
 #endif
         binop_with_scalar_tile_init();
-        reconfig_data_format(intermediate_cb, ternary_b_cb);
-        pack_reconfig_data_format(intermediate_cb);
+        reconfig_data_format(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id());
+        pack_reconfig_data_format(intermediate_cb.get_cb_id());
 
         tile_id = 0;
         for (uint32_t m = 0; m < M_block_tiles; m++) {
-            cb_wait_front(ternary_b_cb, N_block_tiles);
+            ternary_b_cb.wait_front(N_block_tiles);
             for (uint32_t n = 0; n < N_block_tiles; n++) {
                 tile_regs_acquire();
 
 #ifndef TERNARY_B_IS_FLOAT32
-                mul_tiles(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
+                mul_tiles(intermediate_cb.get_cb_id(), ternary_b_cb.get_cb_id(), tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                copy_tile_to_dst_init_short(ternary_b_cb);
-                copy_tile(ternary_b_cb, n, TERNARY_B_DST_ID);
+                copy_tile_to_dst_init_short(ternary_b_cb.get_cb_id());
+                copy_tile(ternary_b_cb.get_cb_id(), n, TERNARY_B_DST_ID);
 
-                copy_tile_to_dst_init_short(intermediate_cb);
-                copy_tile(intermediate_cb, tile_id, DST_ID);
+                copy_tile_to_dst_init_short(intermediate_cb.get_cb_id());
+                copy_tile(intermediate_cb.get_cb_id(), tile_id, DST_ID);
 
                 mul_binary_tile_init();
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
@@ -222,56 +286,56 @@ void add_bias_and_addcmul_block(
 
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(DST_ID, intermediate_cb);
+                pack_tile(DST_ID, intermediate_cb.get_cb_id());
                 tile_regs_release();
                 tile_id++;
             }
-            cb_pop_front(ternary_b_cb, N_block_tiles);
+            ternary_b_cb.pop_front(N_block_tiles);
         }
     }
 
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
+    intermediate_cb.pop_front(out_block_num_tiles);
 
     // 'refill' intermediate_cb (also synchronize packer/unpacker)
-    cb_reserve_back(intermediate_cb, out_block_num_tiles);
-    cb_push_back(intermediate_cb, out_block_num_tiles);
+    intermediate_cb.reserve_back(out_block_num_tiles);
+    intermediate_cb.push_back(out_block_num_tiles);
 
-    cb_wait_front(intermediate_cb, out_block_num_tiles);
+    intermediate_cb.wait_front(out_block_num_tiles);
 
-    add_tiles_init(intermediate_cb, ternary_a_cb);
-    reconfig_data_format(intermediate_cb, ternary_a_cb);
-    pack_reconfig_data_format(out_cb);
+    add_tiles_init(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
+    reconfig_data_format(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id());
+    pack_reconfig_data_format(out_cb.get_cb_id());
 
     tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         // Wait for one row of ternary_a tiles
-        cb_wait_front(ternary_a_cb, N_block_tiles);
+        ternary_a_cb.wait_front(N_block_tiles);
 
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             tile_regs_acquire();
 
             // ternary_a_cb is pushed one row at a time, so use column index n
-            add_tiles(intermediate_cb, ternary_a_cb, tile_id, n, DST_ID);
+            add_tiles(intermediate_cb.get_cb_id(), ternary_a_cb.get_cb_id(), tile_id, n, DST_ID);
 
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(DST_ID, out_cb);
+            pack_tile(DST_ID, out_cb.get_cb_id());
             tile_regs_release();
             tile_id++;
         }
 
-        cb_pop_front(ternary_a_cb, N_block_tiles);
-        cb_push_back(out_cb, N_block_tiles);
+        ternary_a_cb.pop_front(N_block_tiles);
+        out_cb.push_back(N_block_tiles);
     }
 
-    cb_pop_front(intermediate_cb, out_block_num_tiles);
+    intermediate_cb.pop_front(out_block_num_tiles);
 }
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
-    const uint32_t in0_cb,
-    const uint32_t in1_cb,
-    const uint32_t out_cb,
+    CircularBuffer& in0_cb,
+    CircularBuffer& in1_cb,
+    CircularBuffer& out_cb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
     const uint32_t full_N_block_tiles,
@@ -291,8 +355,8 @@ void matmul_blocks(
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
                 matmul_block(
-                    in0_cb,
-                    in1_cb,
+                    in0_cb.get_cb_id(),
+                    in1_cb.get_cb_id(),
                     in0_index,
                     in1_index,
                     dst_index,
@@ -311,7 +375,7 @@ void matmul_blocks(
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     uint32_t w_tile_id = N_start + w;
                     uint32_t out_tile_id = h_tile_id * full_N_block_tiles + w_tile_id;
-                    pack_tile<true>(write_dst_index, out_cb, out_tile_id);
+                    pack_tile<true>(write_dst_index, out_cb.get_cb_id(), out_tile_id);
                     write_dst_index++;
                     dst_index++;
                 }
@@ -349,19 +413,28 @@ void kernel_main() {
     constexpr uint32_t broadcast_ternary_b = 1;
 #endif
 
-    constexpr uint32_t in0_cb = tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb = tt::CBIndex::c_2;
-    constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
-    constexpr uint32_t in2_cb = tt::CBIndex::c_4;
-    constexpr uint32_t ternary_a_cb = tt::CBIndex::c_5;
-    constexpr uint32_t ternary_b_cb = tt::CBIndex::c_6;
+    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_2;
+    constexpr uint32_t intermediate_cb_id = tt::CBIndex::c_3;
+    constexpr uint32_t in2_cb_id = tt::CBIndex::c_4;
+    constexpr uint32_t ternary_a_cb_id = tt::CBIndex::c_5;
+    constexpr uint32_t ternary_b_cb_id = tt::CBIndex::c_6;
+
+    CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer out_cb(out_cb_id);
+    CircularBuffer intermediate_cb(intermediate_cb_id);
+    CircularBuffer in2_cb(in2_cb_id);
+    CircularBuffer ternary_a_cb(ternary_a_cb_id);
+    CircularBuffer ternary_b_cb(ternary_b_cb_id);
 
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    mm_init(in0_cb, in1_cb, intermediate_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
+    matmul_init(in0_cb_id, in1_cb_id);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -389,20 +462,20 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            mm_block_init_short(
-                in0_cb,
-                in1_cb,
+            matmul_block_init(
+                in0_cb_id,
+                in1_cb_id,
                 false /*transpose*/,
                 current_subblock_w /*ct_dim*/,
                 current_subblock_h /*rt_dim*/,
                 K_block_tiles /*kt_dim*/);
-            reconfig_data_format(in1_cb, in0_cb);
-            pack_reconfig_data_format(intermediate_cb);
+            reconfig_data_format(in1_cb_id, in0_cb_id);
+            pack_reconfig_data_format(intermediate_cb_id);
             // Accumulation buffer
-            cb_reserve_back(intermediate_cb, out_block_num_tiles);
+            intermediate_cb.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
+                in0_cb.wait_front(in0_block_num_tiles);
+                in1_cb.wait_front(in1_block_num_tiles);
 
                 matmul_blocks(
                     in0_cb,
@@ -431,31 +504,46 @@ void kernel_main() {
 #endif
                 }
                 if (!reuse_in0_block) {
-                    cb_pop_front(in0_cb, in0_block_num_tiles);
+                    in0_cb.pop_front(in0_block_num_tiles);
                 }
-                cb_pop_front(in1_cb, in1_block_num_tiles);
+                in1_cb.pop_front(in1_block_num_tiles);
                 reuse_in0_block = false;
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
             }
 
-            cb_push_back(intermediate_cb, out_block_num_tiles);
+            intermediate_cb.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-            cb_reserve_back(out_cb, out_block_num_tiles);
-#ifndef FUSE_TERNARY
-            cb_wait_front(intermediate_cb, out_block_num_tiles);
+#ifdef FUSE_SWIGLU
+            // SwiGLU collapses the interleaved gate/up block to half its N width.
+            out_cb.reserve_back(out_block_num_tiles >> 1);
+            intermediate_cb.wait_front(out_block_num_tiles);
+#ifdef FUSE_BIAS
+            in2_cb.wait_front(N_block_tiles);
+#endif
+            swiglu_block(
+                intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
+#ifdef FUSE_BIAS
+            in2_cb.pop_front(N_block_tiles);
+#endif
+            intermediate_cb.pop_front(out_block_num_tiles);
+
+#elif !defined(FUSE_TERNARY)
+            out_cb.reserve_back(out_block_num_tiles);
+            intermediate_cb.wait_front(out_block_num_tiles);
 #ifndef FUSE_BIAS
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
 #else
-            cb_wait_front(in2_cb, N_block_tiles);
+            in2_cb.wait_front(N_block_tiles);
             add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
-            cb_pop_front(in2_cb, N_block_tiles);
+            in2_cb.pop_front(N_block_tiles);
 #endif  // FUSE_BIAS
-            cb_pop_front(intermediate_cb, out_block_num_tiles);
+            intermediate_cb.pop_front(out_block_num_tiles);
 
 #else   // FUSE_TERNARY is set
+            out_cb.reserve_back(out_block_num_tiles);
             add_bias_and_addcmul_block(
                 intermediate_cb,
                 in2_cb,

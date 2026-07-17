@@ -55,7 +55,8 @@ inline void _llk_unpack_fast_untilize_mop_config_(const std::uint32_t unit_dim)
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_fast_untilize_init_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format, const std::uint32_t init_unit_dim)
 {
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(0, 0, FACE_R_DIM, 4, unpack_src_format, unpack_dst_format);
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, unpack_src_format, unpack_dst_format);
     _llk_unpack_fast_untilize_mop_config_<is_fp32_dest_acc_en>(init_unit_dim);
 }
 
@@ -109,12 +110,20 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
     const bool use_context_0     = unp_cfg_context == 0;
     const std::uint32_t upk0_reg = use_context_0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
     cfg[upk0_reg]                = address;
-    cfg[SCRATCH_SEC0_val_ADDR32] = tile_stride_16B;
+
+    // SCRATCH_SEC0_val is not context-double-buffered and is consumed by the per-tile
+    // CFGSHIFTMASK updates below. Program it with an ordered Tensix WRCFG (as in
+    // llk_unpack_tilize.h) rather than a raw MMIO store, so it is stream-ordered after a
+    // prior call's still-in-flight CFGSHIFTMASK that reads it (a trailing TRISC_CFG stall
+    // only orders the write before the next run, not against that prior consumer).
+    TT_SETDMAREG(0, LOWER_HALFWORD(tile_stride_16B), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(tile_stride_16B), 0, HI_16(p_gpr_unpack::TMP0));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
 
     semaphore_post(semaphore::UNPACK_SYNC);
-    // Orders the RISCV writes to the unpack base address and scratch stride
-    // before any UNPACR from the MOP can start. The scratch value is consumed by
-    // later CFGSHIFTMASK address updates in this BFP loop.
+    // Order the RISCV MMIO write to the unpack base address before any UNPACR from the MOP
+    // can start (the scratch stride above is already ordered via WRCFG).
     // ISA: STALLWAIT C10 plus the RISCV-store-to-Tensix-instruction ordering rule.
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 

@@ -14,6 +14,7 @@
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "llk_pack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -311,6 +312,9 @@ inline void _llk_pack_reconfig_data_format_(
     [[maybe_unused]] const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    llk::san::pack_operand_configure<true>(
+        is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
+
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
 }
 
@@ -355,6 +359,8 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    llk::san::pack_operand_configure(is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
+
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
@@ -396,11 +402,19 @@ inline void _llk_pack_init_(
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack init supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    llk::san::pack_operand_check(llk::san::IGNORE, llk::san::IGNORE, pack_dst_format, face_r_dim, llk::san::IGNORE, num_faces, partial_face, narrow_tile);
+    // sstanisic todo: sanitizer: propagate enum (see #47440)
+    llk::san::operation_init<llk::san::Operation::Pack>(pack_mode == PackMode::Untilize);
+
     if constexpr (!skip_addrmod_config)
     {
         _llk_pack_configure_addrmod_<pack_mode>();
     }
     _llk_pack_mop_config_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    if constexpr (!skip_packer_strides)
+    {
+        set_packer_l1_offset(pack_dst_format, face_r_dim);
+    }
 
     // Program the packer X (datum) counter. This value is pack_mode-dependent (Untilize packs a single
     // face row, Default packs a full face), so it is per-op state that must be (re)established by init
@@ -421,6 +435,8 @@ inline void _llk_pack_init_(
  */
 inline void _llk_pack_uninit_()
 {
+    // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
+    // llk::san::operation_uninit<llk::san::Operation::Pack>();
 }
 
 /**
@@ -442,6 +458,9 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
+    // sstanisic todo: sanitizer: propagate enum (see #47440)
+    llk::san::operation_check<llk::san::Operation::Pack>(pack_mode == PackMode::Untilize);
+
     if constexpr (pack_mode != PackMode::Untilize)
     {
         if (llk_pack_internal::configured_num_tiles > 1)

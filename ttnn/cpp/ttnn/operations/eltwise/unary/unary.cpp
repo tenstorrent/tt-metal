@@ -176,7 +176,6 @@ DEFINE_UNARY_OP(erfc, ERFC)
 
 DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP)
 DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF)
-DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU)
 DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log, LOG)
 DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log10, LOG10)
 DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log2, LOG2)
@@ -205,8 +204,6 @@ DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
 
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(heaviside, HEAVISIDE)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(leaky_relu, LEAKY_RELU)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(relu_max, RELU_MAX)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(relu_min, RELU_MIN)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(unary_remainder, REMAINDER)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(celu, CELU)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(rpow, RPOW)
@@ -263,6 +260,8 @@ DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(selu, SELU)
     }
 
 DEFINE_UNARY_OP_SCALAR_VARIANT(fill, FILL)
+DEFINE_UNARY_OP_SCALAR_VARIANT(relu_max, RELU_MAX)
+DEFINE_UNARY_OP_SCALAR_VARIANT(relu_min, RELU_MIN)
 DEFINE_UNARY_OP_SCALAR_VARIANT(power, POWER)
 DEFINE_UNARY_OP_SCALAR_VARIANT(gt_unary, UNARY_GT)
 DEFINE_UNARY_OP_SCALAR_VARIANT(lt_unary, UNARY_LT)
@@ -328,17 +327,13 @@ Tensor deg2rad(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
     constexpr float DEG_TO_RAD = 0.017453292519943295f;
-    return ttnn::multiply(
+    return operations::unary::detail::unary_impl(
         input_tensor,
-        DEG_TO_RAD,
-        std::optional(input_tensor.dtype()),
+        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, DEG_TO_RAD)},
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
         sub_core_grids);
 }
 
@@ -347,17 +342,13 @@ Tensor rad2deg(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
     constexpr float RAD_TO_DEG = 57.29577951308232f;
-    return ttnn::multiply(
+    return operations::unary::detail::unary_impl(
         input_tensor,
-        RAD_TO_DEG,
-        std::optional(input_tensor.dtype()),
+        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, RAD_TO_DEG)},
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
         sub_core_grids);
 }
 
@@ -482,6 +473,41 @@ Tensor power_iterative(
     return operations::unary::detail::unary_impl(
         input_tensor,
         {EltwiseUnaryWithParam{UnaryOpType::POWER_ITERATIVE, exponent}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
+Tensor gelu(
+    const Tensor& input_tensor,
+    operations::unary::GeluVariant variant,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
+    std::vector<EltwiseUnaryWithParam> op_chain;
+    switch (variant) {
+        case GeluVariant::FAST_LUT: op_chain = {UnaryWithParam(UnaryOpType::GELU, 1.0f)}; break;
+        case GeluVariant::TANH: op_chain = {UnaryWithParam(UnaryOpType::GELU_TANH)}; break;
+        case GeluVariant::ACCURATE: [[fallthrough]];
+        default: op_chain = {UnaryWithParam(UnaryOpType::GELU, 0.0f)};
+    }
+    return operations::unary::detail::unary_impl(
+        input_tensor, op_chain, memory_config, optional_output_tensor, sub_core_grids);
+}
+
+// Legacy bool overload — kept so existing callers (e.g. ttnn::glu in
+// unary_composite_op.cpp and Python callers using fast_and_approximate_mode)
+// continue to compile. New code should use the GeluVariant overload.
+Tensor gelu(
+    const Tensor& input_tensor,
+    bool fast_and_approximate_mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return gelu(
+        input_tensor,
+        fast_and_approximate_mode ? operations::unary::GeluVariant::FAST_LUT : operations::unary::GeluVariant::ACCURATE,
         memory_config,
         optional_output_tensor,
         sub_core_grids);

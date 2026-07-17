@@ -29,13 +29,18 @@ on:
         required: false
         type: boolean
         default: false
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor pull-through cache prefix (e.g. 'harbor.example.com/'). Empty to pull GHCR directly."
 jobs:
   create-docker-release-image:
     name: Build ${{ inputs.image }} image
     permissions:
       contents: read
       packages: write
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-large-stable
     outputs:
       image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
     steps:
@@ -49,7 +54,7 @@ jobs:
           UBUNTU_VERSION="${PLATFORM#ubuntu-}"
           echo "version=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -79,29 +84,58 @@ jobs:
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+      - name: Compute tool tags
+        id: tool-tags
+        run: |
+          TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "${{ github.repository }}")
+          {
+            echo "tool_tags<<EOF"
+            echo "$TOOL_TAGS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Prepare bake overrides
+        id: bake
+        env:
+          TOOL_TAGS: ${{ steps.tool-tags.outputs.tool_tags }}
+          TAG_NAME: ${{ env.TAG_NAME }}
+          WHEEL_FILENAME: ${{ env.WHEEL_FILENAME }}
+          UBUNTU_VERSION: ${{ env.UBUNTU_VERSION }}
+          PYTHON_VERSION: ${{ env.PYTHON_VERSION }}
+          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+        run: |
+          set -euo pipefail
+          TARGET="${{ inputs.image }}"
+          TOOLS=(ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd sfpi openmpi)
+          SET=""
+          for tool in "${TOOLS[@]}"; do
+            tag=$(echo "$TOOL_TAGS" | jq -r ".\"${tool}-tag\"")
+            [ "$tag" = "null" ] && { echo "ERROR: missing tag for tool '$tool' in compute-tool-tags output"; exit 1; }
+            SET+="${TARGET}.contexts.${tool}-layer=docker-image://${HARBOR_PREFIX}${tag}"$'\n'
+          done
+          SET+="${TARGET}.tags=${TAG_NAME}"$'\n'
+          SET+="${TARGET}.output=type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true"$'\n'
+          SET+="${TARGET}.args.WHEEL_FILENAME=${WHEEL_FILENAME}"$'\n'
+          SET+="${TARGET}.args.UBUNTU_VERSION=${UBUNTU_VERSION}"$'\n'
+          SET+="${TARGET}.args.PYTHON_VERSION=${PYTHON_VERSION}"$'\n'
+          SET+="${TARGET}.args.GIT_REF=${{ github.ref_name || 'main' }}"$'\n'
+          {
+            echo "set<<EOF"
+            echo "$SET"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
-        id: build-push
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/manual-docker-bake
         with:
-          push: true
-          build-args: |
-            WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
-            UBUNTU_VERSION=${{ steps.generate-tag-name.outputs.UBUNTU_VERSION }}
-            PYTHON_VERSION=${{ steps.generate-tag-name.outputs.PYTHON_VERSION }}
-            GIT_REF=${{ github.ref_name || 'main' }}
-          tags: ${{ env.TAG_NAME }}
-          context: .
-          file: dockerfile/Dockerfile
-          target: ${{ inputs.image }}
-          outputs: |
-            type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          targets: ${{ inputs.image }}
+          set-lines: ${{ steps.bake.outputs.set }}
+          harbor-prefix: ${{ inputs.harbor-prefix }}
       - name: Get image digest
         if: ${{ !inputs.dry-run }}
         id: get-digest
         run: |
-          # Output format: repo@sha256:digest
-          IMAGE_ID="${{ env.REPO_IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}"
+          DIGEST=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${{ env.TAG_NAME }}")
+          IMAGE_ID="${{ env.REPO_IMAGE_NAME }}@${DIGEST}"
           echo "Built image: $IMAGE_ID"
           echo "IMAGE_DIGEST=$IMAGE_ID" >> $GITHUB_OUTPUT
 

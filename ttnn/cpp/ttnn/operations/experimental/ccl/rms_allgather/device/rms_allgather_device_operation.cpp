@@ -190,7 +190,8 @@ TensorSpec RMSAllGatherDeviceOperation::compute_output_specs(
 
     auto mem_config = args.output_mem_config;
     if (!mem_config.shard_spec().has_value()) {
-        mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
+        mem_config =
+            tt::tt_metal::MemoryConfig(mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
     }
 
     return ttnn::TensorSpec(

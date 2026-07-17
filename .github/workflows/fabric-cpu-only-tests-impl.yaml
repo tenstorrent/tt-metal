@@ -3,13 +3,21 @@ name: "[internal] Fabric cpu-only tests impl"
 on:
   workflow_call:
     inputs:
-      arch:
-        required: true
-        type: string
-      timeout:
+      runs-on-sku:
         required: false
-        type: number
-        default: 15
+        type: string
+        default: cpu_medium
+        description: "SKU from sku_config.yaml selecting the CPU runner pool (e.g. cpu_medium)."
+      tests-yaml-path:
+        required: false
+        type: string
+        default: ./tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml
+        description: "Pipeline reorg test matrix YAML (e.g. fabric_cpu_only_smoke_merge_gate_tests.yaml for merge gate)."
+      test-category:
+        required: false
+        type: string
+        default: unit
+        description: "Time-budget workflow key passed to verify_time_budget.py (unit for fabric CPU-only tests)."
       build-artifact-name:
         required: true
         type: string
@@ -19,32 +27,75 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
 
 jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -euo pipefail
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.runs-on-sku }}" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+
   fabric-cpu-unit-tests:
-    name: ${{ inputs.arch }} fabric cpu unit tests (${{ matrix.shard.name }})
-    runs-on: tt-ubuntu-2204-medium-stable
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
+      # Keep every shard running even if another shard fails or times out.
       fail-fast: false
       matrix:
-        shard:
-          # Shard A (~6m20s): unit + phys-grouping + control-plane + t3k + wh-galaxy
-          - name: "unit-phys-ctrl-t3k-wh"
-            groups: "unit phys-grouping control-plane t3k wh-galaxy"
-          # Shard B (~5m): bh-galaxy
-          - name: "bh"
-            groups: "bh-galaxy"
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
-        ARCH_NAME: ${{ inputs.arch }}
+        ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: warn
         LD_LIBRARY_PATH: /work/build/lib
         PYTHONPATH: /work
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        TT_METAL_CLEAR_L1: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
     defaults:
@@ -65,14 +116,11 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           hang-detection-timeout: 20.0
-      - name: Run fabric cpu-only unit tests (${{ matrix.shard.name }})
-        timeout-minutes: ${{ inputs.timeout }}
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          # Keep commands in tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh (also runnable locally).
-          for g in ${{ matrix.shard.groups }}; do
-            ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group "$g"
-          done
-
+          mkdir -p generated/test_reports
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

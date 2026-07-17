@@ -309,34 +309,44 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         for i, t in enumerate(tqdm.tqdm(timesteps)):
             on_event(SectionStart(f"denoising_step_{i}"))
 
-            for idx, (device, tracer) in enumerate(zip(self.submesh_devices, self._tracers, strict=True)):
+            velocity_preds = []
+            for idx, tracer in enumerate(self._tracers):
                 timestep = ttnn.full(
                     [1, 1, 1, 1],
                     fill_value=t,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.float32,
-                    device=device,
+                    device=self.submesh_devices[idx],
                 )
 
-                velocity_pred = tracer(
-                    cfg_enabled=self._cfg_enabled,
-                    submesh_idx=idx,
-                    latents=latents[idx],
-                    prompt_embed=context[idx] if i == 0 else tracer.inputs["prompt_embed"],
-                    pooled_projections=pooled[idx] if i == 0 else tracer.inputs["pooled_projections"],
-                    timestep=timestep,
-                    N=latents_sequence_length,
-                    traced=traced,
+                velocity_preds.append(
+                    tracer(
+                        cfg_enabled=self._cfg_enabled,
+                        submesh_idx=idx,
+                        latents=latents[idx],
+                        prompt_embed=context[idx] if i == 0 else tracer.inputs["prompt_embed"],
+                        pooled_projections=pooled[idx] if i == 0 else tracer.inputs["pooled_projections"],
+                        timestep=timestep,
+                        N=latents_sequence_length,
+                        traced=traced,
+                        tracer_blocking_execution=False,
+                    )
                 )
 
                 # latents can be overwritten by trace execution, use the captured input instead,
                 # which is safe.
                 latents[idx] = tracer.inputs["latents"]
 
-                if self._cfg_enabled:
-                    velocity_pred = self._cfg_combiner.combine(velocity_pred, guidance_scale)
+            if self._cfg_enabled:
+                velocity_preds = self._cfg_combiner.combine(velocity_preds, guidance_scale)
 
-                latents[idx] = self._solvers[idx].step(step=i, latent=latents[idx], velocity_pred=velocity_pred)
+            for device in self.submesh_devices:
+                ttnn.synchronize_device(device)
+
+            latents = [
+                solver.step(step=i, latent=latents[idx], velocity_pred=velocity_preds[idx])
+                for idx, solver in enumerate(self._solvers)
+            ]
 
             on_event(SectionEnd(f"denoising_step_{i}"))
         on_event(SectionEnd("denoising"))

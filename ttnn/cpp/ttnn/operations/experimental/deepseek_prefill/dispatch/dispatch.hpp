@@ -15,7 +15,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 std::array<ttnn::Tensor, 2> dispatch(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
@@ -25,6 +24,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
+    const std::optional<ttnn::Tensor>& padding_config = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = 0,

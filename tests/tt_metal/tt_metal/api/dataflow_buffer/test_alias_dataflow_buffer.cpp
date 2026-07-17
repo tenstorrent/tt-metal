@@ -111,18 +111,15 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         *mesh_device, make_alias_dram_tensor_spec(entry_size_b, num_entries_b), TensorTopology{});
 
     // DM kernel configs (Gen1 + Gen2 variants so the same spec runs everywhere).
-    const DataMovementHardwareConfig producer_cfg{
-        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config =
-            DataMovementHardwareConfig::Gen2Config{
-                .disable_implicit_sync_for = {experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}},
-    };
-    const DataMovementHardwareConfig consumer_cfg{
-        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_config =
-            DataMovementHardwareConfig::Gen2Config{
-                .disable_implicit_sync_for = {experimental::DFBSpecName{"dfb_a"}, experimental::DFBSpecName{"dfb_b"}}},
-    };
+    DataMovementHardwareConfig producer_cfg;
+    DataMovementHardwareConfig consumer_cfg;
+    if (mesh_device->arch() == ARCH::QUASAR) {
+        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    }
 
     DataflowBufferSpec dfb_a{
         .unique_id = experimental::DFBSpecName{"dfb_a"},
@@ -240,14 +237,15 @@ void run_alias_dfb_program(
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&](uint32_t epc_a, uint32_t epc_b) {
-        return RuntimeArgValues{
-            {node,
-             {{"chunk_offset_a", 0u},
-              {"chunk_offset_b", 0u},
-              {"entries_per_core_a", epc_a},
-              {"entries_per_core_b", epc_b}}}};
+        return MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"chunk_offset_a", 0u},
+                {"chunk_offset_b", 0u},
+                {"entries_per_core_a", epc_a},
+                {"entries_per_core_b", epc_b},
+            });
     };
 
     ProgramRunArgs run_params;
@@ -278,7 +276,7 @@ void run_alias_dfb_program(
     detail::WriteToBuffer(*in_a.mesh_buffer().get_reference_buffer(), input_a);
     detail::WriteToBuffer(*in_b.mesh_buffer().get_reference_buffer(), input_b);
 
-    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+    if (mesh_device->arch() == ARCH::QUASAR) {
         // TODO #38042: barrier for Quasar DRAM write visibility.
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -325,20 +323,15 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     MeshTensor ring  = MeshTensor::allocate_on_device(
         *mesh_device, make_alias_l1_tensor_spec(entry_size, num_entries), TensorTopology{});
 
-    const DataMovementHardwareConfig producer_cfg{
-        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0},
-        .gen2_config =
-            DataMovementHardwareConfig::Gen2Config{
-                .disable_implicit_sync_for =
-                    {experimental::DFBSpecName{"dfb_borrowed"}, experimental::DFBSpecName{"dfb_alias"}}},
-    };
-    const DataMovementHardwareConfig consumer_cfg{
-        .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1},
-        .gen2_config =
-            DataMovementHardwareConfig::Gen2Config{
-                .disable_implicit_sync_for =
-                    {experimental::DFBSpecName{"dfb_borrowed"}, experimental::DFBSpecName{"dfb_alias"}}},
-    };
+    DataMovementHardwareConfig producer_cfg;
+    DataMovementHardwareConfig consumer_cfg;
+    if (mesh_device->arch() == ARCH::QUASAR) {
+        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+    } else {
+        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
+        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+    }
 
     // dfb_borrowed: backed by ring_tensor (L1)
     DataflowBufferSpec dfb_borrowed{
@@ -480,7 +473,7 @@ TEST_F(MeshDeviceFixture, AliasDFBDataFlow1Sx1S) {
 }
 
 TEST_F(MeshDeviceFixture, AliasDFBDataFlow2Sx4S) {
-    if (devices_.at(0)->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar TC hardware";
     }
     run_alias_dfb_program(
@@ -491,7 +484,7 @@ TEST_F(MeshDeviceFixture, AliasDFBDataFlow2Sx4S) {
 }
 
 TEST_F(MeshDeviceFixture, AliasDFBDataFlow4Sx2S) {
-    if (devices_.at(0)->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar TC hardware";
     }
     run_alias_dfb_program(
@@ -563,6 +556,50 @@ TEST_F(MeshDeviceFixture, AliasDFBAlloc3Way) {
         addr_a, addr_b, addr_c);
 }
 
+TEST_F(MeshDeviceFixture, AliasDFBAgreedGroupResize) {
+    IDevice* device = devices_.at(0)->get_devices()[0];
+    const CoreCoord core{0, 0};
+
+    // Two aliased DFBs starting at equal total size (4096 B), plus a trailing non-aliased DFB to
+    // observe the alias group's L1 footprint.
+    const auto cfg_a = make_1sx1s_config(512, 8);   // total 4096 (primary)
+    const auto cfg_b = make_1sx1s_config(256, 16);  // total 4096 (secondary)
+    const auto cfg_c = make_1sx1s_config(512, 4);   // total 2048 (trailing, non-aliased)
+
+    Program program = CreateProgram();
+    const uint32_t id_a = dfb::CreateDataflowBuffer(program, core, cfg_a);
+    const uint32_t id_b = dfb::CreateDataflowBuffer(program, core, cfg_b);
+    const uint32_t id_c = dfb::CreateDataflowBuffer(program, core, cfg_c);
+    program.impl().set_dfb_alias(id_a, id_b);
+
+    program.impl().finalize_dataflow_buffer_configs();
+    program.impl().allocate_dataflow_buffers(device);
+
+    const uint32_t addr_a0 = program.impl().get_dataflow_buffer(id_a)->uniform_alloc_addr();
+    EXPECT_EQ(addr_a0, program.impl().get_dataflow_buffer(id_b)->uniform_alloc_addr())
+        << "Aliased DFBs must share one L1 address";
+    EXPECT_GE(program.impl().get_dataflow_buffer(id_c)->uniform_alloc_addr(), addr_a0 + 4096u)
+        << "Trailing DFB_C must follow the 4096 B alias group";
+
+    // Agreed group resize: both members -> new equal total 8192 B, via different views.
+    std::vector<detail::ProgramImpl::DfbSizeOverride> overrides = {
+        {.dfb_id = id_a, .entry_size = 512u, .num_entries = 16u},  // 8192
+        {.dfb_id = id_b, .entry_size = 1024u, .num_entries = 8u},  // 8192
+    };
+    EXPECT_NO_THROW(program.impl().apply_dfb_size_overrides(overrides));
+    program.impl().allocate_dataflow_buffers(device);
+
+    auto dfb_a = program.impl().get_dataflow_buffer(id_a);
+    auto dfb_b = program.impl().get_dataflow_buffer(id_b);
+    EXPECT_EQ(dfb_a->total_size(), 8192u);
+    EXPECT_EQ(dfb_b->total_size(), 8192u);
+    const uint32_t addr_a1 = dfb_a->uniform_alloc_addr();
+    EXPECT_EQ(addr_a1, dfb_b->uniform_alloc_addr())
+        << "Aliased DFBs must still share one L1 address after an agreed resize";
+    EXPECT_GE(program.impl().get_dataflow_buffer(id_c)->uniform_alloc_addr(), addr_a1 + 8192u)
+        << "Trailing DFB_C must follow the resized (8192 B) alias group footprint";
+}
+
 TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     const NodeCoord node{0, 0};
     constexpr uint32_t kEntrySize   = 512;
@@ -578,14 +615,15 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
 
-    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&]() {
-        return RuntimeArgValues{
-            {node,
-             {{"chunk_offset_a", 0u},
-              {"chunk_offset_b", 0u},
-              {"entries_per_core_a", kNumEntries},
-              {"entries_per_core_b", kNumEntries}}}};
+        return MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"chunk_offset_a", 0u},
+                {"chunk_offset_b", 0u},
+                {"entries_per_core_a", kNumEntries},
+                {"entries_per_core_b", kNumEntries},
+            });
     };
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {
@@ -636,14 +674,15 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
 
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);
 
-    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&]() {
-        return RuntimeArgValues{
-            {node,
-             {{"chunk_offset_a", 0u},
-              {"chunk_offset_b", 0u},
-              {"entries_per_core_a", kNumEntries},
-              {"entries_per_core_b", kNumEntries}}}};
+        return MakeRuntimeArgsForSingleNode(
+            node,
+            {
+                {"chunk_offset_a", 0u},
+                {"chunk_offset_b", 0u},
+                {"entries_per_core_a", kNumEntries},
+                {"entries_per_core_b", kNumEntries},
+            });
     };
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {
@@ -672,7 +711,7 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     detail::WriteToBuffer(*in_a.mesh_buffer().get_reference_buffer(), input_a);
     detail::WriteToBuffer(*in_b.mesh_buffer().get_reference_buffer(), input_b);
 
-    if (devices_.at(0)->get_devices()[0]->arch() == ARCH::QUASAR) {
+    if (devices_.at(0)->arch() == ARCH::QUASAR) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 

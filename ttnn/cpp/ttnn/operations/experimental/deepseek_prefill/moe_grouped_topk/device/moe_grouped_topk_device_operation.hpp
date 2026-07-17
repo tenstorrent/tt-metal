@@ -4,11 +4,20 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
+
+// Router affinity activation applied to the gate logits before bias-add / top-k.
+// Sigmoid is DeepSeek-V3 / Kimi; SqrtSoftplus (== sqrt(softplus(x))) is DeepSeek-V4.
+enum class ScoreFunc : uint32_t {
+    Sigmoid = 0,
+    SqrtSoftplus = 1,
+};
 
 struct MoeGroupedTopkDeviceOperation {
     struct operation_attributes_t {
@@ -19,12 +28,14 @@ struct MoeGroupedTopkDeviceOperation {
         float route_scale;
         float epsilon;
         bool stable_sort;
+        ScoreFunc score_func;
         tt::tt_metal::MemoryConfig output_mem_config;
     };
 
     struct tensor_args_t {
         const Tensor& scores;
         const Tensor& bias;
+        std::optional<Tensor> padding_config;
     };
 
     using spec_return_value_t = std::array<TensorSpec, 2>;
@@ -79,6 +90,9 @@ moe_grouped_topk(
     float route_scale,
     float epsilon,
     bool stable_sort = false,
-    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt);
+    ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc score_func =
+        ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc::Sigmoid,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& padding_config = std::nullopt);
 
 }  // namespace ttnn::prim

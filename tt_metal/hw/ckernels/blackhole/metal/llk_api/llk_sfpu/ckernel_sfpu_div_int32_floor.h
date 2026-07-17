@@ -38,7 +38,7 @@ sfpi_inline void calculate_div_int32_body(
     // initial approximation.
     // We interleave SFPMAD with the loading and conversion of `a`.
     sfpi::vFloat inv_b_f = sfpi::approx_recip(b_f);
-    sfpi::vFloat e = -inv_b_f * b_f + sfpi::vConst1;
+    sfpi::vFloat e = -inv_b_f * b_f + 1.0f;
     sfpi::vInt a_orig = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
     e = e * e + e;
     sfpi::vMag a = sfpi::abs(a_orig);
@@ -52,7 +52,7 @@ sfpi_inline void calculate_div_int32_body(
     // the mantissa so that we extract the top 22 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
     sfpi::vInt sign = a_orig ^ b_orig;
-    sfpi::vUInt q = sfpi::exman(q_f);
+    sfpi::vMag q_m = sfpi::exman(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
@@ -60,10 +60,8 @@ sfpi_inline void calculate_div_int32_body(
     // 22 bits, so we can compute qb = (q1<<10 + 0) * (b1<<22 + b0)
     //                               = (q1<<10) * b0
 
-    sfpi::vInt qb = sfpi::fractional_mul(q, b);
-
-    q <<= 10;
-    qb <<= 10;
+    sfpi::vInt qb{sfpi::fractional_mul(q_m, b) << 10};
+    sfpi::vInt q{q_m << 10};
 
     // Compute remainder.
     sfpi::vInt r = a - qb;

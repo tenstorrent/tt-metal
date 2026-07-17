@@ -66,7 +66,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         sfpi::vFloat scale, bias;
 
         r = 8.361816406e-03f;
-        sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(j);
+        sfpi::vInt i = sfpi::as<sfpi::vInt>(j);
         j = j - rounding_bias;
 
         sfpi::vFloat c2 = 4.177856445e-02f;
@@ -93,7 +93,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
             sfpi::vFloat jm2 = j + -2.0f;
             // Keep reconstruction half-scaled: scale is 0.5 * 2**i. Avoids
             // materialising 2**i directly near overflow boundary.
-            scale = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
+            scale = sfpi::as<sfpi::vFloat>((i << 23) + sfpi::as<sfpi::vInt>(w));
 
             sfpi::vFloat abs_jm2 = sfpi::abs(jm2);
             bias = scale - w;
@@ -115,7 +115,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         sfpi::vFloat s, t, u, x, y;
 
         r = 1.974105835e-04f;
-        sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(j);
+        sfpi::vInt i = sfpi::as<sfpi::vInt>(j);
         j = j - rounding_bias;
 
         sfpi::vFloat c4 = 1.393107930e-3f;
@@ -130,7 +130,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
         r = r * f + 4.166680202e-2f;
         sfpi::vFloat w = 0.5f;
         r = r * f + sfpi::vConstFloatPrgm2;
-        sfpi::vFloat c0 = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(w) + -1);
+        sfpi::vFloat c0 = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(w) + -1);
 
         u = f;
         sfpi::vFloat jm1 = j + -1.0f;
@@ -141,7 +141,7 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
 
         v_if(j != 0.0f) {
             v_if(jm1 != 0.0f) {
-                t = sfpi::reinterpret<sfpi::vFloat>((i << 23) + sfpi::reinterpret<sfpi::vInt>(w));
+                t = sfpi::as<sfpi::vFloat>((i << 23) + sfpi::as<sfpi::vInt>(w));
                 y = t - w;
                 sfpi::vFloat infinity = std::numeric_limits<float>::infinity();
                 x = t - y;  // double-float canonicalization of difference

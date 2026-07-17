@@ -12,8 +12,28 @@ from loguru import logger
 from tracy.common import PROFILER_ARTIFACTS_DIR
 from tracy.process_model_log import get_latest_ops_log_filename
 
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_transformers.tests.test_utils import merge_device_rows
+
+
+def adjust_margin_for_ddr_speed(margin: float, expected_speed: int = 16000) -> float:
+    """Return *margin* adjusted for the actual DDR speed reported by tt-smi.
+
+    - DDR speed < *expected_speed*  → double the margin (slower memory, looser threshold).
+    - DDR speed > *expected_speed*  → warn that baselines may need updating, keep margin.
+    - DDR speed == *expected_speed* or unavailable → keep margin unchanged.
+    """
+    ddr_speed = get_ddr_speed()
+    if ddr_speed is not None and ddr_speed < expected_speed:
+        logger.warning(
+            f"DDR speed is {ddr_speed} (expected {expected_speed}), increasing margin from {margin} to {margin * 2}"
+        )
+        return margin * 2
+    if ddr_speed is not None and ddr_speed > expected_speed:
+        logger.warning(f"DDR speed is {ddr_speed} (above expected {expected_speed}), baselines may need updating")
+    return margin
+
 
 # TP-collective ops: depend on TP=4 topology/bandwidth → take from 2x4
 # Everything else: depends on SP=8 tokens-per-chip and 8 experts/device → take from 8x1
@@ -53,7 +73,7 @@ def _is_galaxy_env() -> bool:
     or even in-test before `run_device_perf` spawns its tracy subprocess, the parent
     holds chip locks and the subprocess deadlocks waiting for them.
 
-    CI sets `MESH_DEVICE=TG` for galaxy jobs (see galaxy_deepseek_prefill_tests.yaml
+    CI sets `MESH_DEVICE=TG` for galaxy jobs (see blaze_models_prefill_tests.yaml
     and demo_sp_release_tests.yaml).
     """
     return os.environ.get("MESH_DEVICE", "").upper() in ("TG", "GALAXY")
@@ -181,6 +201,7 @@ def run_model_device_perf_test_with_merge(
     margin: float = 0.015,
     comments: str = "",
     op_filter: str = "",
+    between_signposts: tuple[str, str] | None = None,
     extra_env: dict | None = None,
 ):
     """
@@ -203,6 +224,12 @@ def run_model_device_perf_test_with_merge(
         op_filter: If set, restricts the measurement to rows whose OP CODE
             contains the given substring — useful when the worker emits multiple
             ops and only one is under test.
+        between_signposts: If set to (start_header, stop_header), restricts the
+            measurement to device ops emitted between those two tracy signposts
+            (e.g. ("MLA_START", "MLA_END")), excluding everything dispatched before
+            the first start / after the last stop — such as one-time weight-load
+            tilize/typecast at construction. Handles repeated/nested pairs (only ops
+            inside an open region are kept).
         extra_env: If set, applied to os.environ for the duration of the subprocess
             invocation. Use for vars the worker reads directly (e.g. TT_DS_CAPTURED_LAYER)
             — prefixing them into the command doesn't work because tracy's -m flag
@@ -234,6 +261,25 @@ def run_model_device_perf_test_with_merge(
     device_rows = len(df[df["OP TYPE"] == "tt_dnn_device"])
 
     logger.debug(f"CSV total rows: {total_rows}, signposts: {signpost_rows}, device ops: {device_rows}")
+
+    if between_signposts is not None:
+        start_header, stop_header = between_signposts
+        sp = df["OP TYPE"] == "signpost"
+        is_start = sp & (df["OP CODE"] == start_header)
+        is_stop = sp & (df["OP CODE"] == stop_header)
+        if not is_start.any() or not is_stop.any():
+            pytest.fail(
+                f"between_signposts={between_signposts!r}: signpost(s) not found in {filename} "
+                f"(found starts={int(is_start.sum())}, stops={int(is_stop.sum())})"
+            )
+        # CSV rows are in host-dispatch order; +1 at each start, -1 at each stop. A row is "inside"
+        # an open region when the running depth is > 0. The start row itself raises depth to 1, so it
+        # is excluded only by ~sp (signpost rows are never device ops); the stop row drops depth to 0.
+        depth = (is_start.astype(int) - is_stop.astype(int)).cumsum()
+        df = df[(depth > 0) & ~sp]
+        if df.empty:
+            pytest.fail(f"between_signposts={between_signposts!r} matched no device rows in {filename}")
+        logger.debug(f"Rows between signposts {between_signposts}: {len(df)}")
 
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
 

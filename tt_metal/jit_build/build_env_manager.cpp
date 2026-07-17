@@ -5,10 +5,12 @@
 #include "build_env_manager.hpp"
 
 #include <tracy/Tracy.hpp>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 
 #include <tt_stl/assert.hpp>
@@ -25,57 +27,82 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Process-wide singleton state. Seeded once via seed_if_unseeded_with_hal(), then read-only
-// for the lifetime of the process. Driven by MetalContext::create_* so that the seeding HAL
-// is always the HAL of the first MetalContext that comes into existence -- no implicit
-// silicon initialisation, and no walking of g_instances slots from outside MetalContext.
-std::atomic<BuildEnvManager*> s_instance{nullptr};
+// Per-ContextId BuildEnvManager instances. Each MetalContext (silicon, mock, future) gets its
+// own slot so that contexts with different dispatch configurations do not share
+// device_id_to_build_env_ entries. Seeded lazily by seed_if_unseeded_with_hal(ContextId, Hal).
+// Slots are read-only for the lifetime of the process once seeded.
+//
+// PRE-EXISTING LIMITATION (carried forward from the original singleton design, now scoped
+// per-context): HAL layout within a single context can be modulated by rtoptions --
+// simulator mode, Blackhole DRAM programmable cores, 2-erisc mode -- so the HAL that first
+// seeds a context's slot wins and shapes the kernel/firmware build_state_indices_ tables
+// for the lifetime of that context. Cross-context, the slots are independent and unaffected.
+std::array<std::atomic<BuildEnvManager*>, MAX_CONTEXT_COUNT> s_instances{};
 std::mutex s_seed_mutex;
 
 }  // namespace
 
-void BuildEnvManager::seed_if_unseeded_with_hal(const Hal& hal) {
-    // Fast path: already seeded. No lock, no allocation.
-    if (s_instance.load(std::memory_order_acquire) != nullptr) {
+void BuildEnvManager::seed_if_unseeded_with_hal(ContextId context_id, const Hal& hal) {
+    const int slot = context_id.get();
+    TT_FATAL(
+        slot >= 0 && static_cast<size_t>(slot) < MAX_CONTEXT_COUNT,
+        "BuildEnvManager: context_id {} out of range [0, {})",
+        slot,
+        MAX_CONTEXT_COUNT);
+    // Fast path: this context's slot is already seeded. No lock, no allocation.
+    if (s_instances[slot].load(std::memory_order_acquire) != nullptr) {
         return;
     }
     std::lock_guard<std::mutex> lock(s_seed_mutex);
-    if (s_instance.load(std::memory_order_acquire) != nullptr) {
+    if (s_instances[slot].load(std::memory_order_acquire) != nullptr) {
         return;
     }
-    // Seed the singleton with the supplied HAL. The constructor sizes
+    // Seed this context's slot with the supplied HAL. The constructor sizes
     // kernel_build_state_indices_ / firmware_build_state_indices_ from that HAL's
     // programmable-core-type, processor-class, and fw-binary counts.
-    //
-    // PRE-EXISTING LIMITATION (not introduced by the explicit-seeding refactor, but surfaced
-    // once contexts can genuinely coexist in-process): HAL layout can be modulated by
-    // rtoptions -- simulator mode, Blackhole DRAM programmable cores, 2-erisc mode -- so two
-    // contexts on the same arch with disagreeing rtoptions, or two contexts on different
-    // arches, can produce different layout counts. Whichever HAL seeds this singleton first
-    // wins; the other context will index build states through a table sized for the wrong
-    // layout. This is a property of the singleton design.
-    // TODO(#TBD): key BuildEnvManager by a stable HAL signature (arch + relevant rtoptions),
-    // or move the index computation into per-device DeviceBuildEnv so each device carries
-    // its own mapping. That refactor closes the cross-arch / cross-rtoptions hazard above.
-    s_instance.store(new BuildEnvManager(hal), std::memory_order_release);
+    s_instances[slot].store(new BuildEnvManager(hal), std::memory_order_release);
+}
+
+void BuildEnvManager::destroy_for_context(ContextId context_id) {
+    const int slot = context_id.get();
+    TT_FATAL(
+        slot >= 0 && static_cast<size_t>(slot) < MAX_CONTEXT_COUNT,
+        "BuildEnvManager: context_id {} out of range [0, {})",
+        slot,
+        MAX_CONTEXT_COUNT);
+    // Lock pairs with seed_if_unseeded_with_hal()'s double-check to avoid a concurrent reseed.
+    std::lock_guard<std::mutex> lock(s_seed_mutex);
+    auto* existing = s_instances[slot].exchange(nullptr, std::memory_order_acq_rel);
+    delete existing;
 }
 
 BuildEnvManager& BuildEnvManager::get_instance(ContextId context_id) {
-    // Resolve the ContextId to a HAL via MetalContext::instance(context_id), then seed.
+    const int slot = context_id.get();
+    TT_FATAL(
+        slot >= 0 && static_cast<size_t>(slot) < MAX_CONTEXT_COUNT,
+        "BuildEnvManager: context_id {} out of range [0, {})",
+        slot,
+        MAX_CONTEXT_COUNT);
+    auto* existing = s_instances[slot].load(std::memory_order_acquire);
+    if (existing != nullptr) {
+        return *existing;
+    }
+    // Lazy seeding path: resolve the ContextId to a HAL via MetalContext::instance(context_id).
     // Callers that already hold g_instance_mutex (i.e. MetalContext::create_*) must use
     // seed_if_unseeded_with_hal() directly with the in-scope HAL to avoid re-entering
     // MetalContext::instance().
-    seed_if_unseeded_with_hal(MetalContext::instance(context_id).hal());
-    return *s_instance.load(std::memory_order_acquire);
+    seed_if_unseeded_with_hal(context_id, MetalContext::instance(context_id).hal());
+    return *s_instances[slot].load(std::memory_order_acquire);
 }
 
 BuildEnvManager& BuildEnvManager::get_instance() {
-    auto* existing = s_instance.load(std::memory_order_acquire);
+    auto* existing = s_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire);
     TT_FATAL(
         existing != nullptr,
-        "BuildEnvManager::get_instance() called before any MetalContext was created. The "
-        "singleton is seeded by MetalContext::create_instance(); ensure at least one "
-        "MetalEnv has been constructed first, or call get_instance(ContextId) explicitly.");
+        "BuildEnvManager::get_instance() called before the default-context MetalContext was "
+        "created. The default-context slot is seeded by MetalContext::create_instance(); "
+        "ensure at least one default-context MetalEnv has been constructed first, or call "
+        "get_instance(ContextId) explicitly for a non-default context.");
     return *existing;
 }
 

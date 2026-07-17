@@ -32,24 +32,24 @@ namespace ckernel {
 enum { ADD_UNARY = 0, SUB_UNARY = 1, MUL_UNARY = 2, DIV_UNARY = 3, RSUB_UNARY = 4 };
 #ifndef ARCH_QUASAR
 ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
         (APPROX, ADD_UNARY, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param1));
 }
 
 ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
         (APPROX, SUB_UNARY, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param1));
 }
 #endif
@@ -58,37 +58,37 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1)));
 #else
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
         (APPROX, MUL_UNARY, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param1));
 #endif
 }
 
 #ifndef ARCH_QUASAR
 ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
         (APPROX, DIV_UNARY, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param1));
 }
 
 ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_binop_with_scalar,
         (APPROX, RSUB_UNARY, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param1));
 }
 
@@ -108,8 +108,14 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
 // clang-format on
 
 ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_add_int32, (APPROX, 8 /* ITERATIONS */), RC, idst, param1));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_add_int32,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param1));
 }
 
 // clang-format off
@@ -128,8 +134,14 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
 // clang-format on
 
 ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sub_int32, (APPROX, 8 /* ITERATIONS */), RC, idst, param1));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sub_int32,
+        (APPROX, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC,
+        param1));
 }
 #endif
 
@@ -140,7 +152,7 @@ ALWI void binop_with_scalar_tile_init() {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init()));
 #else
-    MATH(SFPU_INIT(unused));
+    MATH(SFPU_UNARY_INIT(unused));
 #endif
 }
 

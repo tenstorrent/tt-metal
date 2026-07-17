@@ -101,6 +101,9 @@ void invalidate_trisc_instruction_cache() {
 }
 
 void deassert_trisc() {
+    // Temporary workaround due to race vs. host deasserting TRISC reset.
+    // https://github.com/tenstorrent/tt-metal/issues/48064
+    assert_trisc_reset();
     subordinate_sync->allNeo0 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo1 = RUN_SYNC_MSG_ALL_INIT;
     subordinate_sync->allNeo2 = RUN_SYNC_MSG_ALL_INIT;
@@ -111,7 +114,7 @@ void deassert_trisc() {
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
-volatile KernelBarrier g_kernel_barrier __attribute__((used));
+volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -179,6 +182,8 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
+    // Set subordinate_sync->padding to 0 to make checks against subordinate_sync->allDMs correct.
+    subordinate_sync->padding = 0;
     while (subordinate_sync->allDMs != RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE ||
            subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
@@ -195,9 +200,14 @@ extern "C" uint32_t _start1() {
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        // Originally initalized to WAIT by host firmware initializer.
+        // Will be set back to WAIT immediately before running kernels.
+        (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+    while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
+    }
     WAYPOINT("I");
     DPRINT("DM0-FW: initialized\n");
 
@@ -215,6 +225,10 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
+        // Initialize wait for trisc FW
+        for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
+            mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+        }
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
@@ -282,6 +296,11 @@ extern "C" uint32_t _start1() {
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
+                // Initialize wait for kernels
+                for (uint32_t i = 0; i < MaxNumKernels; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
+
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -308,9 +327,6 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
-                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
-                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
-                }
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.
@@ -322,7 +338,8 @@ extern "C" uint32_t _start1() {
                 WAYPOINT("R");
                 if (enables & (1u << index)) {
                     uintptr_t kernel_lma =
-                        (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
+                        (static_cast<uint32_t>(kernel_config_base) +
+                         launch_msg_address->kernel_config.kernel_text_offset[index]);
                     // Invalidate the i$ now the kernels have loaded and before running
                     invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg_address, index);
                     invalidate_l1_icache();
@@ -400,7 +417,7 @@ extern "C" uint32_t _start1() {
         int index = hartid;
 
         uintptr_t kernel_lma =
-            kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];
+            static_cast<uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
 
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);

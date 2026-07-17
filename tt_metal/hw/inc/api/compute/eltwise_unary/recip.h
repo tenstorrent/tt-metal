@@ -15,7 +15,9 @@ namespace ckernel {
  * Please refer to documentation for any_init.
  */
 template <bool legacy_compat = true>
-ALWI void recip_tile_init() { MATH(SFPU_THREE_TEMPLATE_PARAM_INIT(reciprocal, sfpu::recip_init, APPROX, DST_ACCUM_MODE, legacy_compat)); }
+ALWI void recip_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, legacy_compat)));
+}
 // clang-format off
 /**
  * Performs element-wise computation of the reciprocal on each element of a tile
@@ -34,7 +36,12 @@ ALWI void recip_tile_init() { MATH(SFPU_THREE_TEMPLATE_PARAM_INIT(reciprocal, sf
 // clang-format on
 template <bool legacy_compat = true>
 ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
-    MATH(SFPU_FOUR_PARAM_KERNEL_FP32_FIRST_FN(
-        calculate_reciprocal, APPROX, DST_ACCUM_MODE, 8, legacy_compat, idst, vector_mode));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_reciprocal,
+        (APPROX, DST_ACCUM_MODE, 8 /*ITERATIONS*/, legacy_compat),
+        idst,
+        vector_mode));
 }
 }  // namespace ckernel

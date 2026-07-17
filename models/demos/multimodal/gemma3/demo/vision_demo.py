@@ -25,10 +25,10 @@ import torch
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import GemmaMultimodalGenerator
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
 from models.tt_transformers.tt.model_config import DecodersPrecision
@@ -145,17 +145,10 @@ def prepare_generator_args(
 
 
 def _gemma3_vision_demo_device_params():
-    # Blackhole (e.g. P150) needs a larger trace region than Wormhole.
-    if is_blackhole():
-        return {
-            "fabric_config": True,
-            "trace_region_size": 70000000,
-            "num_command_queues": 2,
-            "l1_small_size": 24576,
-        }
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
     return {
         "fabric_config": True,
-        "trace_region_size": 21448704,
+        TRACE_MODEL_KEY_PARAM: "gemma-3-27b-vision",
         "num_command_queues": 2,
         "l1_small_size": 24576,
     }
@@ -535,7 +528,7 @@ def test_multimodal_demo_text(
             benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
             benchmark_data.save_partial_run_json(
                 profiler,
-                run_type=f"{tt_device_name}-demo",
+                run_type="demo_perf",
                 ml_model_name=f"{base_model_name}-Vision",
                 ml_model_type="vlm",
                 num_layers=model_args[0].n_layers,

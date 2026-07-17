@@ -242,6 +242,7 @@ jobs:
         uses: mikepenz/release-changelog-builder-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          configuration: infra/release-changelog-config.json
           fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
           toTag: ${{ needs.create-tag.outputs.version }}
           failOnError: true
@@ -249,6 +250,24 @@ jobs:
       - name: Create empty changelog for dry run
         if: ${{ inputs.dry-run }}
         run: echo "Changelog generation skipped for dry run" > CHANGELOG.txt
+      - name: Set up Python for title rework
+        if: ${{ !inputs.dry-run }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Rework unclear PR titles
+        if: ${{ !inputs.dry-run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUG_CHECKER_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY }}
+        run: |
+          pip install --quiet anthropic==0.91.0
+          python3 .github/actions/scripts/release_notes_rewrite_titles.py CHANGELOG.txt
+      - name: Group changelog by layer
+        if: ${{ !inputs.dry-run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/actions/scripts/release_notes_by_layer.py CHANGELOG.txt
       - name: Output changelog
         if: ${{ !inputs.dry-run }}
         run: cat CHANGELOG.txt

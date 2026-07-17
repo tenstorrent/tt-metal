@@ -67,6 +67,19 @@ def _import_to_db(report_dict, tmp_path):
     return conn, conn.cursor()
 
 
+def _import_to_db_with_comparison_sidecar(report_dict, comparison_sidecar, tmp_path):
+    """Write report plus comparison sidecar, import, return (connection, cursor)."""
+    report_path = tmp_path / "report.json"
+    with open(report_path, "w") as f:
+        json.dump(report_dict, f)
+    sidecar_path = report_path.with_suffix(graph_report.COMPARISON_RECORDS_SIDECAR_SUFFIX)
+    with open(sidecar_path, "w") as f:
+        json.dump(comparison_sidecar, f)
+    db_path = graph_report.import_report(report_path, tmp_path / "output")
+    conn = sqlite3.connect(db_path)
+    return conn, conn.cursor()
+
+
 _SQLITE_TABLES_WITH_RANK = (
     "devices",
     "operations",
@@ -85,6 +98,8 @@ _SQLITE_TABLES_WITH_RANK = (
     "tensor_consumers",
     "tensor_producers",
     "buffer_chunks",
+    "local_tensor_comparison_records",
+    "global_tensor_comparison_records",
 )
 
 
@@ -460,6 +475,95 @@ class TestImportGraphUnit:
         assert len(input_rows) == 1, f"Expected 1 input tensor, got {len(input_rows)}"
         assert input_rows[0][2] == 42, f"Expected tensor_id 42 (resolved from node 1), got {input_rows[0][2]}"
 
+        conn.close()
+
+    def test_comparison_sidecar_imports_records_and_golden_tensors(self, tmp_path):
+        """Comparison mode records are imported from the JSON sidecar."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.relu"},
+                "connections": [],
+                "input_tensors": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "tensor",
+                "params": {"tensor_id": "100", "shape": "[1,32]", "dtype": "BFLOAT16", "layout": "TILE"},
+                "connections": [1],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.relu"},
+                "connections": [4],
+                "duration_ns": 100,
+            },
+            {
+                "counter": 4,
+                "node_type": "tensor",
+                "params": {"tensor_id": "101", "shape": "[1,32]", "dtype": "BFLOAT16", "layout": "TILE"},
+                "connections": [],
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        comparison_sidecar = {
+            "version": 1,
+            "local_tensor_comparison_records": [
+                {
+                    "tensor_id": 101,
+                    "golden_tensor_id": 1001,
+                    "matches": True,
+                    "desired_pcc": 0.9999,
+                    "actual_pcc": 1.0,
+                }
+            ],
+            "global_tensor_comparison_records": [
+                {
+                    "tensor_id": 101,
+                    "golden_tensor_id": 1002,
+                    "matches": True,
+                    "desired_pcc": 0.9999,
+                    "actual_pcc": 1.0,
+                }
+            ],
+            "tensors": [
+                {
+                    "tensor_id": 1001,
+                    "shape": "torch.Size([1, 32])",
+                    "dtype": "torch.bfloat16",
+                    "layout": "torch.strided",
+                    "memory_config": None,
+                    "device_id": None,
+                    "address": None,
+                    "buffer_type": None,
+                },
+                {
+                    "tensor_id": 1002,
+                    "shape": "torch.Size([1, 32])",
+                    "dtype": "torch.bfloat16",
+                    "layout": "torch.strided",
+                    "memory_config": None,
+                    "device_id": None,
+                    "address": None,
+                    "buffer_type": None,
+                },
+            ],
+        }
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db_with_comparison_sidecar(report, comparison_sidecar, tmp_path)
+
+        cursor.execute("SELECT * FROM local_tensor_comparison_records")
+        assert cursor.fetchall() == [(101, 1001, 1, 0.9999, 1.0, 0)]
+
+        cursor.execute("SELECT * FROM global_tensor_comparison_records")
+        assert cursor.fetchall() == [(101, 1002, 1, 0.9999, 1.0, 0)]
+
+        cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id IN (1001, 1002) AND rank = 0 ORDER BY tensor_id")
+        assert cursor.fetchall() == [(1001,), (1002,)]
         conn.close()
 
     def test_multiple_output_tensors(self, tmp_path):
@@ -2280,6 +2384,139 @@ class TestGraphReportImport:
         assert cursor.fetchone()[0] >= 1, "tensors table should have at least 1 tensor"
 
         conn.close()
+
+    def test_import_populates_comparison_records_from_runtime_sidecar(self, device, tmp_report_dir):
+        """Test comparison mode sidecar is produced at runtime and imported offline."""
+        report_path = tmp_report_dir / "report.json"
+        db_dir = tmp_report_dir / "db"
+
+        with (
+            ttnn.manage_config("enable_fast_runtime_mode", False),
+            ttnn.manage_config("enable_logging", True),
+            ttnn.manage_config("enable_comparison_mode", True),
+        ):
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                torch_input = torch.rand((1024, 1024), dtype=torch.bfloat16)
+                input_tensor_a = ttnn.from_torch(
+                    torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+                input_tensor_b = ttnn.from_torch(
+                    torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+                )
+                output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.to_torch(output_tensor)
+            finally:
+                if ttnn.graph.is_graph_capture_active():
+                    ttnn.graph.end_graph_capture_to_file(str(report_path))
+
+        sidecar_path = report_path.with_suffix(graph_report.COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        assert sidecar_path.exists()
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, rank "
+            "FROM local_tensor_comparison_records"
+        )
+        local_tensor_comparison_records = cursor.fetchall()
+
+        cursor.execute(
+            "SELECT tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, rank "
+            "FROM global_tensor_comparison_records"
+        )
+        global_tensor_comparison_records = cursor.fetchall()
+
+        assert len(local_tensor_comparison_records) > 0
+        assert len(global_tensor_comparison_records) > 0
+
+        for tensor_id, golden_tensor_id, matches, desired_pcc, actual_pcc, record_rank in (
+            local_tensor_comparison_records + global_tensor_comparison_records
+        ):
+            assert record_rank == 0
+            assert matches
+            assert actual_pcc >= desired_pcc
+            cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id = ? AND rank = ?", (tensor_id, record_rank))
+            assert cursor.fetchone() is not None
+            cursor.execute(
+                "SELECT tensor_id FROM tensors WHERE tensor_id = ? AND rank = ?", (golden_tensor_id, record_rank)
+            )
+            assert cursor.fetchone() is not None
+
+        conn.close()
+
+    def test_import_includes_git_sha_and_url_in_report_metadata(self, device, tmp_report_dir):
+        """Importer stamps report_metadata with tt-metal origin URL and HEAD SHA when available."""
+        report_path = tmp_report_dir / "report.json"
+        db_dir = tmp_report_dir / "db"
+
+        torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        _ = ttnn.relu(tt_input)
+        _ = ttnn.graph.end_graph_capture_to_file(report_path)
+
+        db_path = graph_report.import_report(report_path, db_dir)
+
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM report_metadata WHERE key IN ('git_sha', 'git_url') ORDER BY key")
+        rows = dict(cursor.fetchall())
+        conn.close()
+
+        assert "git_sha" in rows and "git_url" in rows
+        git_meta = graph_report.get_tt_metal_git_report_metadata()
+        assert rows["git_sha"] == git_meta["git_sha"]
+        assert rows["git_url"] == git_meta["git_url"]
+        if git_meta["git_sha"]:
+            assert len(rows["git_sha"]) >= 7
+
+
+class TestSanitizeGitRemoteUrl:
+    """``sanitize_git_remote_url`` must not persist credentials into report_metadata."""
+
+    def test_strips_userinfo_query_fragment_https(self):
+        assert (
+            graph_report.sanitize_git_remote_url("https://user:secret@github.com/org/repo.git?x=1#frag")
+            == "https://github.com/org/repo.git"
+        )
+
+    def test_strips_empty_userinfo(self):
+        assert graph_report.sanitize_git_remote_url("https://@github.com/org/repo.git") == (
+            "https://github.com/org/repo.git"
+        )
+
+    def test_strips_token_as_username(self):
+        assert graph_report.sanitize_git_remote_url("https://token@github.com/org/repo.git") == (
+            "https://github.com/org/repo.git"
+        )
+
+    def test_scp_style_drops_user(self):
+        assert graph_report.sanitize_git_remote_url("git@github.com:tenstorrent/tt-metal.git") == (
+            "github.com:tenstorrent/tt-metal.git"
+        )
+
+    def test_ssh_url_strips_userinfo(self):
+        assert graph_report.sanitize_git_remote_url("ssh://git@github.com/org/repo.git") == (
+            "ssh://github.com/org/repo.git"
+        )
+
+    def test_ipv6_host_preserved(self):
+        assert graph_report.sanitize_git_remote_url("http://[::1]:8080/path/to/repo") == (
+            "http://[::1]:8080/path/to/repo"
+        )
+
+    def test_whitespace_trimmed(self):
+        assert graph_report.sanitize_git_remote_url("  https://a@b/c  ") == "https://b/c"
+
+    def test_non_numeric_port_does_not_raise(self):
+        # urlparse parses ':org' as the port token; .port raises ValueError without the guard.
+        result = graph_report.sanitize_git_remote_url("ssh://git@github.com:org/repo.git")
+        assert "git@" not in result
+        assert "github.com" in result
 
 
 class TestReportVersion:

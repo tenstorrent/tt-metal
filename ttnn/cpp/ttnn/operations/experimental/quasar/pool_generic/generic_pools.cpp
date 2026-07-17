@@ -1,0 +1,1314 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "generic_pools.hpp"
+
+#include "tt-metalium/constants.hpp"
+#include "ttnn/operations/experimental/quasar/pool_generic/device/pool_op.hpp"
+#include <cmath>
+#include <optional>
+#include <tt-metalium/buffer_types.hpp>
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
+#include "ttnn/operations/experimental/quasar/halo/halo.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/experimental/quasar/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
+
+namespace ttnn::operations::pool::quasar {
+
+// Generic invoke function for both max and avg pool operations. Most of the arguments are shared except for the
+// dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
+// maxpool.
+
+static std::tuple<MemoryConfig, uint32_t, sliding_window::ParallelConfig> get_pool_input_memory_config(
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    uint32_t batch_size,
+    uint32_t channels,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& output_shape,
+    const tt::tt_metal::CoreCoord& core_grid,
+    const DataType& input_dtype,
+    const Layout& input_layout,
+    const DataType& output_dtype,
+    const Layout& output_layout,
+    Pool2DType pool_type,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override,
+    bool return_indices,
+    bool config_tensor_in_dram) {
+    bool is_out_tiled = output_layout == ttnn::TILE_LAYOUT;
+    bool is_in_tiled = input_layout == ttnn::TILE_LAYOUT;
+    sliding_window::ParallelConfig parallel_config;
+
+    uint32_t smallest_RM_elem_size =
+        tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16));  // Size of BFloat16
+    uint32_t input_channels_alignment =
+        is_in_tiled ? tt::constants::TILE_WIDTH : (tt::tt_metal::hal::get_l1_alignment() / smallest_RM_elem_size);
+    TensorMemoryLayout shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;  // default to height sharding
+    if (applied_shard_scheme.has_value()) {
+        TT_FATAL(
+            (applied_shard_scheme.value() == TensorMemoryLayout::HEIGHT_SHARDED) ||
+                (applied_shard_scheme.value() == TensorMemoryLayout::WIDTH_SHARDED) ||
+                (applied_shard_scheme.value() == TensorMemoryLayout::BLOCK_SHARDED),
+            "Only height, width, or block sharding strategies are supported.");
+        shard_layout = applied_shard_scheme.value();
+        parallel_config = conv::determine_parallel_config(
+            shard_layout,
+            batch_size,
+            channels,
+            output_shape[1],
+            output_shape[2],
+            channels,
+            input_channels_alignment,
+            core_grid,
+            ShardOrientation::ROW_MAJOR,
+            false,
+            is_out_tiled,
+            is_in_tiled || is_out_tiled,  // if input/output is tiled we need to choose num_cores_c to make the
+                                          // shard width to be a tile multiple, it cannot be 16
+            0);
+    } else {  // auto-sharding
+        std::optional<sliding_window::ParallelConfig> sw_parallel_config = pool::determine_pool_config_for_auto_shard(
+            input_dtype,
+            input_layout,
+            core_grid,
+            sliding_window_config,
+            pool_type,
+            count_include_pad,
+            divisor_override,
+            return_indices,
+            output_layout,
+            output_dtype,
+            config_tensor_in_dram);
+        TT_FATAL(
+            sw_parallel_config.has_value(),
+            "autosharding could not determine valid shard scheme, please check tensor dimensions");
+        parallel_config = sw_parallel_config.value();
+    }
+
+    uint32_t num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
+
+    uint32_t input_tensor_width_snapped_to_channels_alignment =
+        tt::round_up(channels, num_cores_c * input_channels_alignment);
+
+    // Create target shape and apply sharding
+    Shape input_tensor_shape = conv::flatten_4d_shape(input_shape);
+    ttnn::Shape input_padded_shape = ttnn::Shape(
+        {input_tensor_shape[0],
+         input_tensor_shape[1],
+         input_tensor_shape[2],
+         input_tensor_width_snapped_to_channels_alignment});
+    auto input_tensor_memory_config = conv::create_sharded_memory_config_from_parallel_config(
+        input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
+    log_trace(
+        tt::LogOp,
+        "Pool Input = {}, Output = {}, Memory Config = {}",
+        input_shape,
+        output_shape,
+        input_tensor_memory_config);
+    return {input_tensor_memory_config, input_tensor_width_snapped_to_channels_alignment, parallel_config};
+}
+
+static std::vector<Tensor> pool2d_L1(
+    const Tensor& input_tensor,
+    Pool2DType pool_type,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::optional<std::array<uint32_t, 2>> dilation = std::nullopt,
+    bool ceil_mode = false,
+    bool count_include_pad = true,
+    std::optional<int32_t> divisor_override = std::nullopt,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool deallocate_input = false,
+    bool reallocate_halo_output = true,
+    bool return_indices = false,
+    const DataType dtype = DataType::BFLOAT16,
+    const Layout output_layout = Layout::ROW_MAJOR,
+    std::optional<std::array<uint32_t, 2>> ceil_pad = std::nullopt,
+    bool config_tensor_in_dram = false) {
+    std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
+    bool is_out_tiled = output_layout == Layout::TILE;
+    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    TT_FATAL(
+        dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B,
+        "Currently only BFLOAT16, BFLOAT8_B, and BFLOAT4_B output data formats are supported");
+    TT_FATAL(
+        !((dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B) && output_layout == Layout::ROW_MAJOR),
+        "BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout");
+    validate_input_params(
+        input_tensor,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding_4d[0],
+        padding_4d[1],
+        padding_4d[2],
+        padding_4d[3],
+        dilation.has_value() ? dilation.value()[0] : 1,
+        dilation.has_value() ? dilation.value()[1] : 1,
+        is_in_tiled);
+    uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
+    uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
+    sliding_window::SlidingWindowConfig sliding_window_config{
+        .batch_size = batch_size,
+        .channels = channels,
+        .input_hw = {input_h, input_w},
+        .window_hw = {kernel_size.at(0), kernel_size.at(1)},
+        .stride_hw = {stride.at(0), stride.at(1)},
+        .padding = padding_4d,
+        .dilation_hw = {dilation_h, dilation_w},
+        .ceil_pad_hw = ceil_pad.has_value()
+                           ? std::optional<sliding_window::uint32_pair_t>({ceil_pad->at(0), ceil_pad->at(1)})
+                           : std::nullopt,
+        .ceil_mode = ceil_mode,
+    };
+    auto output_shape = sliding_window_config.get_output_shape();
+    TT_FATAL(
+        output_shape[1] > 0 && output_shape[2] > 0,
+        "Pool2D: Computed output dimensions must be positive, got {}x{} "
+        "(input={}x{}, kernel={}x{}, stride={}x{}, dilation={}x{}, padding=[{},{},{},{}])",
+        output_shape[1],
+        output_shape[2],
+        input_h,
+        input_w,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        dilation_h,
+        dilation_w,
+        padding_4d[0],
+        padding_4d[1],
+        padding_4d[2],
+        padding_4d[3]);
+    const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
+    sliding_window::ParallelConfig parallel_config;
+    MemoryConfig out_memory_config = input_tensor.memory_config();
+    uint32_t num_cores_nhw = 0;
+    uint32_t num_cores_c = 0;
+    Tensor input_tensor_sharded = input_tensor;
+    if (!out_memory_config.shard_spec().has_value()) {
+        // Input is not sharded. Perform sharding.
+
+        ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
+
+        auto [in_memory_config, input_tensor_width_snapped_to_channels_alignment, calc_parallel_config] =
+            get_pool_input_memory_config(
+                sliding_window_config,
+                applied_shard_scheme,
+                batch_size,
+                channels,
+                input_tensor_shape,
+                output_shape,
+                input_tensor.device()->compute_with_storage_grid_size(),
+                input_tensor.dtype(),
+                input_tensor.layout(),
+                dtype,
+                output_layout,
+                pool_type,
+                count_include_pad,
+                divisor_override,
+                return_indices,
+                config_tensor_in_dram);
+        parallel_config = calc_parallel_config;
+        bool is_tensor_already_flattened = (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1);
+        Tensor input_tensor_flattened = input_tensor;
+        // If tensor is in (n,h,w,c) format, flatten it to (1,1,nhw,c) for optimal sharding
+        if (!is_tensor_already_flattened) {
+            const auto flattened_input_shape = conv::flatten_4d_shape(input_tensor.logical_shape());
+            const auto flattened_padded_input_shape = conv::flatten_4d_shape(input_tensor.padded_shape());
+            input_tensor_flattened = ttnn::operations::experimental::quasar::reshape(
+                input_tensor, flattened_input_shape, flattened_padded_input_shape);
+            input_tensor_shape = flattened_input_shape;
+        }
+        // Calculate padding needed for channels dimension
+        uint32_t input_channels = input_tensor_shape[3];
+        uint32_t padding_needed = input_tensor_width_snapped_to_channels_alignment - input_channels;
+
+        // Apply zero padding to channels if needed - we need it in case when output dtype is block float because if we
+        // have random values it would affect common exponent calculation
+        if (padding_needed > 0 && is_block_float(dtype)) {
+            ttsl::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
+            input_tensor_flattened = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
+        }
+        input_tensor_sharded = ttnn::operations::experimental::quasar::to_memory_config(
+            input_tensor_flattened, in_memory_config, std::nullopt);
+        out_memory_config = input_tensor_sharded.memory_config();
+
+    } else {
+        TT_FATAL(
+            !applied_shard_scheme.has_value(), "A sharding scheme should not be specified for a sharded input tensor.");
+        // input is already sharded, use it as is
+        TT_FATAL(
+            out_memory_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+            "Only row major orientation is supported.");
+
+        parallel_config.grid = out_memory_config.shard_spec().value().grid;
+        parallel_config.shard_scheme = out_memory_config.memory_layout();
+        parallel_config.shard_orientation = out_memory_config.shard_spec().value().orientation;
+    }
+    num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
+    num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
+
+    // update the shard spec to match the output shape
+    auto shard_spec = out_memory_config.shard_spec().value();
+    uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
+    uint32_t output_nhw_padded =
+        tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
+    uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
+    uint32_t output_c = channels;
+    // When the last per-shard tile is strictly less than one full face wide (channels % 32 < 16),
+    // round up to TILE_WIDTH so the packer always writes 2 full faces without reconfiguring.
+    // When channels % 32 == FACE_WIDTH the last tile has exactly one face and no extra padding is needed.
+    // Use ceiling division so that for WIDTH/BLOCK sharding, where channels may not divide evenly,
+    // we check the maximum per-shard channel count and avoid false partial-tile detection.
+    // E.g. channels=290, num_cores_c=19: ceil(290/19)=16 = FACE_WIDTH → no tile pad needed.
+    //      channels=290, num_cores_c=1:  ceil(290/1)=290, 290%32=2 → tile pad needed.
+    uint32_t channels_per_shard = tt::div_up(output_c, num_cores_c);
+    uint32_t cps_mod_tile = channels_per_shard % tt::constants::TILE_WIDTH;
+    // For TILE output the shard width must be TILE_WIDTH-aligned regardless; for ROW_MAJOR we
+    // only round up to TILE_WIDTH when the partial last tile is strictly less than one full face
+    // wide (cps_mod_tile < FACE_WIDTH) AND there is at least one preceding full tile per core
+    // (channels_per_shard > FACE_WIDTH). When the only tile per core is partial and fits in one
+    // face, the kernel packs just 1 face — so FACE_WIDTH alignment matches the kernel output and
+    // avoids creating per-shard internal padding that breaks downstream consumers (e.g.
+    // sharded_to_interleaved, slice_write).
+    bool needs_tile_pad = !is_out_tiled && cps_mod_tile > 0 && cps_mod_tile < tt::constants::FACE_WIDTH &&
+                          channels_per_shard > tt::constants::FACE_WIDTH;
+    uint32_t base_alignment =
+        (is_out_tiled || needs_tile_pad) ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2;
+    uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * base_alignment);
+    uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
+    log_debug(
+        tt::LogOp,
+        "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}",
+        output_nhw,
+        output_nhw_padded,
+        output_shard_height_padded,
+        output_shard_width_padded);
+    out_memory_config = tt::tt_metal::MemoryConfig(
+        out_memory_config.memory_layout(),
+        out_memory_config.buffer_type(),
+        tt::tt_metal::ShardSpec{
+            shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR});
+    sliding_window_config = sliding_window::SlidingWindowConfig{
+        .batch_size = batch_size,
+        .channels = channels,
+        .input_hw = {input_h, input_w},
+        .window_hw = {kernel_size.at(0), kernel_size.at(1)},
+        .stride_hw = {stride.at(0), stride.at(1)},
+        .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
+        .dilation_hw = {dilation_h, dilation_w},
+        .ceil_pad_hw = ceil_pad.has_value()
+                           ? std::optional<sliding_window::uint32_pair_t>({ceil_pad->at(0), ceil_pad->at(1)})
+                           : std::nullopt,
+        .num_cores_nhw = num_cores_nhw,
+        .num_cores_c = num_cores_c,
+        .core_range_set = parallel_config.grid,
+        .snap_to_tile = is_out_tiled,
+        .ceil_mode = ceil_mode,
+    };
+
+    // call the halo uop
+    const auto resolved_compute_kernel_config = init_device_compute_kernel_config(
+        tt::tt_metal::hal::get_arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/input_tensor_sharded.dtype() == DataType::FLOAT32,
+        /*default_l1_acc=*/false);
+    Tensor haloed_tensor = ttnn::operations::experimental::quasar::halo(
+        input_tensor_sharded,
+        sliding_window_config,
+        resolved_compute_kernel_config,
+        get_bf16_pool_init_value(pool_type),  // pad_val
+        false,
+        parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
+        is_out_tiled,
+        config_tensor_in_dram);
+
+    if (deallocate_input || is_input_tensor_in_dram) {
+        input_tensor_sharded.deallocate(/*force*/ true);
+    }
+
+    if (reallocate_halo_output) {
+        haloed_tensor = ttnn::move(haloed_tensor);
+    }
+
+    // NOLINTBEGIN(bugprone-use-after-move)
+    const uint32_t pre_allocate_size =
+        haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    // NOLINTEND(bugprone-use-after-move)
+
+    // call the pool2d uop
+    std::vector<Tensor> output_tensors = ttnn::prim::qsr::pool2d(
+        haloed_tensor,
+        sliding_window_config,
+        pool_type,
+        dtype,
+        output_layout,
+        out_memory_config,
+        compute_kernel_config,
+        count_include_pad,
+        divisor_override,
+        return_indices,
+        pre_allocate_size,
+        config_tensor_in_dram);
+
+    // format and return the result
+    if (memory_config.has_value() && memory_config.value() != out_memory_config) {
+        for (auto& output_tensor : output_tensors) {
+            output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
+                output_tensor, memory_config.value(), std::nullopt);
+        }
+    }
+
+    if (return_indices) {
+        TT_FATAL(
+            output_tensors.size() == 2,
+            "Expected two output tensors when return_indices is true, but got {}.",
+            output_tensors.size());
+        return output_tensors;
+    }
+    TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
+    return output_tensors;
+}
+
+class Pool2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
+    uint32_t batch_size;
+    IOShape input_shape;
+    uint32_t channels;
+    std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 2> stride;
+    std::array<uint32_t, 4> padding_n4;
+    std::array<uint32_t, 2> dilation;
+    std::array<uint32_t, 2> ceil_pad{};
+    sliding_window::SlidingWindowConfig sliding_window_config;
+    IOShape output_shape;
+    bool ceil_mode;
+    bool count_include_pad;
+    std::optional<int32_t> divisor_override;
+    bool return_indices;
+    Pool2DType pool_type;
+    DataType input_dtype;
+    DataType dtype;
+    TensorMemoryLayout shard_layout;
+    Layout input_layout;
+    Layout output_layout;
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+    bool config_tensor_in_dram;
+    MeshDevice* device;
+
+public:
+    Pool2dSliceAttr(
+        uint32_t batch_size,
+        IOShape input_shape,
+        uint32_t channels,
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 4> padding_n4,
+        std::array<uint32_t, 2> dilation,
+        bool ceil_mode,
+        bool count_include_pad,
+        std::optional<int32_t> divisor_override,
+        std::optional<const TensorMemoryLayout> applied_shard_scheme,
+        bool return_indices,
+        Pool2DType pool_type,
+        DataType input_dtype,
+        DataType dtype,
+        Layout input_layout,
+        Layout output_layout,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+        bool config_tensor_in_dram,
+        MeshDevice* device) :
+        batch_size(batch_size),
+        input_shape(input_shape),
+        channels(channels),
+        kernel_size(kernel_size),
+        stride(stride),
+        padding_n4(padding_n4),
+        dilation(dilation),
+        ceil_mode(ceil_mode),
+        count_include_pad(count_include_pad),
+        divisor_override(divisor_override),
+        return_indices(return_indices),
+        pool_type(pool_type),
+        input_dtype(input_dtype),
+        dtype(dtype),
+        input_layout(input_layout),
+        output_layout(output_layout),
+        compute_kernel_config(compute_kernel_config),
+        config_tensor_in_dram(config_tensor_in_dram),
+        device(device) {
+        // Determine shard layout: use provided scheme, or auto-select the best one
+        if (applied_shard_scheme.has_value()) {
+            shard_layout = applied_shard_scheme.value();
+        } else {
+            // Use autosharding to determine the best scheme
+            sliding_window::SlidingWindowConfig temp_config{
+                .batch_size = batch_size,
+                .channels = channels,
+                .input_hw = {std::get<0>(input_shape), std::get<1>(input_shape)},
+                .window_hw = {kernel_size.at(0), kernel_size.at(1)},
+                .stride_hw = {stride.at(0), stride.at(1)},
+                .padding = padding_n4,
+                .dilation_hw = {dilation.at(0), dilation.at(1)},
+                .ceil_mode = ceil_mode,
+            };
+
+            auto parallel_config = pool::determine_pool_config_for_auto_shard(
+                dtype,
+                input_layout,
+                device->compute_with_storage_grid_size(),
+                temp_config,
+                pool_type,
+                count_include_pad,
+                divisor_override,
+                return_indices,
+                output_layout,
+                dtype,
+                config_tensor_in_dram);
+
+            if (parallel_config.has_value()) {
+                shard_layout = parallel_config->shard_scheme;
+            } else {
+                // Fallback to height sharding if autosharding fails
+                shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+            }
+        }
+
+        sliding_window_config = sliding_window::SlidingWindowConfig{
+            .batch_size = batch_size,
+            .channels = channels,
+            .input_hw = {std::get<0>(input_shape), std::get<1>(input_shape)},
+            .window_hw = {kernel_size.at(0), kernel_size.at(1)},
+            .stride_hw = {stride.at(0), stride.at(1)},
+            .padding = padding_n4,
+            .dilation_hw = {dilation.at(0), dilation.at(1)},
+            .ceil_mode = ceil_mode,
+        };
+        auto full_output_shape = sliding_window_config.get_output_shape();
+        this->output_shape = IOShape{full_output_shape[1], full_output_shape[2]};
+        this->ceil_pad = {
+            sliding_window_config.get_ceil_pad_hw().first, sliding_window_config.get_ceil_pad_hw().second};
+    }
+
+    std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>, std::array<uint32_t, 2>, uint32_t>
+    get_input_slice_and_padding(const IOShape& output_slice_start, const IOShape& output_slice_end) const {
+        auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
+        auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
+        int input_slice_height_start = (output_slice_height_start * stride[0]) - padding_n4[0];
+        int input_slice_height_end = ((output_slice_height_end - 1) * stride[0]) - padding_n4[0] +
+                                     ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
+        int input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[2];
+        int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding_n4[2] +
+                                    ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+
+        int pad_top = std::max<int>(0, -input_slice_height_start);
+        int pad_bottom = std::max<int>(0, input_slice_height_end - std::get<0>(input_shape));
+        int pad_left = std::max<int>(0, -input_slice_width_start);
+        int pad_right = std::max<int>(0, input_slice_width_end - std::get<1>(input_shape));
+
+        input_slice_height_start = std::max<int>(0, input_slice_height_start);
+        input_slice_height_end = std::min<int>(std::get<0>(input_shape), input_slice_height_end);
+        input_slice_width_start = std::max<int>(0, input_slice_width_start);
+        input_slice_width_end = std::min<int>(std::get<1>(input_shape), input_slice_width_end);
+
+        std::array<uint32_t, 2> this_ceil_pad = {0, 0};
+        auto [output_height, output_width] = output_shape;
+        if (output_slice_height_start == 0) {
+            pad_top = padding_n4[0];
+            input_slice_height_start = 0;
+        }
+        if (output_slice_height_end == output_height) {
+            pad_bottom = padding_n4[1];
+            input_slice_height_end = std::get<0>(input_shape);
+            this_ceil_pad[0] = ceil_pad[0];
+        }
+        if (output_slice_width_start == 0) {
+            pad_left = padding_n4[2];
+            input_slice_width_start = 0;
+        }
+        if (output_slice_width_end == output_width) {
+            pad_right = padding_n4[3];
+            input_slice_width_end = std::get<1>(input_shape);
+            this_ceil_pad[1] = ceil_pad[1];
+        }
+        uint32_t width_rounding_value = (output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
+        uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
+        if (output_slice_width % width_rounding_value != 0) {
+            uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
+            log_trace(
+                tt::LogOp,
+                "Pool2d Slicing: Additional output width of {} added to the right side.",
+                additional_padded_width);
+
+            output_slice_width += additional_padded_width;
+            pad_right = (output_slice_width - 1) * stride[1] - input_slice_width +
+                        ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
+        }
+        return {
+            {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}},
+            {pad_top, pad_bottom, pad_left, pad_right},
+            this_ceil_pad,
+            output_slice_width};
+    }
+
+    std::tuple<IOShape, IOShape> get_input_slice(
+        const IOShape& output_slice_start, const IOShape& output_slice_end) const override {
+        return std::get<0>(get_input_slice_and_padding(output_slice_start, output_slice_end));
+    }
+
+    uint32_t get_L1_usage(
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end,
+        const op_slicing::Op2DSliceConfig& /*slice_config*/) const override {
+        auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
+            get_input_slice_and_padding(output_slice_start, output_slice_end);
+        auto [input_slice_start, input_slice_end] = input_slice;
+        uint32_t input_slice_height = std::get<0>(input_slice_end) - std::get<0>(input_slice_start);
+        uint32_t input_slice_width = std::get<1>(input_slice_end) - std::get<1>(input_slice_start);
+        uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
+
+        // Get the memory config for this slice
+        auto sliced_input_memory_config = get_input_memory_config(output_slice_start, output_slice_end);
+
+        // Calculate complete L1 usage for this slice
+        auto pool_l1_usage = pool::calculate_L1_usage_for_pool2d_slice(
+            input_slice_height,
+            input_slice_width,
+            output_slice_height,
+            this_output_width,
+            this_slice_padding,
+            this_ceil_pad,
+            return_indices,
+            pool_type,
+            count_include_pad,
+            divisor_override,
+            input_dtype,
+            dtype,
+            input_layout,
+            output_layout,
+            sliced_input_memory_config,
+            sliding_window_config,
+            config_tensor_in_dram);
+
+        log_trace(
+            tt::LogOp,
+            "Pool2D DRAM Auto slicing: L1 usage = {} for slice output {}x{} (input {}x{}), breakdown: "
+            "halo_input={}, halo_output={}, pool_cb={}, output_tensor={}",
+            pool_l1_usage.total_size,
+            output_slice_height,
+            this_output_width,
+            input_slice_height,
+            input_slice_width,
+            pool_l1_usage.halo_input_size,
+            pool_l1_usage.halo_output_size,
+            pool_l1_usage.pool_cb_size,
+            pool_l1_usage.output_tensor_size);
+
+        return pool_l1_usage.total_size;
+    }
+
+    tt::tt_metal::MemoryConfig get_input_memory_config(
+        const IOShape& output_slice_start, const IOShape& output_slice_end) const override {
+        auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
+            get_input_slice_and_padding(output_slice_start, output_slice_end);
+        auto [input_slice_start, input_slice_end] = input_slice;
+        uint32_t input_slice_height = std::get<0>(input_slice_end) - std::get<0>(input_slice_start);
+        uint32_t input_slice_width = std::get<1>(input_slice_end) - std::get<1>(input_slice_start);
+        uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
+
+        uint32_t input_nhw_rounding_value =
+            (input_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
+        uint32_t input_slice_nhw =
+            tt::round_up(batch_size * input_slice_height * input_slice_width, input_nhw_rounding_value);
+        auto sliced_input_tensor_memory_config = std::get<0>(get_pool_input_memory_config(
+            sliding_window_config,
+            shard_layout,
+            batch_size,
+            channels,
+            ttnn::Shape({1, 1, input_slice_nhw, channels}),
+            ttnn::Shape({batch_size, output_slice_height, this_output_width, channels}),
+            device->compute_with_storage_grid_size(),
+            dtype,
+            input_layout,
+            dtype,
+            output_layout,
+            pool_type,
+            count_include_pad,
+            divisor_override,
+            return_indices,
+            config_tensor_in_dram));
+
+        return sliced_input_tensor_memory_config;
+    }
+
+    std::vector<ttnn::Tensor> run_L1_op(
+        const ttnn::Tensor& sliced_input_tensor,
+        const IOShape& output_slice_start,
+        const IOShape& output_slice_end) override {
+        auto [input_slice, this_slice_padding, this_ceil_pad, this_output_width] =
+            get_input_slice_and_padding(output_slice_start, output_slice_end);
+        auto [input_slice_start, input_slice_end] = input_slice;
+        auto [input_slice_height_start, input_slice_width_start] = input_slice_start;
+        auto [input_slice_height_end, input_slice_width_end] = input_slice_end;
+
+        int input_slice_height = input_slice_height_end - input_slice_height_start;
+        int input_slice_width = input_slice_width_end - input_slice_width_start;
+        auto this_ceil_mode = ceil_mode;
+        if (this_ceil_pad[0] > 0 || this_ceil_pad[1] > 0) {
+            this_ceil_mode = true;
+        }
+
+        auto result = pool2d_L1(
+            sliced_input_tensor,
+            pool_type,
+            batch_size,
+            input_slice_height,
+            input_slice_width,
+            channels,
+            kernel_size,
+            stride,
+            this_slice_padding,
+            dilation,
+            this_ceil_mode,
+            count_include_pad,
+            divisor_override,
+            std::nullopt,
+            std::nullopt,
+            compute_kernel_config,
+            true, /* deallocate_input to save L1 */
+            true, /* reallocate_halo_output to save L1 */
+            return_indices,
+            dtype,
+            output_layout,
+            this_ceil_pad,
+            config_tensor_in_dram);
+
+        return result;
+    }
+
+    std::string name() const override { return "Pool2D"; }
+};
+
+static std::vector<Tensor> pool2d_DRAM(
+    const Tensor& input_tensor,
+    Pool2DType pool_type,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::optional<std::array<uint32_t, 2>> dilation_ = std::nullopt,
+    bool ceil_mode = false,
+    bool count_include_pad = true,
+    std::optional<int32_t> divisor_override = std::nullopt,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Op2DSliceConfig>& dram_slice_config_ = std::nullopt,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool deallocate_input = false,
+    bool reallocate_halo_output = true,
+    bool return_indices = false,
+    const DataType dtype = DataType::BFLOAT16,
+    const Layout output_layout = Layout::ROW_MAJOR,
+    bool config_tensor_in_dram = false) {
+    // Note: We allow return_indices=True to proceed here so we can check if it fits in a single slice.
+    // The verification happens after slice configuration is determined.
+    // The check for L1_FULL or manual num_slices==1 is now handled in determine_pool2d_execution_path.
+    std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
+    auto dilation = dilation_.value_or(std::array<uint32_t, 2>{1, 1});
+    sliding_window::SlidingWindowConfig sliding_window_config{
+        .batch_size = batch_size,
+        .channels = channels,
+        .input_hw = {input_h, input_w},
+        .window_hw = {kernel_size.at(0), kernel_size.at(1)},
+        .stride_hw = {stride.at(0), stride.at(1)},
+        .padding = padding_4d,
+        .dilation_hw = {dilation.at(0), dilation.at(1)},
+        .ceil_mode = ceil_mode,
+    };
+    auto output_shape = sliding_window_config.get_output_shape();
+    uint32_t output_height = output_shape[1];
+    uint32_t output_width = output_shape[2];
+
+    // Create pool slice attribute for slice configuration
+    auto pool_slice_attr = Pool2dSliceAttr(
+        batch_size,
+        Pool2dSliceAttr::IOShape{input_h, input_w},
+        channels,
+        kernel_size,
+        stride,
+        sliding_window::get_pair_n4_padding(padding),
+        dilation,
+        ceil_mode,
+        count_include_pad,
+        divisor_override,
+        applied_shard_scheme,
+        return_indices,
+        pool_type,
+        input_tensor.dtype(),
+        dtype,
+        input_tensor.layout(),
+        output_layout,
+        compute_kernel_config,
+        config_tensor_in_dram,
+        input_tensor.device());
+
+    // Determine slice configuration (automatic if not provided or num_slices==0)
+    Op2DSliceConfig dram_slice_config;
+    if (dram_slice_config_.has_value() && dram_slice_config_.value().num_slices > 0) {
+        dram_slice_config = dram_slice_config_.value();
+    } else {
+        dram_slice_config = op_slicing::determine_slice_config(
+            &pool_slice_attr,
+            ttnn::Shape{batch_size, input_h, input_w, channels},
+            ttnn::Shape{batch_size, output_height, output_width, channels},
+            dram_slice_config_,
+            output_layout,
+            input_tensor.device());
+    }
+
+    // Validate that kernel size can fit in the slices
+    // We need to check that each slice (especially the smallest one) is large enough for the kernel
+    const uint32_t output_sliced_dim =
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height
+                                                                                            : output_width;
+    const uint32_t kernel_sliced_dim =
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? kernel_size[0]
+                                                                                            : kernel_size[1];
+    const uint32_t stride_sliced_dim =
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? stride[0] : stride[1];
+    const uint32_t dilation_sliced_dim =
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? dilation[0] : dilation[1];
+    const uint32_t effective_kernel_size = (kernel_sliced_dim - 1) * dilation_sliced_dim + 1;
+
+    // Check each output slice to find the minimum input slice size
+    // Output slices are distributed as evenly as possible across num_slices
+    uint32_t min_input_slice_in_sliced_dim = UINT32_MAX;
+    for (uint32_t slice_idx = 0; slice_idx < dram_slice_config.num_slices; ++slice_idx) {
+        // Calculate output slice boundaries for this slice
+        uint32_t output_slice_start = (slice_idx * output_sliced_dim) / dram_slice_config.num_slices;
+        uint32_t output_slice_end = ((slice_idx + 1) * output_sliced_dim) / dram_slice_config.num_slices;
+
+        // Calculate required input slice size for this output slice
+        // input_slice_end = (output_slice_end - 1) * stride + effective_kernel_size - padding
+        // input_slice_start = output_slice_start * stride - padding
+        // But we need to consider actual clamping to input boundaries
+        int input_slice_start =
+            static_cast<int>(output_slice_start * stride_sliced_dim) -
+            static_cast<int>(
+                padding_4d
+                    [dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? 0 : 2]);
+        int input_slice_end =
+            static_cast<int>((output_slice_end - 1) * stride_sliced_dim) -
+            static_cast<int>(
+                padding_4d
+                    [dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? 0 : 2]) +
+            static_cast<int>(effective_kernel_size);
+
+        const uint32_t input_sliced_dim =
+            dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? input_h : input_w;
+
+        // Clamp to actual input boundaries
+        input_slice_start = std::max(0, input_slice_start);
+        input_slice_end = std::min(static_cast<int>(input_sliced_dim), input_slice_end);
+
+        uint32_t input_slice_size = static_cast<uint32_t>(input_slice_end - input_slice_start);
+        min_input_slice_in_sliced_dim = std::min(min_input_slice_in_sliced_dim, input_slice_size);
+    }
+
+    TT_FATAL(
+        dram_slice_config.num_slices == 1 ||  // L1 path will handle this case
+            min_input_slice_in_sliced_dim >= effective_kernel_size,
+        "Cannot fit Pool2D operation in L1 memory with DRAM slicing. The smallest input slice (size={}) "
+        "in the {} dimension is smaller than the effective kernel size ({}). "
+        "Kernel: {}x{}, Stride: {}x{}, Dilation: {}x{}, Num slices: {}, Slicing dimension: {}. "
+        "Input shape: {}x{}, Output shape: {}x{}, Channels: {}. "
+        "This means the tensor cannot be processed even with DRAM slicing. "
+        "Consider: (1) reducing kernel size, (2) reducing dilation, (3) increasing stride, "
+        "or (4) if possible, increasing available L1 memory to reduce the number of slices needed.",
+        min_input_slice_in_sliced_dim,
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+        effective_kernel_size,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        dilation[0],
+        dilation[1],
+        dram_slice_config.num_slices,
+        dram_slice_config.slice_type == op_slicing::Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+        input_h,
+        input_w,
+        output_height,
+        output_width,
+        channels);
+
+    // If automatic determination resulted in num_slices=1, use L1 path for efficiency
+    if (dram_slice_config.num_slices == 1) {
+        return pool2d_L1(
+            input_tensor,
+            pool_type,
+            batch_size,
+            input_h,
+            input_w,
+            channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation_,
+            ceil_mode,
+            count_include_pad,
+            divisor_override,
+            memory_config,
+            applied_shard_scheme,
+            compute_kernel_config,
+            deallocate_input,
+            reallocate_halo_output,
+            return_indices,
+            dtype,
+            output_layout,
+            std::nullopt,
+            config_tensor_in_dram);
+    }
+
+    // Prepare input tensor for DRAM slicing path (only reshape if needed)
+    const auto unflattened_input_shape = ttnn::Shape{batch_size, input_h, input_w, channels};
+    Tensor input_tensor_for_slicing = input_tensor;
+
+    // Only reshape if the current shape doesn't match what we need
+    if (input_tensor.logical_shape() != unflattened_input_shape) {
+        input_tensor_for_slicing = ttnn::operations::experimental::quasar::reshape(
+            input_tensor, unflattened_input_shape, unflattened_input_shape);
+    }
+
+    // Create output tensors for DRAM slicing
+    Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
+        TensorSpec(
+            ttnn::Shape({batch_size, output_height, output_width, channels}),
+            tt::tt_metal::TensorLayout(
+                dtype,
+                tt::tt_metal::PageConfig(output_layout),
+                MemoryConfig{
+                    TensorMemoryLayout::INTERLEAVED,
+                    BufferType::DRAM,
+                })),
+        input_tensor_for_slicing.device());
+    std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
+
+    ttnn::operations::op_slicing::run_sliced_op(
+        input_tensor_for_slicing, output_tensors, &pool_slice_attr, dram_slice_config);
+
+    return {dram_output_tensor};
+}
+
+// Enum to represent the execution path for pool2d operations
+enum class Pool2dExecutionPath {
+    L1,   // Execute Pool using L1 memory
+    DRAM  // Execute Pool using DRAM slicing
+};
+
+// Helper function to determine which pool2d execution path to take based on
+// slice configuration and input tensor properties
+Pool2dExecutionPath determine_pool2d_execution_path(
+    const ttnn::Tensor& input_tensor, const std::optional<const Op2DSliceConfig>& slice_config) {
+    bool is_l1 = input_tensor.memory_config().is_l1();
+
+    // If slice config explicitly specifies L1_FULL, use L1 path
+    if (slice_config.has_value() && slice_config->slice_type == Op2DSliceConfig::SliceType::L1_FULL) {
+        return Pool2dExecutionPath::L1;
+    }
+
+    // If slice config explicitly sets num_slices==1, use L1 path (user knows it fits)
+    if (slice_config.has_value() && slice_config->num_slices == 1) {
+        return Pool2dExecutionPath::L1;
+    }
+
+    // If input is in L1 (not DRAM), use L1 path - tensor already fits in L1
+    // We should never move an L1 tensor to DRAM just to slice it
+    if (is_l1) {
+        return Pool2dExecutionPath::L1;
+    }
+
+    // Otherwise, tensor is in DRAM, use DRAM slicing path
+    return Pool2dExecutionPath::DRAM;
+}
+
+static std::vector<Tensor> pool2d(
+    const Tensor& input_tensor,
+    Pool2DType pool_type,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::optional<std::array<uint32_t, 2>> dilation = std::nullopt,
+    bool ceil_mode = false,
+    bool count_include_pad = true,
+    std::optional<int32_t> divisor_override = std::nullopt,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Op2DSliceConfig>& dram_slice_config = std::nullopt,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool deallocate_input = false,
+    bool reallocate_halo_output = true,
+    bool return_indices = false,
+    const DataType dtype = DataType::BFLOAT16,
+    const Layout output_layout = Layout::ROW_MAJOR,
+    bool config_tensor_in_dram = false) {
+    // Handle rank 2 and 3 input tensors by reshaping to rank 4
+    Tensor input_tensor_4d = input_tensor;
+    const auto& logical_shape = input_tensor.logical_shape();
+    const auto& padded_shape = input_tensor.padded_shape();
+    uint32_t rank = logical_shape.rank();
+
+    if (rank == 3) {
+        // Rank-3 tensor: [H, W, C] -> [1, H, W, C]
+        log_debug(
+            tt::LogOp, "Pool2D: Rank-3 input tensor detected, assuming [H, W, C] format and reshaping to [1, H, W, C]");
+        TT_FATAL(batch_size == 1, "Pool2D: For rank-3 input [H, W, C], batch_size must be 1, got {}", batch_size);
+        TT_FATAL(
+            input_h == logical_shape[0] && input_w == logical_shape[1] && channels == logical_shape[2],
+            "Pool2D: For rank-3 input [H, W, C], dimensions must match: input_h={}, input_w={}, channels={}, but got "
+            "shape {}",
+            input_h,
+            input_w,
+            channels,
+            logical_shape);
+
+        ttnn::Shape reshaped_logical({1, input_h, input_w, channels});
+        ttnn::Shape reshaped_padded({1, padded_shape[0], padded_shape[1], padded_shape[2]});
+        input_tensor_4d =
+            ttnn::operations::experimental::quasar::reshape(input_tensor, reshaped_logical, reshaped_padded);
+    } else if (rank == 2) {
+        // Rank-2 tensor: [H, W] -> [1, H, W, 1]
+        log_debug(
+            tt::LogOp, "Pool2D: Rank-2 input tensor detected, assuming [H, W] format and reshaping to [1, H, W, 1]");
+        TT_FATAL(
+            batch_size == 1 && channels == 1,
+            "Pool2D: For rank-2 input [H, W], batch_size and channels must be 1, got batch_size={}, channels={}",
+            batch_size,
+            channels);
+        TT_FATAL(
+            input_h == logical_shape[0] && input_w == logical_shape[1],
+            "Pool2D: For rank-2 input [H, W], dimensions must match: input_h={}, input_w={}, but got shape {}",
+            input_h,
+            input_w,
+            logical_shape);
+
+        ttnn::Shape reshaped_logical({1, input_h, input_w, 1});
+        ttnn::Shape reshaped_padded({1, padded_shape[0], padded_shape[1], 1});
+        input_tensor_4d =
+            ttnn::operations::experimental::quasar::reshape(input_tensor, reshaped_logical, reshaped_padded);
+    } else if (rank != 4) {
+        TT_FATAL(false, "Pool2D: Input tensor must be rank 2, 3, or 4, got rank {}", rank);
+    }
+    // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
+
+    // Global average pool fast path: kernel exactly covers spatial input with no padding/dilation.
+    // pool_sum reduction is much cheaper than the sliding-window pool kernels for this case
+    // (no halo, no scatter, single reduction per output element). We require strict equality
+    // (== rather than >=) so that oversized kernels still hit the regular path's validation.
+    //
+    // Gates:
+    //   - padded spatial extent splits evenly across batches. The canonical reshape to
+    //     (batch_size, 1, H*W, C) requires total_padded_spatial % batch_size == 0. Flat
+    //     (1, 1, N*H*W, C) conv2d outputs whose tile-padded W dim doesn't divide cleanly
+    //     by batch (e.g. MobileNetV2 batch=10: 10*7*7=490 → 512, 512%10!=0) fall through
+    //     to the sliding-window kernel, matching pre-#43820 behavior.
+    //   - applied_shard_scheme not set. When the caller pre-declares a shard scheme, they want
+    //     the sliding-window kernel to honor that layout exactly; pool_sum would re-route.
+    //   - block-float TILE inputs must have tile-aligned spatial. pool_sum needs ROW_MAJOR to
+    //     strip tile-padding garbage from non-aligned spatial, but to_layout(bf8 TILE → RM)
+    //     forces untilize+typecast-to-bfloat16 (~127us in the panoptic_deeplab ASPP case),
+    //     which exceeds the algorithmic win. Tile-aligned block-float TILE has no padding
+    //     rows to strip, so pool_sum runs natively (this is the EfficientNet B0 fast case).
+    //
+    // Sharded inputs *are* accepted — the fast-path body below routes them through
+    // to_memory_config(INTERLEAVED) since pool_sum's 1×1 output can't fit the input's shard
+    // spec. The legacy dedicated global_avg_pool2d device op (deleted in #43820) handled
+    // sharded inputs the same way.
+    std::array<uint32_t, 4> padding_check = sliding_window::get_pair_n4_padding(padding);
+    uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
+    uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
+    bool input_is_block_float_tile =
+        (input_tensor_4d.dtype() == DataType::BFLOAT8_B || input_tensor_4d.dtype() == DataType::BFLOAT4_B) &&
+        input_tensor_4d.layout() == Layout::TILE;
+    uint32_t hw_value = input_h * input_w;
+    bool spatial_is_tile_aligned = (hw_value % tt::constants::TILE_HEIGHT == 0);
+    bool block_float_tile_safe = !input_is_block_float_tile || spatial_is_tile_aligned;
+    const auto& gate_padded_shape = input_tensor_4d.padded_shape();
+    uint32_t gate_total_padded_spatial = gate_padded_shape[0] * gate_padded_shape[1] * gate_padded_shape[2];
+    bool batch_divisible_for_fast_path = (gate_total_padded_spatial % batch_size == 0);
+    bool is_global_pool =
+        (kernel_size[0] == input_h && kernel_size[1] == input_w) &&
+        (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0) &&
+        (dilation_h == 1 && dilation_w == 1) && !applied_shard_scheme.has_value() && batch_divisible_for_fast_path &&
+        block_float_tile_safe;
+
+    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
+        // Reduction needs interleaved input/output. The output is a tiny (1×1 spatial) tensor;
+        // a shard spec sized for the full input cannot fit it, so we fall back to interleaved
+        // with the same buffer type (DRAM/L1) when either the caller asked for a sharded
+        // placement or the input is itself sharded. Callers that need a specific sharded layout
+        // for the output should re-shard explicitly.
+        MemoryConfig input_mem = input_tensor_4d.memory_config();
+        MemoryConfig requested_out_mem = memory_config.value_or(input_mem);
+        MemoryConfig reduce_mem = (requested_out_mem.is_sharded() || input_mem.is_sharded())
+                                      ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, requested_out_mem.buffer_type()}
+                                      : requested_out_mem;
+        // If the caller's requested config is sharded, do not try to re-shard the small output.
+        bool honor_requested_out_mem = !requested_out_mem.is_sharded();
+        uint32_t hw = input_h * input_w;
+        // count_include_pad is irrelevant here: is_global_pool guarantees padding is zero in every
+        // direction, so every element of the kernel window corresponds to a real input value.
+        float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value()) : 1.0f / float(hw);
+
+        // Re-route sharded → INTERLEAVED for the reduction (pool_sum's 1×1 spatial output can't
+        // fit the input's shard spec). For TILE inputs, skip the ROW_MAJOR conversion when it's
+        // safe (matches the deleted dedicated global_avg_pool2d device op):
+        //   - spatial tile-aligned (no tile-padding rows to strip), or
+        //   - block-float TILE (the gate above guarantees tile-aligned in this case; the
+        //     conversion would untilize+typecast and is more expensive than the algorithmic win).
+        Tensor input = input_tensor_4d;
+        if (input.memory_config() != reduce_mem) {
+            input = ttnn::operations::experimental::quasar::to_memory_config(input, reduce_mem);
+        }
+        if (input.layout() != Layout::ROW_MAJOR && !spatial_is_tile_aligned && !input_is_block_float_tile) {
+            input = ttnn::operations::experimental::quasar::to_layout(input, Layout::ROW_MAJOR);
+        }
+
+        // Canonicalize to (batch_size, 1, H*W, C) form using an explicit logical+padded reshape.
+        // This is format-agnostic: it accepts both flat (1, 1, N*H*W, C) input from direct
+        // avg_pool2d callers and NHWC (N, H, W, C) input from the global_avg_pool2d Python
+        // wrapper, and it preserves any pre-existing padding (e.g., legacy callers that
+        // pad_to_tile zero-pad the spatial dim) by carrying padded_shape through. The gate
+        // above ensures total_padded_spatial divides cleanly by batch_size.
+        const auto& post_padded = input.padded_shape();
+        uint32_t total_padded_spatial = post_padded[0] * post_padded[1] * post_padded[2];
+        uint32_t channels_padded = post_padded[3];
+        TT_FATAL(
+            total_padded_spatial % batch_size == 0,
+            "Global pool fast path: padded spatial elements ({}) must be divisible by batch_size ({})",
+            total_padded_spatial,
+            batch_size);
+        uint32_t hw_padded_per_batch = total_padded_spatial / batch_size;
+        ttnn::Shape canonical_logical({batch_size, 1, hw, channels});
+        ttnn::Shape canonical_padded({batch_size, 1, hw_padded_per_batch, channels_padded});
+        Tensor canonical = ttnn::operations::experimental::quasar::reshape(input, canonical_logical, canonical_padded);
+
+        // ttnn::sum exposes a scalar parameter, but pool_sum is the only reduction entry point
+        // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
+        // Replace once ttnn::sum gains equivalent handling.
+        Tensor output =
+            ttnn::operations::experimental::quasar::pool_sum(canonical, 2, reduce_mem, compute_kernel_config, scalar);
+        // pool_sum returns (N, 1, 1, C). For batch=1 this is (1, 1, 1, C), the avg_pool2d output
+        // convention (1, 1, N*out_H*out_W, C) coincides. For batch>1 we reshape to (1, 1, N, C).
+        const auto& output_padded_shape = output.padded_shape();
+        if (batch_size == 1) {
+            // Set logical channel count (zero-copy view).
+            ttnn::Shape out_logical({1, 1, 1, channels});
+            ttnn::Shape out_padded({output_padded_shape[0], 1, 1, output_padded_shape[3]});
+            output = ttnn::experimental::view(output, out_logical, out_padded);
+        } else {
+            ttnn::Shape correct_logical({1, 1, batch_size, channels});
+            ttnn::Shape correct_padded({1, 1, output_padded_shape[0], output_padded_shape[3]});
+            output = ttnn::operations::experimental::quasar::reshape(output, correct_logical, correct_padded);
+        }
+
+        if (output.layout() != output_layout) {
+            output = ttnn::operations::experimental::quasar::to_layout(output, output_layout, std::nullopt, reduce_mem);
+        }
+        // Honor caller's requested output memory config when feasible. We skip re-sharding
+        // because a shard spec sized for the input H×W can't fit the 1×1 output.
+        if (honor_requested_out_mem && output.memory_config() != requested_out_mem) {
+            output = ttnn::operations::experimental::quasar::to_memory_config(output, requested_out_mem);
+        }
+        return {output};
+    }
+
+    auto exec_path =
+        return_indices ? Pool2dExecutionPath::L1 : determine_pool2d_execution_path(input_tensor_4d, dram_slice_config);
+    if (exec_path == Pool2dExecutionPath::L1) {
+        auto result = pool2d_L1(
+            input_tensor_4d,
+            pool_type,
+            batch_size,
+            input_h,
+            input_w,
+            channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+            count_include_pad,
+            divisor_override,
+            memory_config,
+            applied_shard_scheme,
+            compute_kernel_config,
+            deallocate_input,
+            reallocate_halo_output,
+            return_indices,
+            dtype,
+            output_layout,
+            std::nullopt,
+            config_tensor_in_dram);
+        return result;
+    }
+    auto result = pool2d_DRAM(
+        input_tensor_4d,
+        pool_type,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        ceil_mode,
+        count_include_pad,
+        divisor_override,
+        memory_config,
+        dram_slice_config,
+        applied_shard_scheme,
+        compute_kernel_config,
+        deallocate_input,
+        reallocate_halo_output,
+        return_indices,
+        dtype,
+        output_layout,
+        config_tensor_in_dram);
+    return result;
+}
+
+std::vector<Tensor> max_pool2d(
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    bool ceil_mode,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<Op2DSliceConfig>& dram_slice_config,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool deallocate_input,
+    bool reallocate_halo_output,
+    bool return_indices,
+    const DataType dtype,
+    const Layout output_layout,
+    bool config_tensor_in_dram) {
+    auto result = pool2d(
+        input_tensor,
+        Pool2DType::MAX_POOL2D,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        ceil_mode,
+        true,          // count_include_pad
+        std::nullopt,  // divisor_override
+        memory_config,
+        dram_slice_config,
+        applied_shard_scheme,
+        std::nullopt,  // compute_kernel_config - not needed for max pool
+        deallocate_input,
+        reallocate_halo_output,
+        return_indices,
+        dtype,
+        output_layout,
+        config_tensor_in_dram);
+    return result;
+}
+
+Tensor avg_pool2d(
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    bool ceil_mode,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<Op2DSliceConfig>& dram_slice_config,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    bool deallocate_input,
+    bool reallocate_halo_output,
+    const DataType dtype,
+    const Layout output_layout,
+    bool config_tensor_in_dram) {
+    auto result = pool2d(
+        input_tensor,
+        Pool2DType::AVG_POOL2D,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding,
+        std::nullopt,  // dilation
+        ceil_mode,
+        count_include_pad,
+        divisor_override,
+        memory_config,
+        dram_slice_config,
+        applied_shard_scheme,
+        compute_kernel_config,
+        deallocate_input,
+        reallocate_halo_output,
+        false,  // return_indices
+        dtype,
+        output_layout,
+        config_tensor_in_dram);
+
+    // Average pool always returns just the tensor, never indices
+    return result.at(0);
+}
+
+}  // namespace ttnn::operations::pool::quasar

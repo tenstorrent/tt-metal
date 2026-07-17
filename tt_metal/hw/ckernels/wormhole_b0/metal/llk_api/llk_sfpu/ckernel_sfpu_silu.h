@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ckernel_sfpu_sigmoid.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -30,11 +30,9 @@ inline void calculate_silu() {
 
 template <bool APPROXIMATION_MODE>
 inline void silu_init() {
-    if constexpr (!APPROXIMATION_MODE) {
-        _init_sfpu_reciprocal_<false>();
-    } else {
-        _init_sfpu_reciprocal_<true>();
-    }
+    // calculate_silu always uses the non-approx sigmoid path via _sfpu_sigmoid_, so we must
+    // use non-approx sigmoid_init regardless of APPROXIMATION_MODE.
+    sigmoid_init<false>();
 }
 
 }  // namespace ckernel::sfpu

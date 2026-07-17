@@ -192,7 +192,10 @@ TensorSpec BcastDeviceOperation::compute_output_specs(
             // Derive output shard_spec based on input
             shard_spec = input_tensor.shard_spec().value();
         }
-        const MemoryConfig mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        const MemoryConfig mem_config = MemoryConfig(
+            operation_attributes.output_mem_config.memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec);
         return TensorSpec(
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(

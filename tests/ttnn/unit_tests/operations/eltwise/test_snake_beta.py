@@ -208,57 +208,57 @@ def test_snake_beta_rank_preservation(device, x_shape, ab_shape):
 # --- Validation failure tests ---
 
 
-def test_snake_beta_shape_mismatch_alpha_beta(device):
+def test_snake_beta_shape_mismatch_alpha_beta(device, expect_error):
     x = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"alpha.shape == beta.shape|Broadcasting rule violation"):
+    with expect_error(RuntimeError, r"alpha.shape == beta.shape|Broadcasting rule violation"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_dtype_mismatch(device):
+def test_snake_beta_dtype_mismatch(device, expect_error):
     x = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.float32), layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, device=device)
     b = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"dtype"):
+    with expect_error(RuntimeError, r"dtype"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_w_mismatch(device):
+def test_snake_beta_w_mismatch(device, expect_error):
     x = ttnn.from_torch(torch.zeros(1, 1, 32, 64, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"input.W == alpha.W|Broadcasting rule violation"):
+    with expect_error(RuntimeError, r"input.W == alpha.W|Broadcasting rule violation"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_unsupported_broadcast(device):
+def test_snake_beta_unsupported_broadcast(device, expect_error):
     """alpha with a non-1 non-W dim (H=64) is rejected in v1."""
     x = ttnn.from_torch(torch.zeros(1, 1, 64, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(1, 1, 64, 1, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(1, 1, 64, 1, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"non-1 size only on the last dim|input.W == alpha.W|broadcast"):
+    with expect_error(RuntimeError, r"non-1 size only on the last dim|input.W == alpha.W|broadcast"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_row_major_layout(device):
+def test_snake_beta_row_major_layout(device, expect_error):
     x = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"[Tt]ile [Ll]ayout|tile layout"):
+    with expect_error(RuntimeError, r"[Tt]ile [Ll]ayout|tile layout"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_unsupported_input_rank(device):
+def test_snake_beta_unsupported_input_rank(device, expect_error):
     """Rank-1 input is rejected; the kernel reader requires padded_shape rank >= 2."""
     x = ttnn.from_torch(torch.zeros(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     a = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     b = ttnn.from_torch(torch.ones(32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(RuntimeError, match=r"input rank >= 2"):
+    with expect_error(RuntimeError, r"input rank >= 2"):
         ttnn.snake_beta(x, a, b)
 
 
-def test_snake_beta_unsupported_dtype_int32(device):
+def test_snake_beta_unsupported_dtype_int32(device, expect_error):
     """INT32 is rejected; only BFLOAT16 / FLOAT32 are supported."""
     x = ttnn.from_torch(
         torch.zeros(1, 1, 32, 32, dtype=torch.int32),
@@ -278,5 +278,5 @@ def test_snake_beta_unsupported_dtype_int32(device):
         dtype=ttnn.int32,
         device=device,
     )
-    with pytest.raises(RuntimeError, match=r"BFLOAT16 or FLOAT32"):
+    with expect_error(RuntimeError, r"BFLOAT16 or FLOAT32"):
         ttnn.snake_beta(x, a, b)

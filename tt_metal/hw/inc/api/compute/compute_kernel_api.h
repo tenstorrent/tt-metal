@@ -23,15 +23,17 @@
 #endif
 #include "llk_math_matmul_api.h"
 #include "llk_math_unary_datacopy_api.h"
-#include "llk_math_unary_sfpu_api.h"
-#include "llk_math_binary_sfpu_api.h"
 #ifndef ARCH_QUASAR
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "ckernel_sfpu_add_top_row.h"
+#include "ckernel_sfpu_max_pool_indices.h"
 #include "llk_math_binary_api.h"
 #include "llk_math_reduce_api.h"
 // SFPU op kernels invoked directly via the unary macros below. The macros
-// themselves come from llk_math_eltwise_unary_sfpu_macros.h (pulled in by
-// llk_math_unary_sfpu_api.h above). Quasar is out of scope for the unary macro
-// refactor and keeps using its per-op wrappers, so these are BH/WH only.
+// themselves come from llk_math_eltwise_unary_sfpu_macros.h. These BH/WH-only
+// kernels (log, abs, ...) have no Quasar implementation; sigmoid/silu are
+// shared and included for Quasar in the #else branch below.
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_log.h"
@@ -49,6 +51,17 @@
 #include "ckernel_sfpu_unary_max_min.h"
 #include "ckernel_sfpu_reduce.h"
 #include "ckernel_sfpu_alt_complex_rotate90.h"
+#else
+#include "ckernel_sfpu_sigmoid.h"
+#include "ckernel_sfpu_silu.h"
+#include "ckernel_sfpu_tanh.h"
+#include "ckernel_sfpu_square.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu_add_int.h"
+#include "llk_math_eltwise_binary_sfpu_mul_int.h"
+#include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+#include "ckernel_sfpu_topk.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -96,9 +109,9 @@ namespace ckernel {
 template <bool fast_and_approx = false>
 ALWI void sigmoid_tile_init() {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid_init<fast_and_approx>()));
+    MATH(SFPU_UNARY_INIT(sigmoid));
 #else
-    MATH(SFPU_INIT_CB(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
+    MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
 #endif
 }
 
@@ -119,9 +132,9 @@ ALWI void sigmoid_tile_init() {
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_sigmoid<fast_and_approx, DST_ACCUM_MODE>(idst, vec_mode)));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid, (8 /*ITERATIONS*/), idst, vec_mode));
 #else
-    MATH(SFPU_CALL(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sigmoid,
@@ -148,17 +161,102 @@ ALWI void sigmoid_tile(uint32_t idst) {
 // clang-format on
 ALWI void silu_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_silu<APPROX, DST_ACCUM_MODE>(idst)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (8 /*ITERATIONS*/), idst, ::ckernel::VectorMode::RC));
 #else
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), idst, VectorMode::RC));
 #endif
 }
 
 ALWI void silu_tile_init() {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>()));
+    MATH(SFPU_UNARY_INIT(silu));
 #else
-    MATH(SFPU_INIT_CB(silu, sfpu::silu_init, (APPROX)));
+    MATH(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX)));
+#endif
+}
+
+// TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
+/**
+ * Please refer to documentation for any_init.
+ *
+ * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
+ * fast_and_approx = true.
+ */
+template <bool fast_and_approx = false>
+ALWI void tanh_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, DST_ACCUM_MODE)));
+#else
+    MATH(SFPU_UNARY_INIT(tanh));
+#endif
+}
+
+// TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
+// clang-format off
+/**
+ * Performs element-wise computation of tanh on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
+ */
+// clang-format on
+template <bool fast_and_approx = false>
+ALWI void tanh_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_tanh,
+        (fast_and_approx, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (8 /* ITERATIONS */), idst, ::ckernel::VectorMode::RC));
+#endif
+}
+
+// clang-format off
+/**
+ * Performs element-wise computation of square value on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void square_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
+#endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void square_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(square));
+#else
+    MATH(SFPU_UNARY_INIT(square, sfpu::init_square));
 #endif
 }
 
@@ -166,12 +264,12 @@ ALWI void silu_tile_init() {
 
 template <bool fast_and_approx = false>
 ALWI void sigmoid_tile_init_pack() {
-    PACK(SFPU_INIT_CB(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
+    PACK(SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (fast_and_approx)));
 }
 
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false>
 ALWI void sigmoid_tile_pack(uint32_t idst) {
-    PACK(SFPU_CALL(
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sigmoid,
@@ -186,7 +284,7 @@ ALWI void sigmoid_tile_pack(uint32_t idst) {
 template <bool fast_and_approx = false>
 ALWI void log_tile_init() {
     // TODO(AP): move out init
-    MATH(SFPU_INIT_CB(log, sfpu::log_init, (APPROX, fast_and_approx, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(log, sfpu::log_init, (APPROX, fast_and_approx, DST_ACCUM_MODE)));
 }
 
 // clang-format off
@@ -208,13 +306,13 @@ ALWI void log_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void log_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_log,
         (APPROX, fast_and_approx, false /* HAS_BASE_SCALING */, DST_ACCUM_MODE),
-        RC,
         idst,
+        VectorMode::RC,
         0));
 }
 
@@ -224,7 +322,7 @@ ALWI void log_tile(uint32_t idst) {
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile_init() {
     // TODO(AP): move out init
-    MATH(SFPU_INIT_CB(log_with_base, sfpu::log_init, (APPROX, fast_and_approx, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(log_with_base, sfpu::log_init, (APPROX, fast_and_approx, DST_ACCUM_MODE)));
 }
 
 // clang-format off
@@ -244,72 +342,30 @@ ALWI void log_with_base_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_log,
         (APPROX, fast_and_approx, true /* HAS_BASE_SCALING */, DST_ACCUM_MODE),
-        RC,
         idst,
+        VectorMode::RC,
         base_scale));
-}
-
-// TODO: Move to trigonometry.h
-/**
- * Please refer to documentation for any_init.
- *
- * If using fast and approximate implementation of tanh_tile(), then tanh_tile_init() should be also be called with
- * fast_and_approx = true.
- */
-template <bool fast_and_approx = false>
-ALWI void tanh_tile_init() {
-    // TODO(AP): move out init
-    MATH(SFPU_INIT_CB(tanh, sfpu::tanh_init, (fast_and_approx, DST_ACCUM_MODE)));
 }
 
 template <bool fast_and_approx = false>
 ALWI void tanh_tile_init_pack() {
-    PACK(SFPU_INIT_CB(tanh, sfpu::tanh_init, (fast_and_approx, DST_ACCUM_MODE)));
-}
-
-// TODO: Move to trigonometry.h
-// clang-format off
-/**
- * Performs element-wise computation of tanh on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * If using fast and approximate mode, then tanh_tile_init() should be also be called with fast_and_approx = true beforehand.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | fast_and_approx | Whether to use fast and approximate mode                                   | bool     | True or False                                         | False    |
- */
-// clang-format on
-template <bool fast_and_approx = false>
-ALWI void tanh_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_tanh,
-        (fast_and_approx, DST_ACCUM_MODE, 8 /* ITERATIONS */),
-        RC,
-        idst));
+    PACK(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, DST_ACCUM_MODE)));
 }
 
 template <bool fast_and_approx = false>
 ALWI void tanh_tile_pack(uint32_t idst) {
-    PACK(SFPU_CALL_MODE(
+    PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_tanh,
         (fast_and_approx, DST_ACCUM_MODE, 8 /* ITERATIONS */),
-        RC,
-        idst));
+        idst,
+        VectorMode::RC));
 }
 
 /**
@@ -334,7 +390,8 @@ ALWI void signbit_tile_init() {
  */
 // clang-format on
 ALWI void signbit_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX, 8 /* ITERATIONS */), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
 /**
@@ -359,8 +416,8 @@ ALWI void signbit_tile_int32_init() {
  */
 // clang-format on
 ALWI void signbit_tile_int32(uint32_t idst) {
-    MATH(
-        SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX, 8 /* ITERATIONS */), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -378,13 +435,13 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void abs_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), RC, idst));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void abs_tile_init() { MATH(SFPU_INIT(abs)); }
+ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
 
 // clang-format off
 /**
@@ -403,7 +460,7 @@ ALWI void abs_tile_init() { MATH(SFPU_INIT(abs)); }
  */
 // clang-format on
 ALWI void abs_tile_int32(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_int32, (APPROX), RC, idst));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_int32, (APPROX), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -421,36 +478,14 @@ ALWI void abs_tile_int32(uint32_t idst) {
  */
 // clang-format on
 ALWI void sign_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX), RC, idst, 1 /* exponent_size_8 */));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX), idst, VectorMode::RC, 1 /* exponent_size_8 */));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sign_tile_init() { MATH(SFPU_INIT(sign)); }
-
-// clang-format off
-/**
- * Performs element-wise computation of square value on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void square_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), RC, idst));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void square_tile_init() { MATH(SFPU_INIT(square)); }
+ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
 
 // clang-format off
 /**
@@ -467,13 +502,13 @@ ALWI void square_tile_init() { MATH(SFPU_INIT(square)); }
  */
 // clang-format on
 ALWI void tiled_prod_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), RC, idst));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void tiled_prod_tile_init() { MATH(SFPU_INIT(tiled_prod)); }
+ALWI void tiled_prod_tile_init() { MATH(SFPU_UNARY_INIT(tiled_prod)); }
 
 // POWER : y = x^(const param0)
 // clang-format off
@@ -492,13 +527,13 @@ ALWI void tiled_prod_tile_init() { MATH(SFPU_INIT(tiled_prod)); }
  */
 // clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_unary_power,
         (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param0));
 }
 
@@ -528,20 +563,20 @@ ALWI void power_tile_init() {
  */
 // clang-format on
 ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_unary_power_iterative,
         (APPROX, 8 /* ITERATIONS */),
-        RC,
         idst,
+        VectorMode::RC,
         param0));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void power_iterative_tile_init() { MATH(SFPU_INIT(power)); }
+ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
 
 // clang-format off
 // exp2 : y = 2 ^ x  ==> [y = exp(x * log(2))]
@@ -559,14 +594,14 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_INIT(power)); }
  */
 // clang-format on
 ALWI void exp2_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exp2, (true /* APPROXIMATE */, DST_ACCUM_MODE), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exp2, (true /* APPROXIMATE */, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void exp2_tile_init() { MATH(SFPU_INIT_CB(exp2, sfpu::exp2_init, (APPROX, DST_ACCUM_MODE))); }
+ALWI void exp2_tile_init() { MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, DST_ACCUM_MODE))); }
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off
@@ -585,13 +620,13 @@ ALWI void exp2_tile_init() { MATH(SFPU_INIT_CB(exp2, sfpu::exp2_init, (APPROX, D
  */
 // clang-format on
 ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX), RC, idst, param0));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX), idst, VectorMode::RC, param0));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void heaviside_tile_init() { MATH(SFPU_INIT(heaviside)); }
+ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside)); }
 
 // expm1 : (exp(x) - 1)
 // clang-format off
@@ -610,8 +645,13 @@ ALWI void heaviside_tile_init() { MATH(SFPU_INIT(heaviside)); }
 // clang-format on
 template <bool approx = false>
 ALWI void expm1_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_expm1, (approx, DST_ACCUM_MODE, 8 /* ITERATIONS */), RC, idst));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_expm1,
+        (approx, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 }
 
 /**
@@ -619,13 +659,16 @@ ALWI void expm1_tile(uint32_t idst) {
  */
 template <bool approx = false>
 ALWI void expm1_tile_init() {
-    MATH(SFPU_INIT_CB(expm1, sfpu::expm1_init, (approx, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(expm1, sfpu::expm1_init, (approx, DST_ACCUM_MODE)));
 }
 
 ALWI void silu_tile_pack(uint32_t idst) {
-    PACK(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), RC, idst));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (DST_ACCUM_MODE, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
-ALWI void silu_tile_init_pack() { PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (APPROX))); }
+ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
+
+#endif  // !ARCH_QUASAR — TopK below is all-arch
 
 // topK local sort
 // clang-format off
@@ -670,13 +713,13 @@ ALWI void silu_tile_init_pack() { PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (APPR
 template <bool stable_sort = false>
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_phases_steps,
         (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort),
-        RC_custom,
         idst,
+        VectorMode::RC_custom,
         idir,
         i_end_phase,
         i_start_phase,
@@ -717,13 +760,13 @@ ALWI void topk_local_sort(
 // clang-format on
 template <bool idir = false, bool stable_sort = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_merge,
         (true /* APPROXIMATE */, DST_ACCUM_MODE, idir, stable_sort),
-        RC_custom,
         idst,
+        VectorMode::RC_custom,
         m_iter,
         k));
 }
@@ -763,13 +806,13 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
 // clang-format on
 template <bool stable_sort = false>
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_bitonic_topk_rebuild,
         (true /* APPROXIMATE */, DST_ACCUM_MODE, stable_sort),
-        RC_custom,
         idst,
+        VectorMode::RC_custom,
         idir,
         m_iter,
         k,
@@ -780,7 +823,9 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void topk_tile_init() { MATH(SFPU_INIT_CB(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
+ALWI void topk_tile_init() { MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */))); }
+
+#ifndef ARCH_QUASAR  // BH/WH-only ops below
 
 // clang-format off
 /**
@@ -807,15 +852,15 @@ template <
     int ITERATIONS = 8>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_max_pool_with_indices,
         (true /* APPROXIMATE */, DST_ACCUM_MODE, num_rows, ITERATIONS, layout, accumulate),
-        RC,
         idst,
         idst_idx,
         0 /* DST out unused, but required for _llk_math_eltwise_binary_sfpu_params_ */,
+        VectorMode::RC,
         chunk)));
 }
 
@@ -824,7 +869,7 @@ ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chu
  */
 template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>
 ALWI void max_reduce_with_indices_init() {
-    MATH((SFPU_BINARY_INIT_CB(
+    MATH((SFPU_BINARY_INIT_FN(
         max_pool_with_indices, sfpu::init_max_pool_with_indices, (true /* APPROXIMATE */, layout))));
 }
 
@@ -867,13 +912,13 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_reduce,
-        (pool_type, reduce_dim, format),
-        RC_custom,
+        (pool_type, reduce_dim, format, DST_ACCUM_MODE),
         idst,
+        VectorMode::RC_custom,
         ct_dim,
         rt_dim));
 }
@@ -896,7 +941,7 @@ ALWI void sfpu_reduce_init() {
             format == DataFormat::UInt16 || format == DataFormat::Float16_b,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
 
-    MATH(SFPU_INIT_CB_ARGS(reduce, sfpu::init_reduce, (pool_type, format), 1 /* block_ct_dim */));
+    MATH(SFPU_UNARY_INIT_FN_ARGS(reduce, sfpu::init_reduce, (pool_type, format, DST_ACCUM_MODE), 1 /* block_ct_dim */));
 }
 
 // clang-format off
@@ -924,21 +969,21 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
-    MATH((SFPU_BINARY_CALL_MODE(
+    MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_add_top_row,
         (format),
-        RC_custom,
         dst_tile_0,
         dst_tile_1,
-        dst_tile_out)));
+        dst_tile_out,
+        VectorMode::RC_custom)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sfpu_add_top_row_init() { MATH((SFPU_BINARY_INIT_FN(add_top_row, sfpu::init_add_top_row))); }
+ALWI void sfpu_add_top_row_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(add_top_row, sfpu::init_add_top_row))); }
 
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
@@ -995,13 +1040,13 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  */
 // clang-format on
 ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_unary_max_min_int32,
         (true /* IS_MAX */, false /* IS_UINT */, APPROX),
-        RC,
         idst,
+        VectorMode::RC,
         param0));
 }
 
@@ -1009,7 +1054,7 @@ ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void unary_max_int32_tile_init() {
-    MATH(SFPU_INIT_CB(unary_max_int32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UINT */)));
+    MATH(SFPU_UNARY_INIT_FN(unary_max_int32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UINT */)));
 }
 
 // unary_max : if x > value --> x, else value
@@ -1029,13 +1074,13 @@ ALWI void unary_max_int32_tile_init() {
  */
 // clang-format on
 ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_unary_max_min_int32,
         (true /* IS_MAX */, true /* IS_UINT */, APPROX),
-        RC,
         idst,
+        VectorMode::RC,
         param0));
 }
 
@@ -1043,7 +1088,7 @@ ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void unary_max_uint32_tile_init() {
-    MATH(SFPU_INIT_CB(unary_max_uint32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UINT */)));
+    MATH(SFPU_UNARY_INIT_FN(unary_max_uint32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UINT */)));
 }
 
 // unary_max : if x > value --> x, else value
@@ -1063,14 +1108,20 @@ ALWI void unary_max_uint32_tile_init() {
  */
 // clang-format on
 ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min, (true /* IS_MAX */, APPROX), RC, idst, param0));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_unary_max_min,
+        (true /* IS_MAX */, APPROX),
+        idst,
+        VectorMode::RC,
+        param0));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_max_tile_init() { MATH(SFPU_INIT_CB(unary_max, sfpu::unary_max_min_init, (true /* IS_MAX */))); }
+ALWI void unary_max_tile_init() { MATH(SFPU_UNARY_INIT_FN(unary_max, sfpu::unary_max_min_init, (true /* IS_MAX */))); }
 
 // clang-format off
 /**
@@ -1088,13 +1139,14 @@ ALWI void unary_max_tile_init() { MATH(SFPU_INIT_CB(unary_max, sfpu::unary_max_m
  */
 // clang-format on
 ALWI void alt_complex_rotate90_tile(uint32_t idst) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_alt_complex_rotate90, (APPROX), RC, idst));
+    MATH(
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_alt_complex_rotate90, (APPROX), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_INIT(alt_complex_rotate90)); }
+ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_rotate90)); }
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -1113,13 +1165,13 @@ ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_INIT(alt_complex_rotate90
  */
 // clang-format on
 ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_unary_max_min_int32,
         (false /* IS_MAX */, false /* IS_UINT */, APPROX),
-        RC,
         idst,
+        VectorMode::RC,
         param0));
 }
 
@@ -1127,7 +1179,8 @@ ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void unary_min_int32_tile_init() {
-    MATH(SFPU_INIT_CB(unary_min_int32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UINT */)));
+    MATH(
+        SFPU_UNARY_INIT_FN(unary_min_int32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UINT */)));
 }
 
 // unary_min : if x < value --> x, else value
@@ -1147,13 +1200,13 @@ ALWI void unary_min_int32_tile_init() {
  */
 // clang-format on
 ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
+    MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_unary_max_min_int32,
         (false /* IS_MAX */, true /* IS_UINT */, APPROX),
-        RC,
         idst,
+        VectorMode::RC,
         param0));
 }
 
@@ -1161,7 +1214,8 @@ ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void unary_min_uint32_tile_init() {
-    MATH(SFPU_INIT_CB(unary_min_uint32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UINT */)));
+    MATH(
+        SFPU_UNARY_INIT_FN(unary_min_uint32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UINT */)));
 }
 
 // unary_min : if x < value --> x, else value
@@ -1181,14 +1235,20 @@ ALWI void unary_min_uint32_tile_init() {
  */
 // clang-format on
 ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_CALL_MODE(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_unary_max_min, (false /* IS_MAX */, APPROX), RC, idst, param0));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_unary_max_min,
+        (false /* IS_MAX */, APPROX),
+        idst,
+        VectorMode::RC,
+        param0));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void unary_min_tile_init() { MATH(SFPU_INIT_CB(unary_min, sfpu::unary_max_min_init, (false /* IS_MAX */))); }
+ALWI void unary_min_tile_init() { MATH(SFPU_UNARY_INIT_FN(unary_min, sfpu::unary_max_min_init, (false /* IS_MAX */))); }
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 ALWI uint32_t get_compute_special_value_flags() {

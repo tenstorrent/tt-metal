@@ -9,7 +9,7 @@
 // patterns are supported on a per-DFB basis (controlled by the is_blocked
 // CTA for each DFB).
 //
-// Per-DFB endpoints are bound by name (dfb::dfb_<i>, ta::dst_<i>) and the kernel
+// Per-DFB endpoints are bound by name (dfb::dfb_<i>, tensor::dst_<i>) and the kernel
 // unrolls one block per declared DFB.  Per-DFB STRIDED/BLOCKED choice and per-DFB
 // entries_per_consumer become CTAs (entries_per_consumer_<i>, is_blocked_<i>)
 // since the values are known at host build time.
@@ -48,7 +48,7 @@
         constexpr uint32_t is_blocked = get_arg(args::is_blocked_##I);                              \
         DataflowBuffer dfb(dfb::dfb_##I);                                                           \
         const uint32_t entry_size = dfb.get_entry_size();                                           \
-        const auto tensor_accessor = TensorAccessor(ta::dst_##I);                                   \
+        const auto tensor_accessor = TensorAccessor(tensor::dst_##I);                               \
         for (uint32_t tile_id = 0; tile_id < entries_per_consumer; tile_id++) {                     \
             const uint32_t page_id = is_blocked ? tile_id : tile_id * num_consumers + consumer_idx; \
             if constexpr (implicit_sync) {                                                          \

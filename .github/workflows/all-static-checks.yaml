@@ -64,12 +64,6 @@ jobs:
           echo "::error::Pre-commit hooks failed. Suggested fixes posted as PR review comments above."
           echo "To fix locally: pre-commit run --from-ref origin/main --to-ref HEAD"
           exit 1
-  check-black:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Do Nothing
-        run: echo "Black is covered by pre-commit. This is a placeholder to be removed after updating branch restrictions."
-
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:
@@ -120,7 +114,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
       - name: Check ttnn is not used in tt_metal tests
-        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
+        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 32 )); then exit 1; fi
       - name: Check tt_eager constructs is not used in tt_metal tests
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi

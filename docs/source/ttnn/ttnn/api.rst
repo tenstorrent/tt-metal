@@ -15,7 +15,41 @@ Device
    ttnn.synchronize_device
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
-   ttnn.pad_to_tile_shape
+
+Deprecated Device APIs
+======================
+
+.. _ttnn-pad-to-tile-shape-deprecated:
+
+``ttnn.pad_to_tile_shape``
+------------------------------------
+
+``ttnn.pad_to_tile_shape`` has been removed. It previously rounded the last two
+dimensions of a shape to multiples of 32 (tile alignment).
+
+**Migration options:**
+
+1. **Preferred** — use :func:`ttnn.to_layout` which handles tile-alignment
+   automatically when converting to tile layout:
+
+   .. code-block:: python
+
+      # Before
+      padded = ttnn.pad_to_tile_shape(tensor.padded_shape)
+      tensor = ttnn.tilize_with_val_padding(tensor, padded, 0.0, mem_config)
+
+      # After
+      tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=mem_config)
+
+2. If you only need the padded shape value (e.g. for memory config calculations),
+   use ``align_shape_to_tile`` from model utilities:
+
+   .. code-block:: python
+
+      from models.common.tensor_utils import align_shape_to_tile
+
+      padded = align_shape_to_tile([1, 384, 49, 96])
+      # => [1, 384, 64, 96]
 
 Memory Config
 *************
@@ -473,6 +507,7 @@ Transformer
    ttnn.transformer.concatenate_heads
    ttnn.transformer.flash_mla_prefill
    ttnn.transformer.flash_multi_latent_attention_decode
+   ttnn.transformer.gated_delta_attn_seq
    ttnn.transformer.joint_scaled_dot_product_attention
    ttnn.transformer.paged_flash_multi_latent_attention_decode
    ttnn.transformer.paged_scaled_dot_product_attention_decode
@@ -481,8 +516,11 @@ Transformer
    ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_sdpa
+   ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads
-   ttnn.transformer.windowed_scaled_dot_product_attention
+   ttnn.experimental.indexer_score_dsa
+   ttnn.experimental.indexer_score_msa
 
 CCL
 ===

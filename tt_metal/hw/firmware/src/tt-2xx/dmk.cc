@@ -69,12 +69,23 @@ uint32_t _start() {
     extern uint32_t __ldm_tdata_start[];
     extern uint32_t __ldm_tdata_end[];
 
+    // Materialize __tdata_lma's address exactly once. The two references below (do_crt1 in the
+    // thread-0 branch and do_thread_crt1) otherwise emit two R_RISCV_HI20 relocations for
+    // __tdata_lma. On Quasar the XIP relocation pass (ElfFile::Impl::XIPify) pairs HI20<->LO12
+    // heuristically (each LO12 to the nearest preceding HI20); when the second HI20 lands in a loop
+    // tail with its LO12 reached via a back-edge it is left orphaned, throwing "R_RISCV_HI20
+    // relocation ... has no matching R_RISCV_LO12". The asm barrier makes the pointer opaque so the
+    // compiler keeps a single materialization (one HI20) and reuses the register/spill instead of
+    // re-emitting a lui/addi pair.
+    uint32_t* tdata_lma = __tdata_lma;
+    asm volatile("" : "+r"(tdata_lma));
+
     if (hartid == thread_0_hartid) {
-        do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
+        do_crt1(&tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
         (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
 
-    do_thread_crt1(__tdata_lma);
+    do_thread_crt1(tdata_lma);
 
     // Wait until first thread in the group has set its slot to GO.
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[thread_0_hartid] != SHARED_GLOBALS_READY_GO) {

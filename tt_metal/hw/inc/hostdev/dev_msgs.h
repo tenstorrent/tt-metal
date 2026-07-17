@@ -294,8 +294,10 @@ enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, Trans
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[MaxProcessorsPerCoreType];
-    uint8_t pad[3];  // CODEGEN:skip
+    uint8_t pad[(4 - (MaxProcessorsPerCoreType % 4)) % 4];  // CODEGEN:skip
 };
+// Needs to be 32b-divisible, since the host clears pause flags from host using read_core()/write_core().
+static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
 constexpr static int DEBUG_RING_BUFFER_SIZE = DEBUG_RING_BUFFER_ELEMENTS * sizeof(uint32_t);
@@ -413,8 +415,10 @@ struct mailboxes_t {
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
-    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for
-                                                           // the compute kernel.
+    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
+                                                           // the 4 TRISCs per engine.
+    volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4
+                                                              // for the 4 TRISCs per engine.
     struct watcher_msg_t watcher;
     struct DevicePrintMemoryLayout dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;

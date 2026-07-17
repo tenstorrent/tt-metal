@@ -7,6 +7,7 @@ set(FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/socket_peer_descriptor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/hd_socket_descriptor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/h2d_stream_service_descriptor.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/d2h_stream_service_descriptor.fbs
 )
 
 # Check if distributed compute is enabled
@@ -90,6 +91,12 @@ endif()
 
 if(TT_UMD_BUILD_SIMULATION)
     target_compile_definitions(distributed PRIVATE TT_UMD_BUILD_SIMULATION)
+endif()
+
+if(TT_METAL_USE_EMULE)
+    # The slow-dispatch mesh command queue routes per-device dispatch through the emule
+    # register/run split (emulated_program_runner.hpp) — gated on this define.
+    target_compile_definitions(distributed PRIVATE TT_METAL_USE_EMULE=1)
 endif()
 
 target_include_directories(distributed SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)

@@ -100,7 +100,9 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
 
     // this op only supports one tile per output core for now
     ShardSpec shard_spec{core_range, {input_shape[-2], tile_shape[1]}};
-    tt::tt_metal::MemoryConfig out_memory_config = input_tensor.memory_config().with_shard_spec(shard_spec);
+    const auto& input_mem_config = input_tensor.memory_config();
+    tt::tt_metal::MemoryConfig out_memory_config =
+        tt::tt_metal::MemoryConfig(input_mem_config.memory_layout(), input_mem_config.buffer_type(), shard_spec);
 
     return {TensorSpec(
         Shape(output_shape), TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), out_memory_config))};

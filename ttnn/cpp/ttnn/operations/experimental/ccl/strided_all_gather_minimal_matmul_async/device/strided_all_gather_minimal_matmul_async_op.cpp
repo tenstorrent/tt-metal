@@ -53,28 +53,6 @@ StridedAllGatherMinimalMatmulAsync::tensor_return_value_t StridedAllGatherMinima
     return {strided_all_gather_output_tensor, minimal_matmul_output_tensor};
 }
 
-tt::tt_metal::operation::Hash StridedAllGatherMinimalMatmulAsync::compute_program_hash(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "StridedAllGatherMinimalMatmulAsync::compute_program_hash is called");
-    return tt::tt_metal::operation::hash_operation<StridedAllGatherMinimalMatmulAsync>(
-        attributes.strided_all_gather_async_struct.dim,
-        attributes.strided_all_gather_async_struct.num_links,
-        attributes.strided_all_gather_async_struct.ring_size,
-        attributes.strided_all_gather_async_struct.output_mem_config,
-        attributes.strided_all_gather_async_struct.topology,
-        attributes.strided_all_gather_async_struct.cluster_axis,
-        attributes.strided_all_gather_async_struct.num_workers_per_link,
-        attributes.strided_all_gather_async_struct.num_buffers_per_channel,
-        attributes.strided_all_gather_async_struct.mm_cores_y,
-        attributes.strided_all_gather_async_struct.mm_block_ht,
-        attributes.strided_all_gather_async_struct.mm_block_wt,
-        attributes.matmul_struct,
-        attributes.all_gather_core_grid_offset,
-        attributes.read_local_slice_from_input,
-        attributes.ag_op,
-        tensor_args);
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

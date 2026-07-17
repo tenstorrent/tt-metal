@@ -15,6 +15,11 @@ on:
       enabled-skus:
         required: true
         type: string
+      test-category:
+        required: false
+        type: string
+        default: unit
+        description: "merge_gate: core triage (merge-gate); unit: hang-report test (L2 nightly). Selects yaml and verify_time_budget.py key."
       enable-watcher:
         description: "Enable watcher"
         default: false
@@ -27,18 +32,22 @@ on:
         description: "Enable LLK asserts"
         default: false
         type: boolean
-      run-hang-report-test:
-        description: "true: run ONLY the hang-report test; false: run only the core triage tests"
-        default: false
-        type: boolean
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.apply-filters.outputs.matrix }}
+      matrix: ${{ steps.prepare.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/triage_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.test-category == 'merge_gate' && './tests/pipeline_reorg/triage_merge_gate_tests.yaml' || './tests/pipeline_reorg/triage_tests.yaml' }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -52,40 +61,25 @@ jobs:
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "triage"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: prepare
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
-      - name: Select hang-report vs core triage rows
-        id: apply-filters
-        env:
-          MATRIX: ${{ steps.prepare.outputs.matrix }}
-          RUN_HANG_REPORT: ${{ inputs.run-hang-report-test }}
-        run: |
-          # run-hang-report-test selects which rows run (they are disjoint):
-          #   true  -> only the hang-report test (nightly's unique coverage)
-          #   false -> only the core triage tests (already gated on merge-gate)
-          if [[ "$RUN_HANG_REPORT" == "true" ]]; then
-            selected=$(echo "$MATRIX" | jq -c '[.[] | select((.tags // []) | index("hang-report"))]')
-          else
-            selected=$(echo "$MATRIX" | jq -c '[.[] | select((.tags // []) | index("hang-report") | not)]')
-          fi
-          count=$(echo "$selected" | jq 'length')
-          if [[ "$count" -eq 0 ]]; then
-            echo "::warning::No triage tests selected for enabled SKU(s) '${{ inputs.enabled-skus }}'; matrix is empty and jobs will be skipped."
-          fi
-          echo "matrix<<EOF" >> $GITHUB_OUTPUT
-          echo "$selected" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
   triage-tests:
     needs: load-test-matrix

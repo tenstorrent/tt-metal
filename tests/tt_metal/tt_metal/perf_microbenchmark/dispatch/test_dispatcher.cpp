@@ -56,6 +56,11 @@ constexpr uint32_t DEFAULT_ITERATIONS_PAGED_WRITE = 1;
 constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE = 1;
 constexpr uint32_t DEFAULT_ITERATIONS_PACKED_WRITE_LARGE = 1;
 
+// Packed writes accumulate into worker L1, which on the Quasar simulator is limited to the same
+// device-data budget the prefetcher tests use. Transfers above this are clamped so they fit and the
+// generated command count stays bounded.
+constexpr uint32_t QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES = 96 * 1024;
+
 // Params that control the data volume, iteration count, and multicast/unicast
 // for the linear write test
 struct LinearWriteParams {
@@ -138,7 +143,7 @@ HostMemDeviceCommand build_packed_large_write_command(
     HostMemDeviceCommand cmd(command_size_bytes);
 
     // Build data spans pointing to the generated payloads
-    std::vector<tt::stl::Span<const uint8_t>> data_spans;
+    std::vector<ttsl::Span<const uint8_t>> data_spans;
     data_spans.reserve(payloads.size());
 
     for (const auto& payload : payloads) {
@@ -173,7 +178,7 @@ HostMemDeviceCommand build_packed_large_unicast_write_command(
     HostMemDeviceCommand cmd(command_size_bytes);
 
     // Build data spans pointing to the generated payloads
-    std::vector<tt::stl::Span<const uint8_t>> data_spans;
+    std::vector<ttsl::Span<const uint8_t>> data_spans;
     data_spans.reserve(payloads.size());
 
     for (const auto& payload : payloads) {
@@ -416,7 +421,12 @@ public:
 
                 // Update Common::DeviceData for paged write
                 Common::DeviceDataUpdater::update_paged_write(
-                    page_payload, device_data, bank_core, bank_id, page_size_alignment_bytes);
+                    page_payload,
+                    device_data,
+                    bank_core,
+                    bank_id,
+                    page_size_alignment_bytes,
+                    is_dram_ ? tt::CoreType::DRAM : tt::CoreType::WORKER);
 
                 // Append page payload to chunk payload
                 chunk_payload.insert(chunk_payload.end(), page_payload.begin(), page_payload.end());
@@ -527,6 +537,9 @@ class DispatchPackedWriteTestFixture : public BaseDispatchTestFixture,
 protected:
     void init_params(const PackedWriteParams& p) {
         transfer_size_bytes_ = p.transfer_size_bytes;
+        if (Common::is_quasar_sim()) {
+            transfer_size_bytes_ = std::min(transfer_size_bytes_, QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES);
+        }
         num_iterations_ = p.num_iterations;
         dram_data_size_words_ = p.dram_data_size_words;
     }
@@ -1034,7 +1047,7 @@ template <typename FDFixture>
 class SDDispatchTestBase : public FDFixture {
 public:
     void SetUp() override {
-        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        if (tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->device_ = tt_metal::CreateDevice(0);
@@ -1244,6 +1257,19 @@ class DispatchPackedWriteLargeSDTestFixture : public SDDispatchTestBase<Dispatch
 class DispatchPackedWriteLargeUnicastSDTestFixture
     : public SDDispatchTestBase<DispatchPackedWriteLargeUnicastTestFixture> {};
 
+// Quasar FD fixtures. QuasarSimulatorVariant<> sets quasar_simulator_variant_=true so the gate in
+// BaseTestFixture::SetUp skips the default FD fixture on Quasar and these on WH/BH.
+class DispatchLinearWriteQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<DispatchLinearWriteTestFixture> {};
+class DispatchPagedWriteQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<DispatchPagedWriteTestFixture> {};
+class DispatchPackedWriteQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<DispatchPackedWriteTestFixture> {};
+class DispatchPackedWriteLargeQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<DispatchPackedWriteLargeTestFixture> {};
+class DispatchPackedWriteLargeUnicastQuasarSimulatorTestFixture
+    : public Common::QuasarSimulatorVariant<DispatchPackedWriteLargeUnicastTestFixture> {};
+
 // Linear Write Unicast/Multicast
 TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     log_info(tt::LogTest, "DispatchLinearWriteTestFixture - LinearWrite (Fast Dispatch) - Test Start");
@@ -1309,6 +1335,42 @@ TEST_P(DispatchPackedWriteLargeUnicastSDTestFixture, WriteLargePackedUnicast) {
     log_info(
         tt::LogTest,
         "DispatchPackedWriteLargeUnicastSDTestFixture - WriteLargePackedUnicast (Slow Dispatch) - Test Start");
+    run_packed_large_unicast_write_test();
+}
+
+// Quasar simulator FD tests — The default FD fixtures skip on Quasar simulator and these skip on WH/BH.
+TEST_P(DispatchLinearWriteQuasarSimulatorTestFixture, LinearWrite) {
+    log_info(
+        tt::LogTest, "DispatchLinearWriteQuasarSimulatorTestFixture - LinearWrite (Quasar simulator FD) - Test Start");
+    run_linear_write_test();
+}
+
+TEST_P(DispatchPagedWriteQuasarSimulatorTestFixture, PagedWrite) {
+    log_info(
+        tt::LogTest, "DispatchPagedWriteQuasarSimulatorTestFixture - PagedWrite (Quasar simulator FD) - Test Start");
+    run_paged_write_test();
+}
+
+TEST_P(DispatchPackedWriteQuasarSimulatorTestFixture, WritePackedUnicast) {
+    log_info(
+        tt::LogTest,
+        "DispatchPackedWriteQuasarSimulatorTestFixture - WritePackedUnicast (Quasar simulator FD) - Test Start");
+    run_packed_write_test();
+}
+
+TEST_P(DispatchPackedWriteLargeQuasarSimulatorTestFixture, WriteLargePackedMulticast) {
+    log_info(
+        tt::LogTest,
+        "DispatchPackedWriteLargeQuasarSimulatorTestFixture - WriteLargePackedMulticast (Quasar simulator FD) - Test "
+        "Start");
+    run_packed_large_write_test();
+}
+
+TEST_P(DispatchPackedWriteLargeUnicastQuasarSimulatorTestFixture, WriteLargePackedUnicast) {
+    log_info(
+        tt::LogTest,
+        "DispatchPackedWriteLargeUnicastQuasarSimulatorTestFixture - WriteLargePackedUnicast (Quasar simulator FD) - "
+        "Test Start");
     run_packed_large_unicast_write_test();
 }
 
@@ -1391,6 +1453,97 @@ INSTANTIATE_TEST_SUITE_P(
         PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS},
         // Testcase: 409600 bytes
         PackedWriteParams{409600, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS}),
+    [](const testing::TestParamInfo<PackedWriteParams>& info) {
+        return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
+               "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorDispatcherTests,
+    DispatchLinearWriteQuasarSimulatorTestFixture,
+    ::testing::Values(
+        // Testcase: 49152 bytes (Unicast)
+        LinearWriteParams{49152, DEFAULT_ITERATIONS_LINEAR_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
+        // Testcase: 196608 bytes (Unicast)
+        LinearWriteParams{196608, DEFAULT_ITERATIONS_LINEAR_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
+        // Testcase: 49152 bytes (Multicast)
+        LinearWriteParams{49152, DEFAULT_ITERATIONS_LINEAR_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 196608 bytes (Multicast)
+        LinearWriteParams{196608, DEFAULT_ITERATIONS_LINEAR_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<LinearWriteParams>& info) {
+        return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
+               "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
+               (info.param.is_mcast ? "mcast" : "unicast");
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorDispatcherTests,
+    DispatchPagedWriteQuasarSimulatorTestFixture,
+    ::testing::Values(
+        // Testcase: 512 pages x 16 bytes (DRAM)
+        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 512 pages x 16 bytes (L1)
+        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
+        // Testcase: 128 pages x 2048 bytes (DRAM)
+        PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 128 pages x 2048 bytes (L1)
+        PagedWriteParams{2048, 128, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
+        // Testcase: 10 pages x 4128 bytes (not 4K-aligned) (DRAM)
+        PagedWriteParams{4128, 10, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (DRAM)
+        PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true},
+        // Testcase: 13 pages x 16 bytes (arbitrary non-even numbers) (L1)
+        PagedWriteParams{16, 13, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, false},
+        // Testcase: 45 pages x 8192 bytes (high BW) (DRAM)
+        PagedWriteParams{8192, 45, DEFAULT_ITERATIONS_PAGED_WRITE, Common::DRAM_DATA_SIZE_WORDS, true}),
+    [](const testing::TestParamInfo<PagedWriteParams>& info) {
+        std::stringstream ss;
+        ss << "page_size" << info.param.page_size << "_np" << info.param.num_pages << "_iter"
+           << info.param.num_iterations << "_" << (info.param.is_dram ? "DRAM" : "L1");
+        return ss.str();
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorDispatcherTests,
+    DispatchPackedWriteQuasarSimulatorTestFixture,
+    ::testing::Values(
+        // Testcase: 40960 bytes (Unicast)
+        PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE, Common::DRAM_DATA_SIZE_WORDS},
+        // Testcase: 98304 bytes (= QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES = 96 KB) (Unicast)
+        PackedWriteParams{
+            QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES, DEFAULT_ITERATIONS_PACKED_WRITE, Common::DRAM_DATA_SIZE_WORDS}),
+    [](const testing::TestParamInfo<PackedWriteParams>& info) {
+        return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
+               "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorDispatcherTests,
+    DispatchPackedWriteLargeQuasarSimulatorTestFixture,
+    ::testing::Values(
+        // Testcase: 40960 bytes (fits within 96 KB budget)
+        PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS},
+        // Testcase: 98304 bytes (= QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES = 96 KB)
+        PackedWriteParams{
+            QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES,
+            DEFAULT_ITERATIONS_PACKED_WRITE_LARGE,
+            Common::DRAM_DATA_SIZE_WORDS}),
+    [](const testing::TestParamInfo<PackedWriteParams>& info) {
+        return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
+               "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarSimulatorDispatcherTests,
+    DispatchPackedWriteLargeUnicastQuasarSimulatorTestFixture,
+    ::testing::Values(
+        // Testcase: 40960 bytes (fits within 96 KB budget)
+        PackedWriteParams{40960, DEFAULT_ITERATIONS_PACKED_WRITE_LARGE, Common::DRAM_DATA_SIZE_WORDS},
+        // Testcase: 98304 bytes (= QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES = 96 KB)
+        PackedWriteParams{
+            QUASAR_SIMULATION_PACKED_WRITE_MAX_BYTES,
+            DEFAULT_ITERATIONS_PACKED_WRITE_LARGE,
+            Common::DRAM_DATA_SIZE_WORDS}),
     [](const testing::TestParamInfo<PackedWriteParams>& info) {
         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_";

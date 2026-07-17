@@ -43,8 +43,9 @@ class SQUADV2Dataset(Dataset):
         for i in range(len(dataset_question)):
             self.data.append(
                 (
-                    tokenizer.batch_encode_plus(
-                        zip(dataset_question[i], dataset_context[i]),
+                    tokenizer(
+                        text=dataset_question[i],
+                        text_pair=dataset_context[i],
                         max_length=seq_len,
                         padding="max_length",
                         truncation=True,

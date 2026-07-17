@@ -19,6 +19,7 @@ Owner:
 """
 
 from dataclasses import dataclass
+from typing import Any
 from inspector_data import run as get_inspector_data, InspectorException
 from triage import ScriptConfig, ScriptPriority, log_check, triage_field, run_script
 
@@ -49,7 +50,7 @@ def run(args, context):
     entries = result.entries
 
     # Group by scope
-    by_scope = {}
+    by_scope: dict[str, list[Any]] = {}
     for entry in entries:
         scope = entry.scope
         by_scope.setdefault(scope, []).append(entry)

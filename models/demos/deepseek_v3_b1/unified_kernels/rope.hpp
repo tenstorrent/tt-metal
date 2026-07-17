@@ -162,7 +162,7 @@ struct Rope {
             // ================================================================
             for (uint32_t ht = 0; ht < Ht; ht++) {
                 reconfig_data_format_srca<false, true>(args.trans_mat_cb);
-                mm_init_short(args.in_cb, args.trans_mat_cb);
+                matmul_init(args.in_cb, args.trans_mat_cb);
 
                 // Reserve intermediate and output buffers
                 // TODO: If we have bcast with dest reuse, we can get rid of rotated_in_interm_cb

@@ -8,7 +8,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/layernorm.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
@@ -66,30 +66,67 @@
  *       the rest of layernorm for their row(s) width slices.
  */
 namespace {
-// Get the set size of the next block in the Welford combine
-inline auto get_next_set_size(
+// Element count (Welford weight) of the width block at a given GLOBAL width-block index: a full block
+// before the logical boundary, the partially-valid boundary block itself, or zero for a pure-padding
+// block past the logical width. The boundary is the single global position where the logical width ends.
+inline uint32_t block_set_size(
+    const uint32_t global_block_index,
+    const uint32_t boundary_width_index,
+    const uint32_t block_w,
+    const uint32_t last_block_w) {
+    if (global_block_index < boundary_width_index) {
+        return block_w;
+    }
+    if (global_block_index == boundary_width_index) {
+        return last_block_w;
+    }
+    return 0;
+}
+
+// Total logical width of a first-stage row (num_blocks_first_stage consecutive blocks starting at
+// row * num_blocks_first_stage): a full row before the boundary row, zero for a row entirely past it,
+// or the summed real widths of the boundary row (full blocks up to the boundary plus the partial block).
+inline uint32_t row_set_size(
+    const uint32_t row,
+    const uint32_t num_blocks_first_stage,
+    const uint32_t boundary_width_index,
+    const uint32_t block_w,
+    const uint32_t last_block_w) {
+    const uint32_t boundary_row = boundary_width_index / num_blocks_first_stage;
+    if (row < boundary_row) {
+        return num_blocks_first_stage * block_w;
+    }
+    if (row > boundary_row) {
+        return 0;
+    }
+    const uint32_t full_blocks_before_boundary = boundary_width_index - row * num_blocks_first_stage;
+    return full_blocks_before_boundary * block_w + last_block_w;
+}
+
+// Weight of the b-th block in this core's Welford combine, by its true logical width.
+inline uint32_t get_next_set_size(
     const uint32_t block,
-    const uint32_t num_blocks_combine,
     const bool is_second_stage_reader,
     const uint32_t num_blocks_first_stage,
-    const uint32_t second_stage_w,
+    const uint32_t own_row,
+    const uint32_t boundary_width_index,
     const uint32_t block_w,
     const uint32_t last_block_w) {
     if (is_second_stage_reader) {
-        // The next block is either one of the second-stage
-        // blocks from our core column  or one of the
-        // first-stage blocks from our core row (if row major).
-        // This logic relies on the fact that the second stage
-        // readers in a two-stage reduce get the reduce results
-        // from its core column (for row major) streamed in last
-        // (after the results for its core row)
-        return block >= num_blocks_first_stage ? second_stage_w : block_w;
+        // The first num_blocks_first_stage blocks are this reader's own row, streamed in width order;
+        // the rest are the per-row combined results of the other rows, streamed in row order (for row
+        // major, from this reader's core column). Weight own-row blocks by their global block width and
+        // each other-row result by that row's total logical width.
+        if (block < num_blocks_first_stage) {
+            return block_set_size(
+                own_row * num_blocks_first_stage + block, boundary_width_index, block_w, last_block_w);
+        }
+        const uint32_t row = own_row + (block - num_blocks_first_stage) + 1;
+        return row_set_size(row, num_blocks_first_stage, boundary_width_index, block_w, last_block_w);
     }
 
-    // We're either not doing a two-stage reduce or we're
-    // not a second stage reader, so the next block will either
-    // be a full block or a partial one if it's the last
-    return block == num_blocks_combine - 1 ? last_block_w : block_w;
+    // First-stage worker (or single-stage): the blocks are this core's own row, in width order.
+    return block_set_size(own_row * num_blocks_first_stage + block, boundary_width_index, block_w, last_block_w);
 }
 }  // namespace
 void kernel_main() {
@@ -121,6 +158,16 @@ void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(16);
     constexpr uint32_t eps = get_compile_time_arg_val(17);
     constexpr uint32_t per_core_recip_lut_size = get_compile_time_arg_val(18);
+    // Valid (logical) tile count of the final width block: the number of its tiles that hold any
+    // logical data, the last of which may be only partially valid. Fewer than block_wt when the
+    // logical width does not fill the width blocks evenly (each block spans a whole number of tiles).
+    // A partial boundary tile is counted as a valid tile here; its valid-column count is carried
+    // separately in last_tile_w and combined into last_block_w.
+    // For example, w=96 gives 3 tiles, which sharded on two cores leaves two real tiles on the first
+    // core and one real tile plus one padding tile on the second. For w=80 (also 3 tiles), the second
+    // core owns last_block_wt = 1 tile that is itself partial (last_tile_w = 16 valid columns) plus
+    // one padding tile.
+    constexpr uint32_t last_block_wt = get_compile_time_arg_val(19);
 
     // ---------------------------------------------------------------------------
     // CB definitions
@@ -136,7 +183,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external_id = tt::CBIndex::c_10;
     constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;  // Interleaved E[x] and Var[x] final global mcast result
     constexpr uint32_t cb_transpose_id = tt::CBIndex::c_22;  // Transpose interleaved E[x] and Var[x] to columns
-                                                             // (workaround for bug in transpose_wh_dest)
+                                                             // (workaround for bug in transpose_dest)
     constexpr uint32_t cb_fusion_id = tt::CBIndex::c_18;     // stream gamma/beta
     constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
@@ -165,7 +212,7 @@ void kernel_main() {
 
     // Welford-fp32 alias of cb_in_id. When welford_fp32_alias is true, cb_x_welford_named points
     // to c_29, a separate buffer index sharing cb_in_id's SRAM but configured with UnpackToDestFp32,
-    // so Welford's transpose_wh_tile preserves fp32 precision in DEST. The two aliased indices
+    // so Welford's transpose_tile preserves fp32 precision in DEST. The two aliased indices
     // have independent read/write pointers so the fused path pushes both side by side; the non-fused
     // path reads c_0 (sharded) without read/write pointer manipulation, and so does the alias.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
@@ -180,16 +227,21 @@ void kernel_main() {
     const uint32_t block_ht = (block_wt == 1) ? block_ht_volatile : block_ht_const;
     const uint32_t subblock_wt = (block_wt <= 2) ? subblock_wt_volatile : subblock_wt_const;
 
-    // This value is the same for all cores, except ones that have padding tiles
-    // in them. In that case, don't reduce over the padding elements.
-    const uint32_t num_reduce_tiles_per_block_h = get_arg_val<uint32_t>(0);
-    const uint32_t partial_reduce_W = (num_reduce_tiles_per_block_h - 1) * tile_width + last_tile_w;
+    // This core's real (logical) column count. Welford has no per-column mask, so each core must reduce
+    // over exactly its logical columns: cores before the last own a full block_w, and the last real
+    // core owns the remaining logical columns; a whole number of full tiles plus, when the logical
+    // width is not tile-aligned, a final partial tile. The reduce must stop there rather than at the
+    // physical shard end, which carries padding tiles. This is the only per-core quantity that differs
+    // for the partial final shard.
+    // On all-to-all workers indices 1 through 3 hold the two-stage-reduce args, so this value is appended
+    // at index 4, whereas on other workers it immediately follows the reduce-tile count at index 1.
+    const uint32_t welford_reduce_w = get_arg_val<uint32_t>(is_allgather_worker ? 4 : 1);
+    const uint32_t partial_reduce_W = welford_reduce_w;
 
-    // We split the Welford calls into full tiles and a final partial tile (if any)
-    const bool all_full_tiles = partial_reduce_W % tile_width == 0;
-    const uint32_t num_full_welford_tiles =
-        all_full_tiles ? num_reduce_tiles_per_block_h : num_reduce_tiles_per_block_h - 1;
-    const uint32_t partial_welford_tile_w = all_full_tiles ? 0 : last_tile_w;
+    // Split the Welford reduction into full tiles and a final partial tile (present only when the
+    // logical width is not a multiple of the tile width).
+    const uint32_t num_full_welford_tiles = welford_reduce_w / tile_width;
+    const uint32_t partial_welford_tile_w = welford_reduce_w % tile_width;
 
     // This is the number of tile rows to process
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
@@ -198,10 +250,17 @@ void kernel_main() {
     const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
     const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
     constexpr uint32_t block_w = block_wt * tile_width;
-    constexpr uint32_t last_block_w = block_w - tile_width + last_tile_w;
-    uint32_t first_stage_w =
-        use_two_stage_reduce ? num_blocks_first_stage * block_w : (num_blocks_first_stage - 1) * block_w + last_block_w;
-    uint32_t second_stage_w = use_two_stage_reduce ? (num_blocks_first_stage - 1) * block_w + last_block_w : 0;
+    // Width (valid columns) of the final width block, weighting it in the cross-core combine. The
+    // final block owns last_block_wt tiles (<= block_wt), the last of which has last_tile_w valid
+    // columns; the other blocks each own a full block_w.
+    constexpr uint32_t last_block_w = (last_block_wt - 1) * tile_width + last_tile_w;
+    // Global width-block index of the partial boundary block and this core's own width-block index,
+    // read only on all-to-all workers (the cores that run the cross-core combine). own_row is this
+    // core's first-stage row; a width shard's global index is own_row * num_blocks_first_stage + its
+    // position within the row. These let the combine weight each block/row by its true logical width.
+    const uint32_t boundary_width_index = is_allgather_worker ? get_arg_val<uint32_t>(5) : 0;
+    const uint32_t my_width_index = is_allgather_worker ? get_arg_val<uint32_t>(6) : 0;
+    const uint32_t own_row = my_width_index / num_blocks_first_stage;
 
     // The number of blocks to combine.
     // If we're the second stage reader, we're reducing the
@@ -291,16 +350,9 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(cb_x_welford_id);
     cb_ex_partial.reserve_back(num_block_ht_result_tiles);
-    // Full transpose_wh_init when the alias is active. cb_x_welford_id's buffer index isn't
-    // visible to binary_op_init_common / unary_op_init_common at the top of kernel_main (only
-    // cb_in0/cb_in_id is), so we run the full init once to program all hw config registers
-    // (pack, math hw_configure) for it. For the non-alias path cb_x_welford_id == cb_in_id and
-    // transpose_wh_init_short suffices.
-    if constexpr (welford_fp32_alias) {
-        transpose_wh_init(cb_x_welford_id, cb_ex_partial_id);
-    } else {
-        transpose_wh_init_short(cb_x_welford_id);
-    }
+    // Reconfigure the transpose op for the welford intake CB. When the alias is active,
+    // cb_x_welford_id has UnpackToDestFp32 mode so transpose_tile preserves fp32 precision.
+    transpose_init(cb_x_welford_id);
     welford_init();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
@@ -313,30 +365,33 @@ void kernel_main() {
             if constexpr (welford_fp32_alias) {
                 // SFPU replay slots [0, 32) currently hold the welford recurrence (welford uses
                 // the full 32-slot math-thread replay buffer; the recovery block below re-records
-                // all of it after each transpose). transpose_wh_init_short re-records slots
-                // [16, 32) with the transpose-dest setup so transpose_wh_tile below can replay them.
-                transpose_wh_init_short(cb_x_welford_id);
+                // all of it after each transpose). transpose_init re-records slots
+                // [16, 32) with the transpose-dest setup so transpose_tile below can replay them.
+                transpose_init(cb_x_welford_id);
             }
-            transpose_wh_tile(cb_x_welford_id, w + index_h_offset, welford_input_dst);
+            transpose_tile(cb_x_welford_id, w + index_h_offset, welford_input_dst);
             if constexpr (welford_fp32_alias) {
-                // transpose_wh_tile took the UnpackToDestFp32 path. Its math-side init clobbered
+                // transpose_tile took the UnpackToDestFp32 path. Its math-side init clobbered
                 // the welford recurrence at SFPU replay slots [16, 32).
                 // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with
                 // the welford recurrence; PreserveStats keeps the running mean / M2 accumulator
                 // in LREG4/5. UNPACK A is left in transpose=1;
                 // welford_update is pure SFPU and does not consume that state, and the next
-                // iteration's transpose_wh_init_short reprograms it.
+                // iteration's transpose_init reprograms it.
                 welford_init<WelfordInitMode::PreserveStats>();
             }
             welford_update<per_core_recip_lut_size>(welford_input_dst, sample_idx, *p_reciprocals);
             sample_idx += tile_width;
         }
-        // Do the partial Welford tile, if any
+        // Do the partial Welford tile, if any. It is the tile immediately after this core's full tiles
+        // (index_h_offset + num_full_welford_tiles), i.e. the last real tile of this core's logical
+        // columns; not necessarily the last physical tile of the shard (block_wt - 1), which on the
+        // final core is a pure-padding tile when the width is split across cores.
         if (partial_welford_tile_w > 0) {
             if constexpr (welford_fp32_alias) {
-                transpose_wh_init_short(cb_x_welford_id);
+                transpose_init(cb_x_welford_id);
             }
-            transpose_wh_tile(cb_x_welford_id, block_wt - 1, welford_input_dst);
+            transpose_tile(cb_x_welford_id, index_h_offset + num_full_welford_tiles, welford_input_dst);
             if constexpr (welford_fp32_alias) {
                 welford_init<WelfordInitMode::PreserveStats>();
             }
@@ -345,7 +400,7 @@ void kernel_main() {
         }
         welford_finalize_to_row<per_core_recip_lut_size>(welford_mean_dst, partial_reduce_W - 1, *p_reciprocals);
         // We should transpose back to columns here
-        // However, transpose_wh_dest() is currently buggy.
+        // However, transpose_dest() is currently buggy.
         // So we transpose to an intermediate CB downstream
         tile_regs_commit();
         tile_regs_wait();
@@ -372,13 +427,14 @@ void kernel_main() {
                 cb_ex_external,
                 cb_ex,
                 num_blocks_combine,
-                [&](uint32_t b) {
+                [is_second_stage_reader, num_blocks_first_stage, own_row, boundary_width_index, block_w, last_block_w](
+                    uint32_t b) {
                     return get_next_set_size(
                         b,
-                        num_blocks_combine,
                         is_second_stage_reader,
                         num_blocks_first_stage,
-                        second_stage_w,
+                        own_row,
+                        boundary_width_index,
                         block_w,
                         last_block_w);
                 },
@@ -404,13 +460,13 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     cb_ex_global.wait_front(num_block_ht_result_tiles);
     cb_transpose.reserve_back(num_block_ht_result_tiles);
-    transpose_wh_init_short(cb_ex_global_id);
+    transpose_init(cb_ex_global_id);
     uint32_t processed_tiles = 0;
     while (processed_tiles < num_block_ht_result_tiles) {
         uint32_t tiles_to_load = std::min(num_block_ht_result_tiles - processed_tiles, num_dest_regs);
         tile_regs_acquire();
         for (uint32_t i = 0; i < tiles_to_load; i++) {
-            transpose_wh_tile(cb_ex_global_id, processed_tiles + i, i);
+            transpose_tile(cb_ex_global_id, processed_tiles + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();

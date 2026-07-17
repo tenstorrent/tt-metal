@@ -22,6 +22,11 @@ import sys
 import numpy as np
 import torch
 from PIL import Image
+
+# NOTE(transformers-5.x): `AutoModelForVision2Seq` was removed in transformers 5.x.
+# When this path is bumped off the pinned 4.40.x, rename it to `AutoModelForImageTextToText`
+# (the merged replacement, available since 4.46). Left as-is for now: OpenVLA is not run on
+# CI and pins an older transformers, so it hasn't been validated under 5.x.
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
 

@@ -29,7 +29,7 @@ template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, c
 inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    const std::uint32_t num_eltwise_instrn_per_face = (tensor_shape.face_r_dim >> math_rows_log2(ELTWISE_MATH_ROWS));
+    const std::uint32_t num_eltwise_instrn_per_face = (tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS));
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
                                              ? p_elwise::SRCB_BCAST_COL

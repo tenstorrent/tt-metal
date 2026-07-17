@@ -19,12 +19,6 @@ constexpr static unsigned int SFP_ROWS           = 2;
 constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
 constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
 
-#if defined(LLK_TRISC_ISOLATE_SFPU)
-constexpr static std::uint32_t TRISC_ID = 3;
-#else
-constexpr static std::uint32_t TRISC_ID = 1;
-#endif
-
 // Struct for the ALU addresses
 constexpr std::uint32_t NUM_WORDS_ALU_FORMAT = 3;
 
@@ -66,9 +60,9 @@ typedef union
 // List of possible data format config states
 enum class DataFormatConfigSet : std::uint8_t
 {
-    UNCONFIGURED          = 0,
-    DEFAULT               = 1,
-    MOV_OPS_EXPLICIT_FMT  = 2
+    UNCONFIGURED         = 0,
+    DEFAULT              = 1,
+    MOV_OPS_EXPLICIT_FMT = 2
 };
 
 // /**
@@ -79,29 +73,6 @@ enum class DataFormatConfigSet : std::uint8_t
 // inline uint32_t trisc_log2(const uint32_t val) {
 //     return 31 - __builtin_clz(val);
 // }
-
-/**
- * @brief Helper function to calculate log2 for FPU rows
- * since FPU rows are <=16, and are power of 2, can use
- * simplified higher perf method
- * @param val: Input value to log2 operation
- */
-inline std::uint32_t math_rows_log2(const std::uint32_t math_rows)
-{
-    switch (math_rows)
-    {
-        case 16:
-            return 4;
-        case 8:
-            return 3;
-        case 4:
-            return 2;
-        case 2:
-            return 1;
-        default:
-            return 0;
-    }
-}
 
 /**
  * @brief Increments given counters
@@ -173,13 +144,45 @@ inline void _set_dst_write_addr_(const std::uint32_t tile_index)
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 
-inline void _set_dst_write_addr_by_rows_(const std::uint32_t num_rows_per_tile, const std::uint32_t tile_index)
+/**
+ * @brief Computes the tile-shape index (a log2-style shift exponent derived from
+ *        the number of rows per tile) and stores it in GPR TEMP0 for later reuse
+ *        by @ref _set_dst_write_addr_by_gpr_ and the reduce MOP instruction stream.
+ *
+ *        This is the "compute once" half of the pair that splits
+ *        @ref _set_dst_write_addr_by_rows_ so the shift amount is calculated a
+ *        single time (when the tile shape is known) and reused across many
+ *        per-tile dest-base calculations.
+ *
+ * @param num_rows_per_tile Number of data rows per tile.
+ */
+inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
 {
     const std::uint32_t tile_shape_idx =
         (num_rows_per_tile == 64)
             ? 6
             : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
-    const std::uint32_t dst_index = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
+    ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX] = tile_shape_idx;
+}
+
+/**
+ * @brief Sets the destination register base address depending on the tile index,
+ *        using the tile-shape index previously stored in GPR TEMP0 by
+ *        @ref _set_tile_shape_idx_gpr_ as the left-shift amount that converts
+ *        tile_index into a dest offset.
+ *
+ *        This is the "use many" half of the pair that splits
+ *        @ref _set_dst_write_addr_by_rows_; call @ref _set_tile_shape_idx_gpr_
+ *        once before invoking this for each tile in the reduce.
+ *
+ * @param tile_index Tile index in the dest reg.
+ *        16-bit dest reg data format -> tile_index = 0 - 7
+ *        32-bit dest reg data format -> tile_index = 0 - 3
+ */
+inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
+{
+    const std::uint32_t tile_shape_idx = ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+    const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + ckernel::trisc::_get_dest_buffer_base_();
     ckernel::trisc::_set_dest_section_base_<TRISC_ID>(dst_index);
 }
 

@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+from dataclasses import dataclass
 
+import pytest
 import torch
 
 import ttnn
-
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
 
@@ -540,9 +539,65 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     assert_output_accuracy(golden_output, output_ttnn)
 
 
-def test_layer_norm_inputs_requires_input_tensor():
+def test_layer_norm_inputs_requires_input_tensor(expect_error):
     """``LayerNormInputs()`` without an input tensor must raise."""
-    import pytest
 
-    with pytest.raises(TypeError):
+    with expect_error(TypeError, "."):
         ttnn.LayerNormInputs()
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [42, 127, 519])
+@pytest.mark.parametrize("op_name", ["layer_norm", "rms_norm"])
+def test_norm_row_major_weight_partial_tile_padding(device, h, w, op_name):
+    """Row-major weight/bias with a TILE input whose logical W is not tile-aligned must
+    not let implicit-padding values pollute per-row mean/variance.
+
+    The interleaved row-major-gamma reader generates only a single full-tile reduce
+    scaler. The reduce LLK then sums across all 32 columns of the last tile, including
+    the implicit padded region past the logical width. If those padded bytes are
+    non-zero, sum(x) and sum(x^2) absorb them and the resulting normalization is wrong.
+    A correct kernel must either zero the input padding before the reduce or generate
+    a masked partial-last-tile scaler so the padded columns contribute zero.
+
+    Welford is excluded from this case: layer_norm-Welford handles the partial last
+    tile via last_tile_rows in the compute kernel, and rms_norm forbids Welford.
+    """
+    torch.manual_seed(0)
+    dtype = torch.bfloat16
+    tile_w = 32
+    padded_w = (w + tile_w - 1) // tile_w * tile_w
+    wt = padded_w // tile_w
+
+    torch_input_tensor = torch.rand((h, w), dtype=dtype)
+    torch_weight = torch.rand((w,), dtype=dtype)
+    torch_bias = torch.rand((w,), dtype=dtype)
+
+    # Row-major weight/bias must have padded last dim == tile_width and physical volume
+    # == padded_W. Pad the logical W values with zeros and reshape to (Wt, 32) so the
+    # Wt-element tile pages match the padded input width.
+    weight_rm = torch.cat([torch_weight, torch.zeros(padded_w - w, dtype=dtype)]).reshape(wt, tile_w)
+    bias_rm = torch.cat([torch_bias, torch.zeros(padded_w - w, dtype=dtype)]).reshape(wt, tile_w)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
+    weight = ttnn.from_torch(weight_rm, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    bias = ttnn.from_torch(bias_rm, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=False)
+
+    if op_name == "layer_norm":
+        torch_output_tensor = torch.nn.functional.layer_norm(
+            torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+        )
+        output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
+    else:
+        x = torch_input_tensor.float()
+        rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-12)
+        torch_output_tensor = (x * rms * torch_weight.float() + torch_bias.float()).to(dtype)
+        output_tensor = ttnn.rms_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
+
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_output_accuracy(torch_output_tensor, output_tensor)

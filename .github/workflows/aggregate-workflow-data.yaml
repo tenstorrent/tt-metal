@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       slack-channel-id:
-        description: "Slack channel ID for notifications. Leave empty to use repo secret SLACK_METAL_INFRA_CHANNEL_ID."
+        description: "Slack channel ID for notifications. Leave empty to use repo secret FULL_CI_TRIAGE_CHANNEL."
         required: false
       failures-to-elevate:
         description: 'TEST MODE. When set to N>0, discards real regressions and replaces them with N currently-stayed-failing JOBS (not pipelines). Produces exactly N top-level Slack messages, suppresses the "X other pipelines are failing" footer. Empty/0 = normal production behavior.'
@@ -62,7 +62,7 @@ jobs:
           workflow_ids: |
             [
               ".github/workflows/sanity-tests.yaml",
-              ".github/workflows/blackhole-post-commit.yaml",
+              ".github/workflows/blackhole-sanity-tests.yaml",
               ".github/workflows/blackhole-e2e-tests.yaml",
               ".github/workflows/blackhole-demo-tests.yaml",
               ".github/workflows/galaxy-profiler-tests.yaml",
@@ -94,7 +94,7 @@ jobs:
 
               ".github/workflows/perf-device-models.yaml",
               ".github/workflows/perf-models.yaml",
-              ".github/workflows/fast-dispatch-full-regressions-and-models.yaml",
+              ".github/workflows/single-card-ttnn-models-frequent-tests.yaml",
               ".github/workflows/single-card-demo-tests.yaml",
               ".github/workflows/tt-metal-l2-nightly.yaml",
               ".github/workflows/ttnn-run-sweeps.yaml",
@@ -309,7 +309,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          channel_id: ${{ github.event.inputs.slack-channel-id || secrets.FULL_CI_TRIAGE_CHANNEL }}
           regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           alert_all_message_path: ${{ github.workspace }}/regression-notification-inputs/alert-all-message.txt
         env:
@@ -354,7 +354,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_ts: ${{ needs.handle-failures.outputs.slack_ts }}
           slack_ts_map: ${{ needs.handle-failures.outputs.slack_ts_map }}
-          slack_channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          slack_channel_id: ${{ github.event.inputs.slack-channel-id || secrets.FULL_CI_TRIAGE_CHANNEL }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true
           max_dispatches: ${{ github.event.inputs.max-regression-analysis-dispatches || '' }}

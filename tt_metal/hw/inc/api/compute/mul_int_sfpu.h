@@ -52,10 +52,18 @@ ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (data_format == DataFormat::UInt16) {
-        MATH((SFPU_BINARY_CALL_MODE(
-            DST_SYNC_MODE, DST_ACCUM_MODE, _mul_int_, (APPROX, 8 /* ITERATIONS */), RC, idst0, idst1, odst)));
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _mul_int_,
+            (APPROX, 8 /* ITERATIONS */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::RC)));
     } else {
-        MATH((SFPU_BINARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROX), RC, idst0, idst1, odst)));
+        MATH(
+            (SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
     }
 #endif
 }
@@ -73,9 +81,9 @@ ALWI void mul_int_tile_init() {
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (data_format == DataFormat::UInt16) {
-        MATH((SFPU_BINARY_INIT_CB(mul_uint16, sfpu::_init_mul_int_, (APPROX))));
+        MATH((SFPU_BINARY_INIT_FN(mul_uint16, sfpu::_init_mul_int_, (APPROX))));
     } else {
-        MATH((SFPU_BINARY_INIT_CB(mul_int32, sfpu::mul_int32_init, (APPROX))));
+        MATH((SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROX))));
     }
 #endif
 }

@@ -4,91 +4,12 @@
 
 #pragma once
 
-#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
-
-// Called by the master worker to synchronize with the slave workers
-//
-// Device 2.0 migration: consumes raw L1 addresses and uses legacy noc_semaphore_* primitives.
-// These semaphores are local (created via tt_metal::CreateSemaphore), and OpSignaler already does
-// the id to address translation via get_semaphore(id) on the kernel side before calling this helper.
-// TODO(#45846): refactor to take an id-based interface.
-FORCE_INLINE void master_sync_slaves(
-
-    /* Used to get slave worker's sem addrs */
-    const uint32_t num_workers_to_sync,
-    const uint32_t* worker_noc_coords,
-    const uint32_t worker_sync_sem_addr,
-
-    /* Used to signal the remote op */
-    const uint32_t num_fused_op_cores_to_signal,
-    const uint32_t* fused_op_cores_noc_coords,
-    const uint32_t fused_op_sem_addr,
-    const bool mcast_signal_op_cores,
-
-    uint32_t fused_op_core_idx) {
-    // Wait for all the slaves to finish their work
-    volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr;
-    if (num_workers_to_sync > 1) {
-        master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
-        noc_semaphore_wait(master_l1_semaphore_addr, num_workers_to_sync - 1);
-        // DPRINT("MASTER SYNCED WITH SLAVES\n");
-    }
-
-    // Send signal to op
-    if (mcast_signal_op_cores) {
-        for (uint32_t i = 0; i < num_fused_op_cores_to_signal; i++) {
-            uint64_t remote_fused_op_l1_semaphore_addr =
-                get_noc_addr(fused_op_cores_noc_coords[i * 2], fused_op_cores_noc_coords[i * 2 + 1], fused_op_sem_addr);
-            noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
-        }
-    } else {
-        uint64_t remote_fused_op_l1_semaphore_addr = get_noc_addr(
-            fused_op_cores_noc_coords[fused_op_core_idx * 2],
-            fused_op_cores_noc_coords[fused_op_core_idx * 2 + 1],
-            fused_op_sem_addr);
-        noc_semaphore_inc(remote_fused_op_l1_semaphore_addr, 1);
-    }
-    // DPRINT("MASTER SIGNALED REMOTE OP\n");
-
-    if (num_workers_to_sync > 1) {
-        // Clear the master semaphore, so that it can be used again
-        noc_semaphore_set(master_l1_semaphore_addr, 0);
-
-        // Clear the slave semaphores, so that they can continue processing
-        for (uint32_t i = 1; i < num_workers_to_sync;
-             i++) {  // Skip the first set of coords because they are for master worker
-            uint64_t remote_slave_l1_sem_addr =
-                get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
-            noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
-            // DPRINT("MASTER CLEAREED A SLAVE SEMAPHORE\n");
-        }
-    }
-}
-
-// Called by the slave worker to synchronize with the master worker
-//
-// Device 2.0 migration: TODO(#45846): refactor to take an id-based interface (see master_sync_slaves note above).
-FORCE_INLINE void slave_sync_master(const uint32_t* worker_noc_coords, const uint32_t worker_sync_sem_addr) {
-    // Signal the master that the slave has finished its work
-    uint64_t remote_master_l1_semaphore_addr =
-        get_noc_addr(worker_noc_coords[0], worker_noc_coords[1], worker_sync_sem_addr);
-    noc_semaphore_inc(remote_master_l1_semaphore_addr, 1);
-    // DPRINT("SLAVE SYNCED WITH MASTER\n");
-
-    // Wait for the master to signal that this slave is ready to continue
-    volatile tt_l1_ptr uint32_t* slave_l1_semaphore_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
-    noc_semaphore_wait(slave_l1_semaphore_addr, 1);
-    // DPRINT("SLAVE SEMAPHORE CLEARED BY MASTER\n");
-
-    // Clear the slave semaphore, so that it can be used again
-    noc_semaphore_set(slave_l1_semaphore_addr, 0);
-}
 
 FORCE_INLINE bool is_master(uint32_t master_x, uint32_t master_y, uint32_t worker_x, uint32_t worker_y) {
     return master_x == worker_x && master_y == worker_y;
@@ -102,13 +23,14 @@ uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
 
 // Used to signal an operation that it can start processing data, resulting in overlapping
 struct OpSignaler {
+    Noc noc;
     uint32_t num_workers_to_sync = 0;
     uint32_t* workers_noc_coords = nullptr;  // Worker NOC coordinates [x1, y1, x2, y2...], first one is for master
-    uint32_t worker_sync_sem_addr = 0;
+    Semaphore<> worker_sync_sem{0};
 
     uint32_t num_fused_op_cores_to_signal = 0;
     uint32_t* signal_op_cores_noc_coords = nullptr;
-    uint32_t signal_op_sem_addr = 0;
+    Semaphore<> signal_op_sem{0};
     bool mcast_signal_op_cores = true;
     uint32_t curr_worker_is_master = 0;
 
@@ -120,14 +42,14 @@ struct OpSignaler {
         // Runtime args
         this->num_workers_to_sync = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
-        this->worker_sync_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+        this->worker_sync_sem = Semaphore<>(get_arg_val<uint32_t>(rt_args_idx++));
         this->workers_noc_coords = (uint32_t*)get_arg_addr(
             increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2));  // Skip over the number of workers
 
         this->num_fused_op_cores_to_signal = get_arg_val<uint32_t>(rt_args_idx++);
         this->signal_op_cores_noc_coords =
             (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_fused_op_cores_to_signal * 2));
-        this->signal_op_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+        this->signal_op_sem = Semaphore<>(get_arg_val<uint32_t>(rt_args_idx++));
         this->mcast_signal_op_cores = get_arg_val<uint32_t>(rt_args_idx++) == 1;
 
         uint32_t master_worker_noc_x = this->workers_noc_coords[0];
@@ -143,19 +65,48 @@ struct OpSignaler {
     void synchronize_workers_and_signal_op(uint32_t fused_op_core_idx) {
         ASSERT(this->initialized);
         if (this->curr_worker_is_master) {
-            master_sync_slaves(
-                this->num_workers_to_sync,
-                this->workers_noc_coords,
-                this->worker_sync_sem_addr,
+            // Wait for all the slaves to finish their work
+            if (this->num_workers_to_sync > 1) {
+                this->worker_sync_sem.wait(this->num_workers_to_sync - 1);
+            }
 
-                this->num_fused_op_cores_to_signal,
-                this->signal_op_cores_noc_coords,
-                this->signal_op_sem_addr,
-                this->mcast_signal_op_cores,
+            // Send signal to op
+            if (this->mcast_signal_op_cores) {
+                for (uint32_t i = 0; i < this->num_fused_op_cores_to_signal; i++) {
+                    this->signal_op_sem.up(
+                        this->noc,
+                        this->signal_op_cores_noc_coords[i * 2],
+                        this->signal_op_cores_noc_coords[i * 2 + 1],
+                        1);
+                }
+            } else {
+                this->signal_op_sem.up(
+                    this->noc,
+                    this->signal_op_cores_noc_coords[fused_op_core_idx * 2],
+                    this->signal_op_cores_noc_coords[fused_op_core_idx * 2 + 1],
+                    1);
+            }
 
-                fused_op_core_idx);
+            if (this->num_workers_to_sync > 1) {
+                // Clear the master semaphore, so that it can be used again
+                this->worker_sync_sem.set(0);
+
+                // Clear the slave semaphores, so that they can continue processing
+                for (uint32_t i = 1; i < this->num_workers_to_sync;
+                     i++) {  // Skip the first set of coords because they are for master worker
+                    this->worker_sync_sem.up(
+                        this->noc, this->workers_noc_coords[i * 2], this->workers_noc_coords[i * 2 + 1], 1);
+                }
+            }
         } else {
-            slave_sync_master(this->workers_noc_coords, this->worker_sync_sem_addr);
+            // Signal the master that this slave has finished its work
+            this->worker_sync_sem.up(this->noc, this->workers_noc_coords[0], this->workers_noc_coords[1], 1);
+
+            // Wait for the master to signal that this slave is ready to continue
+            this->worker_sync_sem.wait(1);
+
+            // Clear the slave semaphore, so that it can be used again
+            this->worker_sync_sem.set(0);
         }
     }
 };

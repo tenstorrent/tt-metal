@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -47,7 +47,11 @@ def test_mse_loss(device, input_shapes, loss_mode):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    if loss_mode[0] in ("mean", "sum"):
+        # Reduced losses are scalars; PCC is undefined on constant tensors.
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=3)
+    else:
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
 
 
 @pytest.mark.parametrize(
@@ -86,4 +90,8 @@ def test_l1_loss(device, input_shapes, loss_mode):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    if loss_mode[0] in ("mean", "sum"):
+        # Reduced losses are scalars; PCC is undefined on constant tensors.
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=3)
+    else:
+        assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

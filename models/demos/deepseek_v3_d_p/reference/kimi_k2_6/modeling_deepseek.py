@@ -50,7 +50,12 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from transformers.utils.import_utils import is_torch_fx_available
+
+# transformers >= 5.x removed is_torch_fx_available (it was just `is_torch_available()`).
+try:
+    from transformers.utils.import_utils import is_torch_fx_available
+except ImportError:
+    from transformers.utils import is_torch_available as is_torch_fx_available
 
 from .configuration_deepseek import DeepseekV3Config
 
@@ -382,6 +387,10 @@ class MoEGate(nn.Module):
         import torch.nn.init as init
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.topk_method == "noaux_tc":
+            # Without this the bias stays uninitialized (torch.empty), making gate routing —
+            # and therefore the whole layer — non-deterministic across runs with random weights.
+            init.zeros_(self.e_score_correction_bias)
 
     def forward(self, hidden_states):
         bsz, seq_len, h = hidden_states.shape
@@ -1042,7 +1051,7 @@ class DeepseekV3DecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        self.self_attn = ATTENTION_CLASSES[config._attn_implementation](config=config, layer_idx=layer_idx)
+        self.self_attn = ATTENTION_CLASSES[config._attn_implementation or "eager"](config=config, layer_idx=layer_idx)
 
         self.mlp = (
             DeepseekV3MoE(config)

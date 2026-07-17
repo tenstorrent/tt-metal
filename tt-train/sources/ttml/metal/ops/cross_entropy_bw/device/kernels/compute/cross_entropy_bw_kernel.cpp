@@ -2,20 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <api/debug/dprint.h>
 #include <api/compute/cb_api.h>
 #include <api/compute/pack.h>
 #include <api/compute/reconfig_data_format.h>
 #include <api/compute/reg_api.h>
+#include <api/debug/dprint.h>
 #include <hostdevcommon/kernel_structs.h>
 #include <tensix.h>
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -342,7 +343,8 @@ void reduce_sum_exp_x() {
 
     // We used matmul_tiles instead of reduce_tile, because reduce_tile causes a loss of precision. The same issue has
     // been observed in moreh’s ops.
-    mm_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, cb_exp_sum_after_reduction, 0);
+    reconfig_data_format(cb_mat_mul_reduce, cb_exp_sum_before_reduction);
+    matmul_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, 0);
     matmul_tiles(
         cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register);
 

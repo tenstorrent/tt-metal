@@ -71,7 +71,7 @@ void py_module(nb::module_& mod) {
             )doc");
 
     // DRAM-sender GCB factories live under ttnn.experimental.* — see
-    // ttnn/cpp/ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.cpp.
+    // ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.cpp.
 }
 
 }  // namespace ttnn::global_circular_buffer

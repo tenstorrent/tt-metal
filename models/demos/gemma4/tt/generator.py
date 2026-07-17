@@ -16,13 +16,36 @@ from models.demos.gemma4.tt.generator_trace import (
     resolve_gemma4_prefill_trace_enable,
     warmup_gemma4_model_prefill,
 )
-from models.tt_transformers.tt.common import get_padded_prefill_len
+from models.tt_transformers.tt.common import get_block_size, get_padded_prefill_len, num_blocks_in_seq
 from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN, SUPPORTED_PREFILL_BATCH_SIZES, Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
 # Same 128k batched-prefill token ceiling as the shared Generator
 # (padded_batch × padded_prefill_seq_len).
 GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
+
+
+def _load_text_tokenizer(model_path):
+    # The 12B tokenizer config can advertise multimodal extra_special_tokens as
+    # a list (for example ["<|video|>"]), while this transformers version expects
+    # a dict. The text-only demo does not need those model-specific aliases.
+    try:
+        return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, extra_special_tokens={})
+    except (ValueError, OSError, EnvironmentError) as e:
+        # The whole Gemma4 family shares one identical tokenizer, but some
+        # checkpoints (e.g. gemma-4-31B-it) ship without local tokenizer files.
+        # On an offline box AutoTokenizer can't fetch them and raises a misleading
+        # "need sentencepiece/tiktoken" error. Fall back to an explicit source
+        # (GEMMA4_TOKENIZER) or the 12B tokenizer, which is byte-identical.
+        fallback = os.environ.get("GEMMA4_TOKENIZER", "google/gemma-4-12B-it")
+        if os.path.normpath(str(fallback)) == os.path.normpath(str(model_path)):
+            raise
+        logger.warning(
+            f"Tokenizer load from '{model_path}' failed ({type(e).__name__}: {e}); "
+            f"falling back to the shared Gemma4 tokenizer '{fallback}'. "
+            f"Override with GEMMA4_TOKENIZER."
+        )
+        return AutoTokenizer.from_pretrained(fallback, trust_remote_code=True, extra_special_tokens={})
 
 
 def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded_sliding):
@@ -69,16 +92,28 @@ def _patch_model_args(
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
-    # Gemma4's prefill doesn't yet honor the Generator's per-chunk offset
-    # (chunk_start_idx/chunk_page_table are discarded), so multi-chunk prefill
-    # mis-handles every chunk after the first (wrong RoPE positions + no
-    # cross-chunk attention) — this is the real cause of the >32k garbage. To
-    # keep prefill correct we force a SINGLE chunk by making max_prefill_chunk_size
-    # a power of 2 >= the padded prompt; the in-call SDPA then chunks internally
-    # (correct past 32768). NOTE: a single chunk uses prefill memory proportional
-    # to the full prompt, so very long contexts (>~64k) can OOM — proper
-    # chunk_start_idx support is the follow-up for bounded-memory long prefill.
-    model_args.max_prefill_chunk_size = 1 << max(int(max_seq_len - 1).bit_length(), 11)
+    # Prefill chunking policy — the DEMO path forces a SINGLE chunk.
+    #
+    # Generator-level multi-chunk prefill (GEMMA4_GEN_PREFILL_CHUNK=<tokens>)
+    # drives chunk_start_idx/chunk_page_table per chunk. That path is only
+    # validated to not *hang* (the #49083 fetch-queue wedge on the vLLM serving
+    # boundary, see generator_vllm.py) — it is NOT validated for output
+    # correctness across many chunks: Gemma4's per-chunk plumbing (per-chunk RoPE
+    # offset, cross-chunk paged reads, the hand-rolled sliding-window tail, and an
+    # unimplemented KV-shared cross-chunk case) mis-handles long multi-chunk
+    # prefill and produces garbage (empirically <pad> at 64k / 16 chunks).
+    #
+    # The demo's long-context configs (64k/128k/256k) are instead validated with
+    # a SINGLE chunk: max_prefill_chunk_size is a power of 2 >= the padded prompt,
+    # so the prompt prefills in one chunk and the in-call SDPA chunks internally
+    # (correct past 32768, validated coherent to ~100k with bounded sliding). Only
+    # honor an explicit GEMMA4_GEN_PREFILL_CHUNK override; otherwise force the
+    # single chunk. (The vLLM generator legitimately differs — it must chunk to
+    # dodge the serving-path wedge — see resolve_gemma4_prefill_chunk_size.)
+    _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
+    model_args.max_prefill_chunk_size = (
+        _chunk_override if _chunk_override > 0 else 1 << max(int(max_seq_len - 1).bit_length(), 11)
+    )
     model_args.mesh_device = mesh_device
     model_args.device_name = determine_device_name(mesh_device)
     model_args.model_name = model_path
@@ -107,7 +142,57 @@ def _patch_model_args(
     model_args.encode_prompt = _encode_prompt
 
 
-class Gemma4Generator(Generator):
+class ChunkedPrefillPageTableGuardMixin:
+    """Guard the shared ``Generator.prefill_forward_single_user_text`` against an
+    over-wide page table, without modifying ``models/tt_transformers``.
+
+    vLLM's block manager can hand over a page table with more block columns than
+    the prompt needs. The shared method then computes a negative pad width
+    (``num_blocks_in_seq(...) - page_table.shape[1] < 0``) and crashes on
+    ``torch.cat``. Trim the page table to exactly the blocks this prompt needs so
+    the base method's pad becomes a no-op. Mirrors the per-model guard in
+    ``models/demos/llama3_70b_galaxy/tt/generator.py`` (kept in the gemma4 model
+    so the shared generator stays untouched). Mixed into both the demo
+    (:class:`Gemma4Generator`) and vLLM (``Gemma4ForCausalLM``) generators, whose
+    class hierarchies both reach the shared method but do not share a gemma4 base.
+    """
+
+    def prefill_forward_single_user_text(
+        self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
+    ):
+        if page_table is not None and kv_cache is not None:
+            block_size = get_block_size(kv_cache)
+            needed_blocks = num_blocks_in_seq(tokens.shape[-1] + num_cached_tokens, block_size)
+            # Bounded sliding KV cache: sliding layers pass ``cache_position_modulo``
+            # to ``paged_fill_cache``, which requires ``page_table`` to span the whole
+            # window (``cols * block_size >= cache_position_modulo``) so the circular
+            # wrap can address every slot — even for a short prompt whose own block
+            # count is far smaller. Trimming to the prompt's ``needed_blocks`` (as the
+            # over-wide guard does) would undo the widening applied upstream in
+            # ``_get_prefill_user_page_table`` and TT_FATAL the fill. Floor
+            # ``needed_blocks`` at the window's block count when any layer runs bounded
+            # (read from the per-layer configs so this holds for both the demo and vLLM
+            # generators without a generator-level flag).
+            modulos = []
+            for layer in getattr(self.model[0], "layers", []):
+                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+                modulo = getattr(cfg, "cache_position_modulo", None)
+                if modulo:
+                    modulos.append(modulo)
+            if modulos and block_size:
+                needed_blocks = max(needed_blocks, num_blocks_in_seq(max(modulos), block_size))
+            if page_table.shape[1] > needed_blocks:
+                page_table = page_table[:, :needed_blocks]
+        return super().prefill_forward_single_user_text(
+            tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            num_cached_tokens=num_cached_tokens,
+            **kwargs,
+        )
+
+
+class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
@@ -139,13 +224,19 @@ class Gemma4Generator(Generator):
             for m in self.model:
                 m._prefill_trace_mode = False
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device=False):
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device,
+        greedy_only: bool = False,
+    ):
         warmup_gemma4_model_prefill(
             self,
             kv_cache,
             enable_trace=enable_trace,
             can_sample_on_device=can_sample_on_device,
-            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+            greedy_only=greedy_only,
         )
 
     def prefill_forward_text(
@@ -328,7 +419,7 @@ class Gemma4Generator(Generator):
         paged_attention_config=None,
         bounded_sliding_kv_cache=False,
     ):
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer = _load_text_tokenizer(model_path)
         if not hasattr(tokenizer, "stop_tokens"):
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
 

@@ -355,10 +355,16 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     auto* const input_buf = input.buffer();
     auto* const output_buf = output->buffer();
 
-    const auto gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0u;
-    const auto beta_addr = beta_has_value ? beta.value().buffer()->address() : 0u;
-    const auto mean_addr = mean_has_value ? mean.value().buffer()->address() : 0u;
-    const auto rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0u;
+    // Pass tensor buffers as Buffer* (nullptr when the optional is absent) so the
+    // ProgramDescriptor framework registers them as BufferBindings and patches their
+    // addresses on program-cache hits. Raw uint32_t addresses here would be baked in on
+    // the first dispatch and go stale once these tensors are reallocated on a later call,
+    // because the presence of the input/output Buffer* bindings already puts this op on
+    // the fast cache-hit path (which skips create_descriptor() and only patches bindings).
+    auto* const gamma_buf = gamma_has_value ? gamma.value().buffer() : nullptr;
+    auto* const beta_buf = beta_has_value ? beta.value().buffer() : nullptr;
+    auto* const mean_buf = mean_has_value ? mean.value().buffer() : nullptr;
+    auto* const rstd_buf = rstd_has_value ? rstd.value().buffer() : nullptr;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -374,22 +380,13 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
 
         reader_desc.emplace_runtime_args(
             core,
-            {input_buf,
-             gamma_addr,
-             beta_addr,
-             num_rows_per_core,
-             num_inner,
-             tile_offset,
-             scaler_u,
-             e_u,
-             mask_h,
-             mask_w});
+            {input_buf, gamma_buf, beta_buf, num_rows_per_core, num_inner, tile_offset, scaler_u, e_u, mask_h, mask_w});
 
         writer_desc.emplace_runtime_args(
             core,
             {output_buf,
-             mean_addr,
-             rstd_addr,
+             mean_buf,
+             rstd_buf,
              num_rows_per_core,
              num_inner,
              tile_offset,

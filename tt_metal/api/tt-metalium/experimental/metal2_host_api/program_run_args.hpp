@@ -50,23 +50,37 @@ struct ProgramRunArgs {
     struct KernelRunArgs {
         KernelSpecName kernel;
 
-        // Per-node runtime argument values:
-        // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
-        // set, for every node the kernel runs on.
-        // Missing arguments or superfluous arguments will trigger validation errors.
+        // Per-node runtime argument values.
+        // Arguments are keyed by argument name and then by node:
+        //   runtime_arg_values[name][node] = value.
+        //
+        // When calling SetProgramRunArgs:
+        //  Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
+        //  set, for every node the kernel runs on.
+        //  Missing arguments or superfluous arguments will trigger validation errors.
+        //
+        // When calling UpdateProgramRunArgs:
+        //  Only non-enqueue invariant runtime arguments must be set.
+        //  Updated arguments must be updated for every node the kernel runs on.
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
-        using RuntimeArgValues = Table<std::string, uint32_t>;
-        struct NodeRuntimeArgs {
-            NodeCoord node;
-            RuntimeArgValues args;
-        };
-        Group<NodeRuntimeArgs> runtime_arg_values;
+        //
+        using RuntimeArgValues = Table<std::string, Table<NodeCoord, uint32_t>>;
+        RuntimeArgValues runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
-        // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
-        RuntimeArgValues common_runtime_arg_values;
+        //
+        // When calling SetProgramRunArgs:
+        //  Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names
+        //  must be set.
+        //
+        // When calling UpdateProgramRunArgs:
+        //  Only non-enqueue invariant common runtime arguments must be set.
+        //  (However, CRTAs should seldom-to-never be enqueue invariant!)
+        //
+        using CommonRuntimeArgValues = Table<std::string, uint32_t>;
+        CommonRuntimeArgValues common_runtime_arg_values;
 
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
@@ -96,7 +110,8 @@ struct ProgramRunArgs {
 
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
-        // If unset, the ProgramSpec value is used.
+        // These overrides are stateful across executions: if unset, the DFB keeps its current size
+        // (initially the ProgramSpec value; a prior override persists until changed).
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
@@ -107,10 +122,17 @@ struct ProgramRunArgs {
     Group<DFBRunOverrides> dfb_run_overrides;
 };
 
+//-----------------------------------------------------
 // Convenience aliases
+//-----------------------------------------------------
+
 using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
 using TensorArgument = ProgramRunArgs::TensorArgument;
+
+//-----------------------------------------------------
+// Helper functions
+//-----------------------------------------------------
 
 // Resolve a TensorArgument to its MeshTensor.
 // (Switch to std::visit once MeshTensorView is added as a second variant alternative.)
@@ -124,55 +146,51 @@ ProgramRunArgs MergeProgramRunArgs(
     ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation = false);
 // Invocation: auto full = MergeProgramRunArgs(std::move(base_run_args), {appended_run_args});
 
-//------------------------------------------------
-// ProgramRunArgsView (for advanced users)
-//------------------------------------------------
-//
-// NOTE: ProgramRunArgsView is not yet supported! It is included here as a sketch only.
-//
-// Non-owning view into a Program's command buffers.
-// Enables in-place modification of mutable Program parameters.
-//
-// STATEFULNESS: Program command buffers are stateful.
-//   Parameters retain their previously specified value unless modified.
-//
-// LIFETIME: This view is valid for the lifetime of the Program.
-//   Accessing the view after the Program is destroyed is undefined behavior.
-//
-// THREAD SAFETY: Modifications through this view are not synchronized;
-//   the caller must ensure exclusive access when modifying.
-//
-struct ProgramRunArgsView {
-    struct KernelRunArgsView {
-        KernelSpecName kernel;
+//-----------------------------------------------------
+// Helper function for per-node runtime argument values
+//-----------------------------------------------------
 
-        // Direct views into per-node vararg runtime args
-        Table<NodeCoord, std::span<uint32_t>> runtime_varargs;
+// Runtime argument (RTA) values must be provided for every node the kernel runs on.
+// In ProgramRunArgs, runtime arguments (RTAs) are expressed first by name, then by
+// node (name -> node -> value). However, legacy use sites usually produce RTA values
+// in a node-first style (node -> name -> value).
+//
+// These helper functions bridge the gap between the legacy style and ProgramRunArgs.
+// It is much better to refactor legacy code to express RTA values in name-first style.
+// But, these helpers are provided for convenience and backward compatibility.
 
-        // Direct view into common vararg runtime args
-        std::span<uint32_t> common_runtime_varargs;
-    };
-    // TODO: Better to just expose the multi-dim dispatch vectors directly?
-    //       Would eliminate the lookup indirection.
-    //       ...But would mess up all the implicit RTAs....
-    //       Look into this when implementing.
-    Group<KernelRunArgsView> kernel_run_args;
+// Two shapes for the two call patterns:
+//
+//   Multi-node kernel — accumulate across the core loop:
+//     KernelRunArgs kra{.kernel = ...};
+//     for (const auto& core : cores) {
+//         AddRuntimeArgsForNode(kra.runtime_arg_values, core, {{"num_tiles", num_tiles[core]}, ...});
+//     }
+//
+//   Special case for a single-node kernel — build the table inline:
+//     KernelRunArgs{
+//         .kernel = ...,
+//         .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+//              node, {{"var", a}, {"num_tiles", n}}),
+//     };
 
-    struct DFBRunOverridesView {
-        DFBSpecName dfb;
+// Append RTAs for a single node to an existing RuntimeArgValues table.
+inline void AddRuntimeArgsForNode(
+    KernelRunArgs::RuntimeArgValues& runtime_arg_values,                  // existing RTA table
+    const NodeCoord& node,                                                // node
+    std::initializer_list<std::pair<std::string, uint32_t>> named_values  // name -> value list
+) {
+    for (const auto& [name, value] : named_values) {
+        runtime_arg_values[name][node] = value;
+    }
+}
 
-        // DFB size overrides
-        // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
-        // (This is seldom used in practice)
-        uint32_t* entry_size;   // points to the value that will be used to allocate DFB ephemeral memory
-        uint32_t* num_entries;  // always set to non-null location
-
-        // Note: borrowed-memory DFBs update their backing L1 SRAM address from
-        // the corresponding tensor_arg.
-    };
-    Group<DFBRunOverridesView> dfb_run_overrides;
-};
-
-// TODO: Consider a const version of the view object, for debug/test use?
+// Build a fresh table for a single node
+inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForSingleNode(
+    const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
+    KernelRunArgs::RuntimeArgValues runtime_arg_values;
+    AddRuntimeArgsForNode(runtime_arg_values, node, named_values);
+    return runtime_arg_values;
+}
 
 }  // namespace tt::tt_metal::experimental

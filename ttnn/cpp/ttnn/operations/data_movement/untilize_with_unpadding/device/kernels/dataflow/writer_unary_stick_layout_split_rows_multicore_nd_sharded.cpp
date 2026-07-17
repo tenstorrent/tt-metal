@@ -6,10 +6,9 @@
 #include <array>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "api/debug/dprint.h"
 
 namespace {
@@ -23,7 +22,7 @@ void kernel_main() {
     const uint32_t start_shard_id = get_arg_val<uint32_t>(2);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
     constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(4);
@@ -44,16 +43,16 @@ void kernel_main() {
     const auto accessor_src = TensorAccessor(src0_args, src0_addr);
 
     Noc noc;
-    CircularBuffer cb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     auto write_tiles_in_current_block = [&](uint32_t start_row,
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block,
                                             uint32_t num_rows_to_write) {
-        cb_out.wait_front(num_tiles_per_input_block);
+        dfb_out.wait_front(num_tiles_per_input_block);
 
-        uint32_t base_l1_read_addr = cb_out.get_read_ptr();
+        uint32_t base_l1_read_addr = dfb_out.get_read_ptr();
 
         for (uint32_t j = 0; j < num_rows_to_write; ++j) {
             uint32_t current_l1_read_addr = base_l1_read_addr + j * num_cols_per_input_block * output_element_size;
@@ -93,7 +92,7 @@ void kernel_main() {
         }
 
         noc.async_write_barrier();
-        cb_out.pop_front(num_tiles_per_input_block);
+        dfb_out.pop_front(num_tiles_per_input_block);
     };
 
     uint32_t output_tensor_shape[tensor_rank];
@@ -129,8 +128,8 @@ void kernel_main() {
             }
 
             if (!block_is_in_output_tensor) {  // This input block is entirely outside the output tensor, so skip it
-                cb_out.wait_front(num_tiles_per_input_block);
-                cb_out.pop_front(num_tiles_per_input_block);
+                dfb_out.wait_front(num_tiles_per_input_block);
+                dfb_out.pop_front(num_tiles_per_input_block);
                 continue;
             }
 

@@ -8,6 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -156,15 +157,19 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
 
-    mm_init(cb_q_in, cb_k_in, cb_qk_im);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
+    matmul_init(cb_q_in, cb_k_in);
+
+    CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
+    CircularBuffer cb_mask_in_obj(cb_mask_in);
 
     // Wait once for identity scale; streaming v2 removes per-call waits inside reduce_c_row_group.
-    cb_wait_front(cb_identity_scale_in, 1);
+    cb_identity_scale_in_obj.wait_front(1);
 
     // Wait for all lightweight mask tiles once before the ring loop.
     // Writer generates them once and they stay permanently fronted.
     if constexpr (needs_lightweight_mask) {
-        cb_wait_front(cb_mask_in, total_mask_tiles);
+        cb_mask_in_obj.wait_front(total_mask_tiles);
     }
 
     // Precompute padded tile counts that are constant across ring iterations

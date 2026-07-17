@@ -169,7 +169,7 @@ void py_module(nb::module_& mod) {
             auto tiled = rearrange_to_tile_blocks(data.data(), H, W, tile_h, tile_w);
             tt::tt_metal::Tile tile({static_cast<uint32_t>(tile_h), static_cast<uint32_t>(tile_w)});
             auto packed =
-                pack_as_bfp8_tiles<float>(tt::stl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
+                pack_as_bfp8_tiles<float>(ttsl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
             return nb::bytes(reinterpret_cast<const char*>(packed.data()), packed.size() * sizeof(uint32_t));
         },
         nb::arg("data"),
@@ -184,7 +184,7 @@ void py_module(nb::module_& mod) {
             auto tiled = rearrange_to_tile_blocks(data.data(), H, W, tile_h, tile_w);
             tt::tt_metal::Tile tile({static_cast<uint32_t>(tile_h), static_cast<uint32_t>(tile_w)});
             auto packed =
-                pack_as_bfp4_tiles<float>(tt::stl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
+                pack_as_bfp4_tiles<float>(ttsl::Span<const float>(tiled.data(), tiled.size()), true, false, tile);
             return nb::bytes(reinterpret_cast<const char*>(packed.data()), packed.size() * sizeof(uint32_t));
         },
         nb::arg("data"),

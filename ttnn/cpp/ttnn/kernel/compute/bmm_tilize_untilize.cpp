@@ -7,6 +7,7 @@
 #include "internal/mod_div_lib.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
@@ -105,8 +106,8 @@ void kernel_main() {
     uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);     // out_subblock_h*in0_block_w*in0_num_subblocks;
     uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);  // out_subblock_h*in0_block_w
     uint32_t in0_subblock_h = get_compile_time_arg_val(4);
-    uint32_t in1_num_subblocks = get_compile_time_arg_val(5);    // outer column block size (in inner column blocks)
-    uint32_t in1_block_num_tiles = get_compile_time_arg_val(6);  // out_subblock_w*in0_block_w* in1_num_subblocks;
+    uint32_t in1_num_subblocks = get_compile_time_arg_val(5);      // outer column block size (in inner column blocks)
+    uint32_t in1_block_num_tiles = get_compile_time_arg_val(6);    // out_subblock_w*in0_block_w* in1_num_subblocks;
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(7);  // out_subblock_w*in1_num_subblocks
     // if these are not defined as volatile, it causes code size for TRISC2 to be too large if num_blocks > 1
     volatile uint32_t in0_num_blocks_h = get_compile_time_arg_val(8);
@@ -137,7 +138,8 @@ void kernel_main() {
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
 #endif
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
+    matmul_init(in0_cb_id, in1_cb_id);
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
 #ifdef FUSE_BIAS
         uint32_t bias_block_offset = 0;
@@ -148,7 +150,8 @@ void kernel_main() {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_subblock_h * in0_num_subblocks);
-                    mm_init_short_with_dt(tilized_in0_cb_id, in1_cb_id, in0_cb_id);
+                    reconfig_data_format_srca(in0_cb_id, in1_cb_id);
+                    matmul_init(tilized_in0_cb_id, in1_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
@@ -170,8 +173,8 @@ void kernel_main() {
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_init_short_with_dt(
-                                tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id, matmul_partials_cb);
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                         }  // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock
                         int dst_index = 0;
@@ -220,7 +223,7 @@ void kernel_main() {
                             // do not pop front bias as it may be used again for subsequent blocks
                             cb_pop_front(out_for_bias_cb_id, out_subblock_num_tiles);
                             // reconfig for matmul
-                            mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
+                            matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                             // reconfig unpacker df for srcB
                             // reconfig_data_format(in1_cb_id, in0_cb_id);
                         }
@@ -254,7 +257,7 @@ void kernel_main() {
                             out_subblock_h,
                             out_subblock_w,
                             untilize_mode_final_matmul_partials_cb);
-                        mm_init_short(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
+                        matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
                         reconfig_data_format(in1_cb_id, in0_cb_id);
                     }  // last_out
 #endif

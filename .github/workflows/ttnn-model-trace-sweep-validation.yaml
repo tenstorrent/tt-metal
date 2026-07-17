@@ -1,14 +1,8 @@
 name: "ttnn - model trace sweep validation"
 
-run-name: >-
-  ${{
-    github.event_name == 'schedule' && 'ttnn - model trace sweep validation (scheduled)' ||
-    'ttnn - model trace sweep validation'
-  }}
+run-name: "ttnn - model trace sweep validation"
 
 on:
-  schedule:
-    - cron: "0 5 * * *"  # Daily at 5:00 AM UTC (after sweep runs complete)
   workflow_dispatch:
     inputs:
       scope-targets:
@@ -161,9 +155,29 @@ jobs:
           echo "Triggered by: ${{ github.actor }}"
           echo "::endgroup::"
 
+  verify-sweep-validation-budget:
+    name: Verify sweep validation budget
+    needs: inspect-trace-selection-registry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Check budget
+        run: |
+          pip3 install PyYAML > /dev/null 2>&1
+          python3 .github/scripts/utils/verify_time_budget.py \
+            tests/pipeline_reorg/ttnn_sweep_validation_tests.yaml \
+            .github/time_budget.yaml \
+            sweep_validation
+
   run-model-trace-sweep-validation:
     name: Run model trace sweep validation
-    needs: inspect-trace-selection-registry
+    needs: [inspect-trace-selection-registry, verify-sweep-validation-budget]
     uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
     secrets: inherit
     with:

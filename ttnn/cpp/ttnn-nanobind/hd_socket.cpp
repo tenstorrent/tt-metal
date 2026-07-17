@@ -8,8 +8,10 @@
 #include <optional>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/string.h>
 
@@ -124,6 +126,37 @@ void py_module_types(nb::module_& mod) {
 
                 Args:
                     tensor (Tensor): A host-resident tensor whose data will be written to the socket.
+            )doc")
+        .def(
+            "write_tensor",
+            [](tt::tt_metal::distributed::H2DSocket& self,
+               const nb::ndarray<nb::pytorch, nb::c_contig, nb::device::cpu>& tensor) {
+                uint32_t page_size = self.get_page_size();
+                TT_FATAL(page_size > 0, "write_tensor: page_size must be set before calling write_tensor");
+                size_t nbytes = tensor.nbytes();
+                TT_FATAL(
+                    nbytes % page_size == 0,
+                    "write_tensor: tensor data size ({}) is not a multiple of page_size ({})",
+                    nbytes,
+                    page_size);
+                auto* base = static_cast<std::byte*>(const_cast<void*>(tensor.data()));
+                uint32_t num_writes = nbytes / page_size;
+                for (uint32_t i = 0; i < num_writes; i++) {
+                    self.write(base + (i * page_size), 1);
+                }
+            },
+            nb::arg("tensor"),
+            R"doc(
+                Writes a (CPU) torch tensor's data to the socket FIFO.
+
+                The torch tensor must reside in CPU memory and be C-contiguous. The page
+                size must be set via set_page_size() before calling this method. The
+                tensor's total data size in bytes must be an exact multiple of the page
+                size.
+
+                Args:
+                    tensor (torch.Tensor): A CPU, contiguous torch tensor whose data will be
+                        written to the socket.
             )doc")
         .def(
             "barrier",
@@ -260,7 +293,17 @@ void py_module_types(nb::module_& mod) {
                     data_span.size(),
                     page_size);
                 uint32_t num_pages = data_span.size() / page_size;
-                self.read(data_span.data(), num_pages, notify_sender);
+                int32_t remaining_bytes_to_read = num_pages * page_size;
+                uint32_t bytes_read = 0;
+                while (remaining_bytes_to_read > 0) {
+                    uint32_t num_pages_to_read = 1;
+                    self.read(
+                        reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
+                        num_pages_to_read,
+                        notify_sender);
+                    bytes_read += num_pages_to_read * page_size;
+                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                }
             },
             nb::arg("tensor"),
             nb::arg("notify_sender") = true,
@@ -278,6 +321,46 @@ void py_module_types(nb::module_& mod) {
                                           that buffer space is available. Default: True.
             )doc")
         .def(
+            "read_tensor",
+            [](tt::tt_metal::distributed::D2HSocket& self,
+               const nb::ndarray<nb::pytorch, nb::c_contig, nb::device::cpu>& tensor,
+               bool notify_sender) {
+                uint32_t page_size = self.get_page_size();
+                TT_FATAL(page_size > 0, "read_tensor: page_size must be set before calling read_tensor");
+                size_t nbytes = tensor.nbytes();
+                TT_FATAL(
+                    nbytes % page_size == 0,
+                    "read_tensor: tensor data size ({}) is not a multiple of page_size ({})",
+                    nbytes,
+                    page_size);
+                auto* base = static_cast<std::byte*>(const_cast<void*>(tensor.data()));
+                uint32_t num_pages = nbytes / page_size;
+                int32_t remaining_bytes_to_read = num_pages * page_size;
+                uint32_t bytes_read = 0;
+                while (remaining_bytes_to_read > 0) {
+                    uint32_t num_pages_to_read = 1;
+                    self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
+                    bytes_read += num_pages_to_read * page_size;
+                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                }
+            },
+            nb::arg("tensor"),
+            nb::arg("notify_sender") = true,
+            R"doc(
+                Reads data from the socket FIFO into a (CPU) torch tensor.
+
+                The torch tensor must reside in CPU memory, be C-contiguous, and be
+                pre-allocated with the correct size. The page size must be set via
+                set_page_size() before calling this method. The tensor's total data
+                size in bytes must be an exact multiple of the page size.
+
+                Args:
+                    tensor (torch.Tensor): A pre-allocated CPU, contiguous torch tensor to read
+                        data into.
+                    notify_sender (bool): If True, updates bytes_acked on the device to signal
+                                          that buffer space is available. Default: True.
+            )doc")
+        .def(
             "barrier",
             &tt::tt_metal::distributed::D2HSocket::barrier,
             nb::arg("timeout_ms") = nb::none(),
@@ -286,6 +369,26 @@ void py_module_types(nb::module_& mod) {
 
                 Args:
                     timeout_ms (int, optional): Timeout in milliseconds. Throws if not met within timeout.
+            )doc")
+        .def(
+            "discard_pending_pages",
+            &tt::tt_metal::distributed::D2HSocket::discard_pending_pages,
+            R"doc(
+                Discards any currently-available pages WITHOUT reading the data region.
+
+                Rebases the host's ``bytes_acked`` counter to the current ``bytes_sent``
+                value (and notifies the device), which is the correct operation when
+                the host wants to ignore any pending bytes -- e.g. before initiating a
+                sync handshake.
+
+                Unlike a sequence of ``read()`` calls, this does NOT touch the data
+                region (which on Wormhole/Blackhole is mapped through PCIe and may
+                contain undefined values from a prior device run or stale shmem
+                counters).
+
+                Returns:
+                    int: The number of pages that were discarded (0 if there was
+                    nothing pending).
             )doc")
         .def(
             "get_active_cores",

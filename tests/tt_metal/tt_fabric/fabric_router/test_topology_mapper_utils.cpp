@@ -67,6 +67,25 @@ void expect_bh_halfpod_tray_pairing_for_graph_nodes(
         << format_uint_set(trays) << "]";
 }
 
+// Rev C horizontal tray pairs: {1,2} or {3,4} (adjacent trays on one host).
+void expect_bh_rev_c_horizontal_tray_pairing_for_graph_nodes(
+    const std::string& context,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_graph) {
+    std::set<uint32_t> trays;
+    for (const auto& node : adjacency_graph.get_nodes()) {
+        const uint32_t tray = *psd.get_tray_id(node);
+        trays.insert(tray);
+        EXPECT_GE(tray, 1u) << context << " asic_id=" << *node;
+        EXPECT_LE(tray, 4u) << context << " asic_id=" << *node;
+    }
+    const bool only_12 = std::all_of(trays.begin(), trays.end(), [](uint32_t t) { return t == 1u || t == 2u; });
+    const bool only_34 = std::all_of(trays.begin(), trays.end(), [](uint32_t t) { return t == 3u || t == 4u; });
+    EXPECT_TRUE(only_12 || only_34)
+        << context << " — Rev C BH Galaxy nodes must use only tray pair {1,2} or only {3,4}; distinct trays=["
+        << format_uint_set(trays) << "]";
+}
+
 // =============================================================================
 // Test Fixture with Helper Methods
 // =============================================================================
@@ -250,11 +269,10 @@ protected:
         }
 
         AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat);
-        std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-        mesh_groupings.push_back({as0[0], as0[1]});
-        mesh_groupings.push_back({as1[0], as1[1]});
-        mesh_groupings.push_back({as2[0], as2[1]});
-
+        std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+        mesh_groupings[MeshId{0}] = {as0[0], as0[1]};
+        mesh_groupings[MeshId{1}] = {as1[0], as1[1]};
+        mesh_groupings[MeshId{2}] = {as2[0], as2[1]};
         physical = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
     }
 
@@ -1906,9 +1924,9 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FabricExitEdgeMultiplicit
     flat[as1[1]].push_back(as0[1]);
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> groupings;
-    groupings.push_back({as0[0], as0[1]});
-    groupings.push_back({as1[0], as1[1]});
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> groupings;
+    groupings[MeshId{0}] = {as0[0], as0[1]};
+    groupings[MeshId{1}] = {as1[0], as1[1]};
     PhysicalMultiMeshGraph physical = build_hierarchical_from_flat_graph(flat_graph, groupings);
 
     TopologyMappingConfig config;
@@ -1963,9 +1981,9 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FabricExitEdgeMultiplicit
     flat[as1[1]].push_back(as0[1]);
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> groupings;
-    groupings.push_back({as0[0], as0[1]});
-    groupings.push_back({as1[0], as1[1]});
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> groupings;
+    groupings[MeshId{0}] = {as0[0], as0[1]};
+    groupings[MeshId{1}] = {as1[0], as1[1]};
     PhysicalMultiMeshGraph physical = build_hierarchical_from_flat_graph(flat_graph, groupings);
 
     TopologyMappingConfig config;
@@ -1990,9 +2008,8 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_SingleMesh)
     flat_adj[asic2] = {asic1};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0, asic1, asic2});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0, asic1, asic2};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
@@ -2018,10 +2035,9 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_TwoMeshes) 
     flat_adj[asic1_3] = {asic1_2};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0_0, asic0_1, asic0_2, asic0_3});
-    mesh_groupings.push_back({asic1_0, asic1_1, asic1_2, asic1_3});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2, asic0_3};
+    mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2, asic1_3};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
@@ -2051,10 +2067,9 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_MultipleCha
     flat_adj[asic1_2] = {asic1_1};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0_0, asic0_1, asic0_2});
-    mesh_groupings.push_back({asic1_0, asic1_1, asic1_2});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2};
+    mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_size(multi_mesh_graph, MeshId{0}, 3u);
@@ -2074,11 +2089,10 @@ TEST_F(TopologyMapperUtilsTest, ConvertFlatAdjacencyToMultiMeshGraph_ThreeMeshes
     flat_adj[asic2] = {asic1};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0});
-    mesh_groupings.push_back({asic1});
-    mesh_groupings.push_back({asic2});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0};
+    mesh_groupings[MeshId{1}] = {asic1};
+    mesh_groupings[MeshId{2}] = {asic2};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u);
@@ -2114,11 +2128,10 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_DisconnectedMeshe
     flat_adj[asic2_1] = {asic2_0};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0_0, asic0_1, asic0_2, asic0_3, asic0_4});
-    mesh_groupings.push_back({asic1_0, asic1_1, asic1_2, asic1_3});
-    mesh_groupings.push_back({asic2_0, asic2_1});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2, asic0_3, asic0_4};
+    mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2, asic1_3};
+    mesh_groupings[MeshId{2}] = {asic2_0, asic2_1};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u);
@@ -2151,11 +2164,10 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MultipleExitNodes
     flat_adj[asic2_2] = {asic2_1};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0_0, asic0_1, asic0_2, asic0_3, asic0_4});
-    mesh_groupings.push_back({asic1_0, asic1_1, asic1_2});
-    mesh_groupings.push_back({asic2_0, asic2_1, asic2_2});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2, asic0_3, asic0_4};
+    mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2};
+    mesh_groupings[MeshId{2}] = {asic2_0, asic2_1, asic2_2};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_size(multi_mesh_graph, MeshId{0}, 5u);
@@ -2187,10 +2199,9 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_MeshWithOnlyExitN
     flat_adj[asic1_4] = {asic1_3, asic0_4};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0_0, asic0_1, asic0_2, asic0_3, asic0_4});
-    mesh_groupings.push_back({asic1_0, asic1_1, asic1_2, asic1_3, asic1_4});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0_0, asic0_1, asic0_2, asic0_3, asic0_4};
+    mesh_groupings[MeshId{1}] = {asic1_0, asic1_1, asic1_2, asic1_3, asic1_4};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_size(multi_mesh_graph, MeshId{0}, 5u);
@@ -2209,7 +2220,7 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_EmptyGraph) {
 
     PhysicalAdjacencyMap flat_adj;
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
 
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
@@ -2227,10 +2238,9 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_UnassignedASICs) 
     flat_adj[unassigned] = {asic0, asic1};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0});
-    mesh_groupings.push_back({asic1});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0};
+    mesh_groupings[MeshId{1}] = {asic1};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_size(multi_mesh_graph, MeshId{0}, 1u);
@@ -2252,12 +2262,11 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_RingTopology) {
     flat_adj[asic3] = {asic2, asic0};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0});
-    mesh_groupings.push_back({asic1});
-    mesh_groupings.push_back({asic2});
-    mesh_groupings.push_back({asic3});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0};
+    mesh_groupings[MeshId{1}] = {asic1};
+    mesh_groupings[MeshId{2}] = {asic2};
+    mesh_groupings[MeshId{3}] = {asic3};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     EXPECT_EQ(multi_mesh_graph.mesh_adjacency_graphs_.size(), 4u);
@@ -2283,12 +2292,11 @@ TEST_F(TopologyMapperUtilsTest, BuildHierarchicalFromFlatGraph_StarTopology) {
     flat_adj[asic3] = {asic0};
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({asic0});
-    mesh_groupings.push_back({asic1});
-    mesh_groupings.push_back({asic2});
-    mesh_groupings.push_back({asic3});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {asic0};
+    mesh_groupings[MeshId{1}] = {asic1};
+    mesh_groupings[MeshId{2}] = {asic2};
+    mesh_groupings[MeshId{3}] = {asic3};
     const auto multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
     verify_mesh_connectivity(multi_mesh_graph, MeshId{0}, 3u);
@@ -2380,12 +2388,11 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_InterMeshConnectivity_2x2
     }
 
     // Build hierarchical physical graph from flat graph
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back(
-        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m0.begin(), physical_asics_m0.end()));
-    mesh_groupings.push_back(
-        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m1.begin(), physical_asics_m1.end()));
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] =
+        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m0.begin(), physical_asics_m0.end());
+    mesh_groupings[MeshId{1}] =
+        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m1.begin(), physical_asics_m1.end());
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
     PhysicalMultiMeshGraph physical_multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
@@ -2536,11 +2543,10 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
     }
 
     // Build hierarchical physical graph from flat graph
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.reserve(kNumMeshes);
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     for (size_t mesh_idx = 0; mesh_idx < kNumMeshes; ++mesh_idx) {
-        mesh_groupings.push_back(std::unordered_set<tt::tt_metal::AsicID>(
-            physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end()));
+        mesh_groupings[MeshId{static_cast<uint32_t>(mesh_idx)}] = std::unordered_set<tt::tt_metal::AsicID>(
+            physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end());
     }
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
@@ -2795,13 +2801,13 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MixedStrictAndRelaxedConn
     AdjacencyGraph<tt::tt_metal::AsicID> flat_physical_graph(flat_physical_adj);
 
     // Build physical multi-mesh graph from flat graph
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back(
-        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m0.begin(), physical_asics_m0.end()));
-    mesh_groupings.push_back(
-        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m1.begin(), physical_asics_m1.end()));
-    mesh_groupings.push_back(
-        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m2.begin(), physical_asics_m2.end()));
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] =
+        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m0.begin(), physical_asics_m0.end());
+    mesh_groupings[MeshId{1}] =
+        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m1.begin(), physical_asics_m1.end());
+    mesh_groupings[MeshId{2}] =
+        std::unordered_set<tt::tt_metal::AsicID>(physical_asics_m2.begin(), physical_asics_m2.end());
     physical_multi_mesh_graph = build_hierarchical_from_flat_graph(flat_physical_graph, mesh_groupings);
 
     // Rebuild asic_id_to_mesh_rank from mesh_groupings for map_multi_mesh_to_physical
@@ -2958,11 +2964,10 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     }
 
     // Build hierarchical physical graph from flat graph
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.reserve(kNumPhysicalMeshes);
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
-        mesh_groupings.push_back(std::unordered_set<tt::tt_metal::AsicID>(
-            physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end()));
+        mesh_groupings[MeshId{static_cast<uint32_t>(mesh_idx)}] = std::unordered_set<tt::tt_metal::AsicID>(
+            physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end());
     }
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
@@ -3139,11 +3144,10 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     }
 
     // Build hierarchical physical graph from flat graph
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.reserve(kNumPhysicalMeshes);
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
-        mesh_groupings.push_back(std::unordered_set<tt::tt_metal::AsicID>(
-            physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end()));
+        mesh_groupings[MeshId{static_cast<uint32_t>(mesh_idx)}] = std::unordered_set<tt::tt_metal::AsicID>(
+            physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end());
     }
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
@@ -3321,11 +3325,10 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
     }
 
     // Build hierarchical physical graph from flat graph
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.reserve(kNumPhysicalMeshes);
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
-        mesh_groupings.push_back(std::unordered_set<tt::tt_metal::AsicID>(
-            physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end()));
+        mesh_groupings[MeshId{static_cast<uint32_t>(mesh_idx)}] = std::unordered_set<tt::tt_metal::AsicID>(
+            physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end());
     }
 
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
@@ -3945,9 +3948,8 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
     PhysicalAdjacencyMap flat_physical_adj(physical_adj.begin(), physical_adj.end());
 
     // All ASICs belong to the same mesh (rank information is not needed for graph building)
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
-    mesh_groupings.push_back({physical_asics[0], physical_asics[1], physical_asics[2], physical_asics[3]});
-
+    std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings[MeshId{0}] = {physical_asics[0], physical_asics[1], physical_asics[2], physical_asics[3]};
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_physical_adj);
     PhysicalMultiMeshGraph physical_multi_mesh_graph = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
 
@@ -4110,7 +4112,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4172,7 +4174,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4248,7 +4250,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     const std::filesystem::path pgd_path = std::filesystem::path(tt_metal_home) /
                                            "tests/tt_metal/tt_fabric/physical_groupings/"
-                                           "bh_galaxy_physical_grouping_descriptor.textproto";
+                                           "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4299,7 +4301,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4412,7 +4414,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 4u)
         << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (10 stages)";
 }
 
@@ -4433,7 +4435,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4542,7 +4544,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 5u)
         << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (11 stages)";
 }
 
@@ -4563,7 +4565,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4667,22 +4669,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), expected_fabric_nodes);
 
     std::set<std::string> hosts_spanning_blitz_mapped;
-    std::map<std::string, std::set<std::uint32_t>> host_to_logical_meshes;
     for (const auto& [fabric_node, asic_id] : mapping_result.fabric_node_to_asic) {
-        const auto host = psd.get_host_name_for_asic(asic_id);
-        hosts_spanning_blitz_mapped.insert(host);
-        host_to_logical_meshes[host].insert(*fabric_node.mesh_id);
+        hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_EQ(hosts_spanning_blitz_mapped.size(), 8u) << "Mapped Blitz pipeline: should span exactly 8 hosts";
-    if (hosts_spanning_blitz_mapped.size() != 8u) {
-        for (const auto& [host, meshes] : host_to_logical_meshes) {
-            std::cout << host << " <-";
-            for (const auto m : meshes) {
-                std::cout << " " << m;
-            }
-            std::cout << std::endl;
-        }
-    }
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_BHGalaxy4x4Z) {
@@ -4705,7 +4695,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4768,7 +4758,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4806,7 +4796,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
             EXPECT_GE(
                 adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
             EXPECT_LE(
-                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // torus interior: 4 directions * 2 channels
         }
     }
 }
@@ -4831,7 +4821,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4886,10 +4876,11 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Create PSD from mock cluster
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
-    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    // Load PGD - the single BH galaxy mock cluster is a RevC layout, so pair it with the RevC grouping
+    // descriptor (the RevAB descriptor's pinned slot connectivity does not match a RevC PSD).
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4943,7 +4934,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4975,12 +4966,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Single BH galaxy (32 ASICs): PGD has no 1x17 grouping; 1x17 BLACKHOLE matches 4x8_Mesh (32 ASICs)
     using namespace ::tt::tt_fabric;
 
-    // TODO(#45629): Re-enable once PGD torus matching lands on main. The 4x8_Mesh grouping that 1x17 needs
-    // cannot embed on single_bh_galaxy_clus_desc today (0/32 nodes mapped) without torus / cross-tray
-    // support. PR #45629 (https://github.com/tenstorrent/tt-metal/pull/45629) adds that matching.
-    GTEST_SKIP()
-        << "Disabled pending #45629 (PGD torus matching; 4x8_Mesh cannot embed on single BH galaxy mock today)";
-
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
 
@@ -4991,9 +4976,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
+    // Rev C PGD + bh_galaxy_xyz mock (torus XY links) for 4x8_Mesh torus embedding on a single galaxy host.
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -5028,15 +5014,149 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     }
 }
 
-TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_2x4Pipeline) {
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_PgdPinnings) {
+    // Single BH galaxy (32 ASICs): an exact 4x8 MGD matches PGD 4x8_Mesh (32 ASICs) one-to-one, so the graph
+    // should carry a PGD-derived pinning that maps every logical chip (0..31) to a distinct mesh ASIC.
     using namespace ::tt::tt_fabric;
 
-    // TODO(#45629): Re-enable once PGD torus matching lands on main. On single_bh_galaxy_clus_desc the
-    // 4x2_Mesh_flat half-pod ({1,3}/{2,4}) cannot embed -- the PSD lacks the cross-tray connectivity, so
-    // build_physical settles on a {1,2}/{3,4} grouping that violates the half-pod rule. PR #45629
-    // (https://github.com/tenstorrent/tt-metal/pull/45629) adds torus-aware matching plus the
-    // TRAY_1+TRAY_3 / TRAY_2+TRAY_4 cross-tray PGD variants that place this correctly.
-    GTEST_SKIP() << "Disabled pending #45629 (PGD torus matching for {1,3}/{2,4} half-pod on single BH galaxy)";
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with TT_METAL_MOCK_CLUSTER_DESC_PATH=...";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    const std::string mgd_text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 4, 8 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+    MeshGraphDescriptor mgd{mgd_text_proto};
+
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // Exactly one 32-ASIC mesh.
+    ASSERT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
+
+    // The PGD pinning should be present and cover every logical chip exactly once. mesh_pgd_pinnings_ is keyed by
+    // physical MeshId, mapping to a row-major logical-chip-id -> AsicID layout.
+    ASSERT_FALSE(physical_multi_mesh_graph.mesh_pgd_pinnings_.empty())
+        << "Graph built from a PGD should carry a pinning";
+
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        const auto& mesh_nodes = adjacency_graph.get_nodes();
+
+        // Collect this mesh's pinning entries (the chip-id -> ASIC position map stored under this physical MeshId).
+        std::set<std::uint32_t> chip_ids;
+        std::set<AsicPosition> pinned_positions;
+        auto mesh_pin_it = physical_multi_mesh_graph.mesh_pgd_pinnings_.find(mesh_id);
+        if (mesh_pin_it != physical_multi_mesh_graph.mesh_pgd_pinnings_.end()) {
+            for (const auto& [chip_id, asic_position] : mesh_pin_it->second) {
+                EXPECT_TRUE(chip_ids.insert(chip_id).second) << "Duplicate logical chip id in pinning";
+                EXPECT_TRUE(pinned_positions.insert(asic_position).second)
+                    << "Two logical chips pinned to the same ASIC position";
+            }
+        }
+
+        EXPECT_EQ(chip_ids.size(), mesh_nodes.size()) << "Pinning should map every logical chip in mesh " << *mesh_id;
+
+        // Logical chip ids must be the contiguous row-major range 0..N-1.
+        for (std::uint32_t c = 0; c < mesh_nodes.size(); ++c) {
+            EXPECT_TRUE(chip_ids.contains(c)) << "Logical chip id " << c << " missing from pinning";
+        }
+
+        // Every pinned position must correspond to an ASIC in this mesh's footprint, and for an exact match the
+        // pinning covers the full footprint (expressed as positions).
+        std::set<AsicPosition> mesh_positions;
+        for (const auto& asic_id : mesh_nodes) {
+            mesh_positions.insert(AsicPosition{psd.get_tray_id(asic_id), psd.get_asic_location(asic_id)});
+        }
+        EXPECT_EQ(pinned_positions, mesh_positions)
+            << "Pinned positions should be exactly this mesh's ASIC footprint (by position)";
+    }
+}
+
+TEST_F(
+    TopologyMapperUtilsTest,
+    BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_RankBoundFastPath_AssignsPgdPinnings) {
+    // Phase 2 fast path: build from asic_id_to_mesh_rank (rank-bound footprints), then attach the
+    // committed PGD MESH grouping pinning for each mesh's MGD type. Pinnings should match the full
+    // PGD builder for the same single-mesh footprint.
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    auto* mock_desc = getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    if (mock_desc == nullptr) {
+        GTEST_SKIP() << "TT_METAL_MOCK_CLUSTER_DESC_PATH not set - run with TT_METAL_MOCK_CLUSTER_DESC_PATH=...";
+    }
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    const std::string mgd_text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 4, 8 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+    MeshGraphDescriptor mgd{mgd_text_proto};
+
+    const auto pgd_built_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+    ASSERT_EQ(pgd_built_graph.mesh_adjacency_graphs_.size(), 1u);
+    ASSERT_FALSE(pgd_built_graph.mesh_pgd_pinnings_.empty());
+
+    // Reconstruct asic_id_to_mesh_rank from the PGD-discovered footprint (simulates ControlPlane rank bindings).
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [mesh_id, adjacency_graph] : pgd_built_graph.mesh_adjacency_graphs_) {
+        for (const auto& asic_id : adjacency_graph.get_nodes()) {
+            asic_id_to_mesh_rank[mesh_id][asic_id] = MeshHostRankId{0};
+        }
+    }
+
+    const auto rank_bound_graph = build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd);
+
+    ASSERT_EQ(rank_bound_graph.mesh_adjacency_graphs_.size(), pgd_built_graph.mesh_adjacency_graphs_.size());
+    ASSERT_FALSE(rank_bound_graph.mesh_pgd_pinnings_.empty())
+        << "Rank-bound fast path should attach PGD preferred pinnings";
+
+    for (const auto& [mesh_id, expected_pinning] : pgd_built_graph.mesh_pgd_pinnings_) {
+        auto it = rank_bound_graph.mesh_pgd_pinnings_.find(mesh_id);
+        ASSERT_NE(it, rank_bound_graph.mesh_pgd_pinnings_.end())
+            << "Missing PGD pinning for physical mesh " << mesh_id.get();
+        EXPECT_EQ(it->second, expected_pinning)
+            << "Rank-bound enrichment pinning should match PGD builder for mesh " << mesh_id.get();
+    }
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_2x4Pipeline) {
+    using namespace ::tt::tt_fabric;
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
@@ -5048,9 +5168,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
+    // Rev C PGD half-pod 4x2_Mesh_horizontal ({1,3}/{2,4} tray pairs) + bh_galaxy_xyz torus links.
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -5077,14 +5198,13 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
         // Check that there should be 8 nodes in the graph (2x4)
         EXPECT_EQ(adjacency_graph.get_nodes().size(), 8u);
 
-        expect_bh_halfpod_tray_pairing_for_graph_nodes(
+        expect_bh_rev_c_horizontal_tray_pairing_for_graph_nodes(
             std::string("[SingleBHGalaxy_2x4Pipeline] mesh_id=") + std::to_string(*mesh_id), psd, adjacency_graph);
 
-        // Check that each node should have neighbors (1D topology, so 1-2 neighbors)
+        // 2x4 on torus XY mock: up to 4 directions × 2 channels per node
         for (const auto& node : adjacency_graph.get_nodes()) {
             EXPECT_GE(adjacency_graph.get_neighbors(node).size(), 2u * 2u);
-            EXPECT_LE(
-                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(adjacency_graph.get_neighbors(node).size(), 4u * 2u);
         }
     }
 

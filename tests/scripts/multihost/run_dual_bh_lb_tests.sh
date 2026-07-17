@@ -24,7 +24,7 @@ run_dual_bh_lb_unit_tests() {
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
 
   # These tests are not supported on 2x BH-LB and have been commented out
-  # tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
+  # tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_dual_t3k.yaml ; fail+=$?
   # tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
   # tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
   # tt-run --rank-binding "$strict_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
@@ -33,7 +33,7 @@ run_dual_bh_lb_unit_tests() {
   tt-run --rank-binding "$rank_binding_1x16" --mpi-args "$mpi_args" pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lbx2.py ; fail+=$?
 
   echo "LOG_METAL: Running microbenchmark tests for 1x16 rank binding on 2x BH-LB"
-  tt-run --rank-binding "$rank_binding_1x16" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml ; fail+=$?
+  tt-run --rank-binding "$rank_binding_1x16" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability_short_running.yaml ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

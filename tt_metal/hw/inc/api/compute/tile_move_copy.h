@@ -6,6 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
 #include "llk_assert.h"
 
 #ifdef TRISC_MATH
@@ -34,20 +35,22 @@ ALWI void copy_tile_to_dst_init_short(
     uint32_t transpose = 0,
     uint32_t transpose_within_16x16_face = false,
     uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(cbid, call_line);
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        transpose, transpose_within_16x16_face, cbid)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
 #else
     LLK_ASSERT(transpose_within_16x16_face == false, "Transpose within face not supported on Quasar");
     LLK_ASSERT(transpose == 0, "Transpose not supported on Quasar");
-    UNPACK((llk_unpack_A_init<
-            BroadcastType::NONE,
-            false /*acc_to_dest*/,
-            EltwiseBinaryReuseDestType::NONE,
-            false /*unpack_to_dest*/>(transpose, transpose_within_16x16_face, cbid)));
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(cbid)));
+#endif
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        transpose, transpose_within_16x16_face, cbid)));
+    // 4th template arg is arch-divergent (unpack_to_dest on Quasar, is_int_fpu_en on WH/BH); keep it
+    // arch-specific so WH/BH don't wrongly enable the integer-FPU datacopy MOP.
+#ifndef ARCH_QUASAR
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(cbid)));
+#else
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+        cbid)));
 #endif
 }
 /**
@@ -55,6 +58,7 @@ ALWI void copy_tile_to_dst_init_short(
  * registers.
  */
 ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     copy_tile_to_dst_init_short(cbid, 0, false, call_line);
 }
 
@@ -69,15 +73,16 @@ ALWI void copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
  * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate transpose is set | False    |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
+    LLK_SAN_FUNCTION();
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
-#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_cbid, new_cbid)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_cbid, new_cbid)));
     copy_tile_to_dst_init_short(new_cbid, transpose);
-#endif
 }
+#endif
 
 // clang-format off
 /**
@@ -102,31 +107,23 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
 // clang-format on
 ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
+    LLK_SAN_FUNCTION();
+#endif
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
-#else
-    UNPACK((llk_unpack_A<
-            BroadcastType::NONE,
-            false /*acc_to_dest*/,
-            EltwiseBinaryReuseDestType::NONE,
-            false /*unpack_to_dest*/>(in_cb_id, in_tile_index)));
-    MATH((llk_math_eltwise_unary_datacopy(dst_tile_index, in_cb_id)));
-#endif
 }
 
 ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
+    LLK_SAN_FUNCTION();
+#endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles)));
     MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
-#else
-    UNPACK((llk_unpack_A_block(in_cb_id, start_in_tile_index, ntiles)));
-    MATH((llk_math_eltwise_unary_datacopy_block(start_dst_tile_index, ntiles, in_cb_id)));
-#endif
 }
 
 }  // namespace ckernel

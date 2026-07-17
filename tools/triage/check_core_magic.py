@@ -90,7 +90,8 @@ def try_read_magic_with_dispatcher_data(
     """
     try:
         dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
-        return dispatcher_core_data.mailboxes.core_info.core_magic_number.read_value()
+        assert dispatcher_core_data.mailboxes is not None
+        return int(dispatcher_core_data.mailboxes.core_info.core_magic_number.read_value())
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
@@ -110,7 +111,7 @@ def try_read_magic_with_elf(
     Attempt to read core_magic_number using the given firmware ELF.
     Returns the magic value or None if reading fails.
     """
-    return fw_elf.get_global("mailboxes", l1_mem_access).core_info.core_magic_number.read_value()
+    return int(fw_elf.get_global("mailboxes", l1_mem_access).core_info.core_magic_number.read_value())
 
 
 def check_core_magic(
