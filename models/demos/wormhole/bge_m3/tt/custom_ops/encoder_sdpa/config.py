@@ -47,6 +47,13 @@ class EncoderSDPAConfig:
     # BF8 halves the score-CB L1 footprint (~492KB at q256), which is what lets
     # q256/k2048 fit. Experiment: validate PCC/perf before enabling.
     score_cb_bf8: bool = False
+    # CB double-buffer depths (chunks). Default 2 (production double-buffer).
+    # Experiment F: set K/V (and optionally Q) to 1 to free L1 for a bigger Q
+    # chunk while keeping BF16 score (precision-preserving). Trades reader<->
+    # compute prefetch overlap for L1 headroom.
+    k_buffer_depth: int = 2
+    v_buffer_depth: int = 2
+    q_buffer_depth: int = 2
 
     @property
     def q_shape(self) -> tuple[int, int, int, int]:

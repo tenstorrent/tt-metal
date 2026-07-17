@@ -393,9 +393,9 @@ def build_encoder_sdpa_descriptor(
         # CB depths derive from the plan so q_chunk/k_chunk can be swept.
         # Defaults (q128/k2048): Q=16, K=V=256, QK=256 — identical to the
         # parity-verified sizes. K/V are double-buffered (x2), Q holds 2 chunks.
-        _cb_descriptor(CB_Q, 2 * plan.q_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
-        _cb_descriptor(CB_K, 2 * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat4_b, core_grid),
-        _cb_descriptor(CB_V, 2 * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
+        _cb_descriptor(CB_Q, plan.config.q_buffer_depth * plan.q_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
+        _cb_descriptor(CB_K, plan.config.k_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat4_b, core_grid),
+        _cb_descriptor(CB_V, plan.config.v_buffer_depth * plan.k_chunk_tiles * plan.head_dim_tiles, ttnn.bfloat8_b, core_grid),
         _cb_descriptor(CB_IDENTITY, 1, ttnn.bfloat16, core_grid),
         _cb_descriptor(CB_COL_IDENTITY, 1, ttnn.bfloat16, core_grid),
         _cb_descriptor(
