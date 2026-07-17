@@ -321,6 +321,7 @@ class DropInVisionTransformer(torch.nn.Module):
 
         # concatenate all the outputs
         tt_out = ttnn.concat(final_outputs, dim=1)
-        for t in final_outputs:
-            ttnn.deallocate(t)
+        if len(final_outputs) != 1:
+            for t in final_outputs:
+                ttnn.deallocate(t)
         return tt_out
