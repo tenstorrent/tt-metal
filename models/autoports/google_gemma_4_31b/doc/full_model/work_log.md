@@ -194,3 +194,8 @@ source, common sampler/manual-seed kernel semantics, physical capacity math,
 accuracy, qualitative output, trace counters, and compact performance evidence.
 It returned `clean-pass` with no P1/P2 required work. Report:
 `stage_review_remediation_2026-07-17.md`.
+
+Remediation implementation checkpoint:
+`78d64ecf0670d1cf6076b0d669e45aa952232610` (`Fix Gemma 4 full-model sampling
+and capacity audit`). The following audit-only commit records this SHA; no push
+was performed.
