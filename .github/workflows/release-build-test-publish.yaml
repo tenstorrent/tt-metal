@@ -220,7 +220,7 @@ jobs:
           exit 0
 
       # Files one RELEASE issue per *relevant* failed test (see the relevance
-      # map .github/actions/scripts/rtl_sim_jira_tests.json). Falls back to a
+      # map .github/actions/scripts/ai_ip_tests.json). Falls back to a
       # single aggregate ticket if the check carried no per-test detail.
       - name: File Jira issue(s) for relevant failed RTL sim tests
         if: ${{ steps.rtl-sim.outputs.sim-failed == 'true' }}

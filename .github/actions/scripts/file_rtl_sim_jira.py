@@ -13,7 +13,7 @@ Environment:
   RTL_SIM_URL       link to the sim results (check html_url)       (optional)
   RTL_SIM_RUN_URL   link to the release workflow run               (optional)
   RTL_SIM_MAP       path to the relevance-mapping JSON
-                    (default: <this dir>/rtl_sim_jira_tests.json)
+                    (default: <this dir>/ai_ip_tests.json)
   JIRA_BASE_URL / JIRA_USER_EMAIL / JIRA_API_TOKEN / JIRA_PROJECT_KEY  (required)
   JIRA_ISSUE_TYPE   issue type name                                (default: Bug)
   JIRA_DRY_RUN      when truthy, print instead of calling Jira
@@ -71,7 +71,7 @@ def main():
     run_url = _env("RTL_SIM_RUN_URL", "-")
 
     here = os.path.dirname(os.path.abspath(__file__))
-    map_path = _env("RTL_SIM_MAP", os.path.join(here, "rtl_sim_jira_tests.json"))
+    map_path = _env("RTL_SIM_MAP", os.path.join(here, "ai_ip_tests.json"))
     with open(map_path) as f:
         mapping = json.load(f)
 
