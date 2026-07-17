@@ -141,6 +141,26 @@ SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() cons
     return default_sub_device_manager_;
 }
 
+DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {
+    DeviceAddr max_high_water_mark = 0;
+    for (const auto& entry : sub_device_managers_) {
+        max_high_water_mark = std::max(max_high_water_mark, entry.second->get_max_trace_high_water_mark());
+    }
+    return max_high_water_mark;
+}
+
+std::optional<DeviceAddr> SubDeviceManagerTracker::get_min_trace_buffer_address() const {
+    std::optional<DeviceAddr> min_trace_buffer_address;
+    for (const auto& entry : sub_device_managers_) {
+        const auto manager_min_address = entry.second->get_min_trace_buffer_address();
+        if (manager_min_address.has_value()) {
+            const DeviceAddr& address = manager_min_address.value();
+            min_trace_buffer_address = std::min(min_trace_buffer_address.value_or(address), address);
+        }
+    }
+    return min_trace_buffer_address;
+}
+
 SubDeviceManagerId SubDeviceManagerTracker::get_active_sub_device_manager_id() const {
     return active_sub_device_manager_->id();
 }
