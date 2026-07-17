@@ -98,6 +98,12 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
     if (diag & RegimeADiag::DIAG_SKIP_IN1_READ) {
         rdefs["DIAG_SKIP_IN1_READ"] = "1";
     }
+    if (diag & RegimeADiag::DIAG_FWD_FLUSH_FIRST) {
+        rdefs["DIAG_FWD_FLUSH_FIRST"] = "1";  // A/B baseline: OLD per-block flush-before-signal in1 forward
+    }
+    if (diag & RegimeADiag::DIAG_NO_COALESCE) {
+        rdefs["DIAG_NO_COALESCE"] = "1";  // A/B baseline: OLD K_block per-row in1 reads (no coalescing)
+    }
     if (diag & RegimeADiag::DIAG_SKIP_IN0_READ) {
         wdefs["DIAG_SKIP_IN0_READ"] = "1";
     }
@@ -456,7 +462,11 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
 
     // ---- Circular buffers (spec §5) on all cores ----
     mkcb(program, all_cores, 0, cb.cb0_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in0 k-slice resident
-    mkcb(program, all_cores, 1, cb.cb1_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1
+    // in1 CB depth is 4 blocks by default (cb1_tiles = 4*kb*N_sub); DIAG_CB1_D2/D8 rescale to 2/8 blocks
+    // (host-side only; the reader/compute are depth-agnostic). Mask 0 -> unchanged cb.cb1_tiles.
+    const uint32_t cb1_block = cb.cb1_tiles / 4u;
+    const uint32_t cb1_depth = (diag & RegimeADiag::DIAG_CB1_D2) ? 2u : (diag & RegimeADiag::DIAG_CB1_D8) ? 8u : 4u;
+    mkcb(program, all_cores, 1, cb1_depth * cb1_block, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1
     mkcb(program, all_cores, 2, cb.cb2_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // out
     mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
     if (cb.cb7_tiles > 0u) {

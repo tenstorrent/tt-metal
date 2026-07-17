@@ -100,11 +100,17 @@ void kernel_main() {
                 uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
                 noc_async_write(w1, get_noc_addr(sx, sy, w1), in1_blk_bytes);
             }
-            noc_async_writes_flushed();
+#ifdef DIAG_FWD_FLUSH_FIRST
+            noc_async_writes_flushed();  // A/B baseline: OLD flush-before-signal
+#endif
             for (uint32_t s = 0; s < mpeers; ++s) {
                 uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
                 noc_semaphore_inc(get_noc_addr(sx, sy, in1valid_addr), 1);
             }
+            // DEFAULT (adopted): NO per-block flush -- the payload write + valid inc are same-NoC to the same
+            // peer (write issued first, so NoC ordering delivers the payload before the slave observes valid),
+            // and the kernel-exit noc_async_write_barrier drains any still-in-flight payload. -1.6..-5.9% on
+            // Sm>1 shapes, PCC-exact. DIAG_FWD_FLUSH_FIRST restores the old flush-before-signal for A/B.
         }
         ++mbc;
     };
@@ -140,22 +146,40 @@ void kernel_main() {
 #ifndef DIAG_SKIP_IN1_READ
                 uint32_t w1 = get_write_ptr(in1_cb);
                 if (vcols > 0u) {
-                    for (uint32_t kr = 0; kr < K_block; ++kr) {
-                        const uint32_t l = kblk * K_block + kr;  // capacity-local K index within the slice
-                        if (l < valid_k) {
-                            const uint32_t gk = k_start + l;  // global logical K tile
-                            const uint32_t off = (gk * in1_shard_stride_n + n_local + ncol_base) * tile_bytes;
-                            noc_async_read(
-                                get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, vcols * tile_bytes);
-                            // cols [vcols, N_block) are pad-N (garbage): safe, those output cols aren't written.
-                        } else {
-                            // K tail: summed into EVERY valid output col -> must be exactly 0.0 (both operands
-                            // zeroed; writer also zeros in0's K/M tail), so the product is 0*0, never 0*NaN.
-                            zero_l1(w1, N_block);
+#ifndef DIAG_NO_COALESCE
+                    // DEFAULT (adopted): coalesce the whole [K_block x vcols] block into ONE read when it is
+                    // physically contiguous in the bank shard: full owned width (vcols==N_block==shard
+                    // stride), zero column offset, and NO K-tail in this block (all K_block rows valid).
+                    // Consecutive K rows are then adjacent (gk*stride) with a contiguous L1 destination
+                    // (seg_bytes == vcols*tile_bytes), so one read replaces K_block per-row reads (-0.5..-3.1%,
+                    // PCC-exact). Falls back to per-row otherwise. DIAG_NO_COALESCE forces per-row for A/B.
+                    const bool contig = (vcols == N_block) && (N_block == in1_shard_stride_n) &&
+                                        ((n_local + ncol_base) == 0u) && ((kblk * K_block + K_block) <= valid_k);
+                    if (contig) {
+                        const uint32_t off = (k_start + kblk * K_block) * in1_shard_stride_n * tile_bytes;
+                        noc_async_read(
+                            get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, K_block * vcols * tile_bytes);
+                        noc_async_read_barrier();
+                    } else
+#endif
+                    {
+                        for (uint32_t kr = 0; kr < K_block; ++kr) {
+                            const uint32_t l = kblk * K_block + kr;  // capacity-local K index within the slice
+                            if (l < valid_k) {
+                                const uint32_t gk = k_start + l;  // global logical K tile
+                                const uint32_t off = (gk * in1_shard_stride_n + n_local + ncol_base) * tile_bytes;
+                                noc_async_read(
+                                    get_noc_addr_from_bank_id<true>(bank_id, in1_addr + off), w1, vcols * tile_bytes);
+                                // cols [vcols, N_block) are pad-N (garbage): safe, those output cols aren't written.
+                            } else {
+                                // K tail: summed into EVERY valid output col -> must be exactly 0.0 (both operands
+                                // zeroed; writer also zeros in0's K/M tail), so the product is 0*0, never 0*NaN.
+                                zero_l1(w1, N_block);
+                            }
+                            w1 += seg_bytes;
                         }
-                        w1 += seg_bytes;
+                        noc_async_read_barrier();
                     }
-                    noc_async_read_barrier();
                 }
                 // vcols == 0 (whole subblock is pad N): no reads; block is garbage, output not written.
 #endif
