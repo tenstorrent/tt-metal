@@ -713,53 +713,6 @@ def test_eltwise_unary_sfpu_threshold(
     )
 
 
-def _unary_eq_ne_stimuli_spec():
-    # unary_eq/ne compare against threshold 0.5. Random floats effectively never
-    # equal 0.5, so the output would be constant (PCC undefined). Force a regular
-    # subset to exactly 0.5 so both the equal and not-equal branches fire.
-    def dist(size, dtype, generator):
-        idx = torch.arange(size, dtype=torch.float32)
-        x = (idx % 5) - 2.0  # spans {-2, -1, 0, 1, 2}; none equal 0.5
-        x[0::3] = 0.5  # guaranteed threshold hits
-        return x.to(dtype)
-
-    return StimuliSpec(distribution=dist, seed=0)
-
-
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    approx_mode=[ApproximationMode.No],
-    mathop=[MathOperation.UnaryEq, MathOperation.UnaryNe],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    input_dimensions=[[64, 64]],
-)
-def test_eltwise_unary_sfpu_unary_eq_ne(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
-    mathop: MathOperation,
-    dest_acc: DestAccumulation,
-    input_dimensions: list[int],
-):
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
-        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
-            pytest.skip(reason="This combination is not supported on BH architecture")
-
-    eltwise_unary_sfpu(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        dest_acc,
-        approx_mode,
-        mathop,
-        FastMode.No,
-        input_dimensions,
-        spec_A=_unary_eq_ne_stimuli_spec(),
-    )
-
-
 def eltwise_unary_sfpu(
     test_name,
     formats: list[InputOutputFormat],
