@@ -1360,15 +1360,59 @@ void pytensor_module(nb::module_& mod) {
                     "{} doesn't support experimental_per_core_buffer_address",
                     self.storage_type());
                 TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                // Per-core allocation gives a DIFFERENT L1 address per (device, core):
+                // each device's allocator runs on its own frontier. This resolves the
+                // mesh buffer's *reference* (first-local, i.e. device-0) buffer, so on a
+                // multi-device tensor it silently returns device-0's address for every
+                // device. Reject that: callers must query a single-device tensor
+                // (get_device_tensors[i] / experimental_to_single_device) whose reference
+                // buffer IS the device they want.
+                TT_FATAL(
+                    self.device_storage().get_coords().size() == 1,
+                    "experimental_per_core_buffer_address on a multi-device ({}-device) "
+                    "tensor returns only the device-0 reference address, which is wrong "
+                    "for other devices under per-core allocation. Query a single-device "
+                    "tensor instead.",
+                    self.device_storage().get_coords().size());
                 return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), core);
             },
             nb::arg("core"),
             R"doc(
             Get the per-core L1 address for a specific core (experimental per-core allocation).
 
+            Only valid on a single-device tensor. Per-core allocation gives a different
+            address per (device, core); on a multi-device tensor use the
+            (device_coord, core) overload.
+
             .. code-block:: python
 
                 address = tt_tensor.experimental_per_core_buffer_address(ttnn.CoreCoord(0, 0))
+
+        )doc")
+        .def(
+            "experimental_per_core_buffer_address",
+            [](const Tensor& self,
+               const tt::tt_metal::distributed::MeshCoordinate& device_coord,
+               const CoreCoord& core) -> uint32_t {
+                TT_FATAL(
+                    is_device_tensor(self),
+                    "{} doesn't support experimental_per_core_buffer_address",
+                    self.storage_type());
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return experimental::per_core_allocation::get_per_core_address(self.mesh_buffer(), device_coord, core);
+            },
+            nb::arg("device_coord"),
+            nb::arg("core"),
+            R"doc(
+            Get the per-(device, core) L1 address for a specific core on a specific mesh
+            device (experimental per-core allocation). Per-core allocation gives a
+            different address per (device, core), so this is the correct query for a
+            multi-device tensor.
+
+            .. code-block:: python
+
+                address = tt_tensor.experimental_per_core_buffer_address(
+                    ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0))
 
         )doc")
         .def(
