@@ -37,14 +37,6 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     UNRESERVED = 14,
 };
 
-// Address types whose L1 region is shared across CQs co-located on the same dispatch core,
-// rather than replicated per CQ at a `cq_id * cq_zone_stride` offset.
-constexpr bool is_cq_shared(CommandQueueDeviceAddrType addr_type) {
-    return addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES ||
-           addr_type == CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT ||
-           addr_type == CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT;
-}
-
 // likely only used in impl
 enum class CommandQueueHostAddrType : uint8_t {
     ISSUE_Q_RD = 0,
@@ -89,5 +81,10 @@ template <bool addr_16B>
 uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id);
+
+/// @brief Check if the command queue address type is shared across CQs co-located on the same dispatch core
+/// @param addr_type CommandQueueDeviceAddrType address type to check
+/// @return bool true if the address type is shared, false otherwise
+bool is_cq_shared(CommandQueueDeviceAddrType addr_type);
 
 }  // namespace tt::tt_metal

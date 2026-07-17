@@ -161,4 +161,10 @@ uint32_t get_cq_dispatch_progress(ChipId chip_id, uint8_t cq_id) {
     return progress;
 }
 
+bool is_cq_shared(CommandQueueDeviceAddrType addr_type) {
+    return addr_type == CommandQueueDeviceAddrType::WORKER_COMPLETION_SEMAPHORES ||
+           addr_type == CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT ||
+           addr_type == CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT;
+}
+
 }  // namespace tt::tt_metal

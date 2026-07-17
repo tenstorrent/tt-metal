@@ -62,7 +62,6 @@ DispatchMemMap::DispatchMemMap(
     } else {
         TT_THROW("DispatchMemMap not implemented for core type");
     }
-    l1_size_ = l1_size;
 
     const auto dispatch_buffer_block_size = settings.dispatch_size_;
     const auto pcie_alignment = host_alignment_;
@@ -151,7 +150,6 @@ DispatchMemMap::DispatchMemMap(
     dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
 
-    TT_ASSERT(scratch_db_base_ + settings.prefetch_scratch_db_size_ < l1_size);
     TT_FATAL(
         scratch_db_base_ + settings.prefetch_ringbuffer_size_ <= l1_size,
         "Ringbuffer (start: {}, end: {}) extends past L1 end (size: {})",
@@ -193,6 +191,13 @@ DispatchMemMap::DispatchMemMap(
         }
     }
 
+    TT_FATAL(
+        dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ <= l1_size,
+        "DPRINT dispatch L1 region (l1_cache {} bytes after dispatch_s end {}) exceeds L1 size {}",
+        dispatch_s_device_print_l1_cache_size_,
+        dispatch_s_buffer_end_,
+        l1_size);
+
     // Each CQ co-located on this core gets its own zone: a fixed-size shift of the base (CQ0) address
     // space computed above. cq_zone_stride_ is 0 when this core hosts a single CQ, so per-CQ accessors
     // are a no-op in that case.
@@ -202,16 +207,10 @@ DispatchMemMap::DispatchMemMap(
                                 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)
                           : 0;
 
+    const uint32_t last_cq_zone_end =
+        dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ + (num_cqs_per_core_ - 1) * cq_zone_stride_;
     TT_FATAL(
-        dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ + (num_cqs_per_core_ - 1) * cq_zone_stride_ <=
-            l1_size,
-        "DPRINT dispatch L1 region (l1_cache {} bytes after dispatch_s end {}, across {} CQ(s) at zone stride {}) "
-        "exceeds L1 size {}.",
-        dispatch_s_device_print_l1_cache_size_,
-        dispatch_s_buffer_end_,
-        num_cqs_per_core_,
-        cq_zone_stride_,
-        l1_size);
+        last_cq_zone_end <= l1_size, "Last CQ zone end ({}) extends past L1 end (size {})", last_cq_zone_end, l1_size);
 }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
@@ -302,9 +301,7 @@ uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const
     return index;
 }
 
-uint32_t DispatchMemMap::get_prefetcher_l1_size() const { return l1_size_; }
-
-uint32_t DispatchMemMap::completion_counter_base(uint8_t cq_id) const {
+uint32_t DispatchMemMap::get_completion_counter_offset(uint8_t cq_id) const {
     const uint8_t slot = (num_cqs_per_core_ > 1) ? cq_id : 0;
     return slot * DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
 }

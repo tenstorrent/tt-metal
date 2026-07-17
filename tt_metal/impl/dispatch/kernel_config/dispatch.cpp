@@ -156,7 +156,7 @@ void DispatchKernel::GenerateStaticConfigs() {
                 : 0;
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
-        static_config_.completion_counter_base = my_dispatch_constants.completion_counter_base(cq_id_);
+        static_config_.completion_counter_base = my_dispatch_constants.get_completion_counter_offset(cq_id_);
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -242,7 +242,7 @@ void DispatchKernel::GenerateStaticConfigs() {
                 : 0;
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
-        static_config_.completion_counter_base = my_dispatch_constants.completion_counter_base(cq_id_);
+        static_config_.completion_counter_base = my_dispatch_constants.get_completion_counter_offset(cq_id_);
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);

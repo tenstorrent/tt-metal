@@ -156,7 +156,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
             : 0;
     static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
-    static_config_.completion_counter_base = my_dispatch_constants.completion_counter_base(cq_id_);
+    static_config_.completion_counter_base = my_dispatch_constants.get_completion_counter_offset(cq_id_);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
     static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
     static_config_.realtime_profiler_msg_addr =

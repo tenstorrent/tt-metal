@@ -65,7 +65,7 @@ void write_go_signal(
         dispatch_core.x,
         dispatch_core.y,
         MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index) +
-            MetalContext::instance().dispatch_mem_map().completion_counter_base(cq_id));
+            MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent

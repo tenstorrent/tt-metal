@@ -2511,10 +2511,10 @@ void update_program_dispatch_commands(
     // when this arch waits via a NOC stream register instead of an L1 address.
     if (!MetalContext::instance().hal().has_stream_registers()) {
         const auto& mem_map = MetalContext::instance().dispatch_mem_map(dispatch_core_type);
-        const uint32_t wait_addr =
-            mem_map.get_dispatch_message_addr_start() +
-            mem_map.completion_counter_base(cq_id) * MetalContext::instance().hal().get_alignment(HalMemType::L1) +
-            mem_map.get_sync_offset(*sub_device_id);
+        const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
+                                   mem_map.get_completion_counter_offset(cq_id) *
+                                       MetalContext::instance().hal().get_alignment(HalMemType::L1) +
+                                   mem_map.get_sync_offset(*sub_device_id);
         cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
             wait_addr_offset, &wait_addr, sizeof(uint32_t));
     }
@@ -2668,7 +2668,7 @@ void update_program_dispatch_commands(
         MetalContext::instance()
                 .dispatch_mem_map(dispatch_core_type)
                 .get_dispatch_message_update_offset(*sub_device_id) +
-            MetalContext::instance().dispatch_mem_map(dispatch_core_type).completion_counter_base(cq_id));
+            MetalContext::instance().dispatch_mem_map(dispatch_core_type).get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
@@ -2730,7 +2730,7 @@ void update_traced_program_dispatch_commands(
     if (!hal.has_stream_registers()) {
         const auto& mem_map = MetalContext::instance().dispatch_mem_map(dispatch_core_type);
         const uint32_t wait_addr = mem_map.get_dispatch_message_addr_start() +
-                                   mem_map.completion_counter_base(cq_id) * hal.get_alignment(HalMemType::L1) +
+                                   mem_map.get_completion_counter_offset(cq_id) * hal.get_alignment(HalMemType::L1) +
                                    mem_map.get_sync_offset(*sub_device_id);
         cached_program_command_sequence.stall_command_sequences[curr_stall_seq_idx].update_cmd_sequence(
             wait_addr_offset, &wait_addr, sizeof(uint32_t));
@@ -2877,7 +2877,7 @@ void update_traced_program_dispatch_commands(
         MetalContext::instance()
                 .dispatch_mem_map(dispatch_core_type)
                 .get_dispatch_message_update_offset(*sub_device_id) +
-            MetalContext::instance().dispatch_mem_map(dispatch_core_type).completion_counter_base(cq_id));
+            MetalContext::instance().dispatch_mem_map(dispatch_core_type).get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
@@ -3191,7 +3191,7 @@ void reset_worker_dispatch_state_on_device(
                     dispatch_core.x,
                     dispatch_core.y,
                     MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i) +
-                        MetalContext::instance().dispatch_mem_map().completion_counter_base(cq_id)),
+                        MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id)),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 mesh_device->impl().num_noc_unicast_txns(sub_device_id),

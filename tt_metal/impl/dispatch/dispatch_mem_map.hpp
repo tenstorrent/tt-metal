@@ -103,11 +103,9 @@ public:
     // Offset to be passed in the go message.
     uint8_t get_dispatch_message_update_offset(uint32_t index) const;
 
-    uint32_t get_prefetcher_l1_size() const;
-
     // Index of the first worker-completion counter reserved for cq_id's workers, in the shared
     // WORKER_COMPLETION_SEMAPHORES L1 region.
-    uint32_t completion_counter_base(uint8_t cq_id) const;
+    uint32_t get_completion_counter_offset(uint8_t cq_id) const;
 
 private:
     uint32_t cmddat_q_base_ = 0;
@@ -126,7 +124,6 @@ private:
 
     uint32_t host_alignment_ = 0;
     uint32_t l1_alignment_ = 0;
-    uint32_t l1_size_ = 0;
     uint32_t noc_overlay_start_addr_ = 0;
     uint32_t noc_stream_reg_space_size_ = 0;
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;

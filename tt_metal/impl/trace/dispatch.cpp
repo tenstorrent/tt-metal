@@ -115,7 +115,7 @@ void issue_trace_commands(
                 dispatch_core.x,
                 dispatch_core.y,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index) +
-                    MetalContext::instance().dispatch_mem_map().completion_counter_base(cq_id)),
+                    MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id)),
             MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
