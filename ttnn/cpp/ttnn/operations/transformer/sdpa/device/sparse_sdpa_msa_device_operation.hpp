@@ -17,27 +17,6 @@
 
 namespace ttnn::prim {
 
-// Runtime-arg slots patched on cache hits for indexed K/V caches and runtime K/V group strides.
-// Keep these in sync with create_descriptor().
-namespace sparse_sdpa_msa_rt {
-inline constexpr uint32_t kReaderKernelIdx = 0;
-inline constexpr uint32_t kWriterKernelIdx = 1;
-// reader args: {q, k, v, idx, work_start, work_count, k_batch_tile_offset, v_batch_tile_offset,
-//               k_group_tile_stride, v_group_tile_stride}
-inline constexpr uint32_t kReaderKBatchOffsetArg = 6;
-inline constexpr uint32_t kReaderVBatchOffsetArg = 7;
-inline constexpr uint32_t kReaderKGroupStrideArg = 8;
-inline constexpr uint32_t kReaderVGroupStrideArg = 9;
-// Per-device causal chunk_start (chunk_start_idx + rank*S); patched at dispatch when causal masking is on.
-inline constexpr uint32_t kReaderChunkStartArg = 10;
-// writer args: {out, work_start, work_count, k, v, k_batch_tile_offset, v_batch_tile_offset,
-//               k_group_tile_stride, v_group_tile_stride}
-inline constexpr uint32_t kWriterKBatchOffsetArg = 5;
-inline constexpr uint32_t kWriterVBatchOffsetArg = 6;
-inline constexpr uint32_t kWriterKGroupStrideArg = 7;
-inline constexpr uint32_t kWriterVGroupStrideArg = 8;
-}  // namespace sparse_sdpa_msa_rt
-
 struct SparseSDPAMsaOperation {
     using operation_attributes_t = SparseSDPAMsaParams;
     using tensor_args_t = SparseSDPAMsaInputs;
@@ -65,18 +44,19 @@ struct SparseSDPAMsaOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     // Per-device causal start: chunk_start_idx + rank*S along cluster_axis (rank from the coordinate; 0 on a
-    // single device or when non-causal). Shared by create_descriptor (miss-bake) and get_dynamic_runtime_args
-    // (hit-patch) so the two paths cannot drift.
+    // single device or when non-causal). Shared by create_descriptor at miss and hit time so the two cannot drift.
     static uint32_t compute_chunk_start_local(
         const operation_attributes_t& attrs,
         const tensor_args_t& t,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 
-    // Patches per-slot K/V tile offsets and runtime K/V group strides on cache hits.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& attrs,
+    // Cache-hit re-apply of all per-dispatch state (per-core K/V offsets, group strides, causal chunk_start,
+    // buffer addresses), since the hash excludes interleaved K/V T and cache_batch_idx. See the .cpp.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& output,
+        tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
