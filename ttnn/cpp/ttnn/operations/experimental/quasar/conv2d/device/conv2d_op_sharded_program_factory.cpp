@@ -754,11 +754,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     if (split_program_tilize_only && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") == nullptr) {
         dst_full_sync_en = true;
     }
-    // SyncFull EXPERIMENT (REVERTED): forcing dst_full_sync for the UTD tilize did NOT serialize it — it
-    // CORRUPTED it (dprint_tr7/tr8: garbage DFB cb ids like 394007, non-deterministic TZBLK 21 vs 10). The
-    // batched UNP_DEST DEST slot addressing assumes SyncHalf's 2-bank layout; SyncFull's single double-size bank
-    // mis-maps the slots -> OOB DEST/L1 writes. Left as SyncHalf (races/hangs, but doesn't corrupt). The batched
-    // multi-section tilize-to-DEST is unstable at the LLK level (reference test covers only ONE section) -> LLK.
+    // SyncFull for the UTD tilize — RE-ENABLED now that the tilize uses the SEMAPHORE scheme (not the old
+    // dvalid scheme). The earlier SyncFull corruption (dprint_tr7/tr8) was the DVALID scheme's 2-bank slot
+    // addressing + CLEARDVALID-reset-to-bank0, which is GONE. Under the semaphore scheme SyncFull means a single
+    // DEST bank, max=1, and the SEC-base flip (llk_*_tilize_dest_release advance) is gated on SyncHalf -> NO flip
+    // -> fully serialized UNPACK-fills-bank0 / PACK-drains-bank0. This removes the SyncHalf double-buffer per-core
+    // race (dprint_tr11: core0 did all 32 blocks, core1 stalled at 6 -> non-deterministic 2-bank concurrency).
+    // Slower (no unpack/pack overlap) but deterministic. If this is green every run, SyncFull is the workaround.
+    if (arch_is_quasar && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) {
+        dst_full_sync_en = true;
+    }
 
     // OPTION B — Program A must produce the FULL im2col contraction dim K, not just one act_block_w K-sub-block.
     // On Quasar force_conv_no_spill is off, so full_inner_dim does NOT bump act_block_w to the full K; here
