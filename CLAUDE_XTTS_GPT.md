@@ -141,6 +141,20 @@ host-side (input tilization/copy, latent readback, CPU sampling head), which now
   Decode PCC (0.99972) matches prefill bf16 PCC (0.99972) → the KV path is numerically
   equivalent to the parallel forward, as expected for causal attention.
 
+## Known bugs
+- **`TTNNGPTDecoder` breaks when `max_seq` >> actual sequence length** (found 2026-07-17 via
+  the full-pipeline integration). Symptom: with a tight cache the decode matches the
+  reference (teacher-forced 96%+, PCC 0.9997), but with an oversized cache the output is
+  garbage — e.g. same emb/prompt gives 96% agreement at `max_seq=256` and **0%** at
+  `max_seq=736` (first generated code 81 → 405). Root cause: the non-traced decode uses
+  `scaled_dot_product_attention_decode(..., cur_pos=[int])`; the large unused/zero cache
+  region beyond `cur_pos` is not masked cleanly, and the error grows with the number of
+  unused slots. Our decode PCC test only used a tight `max_seq`, so it never caught this.
+  **Fix:** switch `TTNNGPTDecoder` to a device **`cur_pos_tensor`** (as `TTNNGPTTracedDecoder`
+  already does) instead of the Python-int `cur_pos`; re-add a decode PCC test with a large
+  `max_seq` to guard against regression. Until fixed, callers must size `max_seq` close to
+  the real sequence length.
+
 ## Open questions / TODO
 - [x] **KV-cached decode loop** (2026-07-17): `TTNNGPTDecoder` extends `TTNNGPTCore`;
       update_cache + flash-decode SDPA; PCC 0.99972 vs prefill golden.
