@@ -17,7 +17,6 @@ import subprocess
 import sys
 import os
 import re
-import glob
 import json
 import shutil
 import urllib.request
@@ -194,38 +193,6 @@ def download_release_bundle(release, version, dest_dir):
     return dest_path
 
 
-def find_fwbundle(repo_dir, version):
-    """Fallback: locate a firmware bundle committed inside the repo's git tree.
-
-    The archived tt-firmware repo commits ``fw_pack-<version>.fwbundle`` files
-    directly (rather than attaching them as release assets), so this is used
-    when no matching release asset was found. Returns the path, or None.
-    """
-    expected = _safe_join(repo_dir, _fwbundle_filename(version))
-    if os.path.exists(expected):
-        return expected
-
-    candidates = sorted(glob.glob(os.path.join(repo_dir, "**", "*.fwbundle"), recursive=True))
-    if len(candidates) == 1:
-        print(f"\nNote: expected {expected} not found; using {candidates[0]}")
-        return candidates[0]
-    if len(candidates) > 1:
-        print(f"\nMultiple firmware bundles found in {repo_dir}:")
-        for i, path in enumerate(candidates, 1):
-            print(f"  {i}. {path}")
-        while True:
-            choice = input(f"\nSelect firmware bundle (1-{len(candidates)}): ").strip()
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(candidates):
-                    return candidates[idx]
-            except ValueError:
-                pass
-            print(f"Please enter a number between 1 and {len(candidates)}")
-
-    return None
-
-
 def select_firmware_repo():
     """Let user choose which firmware repository to source the bundle from."""
     print("\n" + "=" * 80)
@@ -288,17 +255,10 @@ def select_firmware_version(repo_dir):
         except (ValueError, KeyboardInterrupt):
             print("\nInvalid input. Please enter a number.")
 
-    # Preferred path: download the bundle from the GitHub release assets
-    # (tt-system-firmware ships bundles this way, not committed to the git tree).
+    # Bundles are published as GitHub release assets. Every listed release is
+    # guaranteed to carry its fw_pack-<version>.fwbundle asset (list_released_
+    # versions only keeps releases whose asset it matched), so download it.
     fwbundle_path = download_release_bundle(selected_release, version, dest_dir=os.getcwd())
-
-    # Fallback: the archived tt-firmware commits fw_pack-<version>.fwbundle into
-    # the git tree instead of attaching a release asset.
-    if fwbundle_path is None:
-        print(f"\nNo 'fw_pack-{version}.fwbundle' release asset found; checking the git tree...")
-        print(f"Checking out {selected_tag} in {repo_dir}...")
-        run_command(f"git checkout {selected_tag}", cwd=repo_dir)
-        fwbundle_path = find_fwbundle(repo_dir, version)
 
     if not fwbundle_path or not os.path.exists(fwbundle_path):
         print(f"\nERROR: Could not obtain a firmware bundle for {selected_tag} from {repo_dir}")
