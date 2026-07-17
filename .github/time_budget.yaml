@@ -74,12 +74,12 @@ ttnn:
   pr_gate:
     wh_n150_civ2: 15
   merge_gate:
-    wh_n150_civ2: 45
-    wh_n300_civ2: 55
-    wh_llmbox_civ2_viommu: 15
-    bh_p150b_civ2_viommu: 45
-    sim_wormhole_b0: 40
-    sim_blackhole: 40
+    wh_n150_civ2: 10
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 3
+    bh_p150b_civ2_viommu: 8
+    sim_wormhole_b0: 15
+    sim_blackhole: 15
   sanity:
     wh_n300_civ2: 545
     bh_p100: 545
@@ -138,7 +138,10 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 20
+    wh_n150_civ2: 10
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 3
+    bh_p150b_civ2_viommu: 8
   unit:
     wh_n150_civ2: 90
     wh_n300_civ2: 90
@@ -160,6 +163,11 @@ ttsim:
     sim_blackhole: 30
 
 shield:
+  merge_gate:
+    wh_n150_civ2: 10
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 3
+    bh_p150b_civ2_viommu: 8
   e2e:
     wh_llmbox: 110
   e2e_tier3:
@@ -175,8 +183,10 @@ shield:
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
   merge_gate:
-    cpu_medium: 10
-    wh_n300_civ2: 10
+    wh_n150_civ2: 0
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 3
+    bh_p150b_civ2_viommu: 8
   unit:
     cpu_medium: 235 # fabric CPU-only shards: unit/sp4-glx/subtorus/pod-revAB/pod-revC ×15 + bh-slices ×25 + pod-llama ×55 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30 + bh-ring-stress ×10
     wh_llmbox: 60
@@ -210,10 +220,10 @@ runtime:
   pr_gate:
     wh_n150_civ2: 15
   merge_gate:
-    wh_n150_civ2: 45
+    wh_n150_civ2: 10
     wh_n300_civ2: 15
-    wh_llmbox_civ2_viommu: 15
-    bh_p150b_civ2_viommu: 45
+    wh_llmbox_civ2_viommu: 3
+    bh_p150b_civ2_viommu: 8
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
@@ -244,8 +254,10 @@ runtime:
 
 triage:
   merge_gate:
-    wh_n150_civ2: 11
-    bh_p150b_civ2_viommu: 11
+    wh_n150_civ2: 10
+    wh_n300_civ2: 0
+    wh_llmbox_civ2_viommu: 5
+    bh_p150b_civ2_viommu: 0
   unit:
     wh_n150_civ2: 16
     bh_p150b_civ2_viommu: 16
@@ -267,12 +279,18 @@ llk:
     wh_n150_civ2: 1200
     bh_p150b_civ2: 1200
   merge_gate:
-    wh_n150_civ2: 300
-    bh_p150b_civ2_viommu: 70
+    wh_n150_civ2: 40
+    wh_n300_civ2: 0
+    wh_llmbox_civ2_viommu: 25
+    bh_p150b_civ2_viommu: 8
 
 models:
   merge_gate:
-    wh_galaxy_merge_gate: 5
+    wh_n150_civ2: 10
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 3
+    bh_p150b_civ2_viommu: 8
+    wh_galaxy: 5
   sanity:
     wh_galaxy_perf: 10
     wh_n300_civ2: 5
@@ -394,3 +412,10 @@ syseng:
     wh_n300_civ2: 36
     bh_p100: 18
     bh_p150b_civ2: 18
+
+blaze:
+  merge_gate:
+    wh_n150_civ2: 10
+    wh_n300_civ2: 15
+    wh_llmbox_civ2_viommu: 3
+    bh_p150b_civ2_viommu: 8
