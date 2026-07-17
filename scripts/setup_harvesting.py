@@ -42,9 +42,17 @@ def clone_repos():
     print("STEP 1: Cloning repositories")
     print("=" * 80)
 
+    # Only repos whose local checkout is actually used are cloned:
+    #   * tt-flash           - installed into the venv; provides the flasher.
+    #   * tt-system-firmware - provides the harvesting tooling (STEP 5/6).
+    # Firmware bundles are fetched as GitHub release assets over the API (see
+    # list_released_versions / download_release_bundle), so neither firmware
+    # source needs a local clone. The archived tt-firmware repo is deliberately
+    # NOT cloned: selecting it still works via the release endpoint, and cloning
+    # it would add a needless startup dependency (and failure mode) on an
+    # unmaintained repo that nothing here reads.
     repos = {
         "tt-flash": "https://github.com/tenstorrent/tt-flash",
-        "tt-firmware": "https://github.com/tenstorrent/tt-firmware.git",
         "tt-system-firmware": "https://github.com/tenstorrent/tt-system-firmware.git",
     }
 
