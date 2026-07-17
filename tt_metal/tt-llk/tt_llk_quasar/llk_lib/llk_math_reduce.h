@@ -539,6 +539,7 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& tensor_shape)
 {
+    // TODO: Add SFPU reduce for INT8->Int32 Scalar SUM (https://github.com/tenstorrent/tt-metal/issues/50161)
     static_assert(
         !(is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::SUM),
         "Integer Scalar SUM/AVG (Int32 dest) unsupported on FPU: after the first GAPOOL, "
