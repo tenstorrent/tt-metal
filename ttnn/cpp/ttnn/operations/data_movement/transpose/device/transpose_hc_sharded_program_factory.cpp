@@ -281,8 +281,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     return ret_val;
 }
 
-// Selects the special-case per-core builder. Shared by create_descriptor and get_dynamic_runtime_args
-// so the reader arg0 value they emit/re-apply cannot drift.
+// Selects the special-case per-core builder, keeping the reader arg0 value create_descriptor emits
+// consistent across the special/generic paths.
 inline bool hc_rm_sharded_is_special_case(uint32_t shard_height, uint32_t H, uint32_t C) {
     return (shard_height % H == 0 || H % shard_height == 0) && (shard_height % C == 0 || C % shard_height == 0) &&
            (C % H == 0 || H % C == 0) && (shard_height <= C * H);
@@ -427,32 +427,6 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
     }
 
     return desc;
-}
-
-std::vector<tt::tt_metal::DynamicRuntimeArg> TransposeDeviceOperation::get_dynamic_runtime_args(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const auto factory = select_program_factory(operation_attributes, tensor_args);
-    const auto& input = tensor_args.input;
-    // HC sharded RM is CB-bound; re-apply reader arg0 (read by the kernel) on core 0 to trip the fast-path.
-    // Build only core 0 via the same per-core builders (and shared is_special_case) create_descriptor uses. (#48928)
-    if (std::holds_alternative<TransposeHCShardedProgramFactory>(factory)) {
-        const auto shard = input.shard_spec().value();
-        const uint32_t H = input.logical_shape()[2], C = input.logical_shape()[1];
-        const bool special = hc_rm_sharded_is_special_case(shard.shape[0], H, C);
-        const auto bbox = shard.grid.bounding_box();
-        const auto a =
-            special ? get_runtime_args_hc_rm_sharded_special_case(input, 1, bbox.end_coord.x + 1, bbox.end_coord.y + 1)
-                    : get_runtime_args_hc_rm_sharded(input, 1, bbox.end_coord.x + 1, bbox.end_coord.y + 1);
-        return {tt::tt_metal::DynamicRuntimeArg{0, corerange_to_cores(shard.grid).front(), 0, a[0].first[0]}};
-    }
-    // WH sharded RM emits one placeholder reader arg the kernel ignores; re-apply 0 to trip the fast-path.
-    if (std::holds_alternative<TransposeWHShardedRMProgramFactory>(factory)) {
-        return {tt::tt_metal::DynamicRuntimeArg{0, corerange_to_cores(input.shard_spec().value().grid).front(), 0, 0u}};
-    }
-    return {};
 }
 
 }  // namespace ttnn::prim
