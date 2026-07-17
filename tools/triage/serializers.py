@@ -217,7 +217,7 @@ class RichSerializer(OutputSerializer):
             utils.INFO(f"  {result}")
             return
 
-        table = Table()
+        table = Table(box=_table_box())
         for col in table_data.columns:
             table.add_column(col, justify="left")
         for row in table_data.rows:
@@ -226,6 +226,13 @@ class RichSerializer(OutputSerializer):
 
     def close(self) -> None:
         self._sink.close()
+
+
+def _table_box():
+    # Uses simple chars for tables (| - +) instead of multi-byte chars that are Rich's default.
+    from rich import box
+
+    return box.ASCII if os.environ.get("TT_TRIAGE_SIMPLE_TABLE") == "1" else box.HEAVY_HEAD
 
 
 def _one_line(s: str) -> str:
