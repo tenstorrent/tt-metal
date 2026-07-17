@@ -1189,26 +1189,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .num_entries = per_core_out_matrix_height_ntiles * full_k_ntiles,
                 .data_format_metadata = tilized_info.data_format,
             };
-            // QSR OUT headroom (SAME reason as the fused else-branch below): tilize-only OUT is a borrowed
-            // compute self-loop with a DEGENERATE consumer that never pops, so the producer writes exactly
-            // num_entries (= M*full_K = the full tilized activation) with no drain. The Quasar DFB ring reserves
-            // one slot (holds num_entries-1), so the LAST reserve_back blocks at exact-fill (confirmed:
-            // dprint_tr2 blocked on the final cb=OUT reserve, PB=N-1/RB=N). +1 entry gives the free slot so the
-            // last block completes. compute_output_specs adds the matching +1 tile-row of shard headroom on the
-            // UNPACK_TO_DEST path, so the extra entry fits; logical output unchanged.
-            if (arch_is_quasar && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) {
-                dfb.num_entries += 1;
-            }
+            // QSR OUT headroom REMOVED (red herring): the borrowed-output exact-fill it guarded doesn't stall
+            // (reserve waits free >= n; last block has free == n) and the matching +1 shard row broke the strict
+            // emulator sharded readback. num_entries = M*full_K exact.
         } else {
             dfb = make_dfb(DFB_OUT, Conv2dCb::OUT);
-            // QSR OUT headroom: match the +1 tile-row of shard headroom compute_output_specs adds to the
-            // borrowed output on Quasar. OUT is a compute self-loop (degenerate consumer that never pops), so
-            // the Quasar DFB credit model blocks the producer at exact-fill; +1 entry gives the ring the free
-            // slot so the full output's last reserve/push completes. Fits within the padded shard (+1 tile-row);
-            // logical output unchanged. Gated to the Quasar unpack-to-dest path (WH/BH + non-flag unaffected).
-            if (arch_is_quasar && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) {
-                dfb.num_entries += 1;
-            }
+            // QSR OUT headroom REMOVED (red herring): the borrowed-output exact-fill it guarded doesn't stall
+            // (reserve waits free >= n; the last block has free == n, so it passes — same as WH/BH's borrowed
+            // conv OUT, which uses no headroom). The matching +1 shard row broke the strict emulator sharded
+            // readback (tile_read_bytes 80 vs 81). The real stalls were the DEST-dvalid race (fixed via
+            // set_up_dest_dvalid_per_thread) and the trailing unpacker pop. num_entries stays exact.
         }
         dfb.borrowed_from = TP_OUTPUT;
         spec.dataflow_buffers.push_back(std::move(dfb));

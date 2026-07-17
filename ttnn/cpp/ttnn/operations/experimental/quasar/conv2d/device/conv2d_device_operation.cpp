@@ -60,14 +60,11 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
         const uint32_t padded_w = num_cores_nhw * m_ntiles * tt::constants::TILE_HEIGHT;
         const uint32_t padded_c = k_ntiles * tt::constants::TILE_WIDTH;
         ttnn::Shape tilized_shape({1, 1, padded_w, padded_c});
-        // QSR OUT headroom (SAME as the fused branch below): the tilize-only OUT is a borrowed compute self-loop
-        // (degenerate consumer, never pops); the Quasar DFB ring keeps ~1 slot free, so the last reserve blocks at
-        // exact-fill (confirmed: dprint_tr2). +1 SHARD tile-row matches the factory's +1 to OUT num_entries so the
-        // extra entry has L1 to land in. The LOGICAL tilized_shape stays un-padded (to_torch drops the pad row), so
-        // the readback [M, full_K] stays aligned. Gated to the Quasar unpack-to-dest path.
-        const uint32_t out_headroom_ntiles = (std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) ? 1u : 0u;
+        // QSR OUT headroom REMOVED (red herring; see the fused branch below): the borrowed-output exact-fill it
+        // guarded against doesn't actually stall (DFB reserve waits for free >= n; the last block has free == n),
+        // and the +1 shard row broke the strict emulator sharded readback. Shard = exact M x full_K.
         std::array<uint32_t, 2> shard_shape = {
-            (m_ntiles + out_headroom_ntiles) * tt::constants::TILE_HEIGHT, k_ntiles * tt::constants::TILE_WIDTH};
+            m_ntiles * tt::constants::TILE_HEIGHT, k_ntiles * tt::constants::TILE_WIDTH};
         auto shard_grid = args.memory_config.shard_spec().value().grid;
         auto shard_spec =
             tt::tt_metal::ShardSpec{shard_grid, shard_shape, args.memory_config.shard_spec().value().orientation};
@@ -100,16 +97,15 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
 
     auto output_layout = args.untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (args.memory_config.is_sharded()) {
-        // QSR OUT headroom: on Quasar the conv OUT is a compute self-loop DFB (producer + degenerate consumer
-        // that never pops), and the Quasar DFB credit model blocks the producer at exact-fill (the ring keeps
-        // ~1 slot free). Add 1 tile-row of shard headroom (matched by +1 to the OUT DFB num_entries in the
-        // factory) so the full per-core output fits below the fill threshold and the last reserve/push doesn't
-        // deadlock. The LOGICAL output_shape is unchanged — the extra row is padding (dropped by to_torch /
-        // downstream logical reads). Gated to the Quasar unpack-to-dest conv path; WH/BH + non-flag unaffected.
-        const uint32_t out_headroom_ntiles = (std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) ? 1u : 0u;
+        // QSR OUT headroom REMOVED (was a red herring): it added +1 tile-row per-core to the borrowed OUT shard
+        // to dodge a presumed borrowed-output exact-fill stall. But the DFB credit math shows no such stall —
+        // reserve_back waits for free >= n and the LAST block sees free == n (free = capacity - posted), so it
+        // passes; WH/BH's identically-structured conv OUT needs no headroom for the same reason. The real stalls
+        // were the DEST-dvalid race (fixed via set_up_dest_dvalid_per_thread) and the trailing unpacker pop. The
+        // +1 shard row also broke the strict emulator sharded readback (per-core pad doesn't tile the logical
+        // output when per_core_M is small -> tile_read_bytes 80 vs 81; masked on craq-sim). Shard = exact.
         std::array<uint32_t, 2> shard_shape = {
-            (args.parallelization_config.per_core_out_matrix_height_ntile + out_headroom_ntiles) *
-                tt::constants::TILE_HEIGHT,
+            args.parallelization_config.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT,
             args.parallelization_config.per_core_out_matrix_width_ntile * tt::constants::TILE_WIDTH};
         auto shard_grid = args.memory_config.shard_spec().value().grid;
         auto shard_spec =
