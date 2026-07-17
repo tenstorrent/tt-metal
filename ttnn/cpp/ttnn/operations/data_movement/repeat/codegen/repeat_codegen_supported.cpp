@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::data_movement::repeat_codegen {
@@ -20,9 +21,10 @@ namespace {
 //
 // TILE: only H (d == ndim-2) or W (d == ndim-1) repeats require tile
 // alignment on that axis. RepeatCodegen repeats in tile-page space
-// (ceil(H/32) / ceil(W/32) tiles); repeating a tile-page-quantized axis that
-// isn't itself tile-aligned makes ceil(dim/32)*reps disagree with
-// ceil(dim*reps/32), which shape-mismatches or folds pad rows into live data.
+// (ceil(H/TILE_HEIGHT) / ceil(W/TILE_WIDTH) tiles); repeating a tile-page-
+// quantized axis that isn't itself tile-aligned makes
+// ceil(dim/tile)*reps disagree with ceil(dim*reps/tile), which
+// shape-mismatches or folds pad rows into live data.
 // Repeating N or C never touches this math -- the same tile page (padding
 // included) is just duplicated, which is correct regardless of whether H/W
 // happen to be sub-tile.
@@ -43,10 +45,10 @@ bool single_dim_ok(
     }
     if (layout == ttnn::TILE_LAYOUT) {
         if (d == ndim - 1) {
-            return shape[-1] % 32 == 0;
+            return shape[-1] % tt::constants::TILE_WIDTH == 0;
         }
         if (d == ndim - 2) {
-            return shape[-2] % 32 == 0;
+            return shape[-2] % tt::constants::TILE_HEIGHT == 0;
         }
         return true;
     }
