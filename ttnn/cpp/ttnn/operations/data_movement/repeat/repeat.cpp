@@ -257,6 +257,10 @@ ttnn::Tensor repeat(
     const ttsl::SmallVector<uint32_t>& repetition_vector,
     const std::optional<MemoryConfig>& memory_config,
     const std::string& implementation) {
+    namespace repeat_codegen = operations::data_movement::repeat_codegen;
+    // Validate before any early return so invalid values fail consistently.
+    const auto sel = repeat_codegen::parse_implementation(implementation);
+
     auto [working_tensor, working_repetition_vector] =
         operations::data_movement::detail::match_input_rank(input_tensor, repetition_vector);
     // Strip shard_spec from sharded input; device op re-derives for new output shape.
@@ -294,8 +298,6 @@ ttnn::Tensor repeat(
     }
 
     {
-        namespace repeat_codegen = operations::data_movement::repeat_codegen;
-        const auto sel = repeat_codegen::parse_implementation(implementation);
         // Sharded *output* has no resharding path in this port (codegen only ever produces an
         // interleaved output tensor); gate it here rather than in supported_by_codegen(), which
         // is about the input side per the manifest's hand-authored sharded case.
