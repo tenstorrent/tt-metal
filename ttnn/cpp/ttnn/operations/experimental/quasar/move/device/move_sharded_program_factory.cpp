@@ -132,8 +132,7 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
 
     const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
     for (const auto& core : cores) {
-        reader_run_args.runtime_arg_values.push_back(
-            m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"total_size_bytes", total_size_bytes}}});
+        reader_run_args.runtime_arg_values["total_size_bytes"][core] = total_size_bytes;
     }
 
     run_args.kernel_run_args.push_back(std::move(reader_run_args));

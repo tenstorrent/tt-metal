@@ -45,7 +45,9 @@ template <uint32_t cb_id, uint32_t clear_value_cb_id>
 ALWI void clear_out_tiles(Noc noc, DataflowBuffer cb, DataflowBuffer clear_cb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
-    const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_page_size / tile_size;
+    // QSR: get_local_cb_interface(cb_id).fifo_page_size is stale for Metal-2.0 DFBs; read the entry
+    // size from the DFB object instead (per LLK guidance / the tilize writer fix).
+    const uint32_t num_tiles = cb.get_entry_size() / tile_size;
 
     UnicastEndpoint self_ep;
     const auto src = experimental::local_addr(clear_cb.get_read_ptr(), noc.get_noc_id());
@@ -126,7 +128,8 @@ ALWI void fill_scalar(
 }
 
 ALWI void zero_out_page(Noc noc, DataflowBuffer cb) {
-    const uint32_t page_size = get_local_cb_interface(cb.get_id()).fifo_page_size;
+    // QSR: read the DFB entry size from the object, not the stale legacy CB interface (LLK guidance).
+    const uint32_t page_size = cb.get_entry_size();
     noc.async_write_zeros(cb, page_size);
     noc.write_zeros_l1_barrier();
 }
