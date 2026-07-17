@@ -2185,9 +2185,11 @@ class UnarySFPUGolden:
             MathOperation.Sinh: self._sinh,
             MathOperation.Cosh: self._cosh,
             MathOperation.Gelu: self._gelu,
+            MathOperation.GeluAppx: self._gelu,
             MathOperation.GeluTanh: self._gelu_tanh,
             MathOperation.GeluDerivative: self._gelu_derivative,
             MathOperation.LogWithBase: self._log_with_base,
+            MathOperation.ExpWithBase: self._exp_with_base,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
@@ -2698,6 +2700,17 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.exp2(input_tensor).item()
+
+    def _exp_with_base(self, x):
+        # Matches the dispatch: calculate_exponential with SCALE_EN and a bf16
+        # scale of 0.5, i.e. exp(0.5 * x). 0.5 is exact in bf16, so the only error
+        # versus this golden is the shared exp approximation itself.
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.exp(0.5 * input_tensor).item()
 
     def _neg(self, x):
         return -x

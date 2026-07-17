@@ -80,8 +80,13 @@ class MathOperation(Enum):
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
+    # b^x via the SCALE_EN path of calculate_exponential; dispatched with a bf16
+    # scale of 0.5 so the op computes exp(0.5*x).
+    ExpWithBase = OpSpec("exp_with_base", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
+    # LUT approximation of gelu (the APPROXIMATION_MODE branch of calculate_gelu).
+    GeluAppx = OpSpec("gelu_appx", MathOpType.SFPU_UNARY)
     GeluTanh = OpSpec("gelu_tanh", MathOpType.SFPU_UNARY)
     GeluDerivative = OpSpec("gelu_derivative", MathOpType.SFPU_UNARY)
     Hardsigmoid = OpSpec("hardsigmoid", MathOpType.SFPU_UNARY)

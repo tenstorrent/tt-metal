@@ -163,12 +163,26 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Exp: _exp_spec,
     # exp2: format-specific overflow threshold
     MathOperation.Exp2: _exp2_spec,
+    # exp_with_base computes exp(0.5*x); the 0.5 scale only makes the argument
+    # tamer than plain exp, so the exp overflow-safe domain is a safe superset.
+    MathOperation.ExpWithBase: _exp_spec,
     # fill: the hardware ignores the input value; any range is fine
     MathOperation.Fill: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=1.0)
     ),
     # gelu: gaussian-sampled (mean=0, std=3) — most inputs near 0, but still some large ones.
     MathOperation.Gelu: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.GAUSSIAN,
+            mean=0.0,
+            std=3.0,
+            low=-5.0,
+            high=5.0,
+        )
+    ),
+    # gelu_appx: LUT approximation of gelu — same Gaussian spread as gelu so both
+    # the near-0 transition and the saturating tails exercise the piecewise LUT.
+    MathOperation.GeluAppx: OperandSpecs(
         spec_A=StimuliSpec(
             distribution=DistributionKind.GAUSSIAN,
             mean=0.0,

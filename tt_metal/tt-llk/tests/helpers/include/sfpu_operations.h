@@ -432,6 +432,13 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
     }
+    else if constexpr (OPERATION == SfpuType::exp_with_base)
+    {
+        // "exp with base b" = b^x = exp(x * ln b); implemented as the SCALE_EN path
+        // of calculate_exponential (multiplies the input by a bf16 scale before exp).
+        // Init is identical to exponential; the scale is applied in the calculate call.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
+    }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(erfinv_init<APPROX_MODE>);
@@ -520,6 +527,13 @@ void call_unary_sfpu_operation_init()
     else if constexpr (OPERATION == SfpuType::gelu)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<APPROX_MODE, is_fp32_dest_acc_en>);
+    }
+    else if constexpr (OPERATION == SfpuType::gelu_appx)
+    {
+        // gelu_appx is the LUT branch of calculate_gelu; its init must load the
+        // piecewise-linear LReg table, which only gelu_init<APPROXIMATION_MODE=true>
+        // does — so force the approx init regardless of the harness APPROX_MODE.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<true, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::gelu_derivative)
     {
@@ -737,6 +751,20 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             vector_mode,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
     }
+    // exp_with_base = b^x = exp(x * ln b): the only op that drives calculate_exponential
+    // with SCALE_EN=true. The bf16 scale 0x3F00 == 0.5 selects base b = e^0.5, so the
+    // golden is exp(0.5*x); 0.5 is exact in bf16 so no scale-rounding error is added.
+    else if constexpr (OPERATION == SfpuType::exp_with_base)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_exponential,
+            (APPROX_MODE, is_fp32_dest_acc_en, true /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
+            dst_index,
+            vector_mode,
+            0x3F00u /* bf16(0.5) exp base scale */);
+    }
     else if constexpr (OPERATION == SfpuType::fill)
     {
         if (math_format == ckernel::to_underlying(DataFormat::Int32))
@@ -780,6 +808,12 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::gelu)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::gelu_appx)
+    {
+        // Directly exercise the LUT approximation kernel (the APPROXIMATION_MODE=true
+        // branch of calculate_gelu). Requires the LReg table loaded by gelu_init<true>.
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_appx, (ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::gelu_derivative)
     {

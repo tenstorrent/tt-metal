@@ -452,6 +452,9 @@ DOMAIN_MATHOPS = [
     # gelu derivative and log-with-base (log2).
     MathOperation.GeluDerivative,
     MathOperation.LogWithBase,
+    # gelu LUT approximation and exp-with-base (exp(0.5*x)).
+    MathOperation.GeluAppx,
+    MathOperation.ExpWithBase,
 ]
 
 # Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
@@ -459,6 +462,9 @@ DOMAIN_MATHOPS = [
 DOMAIN_CUSTOM_TOLERANCES = {
     # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
     MathOperation.SigmoidAppx: (0.13, 0.05),
+    # gelu_appx is a 6-segment piecewise-linear LUT of gelu; abs error peaks near
+    # the segment knees, so loosen tolerance the same way as sigmoid_appx.
+    MathOperation.GeluAppx: (0.13, 0.05),
 }
 
 
@@ -489,6 +495,7 @@ def test_eltwise_unary_sfpu_domain(
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.GeluDerivative,
         MathOperation.LogWithBase,
+        MathOperation.GeluAppx,
     ]:
         # gelu/log-family `#pragma GCC unroll` loops compile to invalid assembly
         # under coverage instrumentation (tt-metal#33268 / tt-llk#883), same as the
