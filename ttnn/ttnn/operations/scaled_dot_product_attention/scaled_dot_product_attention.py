@@ -101,14 +101,20 @@ SUPPORTED = {
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
-    "mask_mode": ["none", "custom"],
+    # R4: causal masking. The triangular additive −∞ bias is generated ON-DEVICE
+    # (no mask tensor) from the is_causal compile-time flag: whole future KV chunks
+    # are block-skipped (≈half the KV work) and the single straddling chunk gets a
+    # per-element diagonal mask before the row-max, reusing the existing additive
+    # mask compute path (the same one R1's KV-padding mask rides). causal requires
+    # S_q == S_kv, so causal + cross is refused in EXCLUSIONS below.
+    "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
 }
 
 
 # ---------------------------------------------------------------------------
-# 3. EXCLUSIONS — R2 arms the maxed-input + non-maxed-accumulation corner.
-#    (R4 will arm {mask_mode:causal, attention_kind:cross}.)
+# 3. EXCLUSIONS — R2 arms the maxed-input + non-maxed-accumulation corner;
+#    R4 arms {mask_mode:causal, attention_kind:cross}.
 # ---------------------------------------------------------------------------
 EXCLUSIONS = [
     # R2: float32 input with 16-bit DEST accumulation. A maxed-precision input fed
@@ -126,6 +132,11 @@ EXCLUSIONS = [
     # fully supported; bf16 / float32 on non-aligned shapes (R1) are unaffected.
     {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
     {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
+    # R4: causal masking requires S_q == S_kv (the triangular bias only makes sense
+    # on a square score matrix — a rectangular causal case has no real workload).
+    # A cross-attention shape (S_q != S_kv) tagged causal is refused here; the
+    # is_causal ∧ attn_mask contradiction is raised earlier as a ValueError.
+    {"mask_mode": "causal", "attention_kind": "cross"},
 ]
 
 
@@ -270,6 +281,7 @@ def scaled_dot_product_attention(
         value,
         output_tensor,
         attn_mask=attn_mask,
+        is_causal=is_causal,
         scale=resolved_scale,
         compute_kernel_config=cfg,
     )

@@ -37,6 +37,45 @@ FORCE_INLINE void fill_zeros_tile(uint32_t wptr, uint32_t words) {
     }
 }
 
+// R4 (causal): fully-masked tile — every element −∞ (a KV tile strictly above the
+// causal diagonal relative to the Q tile; every key is in the future of every query).
+FORCE_INLINE void fill_neginf_tile(uint32_t wptr, uint32_t words) {
+    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
+    for (uint32_t i = 0; i < words; ++i) {
+        p[i] = NEGINF_PAIR;
+    }
+}
+
+// R4 (causal): diagonal tile — element (r, c) is −∞ iff key column c is in the
+// future of query row r (c > r), else 0. This is the strict upper-triangular
+// additive causal bias for a tile sitting ON the diagonal (global query tile-row ==
+// global key tile-col). Face-aware bf16 layout (4 faces of 16x16, row-major, two
+// bf16 packed per uint32: low16 = even col, high16 = odd col).
+FORCE_INLINE void fill_causal_diag_tile(uint32_t wptr) {
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wptr);
+    constexpr uint32_t FACE_H = 16;
+    constexpr uint32_t words_per_face_row = 8;                        // 16 cols / 2 per word
+    constexpr uint32_t words_per_face = FACE_H * words_per_face_row;  // 128
+    const uint32_t face_row0[4] = {0, 0, 16, 16};
+    const uint32_t face_col0[4] = {0, 16, 0, 16};
+    for (uint32_t f = 0; f < 4; ++f) {
+        const uint32_t base = f * words_per_face;
+        const uint32_t frow = face_row0[f];
+        const uint32_t fcol = face_col0[f];
+        for (uint32_t lr = 0; lr < FACE_H; ++lr) {
+            const uint32_t r = frow + lr;  // tile-global row 0..31
+            const uint32_t row_base = base + lr * words_per_face_row;
+            for (uint32_t w = 0; w < words_per_face_row; ++w) {
+                const uint32_t c_lo = fcol + 2u * w;  // even column (low16)
+                const uint32_t c_hi = c_lo + 1u;      // odd column  (high16)
+                const uint32_t lo = (c_lo > r) ? 0xFF80u : 0x0000u;
+                const uint32_t hi = (c_hi > r) ? 0xFF80u : 0x0000u;
+                ptr[row_base + w] = (hi << 16) | lo;
+            }
+        }
+    }
+}
+
 // R3 (data-movement): batch a block of async reads then ONE barrier, instead of
 // one read + barrier + push per tile (the double_buffer anti-pattern — the KV CBs
 // are already KV_DEPTH-deep, so the NoC was left latency-bound). `page_of(t)`
@@ -128,7 +167,14 @@ void kernel_main() {
     constexpr bool has_mask = has_mask_v != 0;
     constexpr uint32_t scale_bits = get_compile_time_arg_val(12);
     constexpr uint32_t skv_partial = get_compile_time_arg_val(13);  // valid cols in last S_kv tile (0 => aligned)
-    constexpr bool has_kv_pad = skv_partial != 0;
+    constexpr bool has_kv_pad_raw = skv_partial != 0;
+    // R4: is_causal generates the triangular −∞ bias on-device. Causal SUBSUMES the
+    // R1 KV-padding mask (a padding key at index >= S_kv is always in the future of
+    // every valid query, so the causal diagonal already drives it to −∞), so when
+    // causal is set the vertical-pad path is disabled to avoid double-generating.
+    constexpr uint32_t is_causal_v = get_compile_time_arg_val(14);
+    constexpr bool is_causal = is_causal_v != 0;
+    constexpr bool has_kv_pad = has_kv_pad_raw && !is_causal;
 
     // R3 DM-batching knob — RE-MEASURED in R3a, kept PARKED at its trivial (per-tile)
     // default. R3a re-enabled the divisor predicates on top of the compute-side
@@ -153,7 +199,7 @@ void kernel_main() {
     constexpr bool batch_kv = false;
     constexpr bool batch_mask = batch_q && batch_kv;
 
-    constexpr auto q_args = TensorAccessorArgs<14>();
+    constexpr auto q_args = TensorAccessorArgs<15>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -210,6 +256,21 @@ void kernel_main() {
         const uint32_t sq_off = qc * Sq_chunk_t;
         const uint32_t sq_valid = (Sq_chunk_t < Sq_t - sq_off) ? Sq_chunk_t : (Sq_t - sq_off);
 
+        // R4 causal block-skip: process only the KV chunks that are NOT fully in the
+        // future of this Q chunk. A chunk starting at key tile-row skv_off is fully
+        // masked once skv_off >= sq_off + sq_valid (every key beyond the Q chunk's
+        // last query). skv_off increases with j, so capping the loop at the first
+        // such chunk skips all later ones — roughly halving the KV work for causal
+        // self-attention (and eliding their K/V DRAM reads entirely).
+        uint32_t n_kv_active = n_kv_chunks;
+        if constexpr (is_causal) {
+            const uint32_t kv_limit = sq_off + sq_valid;  // tiles
+            n_kv_active = (kv_limit + Skv_chunk_t - 1) / Skv_chunk_t;
+            if (n_kv_active > n_kv_chunks) {
+                n_kv_active = n_kv_chunks;
+            }
+        }
+
         // Q chunk: (sq_valid x Dt) tiles, row-major (sq, d).
         const uint32_t q_base = (b * H + h) * Sq_t;
         read_tiles<cb_q_in, batch_q>(sq_valid * Dt, tile_bytes, q_acc, [&](uint32_t t) {
@@ -221,7 +282,7 @@ void kernel_main() {
         const uint32_t kv_base = (b * H_kv + kv_head) * Skv_t;
         const uint32_t mask_base = (b * mask_H + mask_head) * Sq_t;
 
-        for (uint32_t j = 0; j < n_kv_chunks; ++j) {
+        for (uint32_t j = 0; j < n_kv_active; ++j) {
             // R1b partial KV chunk: skv_valid <= Skv_chunk_t whole tiles this chunk
             // (only the last chunk is partial). The read layouts stay contiguous at
             // width skv_valid, which is exactly the matmul N (QKᵀ) / K (PV) extent.
@@ -253,13 +314,43 @@ void kernel_main() {
                 });
             }
 
-            // KV-padding softmax mask (h_non_aligned): last KV chunk only. Build a
-            // score-block-shaped additive mask — the last S_kv-column tile of each
-            // Q row carries the vertical -inf mask, all other tiles are zero — so
-            // compute drives the last KV tile's padding columns to -inf before the
-            // row-max/exp/row-sum. The boundary tile is the last VALID tile of the
-            // (possibly partial R1b) last chunk, at local index skv_valid - 1.
-            if constexpr (has_kv_pad) {
+            // R4 causal: on a straddling KV chunk (some key tile-col >= some query
+            // tile-row — i.e. skv_off + skv_valid > sq_off), generate a score-block-
+            // shaped triangular additive mask into cb_kv_mask. Per tile, compare the
+            // global query tile-row (sq_off+si) to the global key tile-col (skv_off+sj):
+            // below-diagonal tiles are unmasked (0), above-diagonal tiles fully masked
+            // (−∞), the on-diagonal tile is triangular (c > r → −∞). Compute adds this
+            // before the row-max via the same additive-mask phase. Fully-past chunks
+            // (skv_off + skv_valid <= sq_off) are all-below-diagonal, so no mask is
+            // generated or consumed — keeping the CB producer/consumer counts matched
+            // with compute's identical predicate.
+            if constexpr (is_causal) {
+                if (skv_off + skv_valid > sq_off) {
+                    const uint32_t mask_words = tile_bytes / 4;
+                    for (uint32_t si = 0; si < sq_valid; ++si) {
+                        const uint32_t q_tile = sq_off + si;  // global query tile-row
+                        for (uint32_t sj = 0; sj < skv_valid; ++sj) {
+                            const uint32_t k_tile = skv_off + sj;  // global key tile-col
+                            cb_reserve_back(cb_kv_mask, 1);
+                            const uint32_t wptr = get_write_ptr(cb_kv_mask);
+                            if (q_tile > k_tile) {
+                                fill_zeros_tile(wptr, mask_words);  // below diagonal: unmasked
+                            } else if (q_tile < k_tile) {
+                                fill_neginf_tile(wptr, mask_words);  // above diagonal: masked
+                            } else {
+                                fill_causal_diag_tile(wptr);  // on diagonal: triangular c>r
+                            }
+                            cb_push_back(cb_kv_mask, 1);
+                        }
+                    }
+                }
+            } else if constexpr (has_kv_pad) {
+                // KV-padding softmax mask (h_non_aligned): last KV chunk only. Build a
+                // score-block-shaped additive mask — the last S_kv-column tile of each
+                // Q row carries the vertical -inf mask, all other tiles are zero — so
+                // compute drives the last KV tile's padding columns to -inf before the
+                // row-max/exp/row-sum. The boundary tile is the last VALID tile of the
+                // (possibly partial R1b) last chunk, at local index skv_valid - 1.
                 if (j == n_kv_chunks - 1) {
                     const uint32_t mask_words = tile_bytes / 4;
                     for (uint32_t sq = 0; sq < sq_valid; ++sq) {

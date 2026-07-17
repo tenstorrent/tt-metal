@@ -188,6 +188,11 @@ void kernel_main() {
     // fp32_dest_acc_en=False throughput regime (== use_fast_exp), so the softmax
     // intermediates are bf16 and the max-precision path stays byte-identical.
     constexpr bool fuse_rowsum = get_compile_time_arg_val(11) != 0;
+    // R4 (causal): block-skip whole future KV chunks + apply the on-device triangular
+    // mask on straddling chunks. is_causal SUBSUMES the R1 KV-padding mask (padding
+    // keys are always in the future), so has_kv_pad's phase-3b add is disabled when
+    // causal is set (below) to avoid a double mask.
+    constexpr bool is_causal = get_compile_time_arg_val(12) != 0;
 
     const uint32_t num_wu = get_arg_val<uint32_t>(0);
     const uint32_t start_wu = get_arg_val<uint32_t>(1);
@@ -241,6 +246,20 @@ void kernel_main() {
         const uint32_t sq_valid = (Sq_chunk_t < Sq_t - sq_off) ? Sq_chunk_t : (Sq_t - sq_off);
         const uint32_t sq_dt = sq_valid * Dt;
 
+        // R4 causal block-skip: mirror the reader — process only KV chunks not fully
+        // in the future of this Q chunk (skv_off < sq_off + sq_valid). The first
+        // processed chunk is always j=0 (in the past or on the diagonal), so the
+        // online-softmax `first` init below is unaffected. Same n_kv_active formula
+        // as the reader keeps the cb_k_in/cb_v_in/cb_kv_mask counts matched.
+        uint32_t n_kv_active = n_kv_chunks;
+        if constexpr (is_causal) {
+            const uint32_t kv_limit = sq_off + sq_valid;  // tiles
+            n_kv_active = (kv_limit + Skv_chunk_t - 1) / Skv_chunk_t;
+            if (n_kv_active > n_kv_chunks) {
+                n_kv_active = n_kv_chunks;
+            }
+        }
+
         // Phase 1: pre-scale Q (folds attention scale) -> cb_q_scaled (resident).
         ckl::mul<
             cb_q_in,
@@ -255,7 +274,7 @@ void kernel_main() {
             OperandKind::Scalar,
             OperandKind::Scalar>(EltwiseShape::tiles(sq_dt));
 
-        for (uint32_t j = 0; j < n_kv_chunks; ++j) {
+        for (uint32_t j = 0; j < n_kv_active; ++j) {
             const bool first = (j == 0);
             // R1b: partial KV chunk. skv_valid is the QKᵀ N extent, PV K extent, and
             // score-block width for this chunk (only the last chunk is < Skv_chunk_t).
@@ -287,10 +306,18 @@ void kernel_main() {
                 ckl::add<cb_scores, cb_mask_in, cb_scores>(EltwiseShape::tiles(sq_skv));
             }
 
-            // Phase 3b: KV-padding mask (h_non_aligned), last chunk only. Additive
-            // -inf on the last KV tile's padding columns so they drop out of the
-            // softmax (max/exp/sum) — same additive path as the custom mask.
-            if constexpr (has_kv_pad) {
+            // Phase 3b: generated additive mask (on-device), before the row-max — same
+            // additive path as the custom mask. R4 causal takes precedence over R1's
+            // KV-padding mask (causal subsumes it): on a straddling KV chunk (some key
+            // tile-col >= some query tile-row) add the reader-generated triangular −∞
+            // bias; fully-past chunks add nothing (matched with the reader's identical
+            // predicate, so cb_kv_mask counts stay balanced). Otherwise (non-causal
+            // h_non_aligned) apply R1's last-chunk vertical padding mask.
+            if constexpr (is_causal) {
+                if (skv_off + skv_valid > sq_off) {
+                    ckl::add<cb_scores, cb_kv_mask, cb_scores>(EltwiseShape::tiles(sq_skv));
+                }
+            } else if constexpr (has_kv_pad) {
                 if (j == n_kv_chunks - 1) {
                     ckl::add<cb_scores, cb_kv_mask, cb_scores>(EltwiseShape::tiles(sq_skv));
                 }
