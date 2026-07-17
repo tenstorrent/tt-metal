@@ -95,13 +95,34 @@ def _github_api_json(url):
         return json.load(response)
 
 
+# Current-epoch firmware bundles are named
+# ``fw_pack-<MAJOR>.<MINOR>.<PATCH>[-rcN].fwbundle`` (a 3-component version).
+# The legacy v80.x epoch (pre-renumber) instead ships a 4-component
+# ``fw_pack-80.x.y.z.fwbundle``, which this pattern deliberately does NOT match
+# — that is how the v80.x line is excluded, regardless of how its git tag is
+# spelled (``v80.18.1`` in tt-system-firmware, ``v80.18.1.0`` in tt-firmware).
+_FW_BUNDLE_RE = re.compile(r"^fw_pack-((\d+)\.\d+\.\d+(?:-rc\d+)?)\.fwbundle$")
+
+
 def list_released_versions(repo_dir):
-    """Return [(tag, release_json), ...] for releases with major version >= 19.
+    """Return [(tag, version, release_json), ...] of flashable v19+ firmware releases.
 
     Firmware bundles are published as GitHub *release assets* (they are not all
     committed into the git tree), so enumerating releases is what gives the set
-    of flashable versions. It also naturally excludes non-firmware tag schemes
-    such as the v80.x tags in tt-system-firmware, which have no releases.
+    of flashable versions. A release is kept only when it carries a standard
+    ``fw_pack-<major>.<minor>.<patch>[-rcN].fwbundle`` asset whose major is >= 19.
+    This:
+
+      * drops the older v18.x line (major < 19),
+      * drops the legacy v80.x epoch, whose bundle is a 4-component
+        ``fw_pack-80.x.y.z.fwbundle`` that does not match the pattern (true
+        whether its tag is 3-part ``v80.18.1`` or 4-part ``v80.18.1.0``),
+      * keeps every v19.x release including ``-rc`` ones, plus future v20.x/v21.x
+        releases that follow the same naming, and
+      * guarantees the download step can find the asset (we matched it here).
+
+    The returned ``version`` is taken from the matched asset (not the tag), so it
+    is always exactly what download_release_bundle() will look for.
     """
     url = f"https://api.github.com/repos/{GITHUB_ORG}/{repo_dir}/releases?per_page=100"
     print(f"\nFetching available firmware releases from {repo_dir} (v19 and above)...")
@@ -114,9 +135,11 @@ def list_released_versions(repo_dir):
     versions = []
     for release in releases:
         tag = release.get("tag_name", "")
-        match = re.match(r"^v(\d+)(?:\.|$)", tag)
-        if match and int(match.group(1)) >= 19:
-            versions.append((tag, release))
+        for asset in release.get("assets", []):
+            match = _FW_BUNDLE_RE.match(asset.get("name", ""))
+            if match and int(match.group(2)) >= 19:
+                versions.append((tag, match.group(1), release))
+                break
     return versions
 
 
@@ -223,7 +246,7 @@ def select_firmware_version(repo_dir):
         sys.exit(1)
 
     print("\nAvailable firmware versions (v19 and above):")
-    for i, (tag, _release) in enumerate(versions, 1):
+    for i, (tag, _version, _release) in enumerate(versions, 1):
         print(f"  {i}. {tag}")
 
     while True:
@@ -231,15 +254,12 @@ def select_firmware_version(repo_dir):
             choice = input(f"\nSelect firmware version (1-{len(versions)}): ").strip()
             idx = int(choice) - 1
             if 0 <= idx < len(versions):
-                selected_tag, selected_release = versions[idx]
+                selected_tag, version, selected_release = versions[idx]
                 break
             else:
                 print(f"Please enter a number between 1 and {len(versions)}")
         except (ValueError, KeyboardInterrupt):
             print("\nInvalid input. Please enter a number.")
-
-    # Extract version number (remove 'v' prefix)
-    version = selected_tag[1:] if selected_tag.startswith("v") else selected_tag
 
     # Preferred path: download the bundle from the GitHub release assets
     # (tt-system-firmware ships bundles this way, not committed to the git tree).
