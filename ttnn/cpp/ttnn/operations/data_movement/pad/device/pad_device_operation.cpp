@@ -4,6 +4,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "pad_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
@@ -232,20 +233,26 @@ Tensor PadDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> PadDeviceOperation::get_dynamic_runtime_args(
+void PadDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Height-sharded RM factory is CB-bound (addresses ride on the sharded CBs; no Buffer* rt-arg). Re-apply
-    // writer arg0 (= output shard height, unchanged) on the first core to trip the fast-path, so the
-    // framework re-patches the sharded CB base addresses instead of rebuilding create_descriptor. (#48928)
-    if (!std::holds_alternative<PadRmShardedHeightOnlyProgramFactory>(
-            select_program_factory(operation_attributes, tensor_args))) {
-        return {};
-    }
-    const auto shard = tensor_return_value.shard_spec().value();  // writer kernel is index 1
-    return {tt::tt_metal::DynamicRuntimeArg{1, shard.grid.bounding_box().start_coord, 0, shard.shape[0]}};
+    // Re-derive all per-dispatch state from the SAME factory the miss path picks and re-apply it to the
+    // cached program (no rebuild). Only ProgramDescriptor factories reach here; WorkloadDescriptor
+    // factories are handled by the adapter's workload path. Supersedes get_dynamic + resolve_bindings.
+    std::visit(
+        [&](auto&& factory) {
+            using Factory = std::decay_t<decltype(factory)>;
+            if constexpr (requires {
+                              Factory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+                          }) {
+                auto desc = Factory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+                tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+            }
+        },
+        select_program_factory(operation_attributes, tensor_args));
 }
 
 PadDeviceOperation::tensor_return_value_t pad(
