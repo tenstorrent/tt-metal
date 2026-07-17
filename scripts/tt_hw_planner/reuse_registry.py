@@ -27,12 +27,15 @@ class ReuseEntry:
 
 
 def _effort_to_status(effort: Effort, status: Status) -> str:
-    # A pre-existing tt-module is never trusted blind: it is always ADAPT
-    # (wrap the canonical module as the stub + PCC test, graduate on native
-    # pass, refine on fail). Only a MISSING module is NEW (write from scratch).
-    #   MISSING -> NEW ;  SUPPORTED (DROP_IN or not) -> ADAPT
+    """Map (effort, support) to a component status. Every category emits a stub +
+    PCC test and goes through the gates. MISSING -> NEW (write from scratch);
+    SUPPORTED+DROP_IN -> REUSE (iter-0 tries the existing module as-is; demoted to
+    ADAPT after the first attempt if the PCC/native gate fails); SUPPORTED+other
+    -> ADAPT (wrap + refine)."""
     if status == Status.MISSING:
         return "NEW"
+    if effort == Effort.DROP_IN and status == Status.SUPPORTED:
+        return "REUSE"
     return "ADAPT"
 
 

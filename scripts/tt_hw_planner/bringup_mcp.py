@@ -430,6 +430,34 @@ def run_component(component: str, mode: str = "single") -> dict:
 
 
 @mcp.tool()
+def _demote_reuse_to_adapt(component: str) -> bool:
+    """A REUSE component gets exactly one iter-0 shot: try the existing tt-module
+    as-is. If it doesn't graduate (PCC fail or the stub is still a torch wrapper),
+    re-tag it REUSE->ADAPT in bringup_status.json so the ADAPT refine path (LLM
+    wraps + adjusts the module) takes over. No-op if it isn't currently REUSE.
+    Returns True iff it flipped."""
+    sp = _DEMO_DIR / "bringup_status.json"
+    try:
+        data = json.loads(sp.read_text())
+    except Exception:
+        return False
+    flipped = False
+    for c in data.get("components", []) or []:
+        if str(c.get("name", "")).strip() == component and c.get("status") == "REUSE":
+            c["status"] = "ADAPT"
+            c["notes"] = (
+                "[gate] REUSE failed iter-0 (PCC/native) -> ADAPT; wrap + refine the existing module. "
+                + (c.get("notes") or "")
+            ).strip()
+            flipped = True
+    if flipped:
+        try:
+            sp.write_text(json.dumps(data, indent=2))
+        except Exception:
+            return False
+    return flipped
+
+
 def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str = "", mode: str = "single") -> dict:
     """Persist the outcome of working `component`: bump attempts, advance the consecutive-same-class
     counter using the DETERMINISTIC class from run_component (your `failure_class` arg is only a
@@ -473,11 +501,13 @@ def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str
         if _block:
             st.setdefault("consecutive_same_class", {})[component] = 0
             _save_state(st)
+            _demoted = _demote_reuse_to_adapt(component)
             return {
                 "recorded": True,
                 "component": component,
                 "graduated": False,
                 "reason": _block,
+                "demoted_reuse_to_adapt": _demoted,
             }
         if stub.is_file():
             try:
@@ -499,7 +529,8 @@ def record_result(component: str, ok: bool, pcc: float = 0.0, failure_class: str
         if len(hist) > 16:
             del hist[: len(hist) - 16]
     _save_state(st)
-    return {"recorded": True, "component": component, "graduated": ok}
+    _demoted = _demote_reuse_to_adapt(component) if not ok else False
+    return {"recorded": True, "component": component, "graduated": ok, "demoted_reuse_to_adapt": _demoted}
 
 
 @mcp.tool()

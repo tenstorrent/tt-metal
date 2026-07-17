@@ -121,15 +121,17 @@ def _shape(cfg: dict) -> Dict[str, Any]:
 
 
 def _diff_status(new_shape: Dict[str, Any], sibling_shape: Dict[str, Any]) -> str:
-    # A sibling tt-module is never trusted blind: whether shapes match or
-    # differ, it is ADAPT (canonical-wrapper stub + per-component PCC test +
-    # LLM refinement, graduate on native pass). Only a missing sibling is NEW.
+    # Sibling exists + shapes match -> REUSE (iter-0 tries the module as-is;
+    # demoted to ADAPT after the first attempt if the PCC/native gate fails).
+    # Shapes differ -> ADAPT (needs refinement). No sibling -> NEW. Every case
+    # still emits a stub + PCC test and goes through the gates.
     if not sibling_shape:
         return NEW
     shared_keys = [k for k in new_shape if k in sibling_shape]
     if not shared_keys:
         return NEW
-    return ADAPT
+    differ = [k for k in shared_keys if new_shape[k] != sibling_shape[k]]
+    return REUSE if not differ else ADAPT
 
 
 def _sibling_tt_file(

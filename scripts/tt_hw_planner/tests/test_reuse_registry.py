@@ -21,21 +21,21 @@ class TestRegistryLookup:
     def test_qwen3_rmsnorm_maps_to_common_rmsnorm(self):
         hit = lookup("qwen3", "Qwen3RMSNorm")
         assert hit is not None
-        assert hit.status == ADAPT
+        assert hit.status == REUSE
         assert hit.tt_path == "models/common/rmsnorm.py"
         assert hit.tt_class == "RMSNorm"
 
     def test_qwen3_attention_maps_to_tt_transformers_attention(self):
         hit = lookup("qwen3", "Qwen3Attention")
         assert hit is not None
-        assert hit.status == ADAPT
+        assert hit.status == REUSE
         assert hit.tt_path == "models/tt_transformers/tt/attention.py"
         assert hit.tt_class == "Attention"
 
-    def test_qwen3_rotary_is_adapt(self):
+    def test_qwen3_rotary_is_reuse(self):
         hit = lookup("qwen3", "Qwen3RotaryEmbedding")
         assert hit is not None
-        assert hit.status == ADAPT
+        assert hit.status == REUSE
         assert hit.tt_path == "models/tt_transformers/tt/rope.py"
 
     def test_unknown_class_returns_none(self):
@@ -148,6 +148,4 @@ class TestModuleTreeIntegration:
             f"components. Got {counts}. "
             f"Components: {[(c.name, c.class_name, c.status) for c in comps]}"
         )
-        assert (
-            counts[ADAPT] >= 1
-        ), f"At least RMSNorm / RotaryEmbedding should be ADAPT (never trusted blind). Got {counts}"
+        assert counts[REUSE] >= 1, f"At least RMSNorm / RotaryEmbedding should be REUSE (exact drop-in). Got {counts}"

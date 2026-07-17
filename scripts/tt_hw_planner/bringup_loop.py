@@ -1702,6 +1702,67 @@ def _render_autofill_stub(
     )
 
 
+_REUSE_COPY_MARKER = "tt_hw_planner: ADAPT/REUSE native copy of an existing tt-module"
+
+
+def _reuse_target_source_path(tt_reuse_target: Optional[str], repo_root: Path) -> Optional[Path]:
+    """The concrete source file of a component's tt_reuse_target, or None.
+
+    Strips annotations (``a/b.py (wraps c)``) and non-path sentinels; returns the
+    repo-relative .py file only if it exists under ``repo_root``."""
+    if not tt_reuse_target:
+        return None
+    tok = str(tt_reuse_target).strip().split(" ")[0].rstrip("/")
+    if not tok.endswith(".py") or "/" not in tok:
+        return None
+    f = Path(repo_root) / tok
+    return f if f.is_file() else None
+
+
+def _render_reuse_copy_stub(component_name: str, tt_reuse_target: str, repo_root: Path) -> Optional[str]:
+    """Native starting stub for ADAPT/REUSE: a VERBATIM copy of the existing
+    tt-module's source (the ``tt_reuse_target``), so bring-up starts from the real
+    ttnn implementation instead of a torch fallback.
+
+    A copy (not an import) so the loop can edit it for this model's quirks (ADAPT)
+    without touching the original source. Absolute imports in the copied source
+    still resolve against the real package. Returns None if the target can't be
+    read (caller falls back to the torch template — e.g. NEW, or an unreadable
+    target)."""
+    src_file = _reuse_target_source_path(tt_reuse_target, repo_root)
+    if src_file is None:
+        return None
+    try:
+        src = src_file.read_text()
+    except OSError:
+        return None
+    rel = str(safe_relative_to_root(src_file))
+    header = (
+        f'"""{_REUSE_COPY_MARKER}\n\n'
+        f"Component: {component_name}\n"
+        f"Copied verbatim from: {rel}\n"
+        f"This is a COPY — edit it freely for this model; the original is untouched.\n"
+        f'REUSE: if it passes PCC as-is it graduates; otherwise it is refined as ADAPT.\n"""\n\n'
+    )
+    return header + src
+
+
+def _render_component_stub(comp: dict, *, model_id: str, repo_root: Path) -> str:
+    """Initial stub for a component. ADAPT/REUSE with a readable tt_reuse_target
+    start from a native COPY of that module (:func:`_render_reuse_copy_stub`);
+    NEW (or an unresolvable target) starts from the torch-fallback template."""
+    if comp.get("status") in ("ADAPT", "REUSE"):
+        copied = _render_reuse_copy_stub(comp.get("name", ""), comp.get("tt_reuse_target") or "", repo_root)
+        if copied is not None:
+            return copied
+    return _render_autofill_stub(
+        component_name=comp.get("name", ""),
+        model_id=model_id,
+        hf_reference=comp.get("hf_reference") or "",
+        discovered_submodule_path=comp.get("submodule_path"),
+    )
+
+
 _AUTOFILL_DTYPE_FIX_MARKER = "Bug Y fix (2026-05-23 live-run sam2-hiera-tiny)"
 
 
@@ -2072,12 +2133,7 @@ def autofill_stubs(
             continue
         safe = _safe_id(comp["name"])
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
-        body = _render_autofill_stub(
-            component_name=comp["name"],
-            model_id=model_id,
-            hf_reference=comp.get("hf_reference") or "",
-            discovered_submodule_path=comp.get("submodule_path"),
-        )
+        body = _render_component_stub(comp, model_id=model_id, repo_root=repo_root)
 
         _skip_preserve_branches = False
         if stub_path.exists() and not overwrite:
@@ -2101,7 +2157,7 @@ def autofill_stubs(
                 actions.append((comp["name"], "regen:autofill-missing-dtype-fix"))
                 _skip_preserve_branches = True
 
-            elif "_get_torch_submodule" in existing or "_LLM_GAPS" in existing:
+            elif "_get_torch_submodule" in existing or "_LLM_GAPS" in existing or _REUSE_COPY_MARKER in existing:
                 actions.append((comp["name"], "preserved:already-autofilled"))
 
                 _safe = _safe_id(comp["name"])
