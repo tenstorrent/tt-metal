@@ -498,4 +498,6 @@ were separate hardware runs.
 - The local current-checkout technical checkpoint SHA is recorded below after
   creation.  No push was performed.
 
-Current-checkout technical checkpoint: `PENDING`
+Current-checkout technical checkpoint:
+`339026e08e3ae8fed55f15bf24205ed050975e07` (`Revalidate Gemma 4 31B
+multichip decoder`).  The follow-up metadata-only commit records this SHA.
