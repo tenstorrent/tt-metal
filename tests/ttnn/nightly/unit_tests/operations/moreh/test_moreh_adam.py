@@ -213,3 +213,63 @@ def test_moreh_adam_caching(params, device):
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     for i in range(1, 4):
         assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]
+
+
+def test_moreh_adam_inplace_cache_hit(device):
+    # In-place Adam (param_out=param_in, exp_avg/exp_avg_sq aliased too) run for several steps on ONE
+    # cache entry, with a DIFFERENT lr and an incrementing step per dispatch.  The first call is a miss;
+    # the rest are hits.  If override_runtime_arguments failed to re-derive lr/step, or if in-place
+    # aliasing mis-patched the CB/buffer slots (#48928), the param would diverge -> allclose catches it.
+    # For a constant grad the Adam update is exactly lr*sign(grad), so param drifts by cumulative lr.
+    torch.manual_seed(2024)
+    shape = [32, 32]
+    betas, eps, weight_decay, amsgrad, fp32_dest_acc_en = (0.9, 0.999), 1e-6, 0.0, False, True
+    compute_kernel_config = get_compute_kernel_options(fp32_dest_acc_en)
+
+    weight = torch.randn(shape).to(torch.bfloat16).float()
+    grad = torch.randn(shape).to(torch.bfloat16).float()
+
+    # CPU ground truth: torch.optim.Adam, one .step() per iteration (its internal step counter == t).
+    param = torch.nn.Parameter(weight.clone())
+    optimizer = optim.Adam([param], lr=0.0, betas=betas, eps=eps, weight_decay=weight_decay, amsgrad=amsgrad)
+
+    # Device: state kept in-place across steps (out tensors alias the in tensors).
+    dev_param = create_tt_tensor(weight, device)
+    dev_grad = create_tt_tensor(grad, device)
+    dev_exp_avg = create_tt_tensor(torch.zeros(shape), device)
+    dev_exp_avg_sq = create_tt_tensor(torch.zeros(shape), device)
+
+    lrs = [0.1, 0.5, 0.9, 0.7, 0.9]
+    num_program_cache_entries_list = []
+    for t, lr in enumerate(lrs, start=1):
+        optimizer.param_groups[0]["lr"] = lr
+        param.grad = grad.clone()
+        optimizer.step()
+
+        ttnn.operations.moreh.adam(
+            dev_param,
+            dev_grad,
+            dev_exp_avg,
+            dev_exp_avg_sq,
+            lr=lr,
+            beta1=betas[0],
+            beta2=betas[1],
+            eps=eps,
+            weight_decay=weight_decay,
+            step=t,
+            amsgrad=amsgrad,
+            param_out=dev_param,
+            exp_avg_out=dev_exp_avg,
+            exp_avg_sq_out=dev_exp_avg_sq,
+            compute_kernel_config=compute_kernel_config,
+        )
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+        param_result = dev_param.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.float)
+        passing, out = comp_allclose_and_pcc(param.detach(), param_result, pcc=0.99, rtol=0.1, atol=0.1)
+        logger.info(f"step={t} lr={lr} param {out}")
+        assert passing, f"param mismatch on cache hit at step={t}, lr={lr}: {out}"
+
+    # Every step reuses the single entry created by the step-1 miss; hits must not grow the cache.
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert all(e == num_program_cache_entries_list[0] for e in num_program_cache_entries_list)
