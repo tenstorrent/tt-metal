@@ -113,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(params.num_faces * params.TEST_FACE_R_DIM, 1);
     for (int i = 0; i < num_total_tiles; ++i)
     {
-        _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM, i);
+        _llk_math_eltwise_unary_datacopy_(i);
     }
 
     // Binary with reuse_dest: SrcA = DEST (from datacopy), SrcB = unpacked B. Compute op(SrcA, SrcB) -> DEST.

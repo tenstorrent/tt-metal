@@ -57,8 +57,19 @@ def serialize_kv_chunk_table(
     cfg.chunk_n_tokens = chunk_n_tokens
     cfg.chunk_size_bytes = chunk_size_bytes
     table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
-    disagg.export_to_protobuf_file(table, path)
-    logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
+    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+
+
+def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
+    """Serialize an already-built KvChunkAddressTable (single- OR multi-config) to a protobuf file for
+    the worker's SET_TABLE, log it, and return `path`. This is the model-agnostic serialize step;
+    callers that need to build a multi-config table (e.g. a sparse model merging its KVPE + index
+    caches) construct the table themselves and hand it here."""
+    ttnn.experimental.disaggregation.export_to_protobuf_file(table, path)
+    logger.info(
+        f"[migration] KV chunk address table serialized to {path} "
+        f"(configs={table.num_configs()}, entries={table.total_entries()})"
+    )
     return path
 
 
@@ -147,6 +158,30 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
             f"{len(unique_fnids)} unique (mesh_id, chip_id) pairs. Device map: {device_map}."
         )
     return device_map
+
+
+def serialize_device_map(mesh_device, path: str) -> str:
+    """Write a JSON {"<mesh_id>:<chip_id>": <asic_unique_id>} device map so a device-less consumer
+    (the prefill_producer) can resolve a table's FabricNodeIds to the ASIC unique_id that
+    read_dram_umd / the migration worker key device reads on. Reuses _enumerate_devices (which calls
+    ttnn.cluster.get_chip_unique_id_from_fabric_node_id). Pairs with the mock KV chunk table."""
+    import json
+    import os
+
+    enumerated = _enumerate_devices(mesh_device)
+    device_map = {f"{mesh}:{chip}": unique_id for (unique_id, mesh, chip) in enumerated}
+    if len(device_map) != len(enumerated):
+        raise RuntimeError(
+            f"[migration] device-map fabric-node collision: {len(enumerated)} chips but only "
+            f"{len(device_map)} unique (mesh_id, chip_id) keys"
+        )
+    # Atomic publish: write a temp file then rename, so a concurrent reader never sees partial JSON.
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as mp:
+        json.dump(device_map, mp)
+    os.replace(tmp, path)
+    logger.info(f"[migration] device map ({len(device_map)} chips) serialized to {path}")
+    return path
 
 
 def publish_table_and_wait_ready(

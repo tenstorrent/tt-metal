@@ -29,7 +29,7 @@ class TileShape:
     """
 
     # Tile shape parameters
-    face_r_dim: int  # Row dimension of each face (typically 16)
+    face_r_dim: int  # Row dimension of each face (valid: 1/2/4/8/16; full face is 16)
     face_c_dim: int  # Column dimension of each face (always 16 for HW)
     num_faces_r_dim: int  # Number of faces in row dimension
     num_faces_c_dim: int  # Number of faces in column dimension
@@ -49,6 +49,10 @@ class TileShape:
     def total_num_faces(self) -> int:
         """Get total number of faces"""
         return self.num_faces_r_dim * self.num_faces_c_dim
+
+    @property
+    def cpp_value(self) -> str:
+        return f"ckernel::TensorShape{{{self.face_r_dim}, {self.face_c_dim}, {self.num_faces_r_dim}, {self.num_faces_c_dim}}}"
 
 
 def validate_tile_shape_tile_dependent_ops(tile_shape: TileShape) -> None:
@@ -85,4 +89,20 @@ def construct_tile_shape(tile_dimensions: Tuple[int, int] = (32, 32)) -> TileSha
         face_c_dim=FACE_C_DIM,
         num_faces_r_dim=num_faces_r_dim,
         num_faces_c_dim=num_faces_c_dim,
+    )
+
+
+def cpp_tensor_shape(tile_shape: TileShape) -> str:
+    """
+    Emit a C++ ``ckernel::make_tensor_shape`` call that matches ``tile_shape``.
+
+    Used by fuser code generators to construct the C++ TensorShape value
+    expected by LLK functions taking a ``ckernel::TensorShape`` parameter.
+    """
+    return (
+        "ckernel::make_tensor_shape("
+        f"{tile_shape.face_r_dim}, "
+        f"{tile_shape.face_c_dim}, "
+        f"{tile_shape.num_faces_r_dim}, "
+        f"{tile_shape.num_faces_c_dim})"
     )

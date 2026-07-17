@@ -172,7 +172,7 @@ inline void calculate_sine() {
     sfpi::vFloat C3, C2, C1, C0;
 
     // Coefficients are chosen per destination precision target for sin(a) on [0, PI/2].
-    if (is_fp32_dest_acc_en) {
+    if constexpr (is_fp32_dest_acc_en) {
         C3 = 0x1.5dc908p-19f;
         C2 = -0x1.9f70fp-13f;
         C1 = 0x1.110edap-7f;
@@ -183,6 +183,7 @@ inline void calculate_sine() {
         C0 = -0x1.5554a4p-3f;
     }
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
@@ -213,7 +214,7 @@ inline void calculate_sine() {
         a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) ^ q);
 
         sfpi::vFloat r;
-        if (is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
             r = C3 * s + C2;
             r = r * s + C1;
             sfpi::vFloat c = a * s;
@@ -258,6 +259,7 @@ inline void calculate_cosine() {
     const float ROUNDING_BIAS = 12582912.0f;
     const float NEG_ROUNDING_BIAS = -12582912.0f;
 
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 

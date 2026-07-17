@@ -213,12 +213,10 @@ void kernel_main() {
                 volatile tt_l1_ptr PlanEntry* entry = &entries[e];
                 uint32_t flags = entry->flags;
                 uint32_t token_t = entry->token_t;
-                uint32_t routed_expert = entry->routed_expert;
                 uint32_t page_idx = entry->page_idx;
                 uint32_t token_idx = entry->token_idx;
                 uint32_t weight_k = entry->weight_k;
                 uint32_t k = unpack_k(weight_k);
-                int16_t weight = unpack_weight(weight_k);
 
                 // Payload source: this token's untilized row inside the compute output CB.
                 uint32_t src_addr = untilize_read_ptr + token_t * aligned_output_page_size;
@@ -235,8 +233,7 @@ void kernel_main() {
                         aligned_output_page_size,
                         {.offset_bytes = token_t * aligned_output_page_size},
                         {.page_id = page_idx});
-                    // Per-token metadata layout (5 × int32): [src chip, global token idx, top-k
-                    // slot, routed expert, routing weight].  Built into the next ring slot, then
+                    // Per-token metadata layout (3 × int32): [src chip, global token idx, top-k slot].  Built into the next ring slot, then
                     // written to the same DRAM page index as the payload.
                     uint32_t meta_addr =
                         metadata_scratch_addr + (local_count % meta_scratch_slots) * aligned_metadata_page_size;
@@ -244,8 +241,6 @@ void kernel_main() {
                     meta[0] = (int32_t)linearized_mesh_coord;
                     meta[1] = (int32_t)token_idx;
                     meta[2] = (int32_t)k;
-                    meta[3] = (int32_t)routed_expert;
-                    meta[4] = (int32_t)weight;
                     noc.async_write(
                         cb_metadata_scratch,
                         metadata_addr_gen,
@@ -298,15 +293,13 @@ void kernel_main() {
                         off += chunk;
                     }
 
-                    // Metadata: same 5 × int32 layout as the local path, staged in the dedicated
-                    // cross-device scratch slot, then written to the sender's c_6 slot.
+                    // Metadata: same [chip, token, top-k slot] layout as the local path, staged in
+                    // the cross-device scratch slot, then written to the sender's c_6 slot.
                     volatile tt_l1_ptr int32_t* meta =
                         reinterpret_cast<volatile tt_l1_ptr int32_t*>(xdev_metadata_scratch_addr);
                     meta[0] = (int32_t)linearized_mesh_coord;
                     meta[1] = (int32_t)token_idx;
                     meta[2] = (int32_t)k;
-                    meta[3] = (int32_t)routed_expert;
-                    meta[4] = (int32_t)weight;
                     uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
                     noc_async_write_one_packet_with_trid(
                         xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);

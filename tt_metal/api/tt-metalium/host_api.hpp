@@ -475,14 +475,14 @@ void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program&
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
- * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | ttsl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
 // clang-format on
 void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    stl::Span<const uint32_t> runtime_args);
+    ttsl::Span<const uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -540,10 +540,10 @@ void SetRuntimeArgs(
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
  * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
  * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
- * | runtime_args | The runtime args to be written                                         | stl::Span<const uint32_t>                              |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | ttsl::Span<const uint32_t>                              |                                                                     | Yes      |
  */
 // clang-format on
-void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::Span<const uint32_t> runtime_args);
 
 // clang-format off
 /**

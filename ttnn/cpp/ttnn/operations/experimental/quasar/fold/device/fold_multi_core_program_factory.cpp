@@ -13,6 +13,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 namespace ttnn::operations::experimental::quasar {
 
 using namespace tt::tt_metal;
@@ -119,7 +121,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
                 DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::PRODUCER},
             },
         .compile_time_args = make_cta(/*is_reader=*/1),
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(input.device().arch()),
     };
 
     KernelSpec reader{
@@ -132,7 +134,7 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
                 DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .compile_time_args = make_cta(/*is_reader=*/0),
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device().arch()),
     };
 
     // ---- Assemble the spec ----

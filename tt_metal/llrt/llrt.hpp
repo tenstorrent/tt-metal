@@ -6,6 +6,8 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -67,6 +69,12 @@ void wait_until_cores_done(
     ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
 
 void wait_for_idle(ChipId device_id, const std::vector<std::vector<CoreCoord>>& logical_cores);
+
+// In test mode, return a watcher fault message if one was recorded, so host waits can unwind.
+std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_id);
+
+// In test mode, throw if watcher detected a device-side fault so host waits can unwind.
+void throw_if_watcher_tripped_in_test_mode(ChipId device_id);
 
 // Send a message to the ethernet firmware mailbox, if supported
 // Possible message types can be queried from the Hal. See tt::tt_metal::FWMailboxMsg

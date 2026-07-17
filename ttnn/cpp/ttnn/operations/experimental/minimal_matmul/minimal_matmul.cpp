@@ -19,7 +19,8 @@ ttnn::Tensor minimal_matmul(
     const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DataType> dtype,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    bool fuse_swiglu) {
     // Call device operation with chunks=1 (default), which returns a vector with 1 element
     auto outputs = ttnn::prim::minimal_matmul(
         input_tensor,
@@ -29,7 +30,13 @@ ttnn::Tensor minimal_matmul(
         config,
         memory_config,
         dtype,
-        compute_kernel_config);
+        compute_kernel_config,
+        /*chunks=*/1,
+        /*dim=*/-1,
+        /*fused_ternary_scalar=*/std::nullopt,
+        /*fused_ternary_input_a=*/std::nullopt,
+        /*fused_ternary_input_b=*/std::nullopt,
+        fuse_swiglu);
 
     // Extract and return the single output
     TT_FATAL(outputs.size() == 1, "Expected single output from minimal_matmul, got {}", outputs.size());

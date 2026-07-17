@@ -141,7 +141,7 @@ def test_sdpa_tail(device, width, block_size, num_blocks, dense, final_reduction
         layout=ttnn.TILE_LAYOUT if not untilize_out else ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=l_mem_config,
-        tile=tile,
+        tile=None if untilize_out else tile,
     )
     torch_ms_out = torch.zeros(ms_shape, dtype=torch.bfloat16)
     ttnn_ms_out = ttnn.from_torch(

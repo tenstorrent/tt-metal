@@ -176,7 +176,7 @@ void ConfigureKernelGroup(
 }
 
 inline void SetRuntimeArgsImpl(
-    const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
+    const Program& program, KernelHandle kernel_id, const CoreCoord& c, ttsl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_runtime_args(c, runtime_args);
     }
@@ -186,7 +186,7 @@ inline void SetRuntimeArgsImpl(
     const Program& program,
     KernelHandle kernel_id,
     const CoreRange& core_range,
-    stl::Span<const uint32_t> runtime_args) {
+    ttsl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
         auto kernel = program.impl().get_kernel(kernel_id);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -201,7 +201,7 @@ inline void SetRuntimeArgsImpl(
     const Program& program,
     KernelHandle kernel_id,
     const CoreRangeSet& core_range_set,
-    stl::Span<const uint32_t> runtime_args) {
+    ttsl::Span<const uint32_t> runtime_args) {
     if (!runtime_args.empty()) {
         auto kernel = program.impl().get_kernel(kernel_id);
         for (const auto& core_range : core_range_set.ranges()) {
@@ -1055,7 +1055,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
                 const auto& dfbs_on_core = program.impl().dataflow_buffers_on_core(logical_core);
-                if (!cbs_on_core.empty()) {
+                const bool scans_remote_cb_configs =
+                    kernel_group->launch_msg.view().kernel_config().min_remote_cb_start_index() < max_cbs;
+                if (!cbs_on_core.empty() || scans_remote_cb_configs) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
                         program.impl().get_program_config(index).cb_size / sizeof(uint32_t));
@@ -1689,17 +1691,6 @@ GlobalSemaphore CreateGlobalSemaphore(
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
 
-namespace experimental {
-GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    std::optional<uint32_t> initial_value,
-    BufferType buffer_type,
-    uint64_t address) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type, address);
-}
-}  // namespace experimental
-
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
 }
@@ -1749,7 +1740,7 @@ void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    stl::Span<const uint32_t> runtime_args) {
+    ttsl::Span<const uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
@@ -1785,7 +1776,7 @@ void SetRuntimeArgs(
     }
 }
 
-void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, ttsl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);

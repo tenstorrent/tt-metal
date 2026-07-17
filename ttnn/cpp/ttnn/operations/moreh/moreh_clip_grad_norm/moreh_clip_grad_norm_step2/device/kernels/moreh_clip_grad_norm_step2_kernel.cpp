@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     int i{0};
@@ -13,24 +13,24 @@ void kernel_main() {
 
     std::uint8_t input_id{0};
     const auto cb_input = input_id++;
-    CircularBuffer cb_input_obj(cb_input);  // input(==tmp_pow_sum)
+    DataflowBuffer dfb_input_obj(cb_input);  // input(==tmp_pow_sum)
     const auto cb_decimal = input_id++;
-    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
+    DataflowBuffer dfb_decimal_obj(cb_decimal);  // decimal
 
     std::uint8_t output_id{16};
     // x^p * exp(log(x) * decimal)
     const auto cb_y = output_id++;  // output(==total_norm)
-    CircularBuffer cb_y_obj(cb_y);
+    DataflowBuffer dfb_y_obj(cb_y);
 
     std::uint8_t intermed_id{24};
     const auto cb_x = intermed_id++;
-    CircularBuffer cb_x_obj(cb_x);           // Sum[tmp_pow_sum](==x)
+    DataflowBuffer dfb_x_obj(cb_x);          // Sum[tmp_pow_sum](==x)
     const auto cb_xpow = intermed_id++;      // x^p
-    CircularBuffer cb_xpow_obj(cb_xpow);
+    DataflowBuffer dfb_xpow_obj(cb_xpow);
     const auto cb_logx = intermed_id++;      // log(x)
-    CircularBuffer cb_logx_obj(cb_logx);
+    DataflowBuffer dfb_logx_obj(cb_logx);
     const auto cb_exp_lxmd = intermed_id++;  // exp(log(x) * decimal)
-    CircularBuffer cb_exp_lxmd_obj(cb_exp_lxmd);
+    DataflowBuffer dfb_exp_lxmd_obj(cb_exp_lxmd);
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -41,42 +41,43 @@ void kernel_main() {
         binary_op_init_common(cb_logx, cb_decimal, cb_y);
     }
 
-    cb_decimal_obj.wait_front(onetile);  // comes from the reader
+    dfb_decimal_obj.wait_front(onetile);  // comes from the reader
 
     // Compute cb_x
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         if (tile_idx == 0) {
             tile_regs_acquire();
-            cb_input_obj.wait_front(onetile);  // comes from the reader
-            cb_x_obj.reserve_back(onetile);
+            dfb_input_obj.wait_front(onetile);  // comes from the reader
+            dfb_x_obj.reserve_back(onetile);
 
             copy_tile_init(cb_input);
             copy_tile(cb_input, 0, dst0);
-            cb_input_obj.pop_front(onetile);
+            dfb_input_obj.pop_front(onetile);
             tile_regs_commit();
 
             tile_regs_wait();
             pack_tile(dst0, cb_x);
-            cb_x_obj.push_back(onetile);
+            dfb_x_obj.push_back(onetile);
             tile_regs_release();
         } else {
             tile_regs_acquire();
-            cb_input_obj.wait_front(onetile);  // comes from the reader
-            cb_x_obj.wait_front(onetile);
-            cb_x_obj.reserve_back(onetile);
+            dfb_input_obj.wait_front(onetile);  // comes from the reader
+            dfb_x_obj.wait_front(onetile);
+            dfb_x_obj.reserve_back(onetile);
 
             add_tiles_init(cb_input, cb_x);
             add_tiles(cb_input, cb_x, 0, 0, dst0);
-            cb_x_obj.pop_front(onetile);
-            cb_input_obj.pop_front(onetile);
+            dfb_x_obj.pop_front(onetile);
+            dfb_input_obj.pop_front(onetile);
             tile_regs_commit();
 
             tile_regs_wait();
             pack_tile(dst0, cb_x);
-            cb_x_obj.push_back(onetile);
+            dfb_x_obj.push_back(onetile);
             tile_regs_release();
         }
     }
     // x^p
-    power_tile_to_cb(cb_x_obj, cb_xpow_obj, cb_logx_obj, cb_decimal_obj, cb_exp_lxmd_obj, cb_y_obj, p, p_is_negative);
+    power_tile_to_cb(
+        dfb_x_obj, dfb_xpow_obj, dfb_logx_obj, dfb_decimal_obj, dfb_exp_lxmd_obj, dfb_y_obj, p, p_is_negative);
 }

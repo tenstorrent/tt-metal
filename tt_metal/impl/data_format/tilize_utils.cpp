@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
@@ -45,7 +45,7 @@ std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val -
 template <typename T>
 std::vector<T> to_tile_major_layout_swizzled(
     ttsl::Span<const T> in_row_major, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
     std::vector<T> tilized_result;
     if (in_row_major.size() == 0) {
         return tilized_result;
@@ -82,7 +82,7 @@ std::vector<T> to_tile_major_layout_swizzled(
 template <typename T>
 std::vector<T> convert_layout_tile_swizzled_to_row_major(
     ttsl::Span<const T> in_tile_swizzled, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
     std::vector<T> result;
     if (in_tile_swizzled.size() == 0) {
         return result;
@@ -123,7 +123,7 @@ std::vector<T> convert_layout_tile_swizzled_to_tile_nfaces(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
     bool transpose_face_order) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
     std::vector<T> result;
     if (in_tile_swizzled.size() == 0) {
         return result;
@@ -187,7 +187,7 @@ std::vector<T> convert_layout_tile_nfaces_to_tile_swizzled(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
     bool transpose_face_order) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
     std::vector<T> result(in_tile_nfaces.size());
     if (in_tile_nfaces.size() == 0) {
         return result;
@@ -260,7 +260,7 @@ std::vector<T> to_tile_major_layout_nfaces(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
     const bool transpose_face_order) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
 
     size_t H = shape[0];
     size_t W = shape[1];
@@ -342,7 +342,7 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_face,
     bool transpose_face_order) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
 
     size_t H = shape[0];
     size_t W = shape[1];
@@ -434,6 +434,7 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
     const bool transpose_of_faces) {
+    TTZoneScopedD(DATA_FORMAT);
     if (inp.size() == 0) {
         return std::vector<T>();
     }
@@ -485,6 +486,7 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
     const bool transpose_of_faces) {
+    TTZoneScopedD(DATA_FORMAT);
     TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
     uint32_t H = shape[shape.size() - 2];
     uint32_t W = shape[shape.size() - 1];

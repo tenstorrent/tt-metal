@@ -10,13 +10,24 @@ import PIL
 import pytest
 import torch
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
+
+
+def create_fractal_image(width: int, height: int) -> Image.Image:
+    c = np.linspace(-2.0, 1.0, width)[None, :] + 1j * np.linspace(-1.5, 1.5, height)[:, None]
+    z = np.zeros_like(c)
+    img = np.zeros(c.shape, dtype=np.uint8)
+    for i in range(32):
+        z = z * z + c
+        img[(img == 0) & (np.abs(z) > 2)] = 255 - 8 * i
+    return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
 @pytest.mark.parametrize(
@@ -26,14 +37,14 @@ from ....utils.test import line_params, ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True],
         # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False],
     ],
     ids=[
         "2x2sp0tp1",
@@ -71,8 +82,13 @@ def test_pipeline_inference(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    pil_image = PIL.Image.open("./prompt_image.png")
-    image_prompt = [ImagePrompt(image=pil_image, frame_pos=0)]
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    if no_prompt:
+        test_image = create_fractal_image(width, height)
+    else:
+        test_image = PIL.Image.open("./prompt_image.png")
+    image_prompt = [ImagePrompt(image=test_image, frame_pos=0)]
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
     num_frames = 81

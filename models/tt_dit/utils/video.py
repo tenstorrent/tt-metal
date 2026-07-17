@@ -16,7 +16,7 @@ from loguru import logger
 @dataclass(frozen=True)
 class Audio:
     """Decoded audio: waveform + sampling rate. Produced by the LTX audio decode and
-    consumed by ``export_video_audio`` (and stage-1 wav dumps)."""
+    consumed by ``export_video_audio``."""
 
     waveform: torch.Tensor
     sampling_rate: int

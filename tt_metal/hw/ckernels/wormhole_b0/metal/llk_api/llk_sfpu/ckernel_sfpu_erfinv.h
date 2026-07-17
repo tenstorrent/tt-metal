@@ -35,11 +35,11 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
 
     // calculated_value = temp + sqrt( temp^2 - log_value / a)
     sfpi::vFloat calculated_value = tmp * tmp - log_value * OneDivA;
-    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false, 2>(calculated_value);
     calculated_value = tmp + intermediate_result;
 
     // result = sqrt(calculated_value)
-    sfpi::vFloat result = sfpu_sqrt_custom<false>(calculated_value);
+    sfpi::vFloat result = sfpu_sqrt_custom<false, 2>(calculated_value);
 
     return result;
 }

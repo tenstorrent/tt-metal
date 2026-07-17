@@ -177,6 +177,105 @@ class TestUpdateCache:
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.parametrize("in_sharded", [False, True])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+def test_update_cache_decode_program_cache_hits(in_sharded, input_dtype, device):
+    """Cache-hit coverage for the UPDATE path's hash-excluded write offsets.
+
+    UpdateKVCacheOperation::compute_program_hash excludes update_idx (cache_idx)
+    and batch_offset, so repeated update_cache calls that differ ONLY in those
+    values hit the program cache. get_dynamic_runtime_args must re-apply the
+    per-dispatch write/read offsets (cache_start_id / tile_update_offset /
+    batch_read_offset) on every hit; if any froze at the first cache-miss value
+    the update would land at (or read from) the wrong position and the
+    per-iteration comp_equal below would fail. We also assert the program cache
+    grew by exactly ONE entry, i.e. every call after the first was a genuine hit
+    (not a recompile that would silently mask a freeze).
+
+    This exercises the branch the reviewer flagged: the pre-existing
+    test_update_cache_decode calls update_cache only once per (freshly built)
+    program, so the get_dynamic re-application path is never taken.
+    """
+    head_dim = 64
+    max_seq_len = 4096
+    num_users = 8
+    num_heads = 2
+    cache_dtype = input_dtype
+
+    cache_shape = [num_users, num_heads, max_seq_len, head_dim]
+    cache = torch.randn(cache_shape).bfloat16().float()
+    cachett = ttnn.Tensor(cache, cache_dtype).to(ttnn.TILE_LAYOUT).to(device)
+
+    # Each (cache_idx, batch_offset) writes to a DIFFERENT seq position and reads
+    # from a DIFFERENT input offset, while tensor shapes/dtype/sharding stay
+    # identical -> all iterations share a single cached program. Distinct
+    # cache_idx values never overlap, so the whole cache must accumulate every
+    # update. All satisfy num_users + batch_offset <= 32.
+    positions = [(0, 0), (1, 8), (127, 16), (1057, 0), (63, 24)]
+
+    input_shape = [num_users, num_heads, 1, head_dim]
+    num_new_cache_entries = 0
+    for cache_idx, batch_offset in positions:
+        assert num_users + batch_offset <= 32
+        x = torch.randn(input_shape).bfloat16().float()
+        # Pad dim0 of the input to 32, placing the real users at [batch_offset,
+        # batch_offset + num_users); the op reads from that offset and writes to
+        # cache users [0, num_users).
+        x_new = x.clone()
+        x_new = torch.cat((torch.zeros(batch_offset, num_heads, 1, head_dim), x_new), dim=0)
+        x_new = torch.cat((x_new, torch.zeros(32 - num_users - batch_offset, num_heads, 1, head_dim)), dim=0)
+        assert x_new.shape[0] == 32, f"Expected x.shape[0] to be 32, got {x_new.shape[0]}"
+        xt = ttnn.Tensor(x_new.permute(2, 1, 0, 3), input_dtype).to(ttnn.TILE_LAYOUT)
+        if in_sharded:
+            compute_grid_size = device.compute_with_storage_grid_size()
+            num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
+            shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+            input_shard_spec = ttnn.ShardSpec(
+                shard_grid,
+                [
+                    xt.volume() // xt.padded_shape[-1] // num_cores,
+                    xt.padded_shape[-1],
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+            )
+            xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
+
+        entries_before = device.num_program_cache_entries()
+        cachett = ttnn.update_cache(cachett, xt, cache_idx, batch_offset=batch_offset)
+        num_new_cache_entries += device.num_program_cache_entries() - entries_before
+
+        # Mirror the update into the torch reference at the SAME position.
+        cache[0:num_users, 0:num_heads, cache_idx : cache_idx + 1, 0:head_dim] = x
+
+        # This iteration's write must land at its own cache_idx / read from its
+        # own batch_offset. A frozen offset would corrupt this slice.
+        tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        eq_update, out_update = comp_equal(
+            x, tt_got_back[0:num_users, 0:num_heads, cache_idx : cache_idx + 1, 0:head_dim]
+        )
+        logger.info(f"cache_idx={cache_idx} batch_offset={batch_offset}: {out_update}")
+        assert eq_update, out_update
+
+    # The full cache must reflect EVERY update at its own position (catches an
+    # offset frozen at a prior iteration's value that clobbered the wrong region).
+    tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    eq_cache, out_cache = comp_equal(cache, tt_got_back)
+    logger.info(out_cache)
+    assert eq_cache, out_cache
+
+    # Exactly one program built: the first call missed, all later calls were
+    # genuine cache hits (so get_dynamic_runtime_args re-applied the offsets).
+    assert (
+        num_new_cache_entries == 1
+    ), f"Expected a single program-cache entry (genuine hits after first), got {num_new_cache_entries}"
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("head_dim", [64])
 @pytest.mark.parametrize("max_seq_len", [2048])
 @pytest.mark.parametrize("num_users", [8, 16, 32, 64])

@@ -8,8 +8,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import eltwise_logical_and_ as tt_eltwise_logical_and_
 
 
@@ -49,11 +48,8 @@ def run_eltwise_logical_andi_tests(
         output_mem_config=out_mem_config,
     )
 
-    # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, x)
-    logger.debug(pcc_value)
-
-    assert success
+    # compare tt and golden outputs (logical_and_ writes result into input tensor on device)
+    assert_equal(ref_value, tt_result)
 
 
 test_sweep_args = [

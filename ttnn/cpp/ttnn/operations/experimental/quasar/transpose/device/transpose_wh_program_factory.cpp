@@ -14,6 +14,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <vector>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -120,9 +122,6 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
     KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
-    reader_run.runtime_arg_values.reserve(num_cores_total);
-    writer_run.runtime_arg_values.reserve(num_cores_total);
-    compute_run.runtime_arg_values.reserve(num_cores_total);
 
     if (row_major) {
         // --------------------------------------------------------------------
@@ -152,7 +151,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"W_size_bytes", W * input_tensor.element_size()},
                  {"l1_write_offset_bytes", wt * input_tensor.element_size() * TILE_WIDTH}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
         };
 
         KernelSpec writer_spec{
@@ -173,16 +172,21 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  {"H_size_bytes", H * output_tensor.element_size()},
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_hw_blocks"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         };
 
-        ComputeHardwareConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ttnn::ComputeKernelConfig compute_cfg{
+            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_cfg);
         if (src_is_float32) {
             // Keep the source CB and the tile-formatted intermediate (cb_tilize) in full Float32
             // on the unpack-to-dest path; both feed the transpose.
-            compute_cfg.unpack_to_dest_mode = {
-                {CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
-                {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+            std::visit(
+                [&](auto& c) {
+                    c.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
+                    c.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
+                },
+                compute_hw);
         }
 
         KernelSpec compute_spec{
@@ -205,7 +209,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                      .dfb_spec_name = CB_OUT0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args = {{"Ht", ht}, {"Wt", wt}, {"HtWt", ht * wt}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_hw_blocks"}},
-            .hw_config = compute_cfg,
+            .hw_config = compute_hw,
         };
         if (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32) {
             compute_spec.compiler_options.defines = {{"DST_ACCUM_MODE", "1"}};
@@ -225,11 +229,24 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             }
 
             const NodeCoord node = core;
-            reader_run.runtime_arg_values.push_back(
-                {node, {{"start_id", num_sticks_read}, {"num_hw_blocks", num_hw_blocks_per_core}}});
-            compute_run.runtime_arg_values.push_back({node, {{"num_hw_blocks", num_hw_blocks_per_core}}});
-            writer_run.runtime_arg_values.push_back(
-                {node, {{"start_id", num_sticks_write}, {"num_hw_blocks", num_hw_blocks_per_core}}});
+            KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+            KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+            KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
+            AddRuntimeArgsForNode(
+                reader_rtas,
+                node,
+                {
+                    {"start_id", num_sticks_read},
+                    {"num_hw_blocks", num_hw_blocks_per_core},
+                });
+            compute_rtas["num_hw_blocks"][node] = num_hw_blocks_per_core;
+            AddRuntimeArgsForNode(
+                writer_rtas,
+                node,
+                {
+                    {"start_id", num_sticks_write},
+                    {"num_hw_blocks", num_hw_blocks_per_core},
+                });
 
             num_sticks_read += num_hw_blocks_per_core * H;
             num_sticks_write += num_hw_blocks_per_core * W;
@@ -249,7 +266,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
         };
 
         KernelSpec writer_spec{
@@ -262,12 +279,15 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
             .compile_time_args = {{"page_size", dst_single_tile_size}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         };
 
-        ComputeHardwareConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ttnn::ComputeKernelConfig compute_cfg{
+            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_cfg);
         if (src_is_float32) {
-            compute_cfg.unpack_to_dest_mode = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+            std::visit(
+                [&](auto& c) { c.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
 
         KernelSpec compute_spec{
@@ -281,7 +301,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
                  DFBBinding{
                      .dfb_spec_name = CB_OUT0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::PRODUCER}},
             .runtime_arg_schema = {.runtime_arg_names = {"NHtWt"}},
-            .hw_config = compute_cfg,
+            .hw_config = compute_hw,
         };
 
         kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};
@@ -307,18 +327,29 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             const uint32_t w = num_tiles_read / Ht_walk % Wt_walk;
 
             const NodeCoord node = core;
-            reader_run.runtime_arg_values.push_back(
-                {node,
-                 {{"num_tiles", num_tiles_per_core},
-                  {"start_id", tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w},
-                  {"start_ht", h},
-                  {"start_wt", w},
-                  {"Ht", Ht_walk},
-                  {"Wt", Wt_walk},
-                  {"HtWt", HtWt_walk}}});
-            compute_run.runtime_arg_values.push_back({node, {{"NHtWt", num_tiles_per_core}}});
-            writer_run.runtime_arg_values.push_back(
-                {node, {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_read}}});
+            KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+            KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+            KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
+            AddRuntimeArgsForNode(
+                reader_rtas,
+                node,
+                {
+                    {"num_tiles", num_tiles_per_core},
+                    {"start_id", tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w},
+                    {"start_ht", h},
+                    {"start_wt", w},
+                    {"Ht", Ht_walk},
+                    {"Wt", Wt_walk},
+                    {"HtWt", HtWt_walk},
+                });
+            compute_rtas["NHtWt"][node] = num_tiles_per_core;
+            AddRuntimeArgsForNode(
+                writer_rtas,
+                node,
+                {
+                    {"num_pages", num_tiles_per_core},
+                    {"start_id", num_tiles_read},
+                });
 
             num_tiles_read += num_tiles_per_core;
         }

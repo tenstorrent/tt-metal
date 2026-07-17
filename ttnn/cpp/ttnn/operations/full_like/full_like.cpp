@@ -17,7 +17,7 @@ Tensor moreh_full_like(
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Full Like: Input must be on device");
     const auto& shape = input.logical_shape();
     return ttnn::prim::full(
-        ttnn::SmallVector<uint32_t>(shape.cbegin(), shape.cend()),
+        ttsl::SmallVector<uint32_t>(shape.cbegin(), shape.cend()),
         fill_value,
         input.device(),
         dtype.value_or(input.dtype()),

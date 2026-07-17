@@ -345,6 +345,27 @@ void print_aerisc_training_status(tt::ChipId device_id, const CoreCoord& virtual
 
 }  // namespace
 
+std::optional<std::string> get_watcher_error_message_in_test_mode(ChipId device_id) {
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled() &&
+        tt::tt_metal::MetalContext::instance().watcher_server()) {
+        auto& watcher = *tt::tt_metal::MetalContext::instance().watcher_server();
+        if (watcher.killed_due_to_error() || !watcher.exception_message().empty()) {
+            return fmt::format(
+                "Device {}: Aborting wait due to watcher error: {}",
+                device_id,
+                watcher.exception_message());
+        }
+    }
+    return std::nullopt;
+}
+
+void throw_if_watcher_tripped_in_test_mode(ChipId device_id) {
+    if (auto error_message = get_watcher_error_message_in_test_mode(device_id)) {
+        TT_THROW("{}", *error_message);
+    }
+}
+
 void wait_until_cores_done(
     tt::ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms) {
     // poll the cores until the set of not done cores is empty
@@ -360,19 +381,7 @@ void wait_until_cores_done(
                 .count();
     }
     while (!not_done_phys_cores.empty()) {
-        // In tests, when rtoptions.get_test_mode_enabled() is true, watcher
-        // will stop but will not kill the program. This section detects watcher
-        // stopping and reports a fatal error so Finish() can return and the test process can tear down.
-        if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled() &&
-            tt::tt_metal::MetalContext::instance().watcher_server()) {
-            auto& watcher = *tt::tt_metal::MetalContext::instance().watcher_server();
-            if (watcher.killed_due_to_error() || !watcher.exception_message().empty()) {
-                TT_THROW(
-                    "Device {}: Aborting wait for physical cores to finish due to watcher error: {}",
-                    device_id,
-                    watcher.exception_message());
-            }
-        }
+        throw_if_watcher_tripped_in_test_mode(device_id);
 
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();

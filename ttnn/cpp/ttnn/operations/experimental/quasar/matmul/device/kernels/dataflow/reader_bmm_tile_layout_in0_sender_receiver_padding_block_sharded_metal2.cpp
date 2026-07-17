@@ -30,6 +30,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "api/debug/dprint.h"  // [DEBUG #47797] in0 mcast handshake diagnosis
+#include "api/debug/ring_buffer.h"  // [DEBUG #47797] PREBARRIER counters (DPRINT MMIO path unsupported on craq-sim)
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_arg(args::core_has_output_block_work);
@@ -120,6 +121,21 @@ void kernel_main() {
         }
     }
     receiver_sem.set(VALID);
+
+    // [DEBUG mcast2d hang] Watcher-reliable (unlike DPRINT on craq-sim) dump of the mcast axis args the
+    // kernel actually received: marker 0x5E4D0000, num_x, num_y, in0_mcast_num_dests, and the first two
+    // resolved remote-sender coords. If num_x==1/num_y>1 (or remote_sender0/1 share an x and differ in y)
+    // the receiver is acking a COLUMN while the sender counts num_dests along the row -> the deadlock.
+    WATCHER_RING_BUFFER_PUSH(0x5E4D0000u);
+    WATCHER_RING_BUFFER_PUSH((uint32_t)num_x);
+    WATCHER_RING_BUFFER_PUSH((uint32_t)num_y);
+    WATCHER_RING_BUFFER_PUSH((uint32_t)in0_mcast_num_dests);
+    WATCHER_RING_BUFFER_PUSH(remote_sender_noc_x[0]);
+    WATCHER_RING_BUFFER_PUSH(remote_sender_noc_y[0]);
+    if constexpr (num_remote_senders > 1) {
+        WATCHER_RING_BUFFER_PUSH(remote_sender_noc_x[1]);
+        WATCHER_RING_BUFFER_PUSH(remote_sender_noc_y[1]);
+    }
 
     // ---- [DEBUG #47797] one-shot per-core dump of the in0 mcast handshake config. ----
     // For block 0, block_id == 0, so the core whose sender_id == 0 must take the sender branch
@@ -269,6 +285,19 @@ void kernel_main() {
                             }
                         }
 
+                        // [DEBUG #47797] SENDER pre-wait: marker 0x5E4D0001, noc, sender_sem value,
+                        // expected (num_dests[-1]). If the newest ring-buffer entry is this and the value
+                        // never reaches expected, receivers' sender_sem.up acks aren't arriving at the sender.
+                        // [DISABLED — handshake confirmed working (sems reach 7 & 3); these loop markers
+                        // flood the 32-entry ring buffer and hide the compute-side stall. Re-enable if the
+                        // handshake regresses.]
+#if 0
+                        WATCHER_RING_BUFFER_PUSH(0x5E4D0001u);
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)noc_index);
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)sender_sem.get_value());
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)(core_in_in0_receiver_mcast_grid ? in0_mcast_num_dests - 1
+                                                                                            : in0_mcast_num_dests));
+#endif
                         if constexpr (core_in_in0_receiver_mcast_grid) {
                             // wait for every core in receiver grid EXCLUDING myself
                             sender_sem.wait(in0_mcast_num_dests - 1);
@@ -384,11 +413,32 @@ void kernel_main() {
                                 (uint32_t)in0_mcast_dest_noc_end_y);
                         }
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
+                        // [DEBUG #47797] RECEIVER ack: marker 0x5E4D0002, noc, block_id, the sender coords
+                        // this .up targets. If the sender is stuck at 0x5E4D0001, check these coords resolve
+                        // to the actual sender core.
+                        // [DISABLED — handshake confirmed working; see note at 0x5E4D0001 above.]
+#if 0
+                        WATCHER_RING_BUFFER_PUSH(0x5E4D0002u);
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)noc_index);
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)block_id);
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)remote_sender_noc_x[block_id]);
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)remote_sender_noc_y[block_id]);
+#endif
                         // Increment remote sender's semaphore using pre-computed coordinates
                         sender_sem.up(noc, remote_sender_noc_x[block_id], remote_sender_noc_y[block_id], 1);
                     }
 
                     if constexpr (core_in_in0_receiver_mcast_grid) {
+                        // [DEBUG #47797] RECEIVER pre-wait: marker 0x5E4D0003, noc, receiver_sem value, VALID.
+                        // If the newest ring-buffer entry is this and the value never reaches VALID, the
+                        // sender's receiver_sem.set_multicast(VALID) isn't reaching this receiver.
+                        // [DISABLED — handshake confirmed working; see note at 0x5E4D0001 above.]
+#if 0
+                        WATCHER_RING_BUFFER_PUSH(0x5E4D0003u);
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)noc_index);
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)receiver_sem.get_value());
+                        WATCHER_RING_BUFFER_PUSH((uint32_t)VALID);
+#endif
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         receiver_sem.wait(VALID);
                     }
@@ -415,6 +465,9 @@ void kernel_main() {
         (uint32_t)noc_nonposted_writes_num_issued[noc_index],
         (uint32_t)ncrisc_noc_reads_flushed(noc_index),
         (uint32_t)ncrisc_noc_nonposted_writes_sent(noc_index));
+    // [DEBUG #47797] PREBARRIER counter ring-buffer dump REMOVED: the barrier isn't the hang
+    // (scmdbuf_tr_ack is stubbed to 0 in craq-sim, so async_full_barrier passes). The handshake dumps
+    // are now at the sender_sem.wait / receiver_sem.wait / sender_sem.up sites (markers 0x5E4D000{1,2,3}).
 
     noc.async_write_barrier();
     // [#47797] Fully drain this kernel's NOC transactions before completing. The metal2 firmware

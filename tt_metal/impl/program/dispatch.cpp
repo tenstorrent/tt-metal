@@ -10,7 +10,7 @@
 #include <cstring>
 #include <span>
 #include <sub_device_types.hpp>
-#include <tracy/Tracy.hpp>
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -616,12 +616,48 @@ void generate_runtime_args_cmds(
     }
 }
 
+// Max cores whose RTA payloads fit in one large-unicast command. The command is inline: every core's
+// payload is embedded in the prefetcher command, so the whole command (relay-inline header + sub-cmds +
+// all per-core payloads) must fit max_prefetch_command_size — not just the 35-sub-cmd cap. On eth dispatch
+// max_prefetch_command_size is only 32KB (vs 128KB on worker) and the eth cmddat queue is 64KB (vs 256KB),
+// so a large per-core payload forces far fewer than 35 cores per command; exceeding it silently overflows
+// the eth cmddat queue and hangs the device. Returns >=1 (a single core's payload is L1-fit-checked at
+// finalize, so it is expected to fit).
+uint32_t max_cores_per_large_unicast_cmd(uint32_t rta_payload_sizeB, uint32_t max_prefetch_command_size) {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
+    for (uint32_t n = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS; n >= 1; --n) {
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_write_packed_large_unicast(n, n * aligned_core_payload);
+        if (calculator.write_offset_bytes() <= max_prefetch_command_size) {
+            return n;
+        }
+    }
+    // Even a single core's inline payload does not fit one prefetcher command. This path embeds the RTA
+    // payload inline in the command, so it cannot be split across commands (only across cores). Fail loudly
+    // here rather than emit an oversized command that silently hangs the device (the fetch_queue_write size
+    // guard is a TT_ASSERT and compiles out in release builds). The kernel-side RTA ceiling
+    // (validate_runtime_args_size) is set before the dispatch core type is known, so this is the first point
+    // that can enforce the dispatch-core-specific prefetch command size.
+    DeviceCommandCalculator single_core;
+    single_core.add_dispatch_write_packed_large_unicast(1, aligned_core_payload);
+    TT_FATAL(
+        false,
+        "A single core's unique runtime args ({} B payload -> {} B prefetcher command) exceed the max prefetch "
+        "command size ({} B) for this dispatch core type. The large-unicast RTA path sends the payload inline and "
+        "cannot split one core across commands. Reduce the number of unique runtime args for this kernel.",
+        rta_payload_sizeB,
+        single_core.write_offset_bytes(),
+        max_prefetch_command_size);
+    return 1;  // unreachable
+}
+
 // Emit unique runtime args for a kernel group using CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST instead of
 // CQ_DISPATCH_CMD_WRITE_PACKED. Unlike the packed path, the large-unicast dispatch handler wraps CB pages
 // per sub-command, so a single core's RTA payload is no longer limited to one dispatch page. Used when a
 // kernel group's per-core payload exceeds that page (see assemble_runtime_args_commands). The command
 // layout mirrors BatchedTransferGenerator: one sub-command (core) per unicast destination, up to
-// CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS per command, with each core's payload laid out
+// max_cores_per_large_unicast_cmd() per command, with each core's payload laid out
 // exactly as the packed path lays out its per-core data region so the RTA-update pointers stay valid.
 void generate_runtime_args_cmds_large_unicast(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
@@ -633,18 +669,20 @@ void generate_runtime_args_cmds_large_unicast(
     std::vector<std::vector<
         std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>>>&
         rt_args_data,
+    uint32_t max_prefetch_command_size,
     uint32_t write_offset_index) {
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     // Device reads rta_payload_sizeB bytes per sub-command, then pads the read pointer to `alignment`, so
     // consecutive per-core payloads in the command stream are separated by this aligned size.
     const uint32_t aligned_core_payload = tt::align(rta_payload_sizeB, l1_alignment);
     const uint32_t count_word_offset = is_watcher_assert_enabled() ? 1 : 0;
+    // Cap cores/command by the prefetcher command size, not just the sub-cmd count (see helper above).
+    const uint32_t max_cores_per_cmd = max_cores_per_large_unicast_cmd(rta_payload_sizeB, max_prefetch_command_size);
 
     const uint32_t num_cores = sub_cmds.size();
     uint32_t offset_idx = 0;
     while (offset_idx < num_cores) {
-        const uint32_t num_in_chunk =
-            std::min<uint32_t>(num_cores - offset_idx, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+        const uint32_t num_in_chunk = std::min<uint32_t>(num_cores - offset_idx, max_cores_per_cmd);
 
         std::vector<CQDispatchWritePackedLargeUnicastSubCmd> large_sub_cmds(num_in_chunk);
         // Per-core payload backing storage. Must outlive the add_dispatch call (memcpy'd into the command).
@@ -773,7 +811,9 @@ BatchedTransfers assemble_runtime_args_commands(
             if (kg->total_rta_size != 0) {
                 uint32_t num_sub_cmds = kg->core_ranges.num_cores();
                 if (unique_rta_requires_large_unicast(kg->total_rta_size)) {
-                    command_count += div_up(num_sub_cmds, CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+                    command_count += div_up(
+                        num_sub_cmds,
+                        max_cores_per_large_unicast_cmd(kg->total_rta_size, constants.max_prefetch_command_size));
                 } else {
                     uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
                     uint32_t max_packed_cmds =
@@ -928,6 +968,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         unique_rt_data_and_sizes,
                         kg->total_rta_size,
                         unique_rt_args_data,
+                        constants.max_prefetch_command_size,
                         get_dispatch_write_offset(programmable_core_type));
                 } else {
                     generate_runtime_args_cmds(
@@ -1197,16 +1238,31 @@ public:
         uint32_t max_cbs = hal.get_arch_num_circular_buffers();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
-        const auto& circular_buffers_unique_coreranges = program.circular_buffers_unique_coreranges();
-        const uint16_t num_multicast_cb_sub_cmds = circular_buffers_unique_coreranges.size();
+        auto cb_config_coreranges = program.circular_buffers_unique_coreranges();
+        // circular_buffers_unique_coreranges() returns non-overlapping ranges, so this is a single build.
+        CoreRangeSet covered_cb_cores(cb_config_coreranges);
+        const auto& kernel_groups = program.get_kernel_groups(index);
+        for (const auto& kernel_group : kernel_groups) {
+            const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
+            if (kernel_config.min_remote_cb_start_index() >= max_cbs) {
+                continue;
+            }
+            // Firmware scans remote CB configs down through min_remote_cb_start_index. Include cores with no CBs so
+            // fast dispatch explicitly clears stale configs there instead of leaving a prior program's remote CB.
+            const auto uncovered_cores = kernel_group->core_ranges.subtract(covered_cb_cores);
+            cb_config_coreranges.insert(
+                cb_config_coreranges.end(), uncovered_cores.ranges().begin(), uncovered_cores.ranges().end());
+            covered_cb_cores = covered_cb_cores.merge(uncovered_cores);
+        }
+
+        const uint16_t num_multicast_cb_sub_cmds = cb_config_coreranges.size();
         cb_config_payloads = std::vector<std::vector<uint32_t>>(
             num_multicast_cb_sub_cmds,
             std::vector<uint32_t>(program.get_program_config(index).cb_size / sizeof(uint32_t), 0));
         if (num_multicast_cb_sub_cmds > 0) {
             uint32_t i = 0;
             uint32_t remote_offset_index = program.get_program_config(index).local_cb_size / sizeof(uint32_t);
-            auto index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-            for (const CoreRange& core_range : circular_buffers_unique_coreranges) {
+            for (const CoreRange& core_range : cb_config_coreranges) {
                 const CoreCoord& virtual_start =
                     device->virtual_core_from_logical_core(core_range.start_coord, CoreType::WORKER);
                 const CoreCoord& virtual_end =
@@ -1214,6 +1270,19 @@ public:
 
                 auto& cb_config_payload = cb_config_payloads[i];
                 uint32_t max_index = 0;
+                for (const auto& kernel_group : kernel_groups) {
+                    if (!kernel_group->core_ranges.intersects(core_range)) {
+                        continue;
+                    }
+                    const auto kernel_config = kernel_group->launch_msg.view().kernel_config();
+                    const uint32_t min_remote_cb_start_index = kernel_config.min_remote_cb_start_index();
+                    if (min_remote_cb_start_index < max_cbs) {
+                        max_index = std::max(
+                            max_index,
+                            remote_offset_index +
+                                (max_cbs - min_remote_cb_start_index) * UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
+                    }
+                }
                 const auto& circular_buffers_on_corerange = program.circular_buffers_on_corerange(core_range);
                 for (const std::shared_ptr<CircularBufferImpl>& cb : circular_buffers_on_corerange) {
                     const uint32_t cb_address = cb->address();
@@ -2603,7 +2672,7 @@ void update_traced_program_dispatch_commands(
     ProgramBinaryStatus program_binary_status,
     std::pair<bool, int> unicast_go_signal_update) {
     uint32_t i = 0;
-    ZoneScopedN("program_loaded_on_device");
+    TTZoneScopedDN(DISPATCH, "program_loaded_on_device");
     const auto& hal = MetalContext::instance().hal();
     const ProgramImpl& program = *trace_node.program;
     const TraceDispatchMetadata& dispatch_md = trace_node.dispatch_metadata;

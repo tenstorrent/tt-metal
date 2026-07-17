@@ -109,7 +109,7 @@ static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape,
     const int rank_a = a_shape.rank();
     const int rank_b = b_shape.rank();
     const int largest_rank = std::max(rank_a, rank_b);
-    SmallVector<uint32_t> output_shape(largest_rank, 1);
+    ttsl::SmallVector<uint32_t> output_shape(largest_rank, 1);
 
     for (int i = -1; i >= -largest_rank; --i) {
         auto a_dim = (i >= -rank_a) ? a_shape[i] : 1;

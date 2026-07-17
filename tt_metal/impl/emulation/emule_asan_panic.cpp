@@ -61,12 +61,19 @@ bool emule_asan_symbolize(const char* module, uintptr_t file_offset, char* out, 
     module = modbuf;
     // Prefer llvm-symbolizer (reads clang's DWARF5; addr2line only yields "??:?"),
     // trying versioned names; addr2line is the last-ditch fallback.
+    // `DEBUGINFOD_URLS=` is load-bearing: llvm-symbolizer otherwise does a blocking debuginfod
+    // NETWORK lookup (the inherited DEBUGINFOD_URLS, e.g. https://debuginfod.ubuntu.com) when the
+    // local DWARF is incomplete; on a host with no route it blocks forever in poll(), wedging
+    // __emule_asan_panic before its abort() so the death never fires. Only bites where
+    // DEBUGINFOD_URLS is set AND unreachable (dev boxes) — not CI. Disabling it keeps the trace
+    // fully local. `</dev/null` additionally guards llvm-symbolizer's interactive-stdin path.
+    // Keep in sync with the tt-emule mirror in include/jit_hw/asan/emule_asan.h.
     const char* tools[] = {
-        "llvm-symbolizer --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx 2>/dev/null",
-        "llvm-symbolizer-20 --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx 2>/dev/null",
-        "llvm-symbolizer-19 --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx 2>/dev/null",
-        "llvm-symbolizer-18 --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx 2>/dev/null",
-        "addr2line -f -C -i -p -e \"%s\" 0x%lx 2>/dev/null",
+        "DEBUGINFOD_URLS= llvm-symbolizer --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx </dev/null 2>/dev/null",
+        "DEBUGINFOD_URLS= llvm-symbolizer-20 --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx </dev/null 2>/dev/null",
+        "DEBUGINFOD_URLS= llvm-symbolizer-19 --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx </dev/null 2>/dev/null",
+        "DEBUGINFOD_URLS= llvm-symbolizer-18 --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx </dev/null 2>/dev/null",
+        "DEBUGINFOD_URLS= addr2line -f -C -i -p -e \"%s\" 0x%lx </dev/null 2>/dev/null",
     };
     for (size_t t = 0; t < sizeof(tools) / sizeof(tools[0]); ++t) {
         char cmd[1100];

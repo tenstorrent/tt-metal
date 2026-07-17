@@ -17,6 +17,7 @@
   cmd: |
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2Smoke*Fixture.*"
     TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   skus:
     bh_quietbox_2:
@@ -47,19 +48,23 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: sdpa nightly tests (QB2 IOMMU only)
+- name: sdpa nightly tests (QB2 only)
   cmd: pytest tests/nightly/blackhole/sdpa/ -svv
   skus:
-    bh_quietbox_2_iommu:
+    bh_quietbox_2:
       timeout: 20
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
 
 - name: ring sdpa PERF tests (QB2 only)
+  # These perf checks measure device kernel duration via the realtime device profiler. On Blackhole
+  # the RT profiler's D2H socket uses 64-bit PCIe addressing, which requires host IOMMU (there is no
+  # hugepage fallback) — see evaluate_realtime_profiler_eligibility in realtime_profiler_manager.cpp.
+  # Without IOMMU the profiler never activates and the tests fail the guard (issue #49665).
   cmd: |
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
-    SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
+    pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
+    pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
+    pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
   skus:
     bh_quietbox_2:
       timeout: 10

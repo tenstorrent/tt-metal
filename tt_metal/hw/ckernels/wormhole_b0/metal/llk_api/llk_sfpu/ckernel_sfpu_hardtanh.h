@@ -21,13 +21,7 @@ inline void calculate_hardtanh(uint param0, uint param1) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        // Branchless clamp: vec_min_max(a, b) sets a = min(a, b), b = max(a, b).
-        // Use fresh copies of the bounds each iteration since they get overwritten.
-        sfpi::vFloat lo = min_val;
-        sfpi::vFloat hi = max_val;
-        sfpi::vec_min_max(lo, v);  // v = max(v, min_val)
-        sfpi::vec_min_max(v, hi);  // v = min(v, max_val)
-        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg[0] = sfpi::clamp(v, min_val, max_val);
         sfpi::dst_reg++;
     }
 }

@@ -8,13 +8,13 @@
 
 namespace ttnn {
 
-ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& dim) {
+ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, const ttsl::SmallVector<int>& dim) {
     const auto& original_logical_shape = input_tensor.logical_shape();
     const auto& padded_shape = input_tensor.padded_shape();
     auto input_tensor_rank = original_logical_shape.rank();
 
-    SmallVector<uint32_t> new_logical_shape(original_logical_shape.cbegin(), original_logical_shape.cend());
-    SmallVector<uint32_t> new_padded_shape(padded_shape.cbegin(), padded_shape.cend());
+    ttsl::SmallVector<uint32_t> new_logical_shape(original_logical_shape.cbegin(), original_logical_shape.cend());
+    ttsl::SmallVector<uint32_t> new_padded_shape(padded_shape.cbegin(), padded_shape.cend());
 
     // Explicitly copy dim to avoid modifying the input
     auto dims = dim;
@@ -68,13 +68,13 @@ ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<i
 }
 
 ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor, int dim) {
-    ttnn::SmallVector<int> dims{dim};
+    ttsl::SmallVector<int> dims{dim};
     return squeeze(input_tensor, dims);
 }
 
 ttnn::Tensor squeeze(const ttnn::Tensor& input_tensor) {
     auto input_tensor_rank = input_tensor.logical_shape().rank();
-    ttnn::SmallVector<int> dims(input_tensor_rank);
+    ttsl::SmallVector<int> dims(input_tensor_rank);
     std::iota(dims.begin(), dims.end(), 0);
     return squeeze(input_tensor, dims);
 }

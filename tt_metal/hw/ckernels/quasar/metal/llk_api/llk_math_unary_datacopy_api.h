@@ -86,7 +86,7 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
     } else {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
         if constexpr (!unpack_to_dest) {
-            _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
+            _llk_math_eltwise_unary_datacopy_(dst_index);
         }
     }
 }
@@ -116,7 +116,7 @@ inline void llk_math_eltwise_unary_datacopy_block(
     // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
     if constexpr (!unpack_to_dest) {
         for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
-            _llk_math_eltwise_unary_datacopy_(num_rows, dst_index);
+            _llk_math_eltwise_unary_datacopy_(dst_index);
         }
     }
 }

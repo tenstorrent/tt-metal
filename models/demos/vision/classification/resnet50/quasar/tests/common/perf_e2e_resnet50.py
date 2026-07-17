@@ -8,7 +8,7 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, profiler
 from models.demos.vision.classification.resnet50.quasar.tests.common.resnet50_test_infra import (
     create_test_infra,
     load_resnet50_model,
@@ -150,8 +150,10 @@ def run_perf_resnet(
     model_location_generator,
 ):
     profiler.clear()
-    if device_batch_size <= 2:
-        pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+    # Batch 1-2 were only validated as unsupported on Wormhole/Blackhole silicon; on the Quasar
+    # sim/emulator they run on both the 2x3 and full grids (mirrors resnet50_test_infra). Skip only WH/BH.
+    if device_batch_size <= 2 and (is_wormhole_b0() or is_blackhole()):
+        pytest.skip("Batch size 1 and 2 are not supported with sharded data on Wormhole/Blackhole")
 
     num_devices = device.get_num_devices()
     batch_size = device_batch_size * num_devices

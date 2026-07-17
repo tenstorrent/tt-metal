@@ -193,6 +193,14 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
+#ifdef FUSE_SWIGLU
+    // SwiGLU emits one output tile per interleaved gate/up pair -> output N is half the
+    // matmul (weight) N. Weight-space n ranges are halved at each write call site.
+    constexpr uint32_t out_N_block_tiles = N_block_tiles / 2;
+    constexpr uint32_t out_block_num_tiles_swiglu = M_block_tiles * out_N_block_tiles;
+    const TensorShape2D out_shape_swiglu(M_tiles, N_tiles / 2, padded_M_tiles, padded_N_tiles / 2);
+#endif
+
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
@@ -305,6 +313,21 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+#ifdef FUSE_SWIGLU
+                        cb_out.wait_front(out_block_num_tiles_swiglu);
+                        uint32_t out_read_ptr = cb_out.get_read_ptr();
+                        write_block_sync<M_block_tiles, out_N_block_tiles>(
+                            noc_obj,
+                            std::get<0>(outputs_tuple),
+                            out_shape_swiglu,
+                            out_read_ptr,
+                            out_tile_size,
+                            defer_write_m_tile,
+                            defer_write_m_tile_end,
+                            defer_write_n_tile / 2,
+                            defer_write_n_tile_end / 2);
+                        cb_out.pop_front(out_block_num_tiles_swiglu);
+#else
                         cb_out.wait_front(out_block_num_tiles);
                         uint32_t out_read_ptr = cb_out.get_read_ptr();
                         // write_block_sync_split is more generic (support multiple output tensors)
@@ -333,6 +356,7 @@ void kernel_main() {
                                 defer_write_n_tile_end);
                         }
                         cb_out.pop_front(out_block_num_tiles);
+#endif  // FUSE_SWIGLU
                     }
                 }
 
@@ -637,6 +661,18 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+#ifdef FUSE_SWIGLU
+                    write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
+                        noc_obj,
+                        std::get<0>(outputs_tuple),
+                        out_shape_swiglu,
+                        cb_out,
+                        out_tile_size,
+                        m_tile,
+                        m_tile_end,
+                        n_tile / 2,
+                        n_tile_end / 2);
+#else
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
@@ -662,6 +698,7 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
+#endif  // FUSE_SWIGLU
                 }
             }
         }

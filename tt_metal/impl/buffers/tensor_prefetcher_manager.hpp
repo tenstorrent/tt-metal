@@ -127,7 +127,12 @@ private:
     static constexpr uint32_t kSocketFifoPages = 128;
 
     struct Request {
-        std::vector<uint8_t> page;  // one socket page; identical bytes for every target
+        // One logical socket page, materialized per sender. Either size num_senders_ (a
+        // PREFETCH page — each sender carries only its own slice of the per-receiver streaming
+        // rotation table, so the bytes differ per sender) or size 1 (STOP / WAIT_CQ — no
+        // rotation, identical bytes broadcast to every sender). worker_loop indexes
+        // sender_pages[sender_pages.size() == 1 ? 0 : s].
+        std::vector<std::vector<uint8_t>> sender_pages;
         std::vector<MeshCoordinate> target_devices;
     };
 
@@ -136,8 +141,11 @@ private:
     void build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size);
     void allocate_sockets();
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
-    // tensor layouts within each page and splitting when a page fills.
-    std::vector<std::vector<uint8_t>> serialize_request_pages(
+    // tensor layouts within each page and splitting when a page fills. Returns one entry per
+    // logical page; each entry is a per-sender vector (size num_senders_) of materialized page
+    // bytes — the header/entry/geometry bytes are identical across senders, while each sender's
+    // page carries only that sender's slice of the per-receiver streaming rotation table.
+    std::vector<std::vector<std::vector<uint8_t>>> serialize_request_pages(
         const experimental::GlobalCircularBuffer& gcb,
         const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
     MeshCoordinateRangeSet full_mesh_subset() const;

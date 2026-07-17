@@ -10,6 +10,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
@@ -86,7 +87,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
     };
 
     KernelSpec writer{
@@ -107,7 +108,7 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
     };
 
     // Work split: per-core page ranges.
@@ -127,10 +128,22 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
             remainder--;
         }
         const uint32_t end_page = start_page + num_pages_for_core;
-        reader_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"start_page", start_page}, {"end_page", end_page}}});
-        writer_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"start_page", start_page}, {"end_page", end_page}}});
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"start_page", start_page},
+                {"end_page", end_page},
+            });
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"start_page", start_page},
+                {"end_page", end_page},
+            });
         start_page = end_page;
     }
 

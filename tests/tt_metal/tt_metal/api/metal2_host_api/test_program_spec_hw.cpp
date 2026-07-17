@@ -35,9 +35,10 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::BindTensorParameterToKernel;
-using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::MakeShardedTensorParameter;
 
@@ -283,7 +284,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"producer"},
-            .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"src_addr", input_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
@@ -293,7 +294,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
@@ -363,7 +364,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
 
     // Compute kernel: produces out_dfb. The kernel under test — exercises every
     // named-arg accessor (RTA / CRTA / two CTAs) plus RTA + CRTA varargs.
-    auto compute = MakeMinimalComputeKernel("compute");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/named_args_loopback_compute.cpp";
     compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
     compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
@@ -372,7 +373,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
 
     // Consumer: NCRISC reads out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp
     // verbatim (positional varargs only).
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 3;
 
@@ -404,7 +405,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"compute"},
-            .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"input_offset", kInputOffset}}),
             .common_runtime_arg_values = {{"num_tiles", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
@@ -498,12 +499,12 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"producer"},
-            .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"src_addr", input_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}}),
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
         },
     };
@@ -558,14 +559,14 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 
     // Compute kernel authored in TT_KERNEL form. magic/entry_size are template params (CTAs);
     // input_offset (RTA) and num_tiles (CRTA) are function params. No varargs.
-    auto compute = MakeMinimalComputeKernel("compute");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/tt_kernel_named_args_compute.cpp";
     compute.runtime_arg_schema.runtime_arg_names = {"input_offset"};
     compute.runtime_arg_schema.common_runtime_arg_names = {"num_tiles"};
     compute.compile_time_args = {{"magic", 0xCAFE0001u}, {"entry_size", entry_size}};
 
     // Consumer: NCRISC reads out_dfb → DRAM. Reuses the existing positional-vararg consumer.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 3;
 
@@ -590,7 +591,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"compute"},
-            .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"input_offset", kInputOffset}}),
             .common_runtime_arg_values = {{"num_tiles", num_transfers}},
         },
         ProgramRunArgs::KernelRunArgs{
@@ -662,10 +663,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "signal"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .role = DataMovementRoleHint::WRITER,
-            },
+        .hw_config = CreateWriter1xxDataMovementConfig(),
     };
     KernelSpec consumer{
         .unique_id = KernelSpecName{"consumer"},
@@ -674,10 +672,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
         .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "waiter"}},
-        .hw_config =
-            DataMovementHardwareConfig{
-                .role = DataMovementRoleHint::READER,
-            },
+        .hw_config = CreateReader1xxDataMovementConfig(),
     };
 
     // A WorkUnitSpec describes the kernels that run on a shared set of nodes.
@@ -880,13 +875,13 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     spec.name = "local_tensor_accessor_compute";
 
     // Compute kernel (the kernel under test) — binds the tensor, produces into out_dfb.
-    auto compute = MakeMinimalComputeKernel("compute");
+    auto compute = MakeMinimalGen1ComputeKernel("compute");
     compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/local_tensor_accessor_compute.cpp";
     compute.compile_time_args = {{"entry_size", entry_size}, {"num_tiles", num_tiles}};
     BindTensorParameterToKernel(compute, "local_t", "local_t");
 
     // Consumer (NCRISC): drains out_dfb → DRAM. Reuses dfb_accessor_loopback_consumer.cpp verbatim.
-    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalReaderDMKernel("consumer");
     consumer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_accessor_loopback_consumer.cpp";
     consumer.advanced_options.num_runtime_varargs = 3;
 
@@ -952,7 +947,7 @@ TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
 
     auto producer_g1 = MakeMinimalGen1DMKernel("producer_g1", DataMovementProcessor::RISCV_0);
     auto producer_g2 = MakeMinimalGen1DMKernel("producer_g2", DataMovementProcessor::RISCV_1);
-    auto consumer = MakeMinimalComputeKernel("consumer");
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1013,13 +1008,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
             {
                 .runtime_arg_names = {"report_addr"},
             },
-        .hw_config =
-            DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                    },
-            },
+        .hw_config = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0},
     };
     dm_kernel.scratchpad_bindings.push_back(
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
@@ -1039,7 +1028,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"scratch_kernel"},
-        .runtime_arg_values = {{node, {{"report_addr", kReportAddr}}}},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
     SetProgramRunArgs(program, params);
 
@@ -1213,7 +1202,8 @@ void kernel_main() {
     auto consumer_args = [&]() {
         return ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}),
         };
     };
 
@@ -1397,7 +1387,8 @@ void kernel_main() {
         ProgramRunArgs params;
         params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
-            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}}},
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}),
         }};
         params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"stage"}, .num_entries = dfb_num_entries});
         SetProgramRunArgs(program, params);

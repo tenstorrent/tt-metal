@@ -226,7 +226,8 @@ def test_eltwise_binary_sfpu_int_quasar(
 
 
 # ===========================================================================
-# Family 2 — float ops (mul, div). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, mul, div). Ported from test_sfpu_binary_float_quasar.py.
+# add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
 # Crafted lanes in face 0 exercising the div special-case branches.
@@ -255,7 +256,7 @@ def _get_valid_float_formats_dest_acc():
 
 def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
     """Map [0,1) uniform stimuli into op-appropriate ranges (div: ±[0.25,4] + special
-    lanes; mul: ±250)."""
+    lanes; add/sub/mul: ±250)."""
     torch_format = format_dict[data_format]
     if mathop == MathOperation.SfpuElwdiv:
         scaled = (src_A.to(torch.float32) - 0.5) * 8.0
@@ -267,14 +268,14 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
             flat[src0_idx * MAX_TILE_ELEMENTS + lane] = dividend
             flat[src1_idx * MAX_TILE_ELEMENTS + lane] = divisor
         return flat.reshape(scaled.shape)
-    # SfpuElwmul
+    # SfpuElwadd / SfpuElwsub / SfpuElwmul — symmetric ±250 range.
     scaled = ((src_A.to(torch.float32) - 0.5) * 500.0).to(torch_format)
     return scaled.flatten().reshape(scaled.shape)
 
 
 def _prepare_float_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
     """Float stimuli: uniform [0,1) mapped to op-appropriate ranges by
-    _prepare_float_inputs (div: ±[0.25,4] + special lanes; mul: ±250)."""
+    _prepare_float_inputs (div: ±[0.25,4] + special lanes; add/sub/mul: ±250)."""
     spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -303,6 +304,8 @@ def _check_div_special_cases(res_tensor):
 
 
 _FLOAT_OPS = [
+    ("ADD", MathOperation.SfpuElwadd),
+    ("SUB", MathOperation.SfpuElwsub),
     ("MUL", MathOperation.SfpuElwmul),
     ("DIV", MathOperation.SfpuElwdiv),
 ]
@@ -322,7 +325,7 @@ _FLOAT_OPS = [
 def test_eltwise_binary_sfpu_float_quasar(
     formats_dest_acc, implied_math_format, tile_indices, binary_op, mathop
 ):
-    """Binary SFPU float ops (mul, div)."""
+    """Binary SFPU float ops (add, sub, mul, div)."""
     formats, dest_acc = formats_dest_acc
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None

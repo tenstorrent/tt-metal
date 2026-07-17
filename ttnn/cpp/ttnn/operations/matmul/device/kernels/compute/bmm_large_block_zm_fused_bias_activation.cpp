@@ -488,7 +488,17 @@ void kernel_main() {
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
+#ifdef BIAS_FULL_BLOCK
+                            // The bias CB holds a full [M, N] tile block. m_tile is this output tile's
+                            // row within that block; bias_tile_idx is the position of the matching bias
+                            // tile in the CB (row m_tile, column in1_index_subblock_offset). Only
+                            // matmul_multicore_reuse_optimized loads the full block; other callers load a
+                            // single bias row and use the N-only index below.
+                            const uint32_t m_tile = in0_subblock * out_subblock_h + j;
+                            uint32_t bias_tile_idx = m_tile * in1_block_w + in1_index_subblock_offset;
+#else
                             uint32_t bias_tile_idx = in1_index_subblock_offset;
+#endif
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
                                 const uint32_t safe_bias_tile_idx =
                                     (is_last_in1_subblock_padded && k >= last_subblock_w_valid)

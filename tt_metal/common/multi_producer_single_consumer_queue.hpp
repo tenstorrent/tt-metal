@@ -7,6 +7,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/tt_pause.hpp>
 
 template <typename T>
@@ -87,7 +88,10 @@ public:
     }
 
     std::shared_ptr<T> pop() {
+        // Precondition: this non-blocking pop must only be called when the
+        // single consumer knows an entry is available.
         Node* oldHead = pop_head();
+        TT_FATAL(oldHead != nullptr, "Cannot pop from an empty MultiProducerSingleConsumerQueue.");
         std::shared_ptr<T> result(oldHead->data);
         // Does not actually delete oldHead->data.
         // Just mark is to null to mark prev node as empty.

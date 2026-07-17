@@ -11,7 +11,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #include "sort_common.hpp"
 
@@ -79,15 +79,15 @@ void kernel_main() {
     constexpr uint32_t index_tensor_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t input_tensor_transposed_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t index_tensor_transposed_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t value_tensor_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t index_tensor_output_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t value_tensor_dfb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t index_tensor_output_dfb_id = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr bool descending = get_compile_time_arg_val(7);
     constexpr bool stable =
         get_compile_time_arg_val(8);  // TODO: In the future change LLK to have the option or add additional step with
                                       // checking values and indexes after the sorting
                                       // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
-    constexpr uint32_t synchronization_cb_id = get_compile_time_arg_val(9);
+    constexpr uint32_t synchronization_dfb_id = get_compile_time_arg_val(9);
     constexpr bool is_row_major = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t rm_input_cb_id = get_compile_time_arg_val(11);
     constexpr uint32_t rm_value_output_cb_id = get_compile_time_arg_val(12);
@@ -101,17 +101,17 @@ void kernel_main() {
     // forever.
     constexpr uint32_t rm_post_sort_index_cb_id = get_compile_time_arg_val(14);
 
-    CircularBuffer input_tensor_cb(input_tensor_cb_id);
-    CircularBuffer index_tensor_cb(index_tensor_cb_id);
-    CircularBuffer input_tensor_transposed_cb(input_tensor_transposed_cb_id);
-    CircularBuffer index_tensor_transposed_cb(index_tensor_transposed_cb_id);
-    CircularBuffer value_tensor_cb(value_tensor_cb_id);
-    CircularBuffer index_tensor_output_cb(index_tensor_output_cb_id);
-    CircularBuffer synchronization_cb(synchronization_cb_id);
-    CircularBuffer rm_input_cb(rm_input_cb_id);
-    CircularBuffer rm_value_output_cb(rm_value_output_cb_id);
-    CircularBuffer rm_index_output_cb(rm_index_output_cb_id);
-    CircularBuffer rm_post_sort_index_cb(rm_post_sort_index_cb_id);
+    DataflowBuffer input_tensor_dfb(input_tensor_cb_id);
+    DataflowBuffer index_tensor_dfb(index_tensor_cb_id);
+    DataflowBuffer input_tensor_transposed_dfb(input_tensor_transposed_cb_id);
+    DataflowBuffer index_tensor_transposed_dfb(index_tensor_transposed_cb_id);
+    DataflowBuffer value_tensor_dfb(value_tensor_dfb_id);
+    DataflowBuffer index_tensor_output_dfb(index_tensor_output_dfb_id);
+    DataflowBuffer synchronization_dfb(synchronization_dfb_id);
+    DataflowBuffer rm_input_dfb(rm_input_cb_id);
+    DataflowBuffer rm_value_output_dfb(rm_value_output_cb_id);
+    DataflowBuffer rm_index_output_dfb(rm_index_output_cb_id);
+    DataflowBuffer rm_post_sort_index_dfb(rm_post_sort_index_cb_id);
 
     constexpr uint32_t one_tile = 1;
 
@@ -155,11 +155,11 @@ void kernel_main() {
         if constexpr (is_row_major) {
             constexpr uint32_t TILE_H = 32;  // TILE_HEIGHT (tt::constants not available in device kernels)
             tilize_init(rm_input_cb_id, Wt, input_tensor_cb_id);
-            rm_input_cb.wait_front(TILE_H);
-            input_tensor_cb.reserve_back(Wt);
+            rm_input_dfb.wait_front(TILE_H);
+            input_tensor_dfb.reserve_back(Wt);
             tilize_block(rm_input_cb_id, Wt, input_tensor_cb_id);
-            input_tensor_cb.push_back(Wt);
-            rm_input_cb.pop_front(TILE_H);
+            input_tensor_dfb.push_back(Wt);
+            rm_input_dfb.pop_front(TILE_H);
             tilize_uninit(rm_input_cb_id, input_tensor_cb_id);
 
             // Re-initialise compute hardware for the sort phase.
@@ -181,18 +181,18 @@ void kernel_main() {
         }
 
         sort_Wt_tiles_row_to_bitonic_sequence(
-            input_tensor_cb,
-            index_tensor_cb,
-            input_tensor_transposed_cb,
-            index_tensor_transposed_cb,
+            input_tensor_dfb,
+            index_tensor_dfb,
+            input_tensor_transposed_dfb,
+            index_tensor_transposed_dfb,
             Wt,
             /*switch_dir=*/true,
             ascending,
             /*end_phase(log2(K))=*/5);
 
         // Wait for bitonic sequence of Wt tiles
-        input_tensor_transposed_cb.wait_front(Wt);
-        index_tensor_transposed_cb.wait_front(Wt);
+        input_tensor_transposed_dfb.wait_front(Wt);
+        index_tensor_transposed_dfb.wait_front(Wt);
 
         // Sort and merge step of bitonic merge sort
         uint32_t stages = 0;
@@ -200,8 +200,8 @@ void kernel_main() {
             stages++;
         }
 
-        synchronization_cb.reserve_back(one_tile);
-        synchronization_cb.push_back(one_tile);
+        synchronization_dfb.reserve_back(one_tile);
+        synchronization_dfb.push_back(one_tile);
 
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
@@ -220,9 +220,9 @@ void kernel_main() {
 
                         tile_regs_acquire();
 
-                        synchronization_cb.wait_front(one_tile);
-                        synchronization_cb.pop_front(one_tile);
-                        synchronization_cb.reserve_back(one_tile);
+                        synchronization_dfb.wait_front(one_tile);
+                        synchronization_dfb.pop_front(one_tile);
+                        synchronization_dfb.reserve_back(one_tile);
 
                         copy_tile_to_dst_init_short_with_dt(
                             input_tensor_transposed_cb_id, index_tensor_transposed_cb_id);
@@ -266,7 +266,7 @@ void kernel_main() {
                         pack_tile<true>(tile_index_low, index_tensor_transposed_cb_id, left_tile_id);
                         pack_tile<true>(tile_index_high, index_tensor_transposed_cb_id, right_tile_id);
 
-                        synchronization_cb.push_back(one_tile);
+                        synchronization_dfb.push_back(one_tile);
 
                         tile_regs_release();
                     }
@@ -274,17 +274,17 @@ void kernel_main() {
             }
         }
 
-        synchronization_cb.wait_front(one_tile);
-        synchronization_cb.pop_front(one_tile);
+        synchronization_dfb.wait_front(one_tile);
+        synchronization_dfb.pop_front(one_tile);
 
-        input_tensor_transposed_cb.reserve_back(Wt);
-        index_tensor_transposed_cb.reserve_back(Wt);
+        input_tensor_transposed_dfb.reserve_back(Wt);
+        index_tensor_transposed_dfb.reserve_back(Wt);
 
-        input_tensor_transposed_cb.pop_front(Wt);
-        index_tensor_transposed_cb.pop_front(Wt);
+        input_tensor_transposed_dfb.pop_front(Wt);
+        index_tensor_transposed_dfb.pop_front(Wt);
 
-        input_tensor_transposed_cb.push_back(Wt);
-        index_tensor_transposed_cb.push_back(Wt);
+        input_tensor_transposed_dfb.push_back(Wt);
+        index_tensor_transposed_dfb.push_back(Wt);
 
         // TILE path: transpose-and-pack to 2-tile streaming CBs so the reader
         // and writer can stream tiles one-by-one to DRAM (existing behaviour).
@@ -294,9 +294,9 @@ void kernel_main() {
         // indices), then untilize the full row back to RM pages.
         if constexpr (!is_row_major) {
             // Values tensor → 2-tile streaming CB (writer drains to DRAM)
-            transpose_and_pack(input_tensor_transposed_cb, value_tensor_cb, Wt);
+            transpose_and_pack(input_tensor_transposed_dfb, value_tensor_dfb, Wt);
             // Index tensor → 2-tile streaming CB (reader drains to DRAM)
-            transpose_and_pack(index_tensor_transposed_cb, index_tensor_output_cb, Wt);
+            transpose_and_pack(index_tensor_transposed_dfb, index_tensor_output_dfb, Wt);
         } else {
             constexpr uint32_t TILE_H = 32;
 
@@ -309,33 +309,34 @@ void kernel_main() {
             static_assert(Wt % SUB_BLOCK_DIM == 0, "Wt must be divisible by SUB_BLOCK_DIM");
 
             // Un-transpose sorted value tiles → input_tensor_cb_id (Wt tiles).
-            transpose_and_pack(input_tensor_transposed_cb, input_tensor_cb, Wt);
+            transpose_and_pack(input_tensor_transposed_dfb, input_tensor_dfb, Wt);
 
             // Un-transpose sorted index tiles → rm_post_sort_index_cb_id (Wt tiles).
-            transpose_and_pack(index_tensor_transposed_cb, rm_post_sort_index_cb, Wt);
+            transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, Wt);
 
-            // Untilize values: Wt tiles → TILE_HEIGHT RM pages in rm_value_output_cb.
+            // Untilize values: Wt tiles → TILE_HEIGHT RM pages in rm_value_output_dfb.
             binary_op_init_common(input_tensor_cb_id, index_tensor_cb_id, rm_value_output_cb_id);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(input_tensor_cb_id, rm_value_output_cb_id);
-            input_tensor_cb.wait_front(Wt);
-            rm_value_output_cb.reserve_back(TILE_H);
+            input_tensor_dfb.wait_front(Wt);
+            rm_value_output_dfb.reserve_back(TILE_H);
             for (uint32_t b = 0; b < NUM_SUB_BLOCKS; ++b) {
                 pack_untilize_block<SUB_BLOCK_DIM, Wt>(input_tensor_cb_id, 1, rm_value_output_cb_id, b);
-                input_tensor_cb.pop_front(SUB_BLOCK_DIM);
+                input_tensor_dfb.pop_front(SUB_BLOCK_DIM);
             }
-            rm_value_output_cb.push_back(TILE_H);
+            rm_value_output_dfb.push_back(TILE_H);
             pack_untilize_uninit(rm_value_output_cb_id);
 
-            // Untilize indices: same chunked pack_untilize pattern but operating on the PACK-only rm_post_sort_index_cb
+            // Untilize indices: same chunked pack_untilize pattern but operating on the PACK-only
+            // rm_post_sort_index_dfb
             binary_op_init_common(rm_post_sort_index_cb_id, input_tensor_cb_id, rm_index_output_cb_id);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(rm_post_sort_index_cb_id, rm_index_output_cb_id);
-            rm_post_sort_index_cb.wait_front(Wt);
-            rm_index_output_cb.reserve_back(TILE_H);
+            rm_post_sort_index_dfb.wait_front(Wt);
+            rm_index_output_dfb.reserve_back(TILE_H);
             for (uint32_t b = 0; b < NUM_SUB_BLOCKS; ++b) {
                 pack_untilize_block<SUB_BLOCK_DIM, Wt>(rm_post_sort_index_cb_id, 1, rm_index_output_cb_id, b);
-                rm_post_sort_index_cb.pop_front(SUB_BLOCK_DIM);
+                rm_post_sort_index_dfb.pop_front(SUB_BLOCK_DIM);
             }
-            rm_index_output_cb.push_back(TILE_H);
+            rm_index_output_dfb.push_back(TILE_H);
             pack_untilize_uninit(rm_index_output_cb_id);
         }
     }  // Ht loop

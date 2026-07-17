@@ -135,7 +135,6 @@ def run_dispatch_op(mesh_device, use_l1_small):
 
     dispatched_buffer, dispatch_metadata = ttnn.experimental.deepseek_prefill.dispatch(
         input_tensor=tt_x,
-        weights_tensor=tt_weights,
         indices_tensor=tt_indices,
         expert_offsets_tensor=tt_expert_offsets,
         expert_dispatch_table_tensor=tt_expert_dispatch_table,

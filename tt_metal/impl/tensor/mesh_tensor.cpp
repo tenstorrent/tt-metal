@@ -31,10 +31,6 @@ const MeshTensorImpl& MeshTensor::impl() const {
 
 const distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return impl().mesh_buffer(); }
 
-std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const {
-    return impl().raw_mesh_buffer();
-}
-
 const distributed::MeshDevice& MeshTensor::device() const { return mutable_device(); }
 
 distributed::MeshDevice& MeshTensor::mutable_device() const { return *mesh_buffer().device(); }

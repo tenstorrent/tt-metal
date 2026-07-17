@@ -131,9 +131,11 @@ static uint32_t upstream_blocked_counter = 0;
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uint32_t prefetch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
 constexpr uint32_t upstream_blocked_count_addr =
-    prefetch_telemetry_base + offsetof(tt::tt_metal::PrefetchCoreTelemetry, upstream_blocked_count);
+    prefetch_telemetry_base +
+    offsetof(tt::tt_metal::dispatch_telemetry_types::PrefetchCoreTelemetry, upstream_blocked_count);
 constexpr uint32_t upstream_unblocked_count_addr =
-    prefetch_telemetry_base + offsetof(tt::tt_metal::PrefetchCoreTelemetry, upstream_unblocked_count);
+    prefetch_telemetry_base +
+    offsetof(tt::tt_metal::dispatch_telemetry_types::PrefetchCoreTelemetry, upstream_unblocked_count);
 using PrefetchTelemetryBlockGuard = TelemetryBlockGuard<
     upstream_blocked_count_addr,
     upstream_unblocked_count_addr,
@@ -2173,7 +2175,8 @@ bool process_cmd(
     }
 
     if constexpr (telemetry_enabled) {
-        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::PrefetchCoreTelemetry*>(prefetch_telemetry_base)
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::PrefetchCoreTelemetry*>(
+            prefetch_telemetry_base)
             ->command_count = ++command_counter;
     }
     return done;
@@ -2647,7 +2650,8 @@ void kernel_main_h() {
         }
 
         if constexpr (telemetry_enabled) {
-            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::PrefetchCoreTelemetry*>(prefetch_telemetry_base)
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::PrefetchCoreTelemetry*>(
+                prefetch_telemetry_base)
                 ->command_count = ++command_counter;
         }
     }

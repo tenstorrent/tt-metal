@@ -47,11 +47,10 @@ struct Conv2dDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
 
-// Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
-// unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-// does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-// For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-bool determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w);
+// NOTE: determine_packer_l1_acc is intentionally NOT declared here. The shared implementation lives
+// in ttnn::prim (ttnn/operations/conv/conv2d/conv2d_utils.cpp); the factories call that one directly.
+// A cloned qsr-namespace declaration here (with no definition) would hijack the unqualified call
+// under unity builds and produce an undefined ttnn::prim::qsr::determine_packer_l1_acc symbol.
 
 // L1 allocation is either for the output tensor or for Circular Buffers.
 // reader_indices_actual_page_size lets the program factory communicate the in-DRAM config tensor's

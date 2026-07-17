@@ -15,13 +15,15 @@ autograd::TensorPtr sample_op(
     const autograd::TensorPtr& logits,
     float temperature,
     uint32_t seed,
-    const autograd::TensorPtr& logits_padding_mask) {
+    const autograd::TensorPtr& logits_padding_mask,
+    std::optional<std::vector<uint32_t>> seed_axes) {
     auto sampled_tensor = ttnn_fixed::sample(
         logits->get_value(),
         temperature,
         seed,
         logits_padding_mask == nullptr ? std::nullopt
-                                       : std::optional<tt::tt_metal::Tensor>(logits_padding_mask->get_value()));
+                                       : std::optional<tt::tt_metal::Tensor>(logits_padding_mask->get_value()),
+        std::move(seed_axes));
 
     auto out = autograd::create_tensor(sampled_tensor);
 

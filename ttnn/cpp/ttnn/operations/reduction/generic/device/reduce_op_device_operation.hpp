@@ -70,6 +70,7 @@ ttnn::Tensor reduce(
     bool negate = false,
     float post_mul_scaler = 1.0f,
     bool row_major_w_dense_path = false,
-    bool row_major_h_dense_path = false);
+    bool row_major_h_dense_path = false,
+    bool use_sfpu_reduce = false);
 
 }  // namespace ttnn::prim

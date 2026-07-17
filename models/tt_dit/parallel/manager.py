@@ -32,11 +32,21 @@ class CCLManager:
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
 
+        # Ping-pong pool of persistent stats buffers for the fused distributed-norm op,
+        # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
+        self._fused_norm_stats_buffer_cache = {}
+
         # Setup semaphores
         self._init_subdevice()
 
         # Initialize semaphores for reduce scatter and all gather and neighbor pad
         self._init_semaphores()
+        # Barrier: GlobalSemaphores are created + zeroed with per-device work; without a
+        # sync here a fast device can start an op and fire a cross-device atomic-inc at a
+        # peer whose semaphore isn't created/zeroed yet -> the inc is lost (ops that read
+        # the semaphore without re-zeroing at startup then desync / hang). Mirrors the
+        # post-buffer-creation syncs in the ping-pong buffer getters.
+        ttnn.synchronize_device(self.mesh_device)
         self.rs_ping_pong_idx = [0, 0]
         self.rs_ping_pong_idx_fused = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
@@ -237,6 +247,38 @@ class CCLManager:
         n_sems = 2
         self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
+    def get_fused_norm_stats_buffer(self, key, create_buffer):
+        """Own the ping-pong pool + lifetime of the fused distributed-norm op's persistent
+        stats (all-gather scratch) buffer.
+
+        `create_buffer` is a 0-arg factory that returns a freshly allocated buffer (or None
+        when the op needs no AG scratch — the non-MUX / no-all-gather path). A 2-deep pool is
+        allocated once per `key` and rotated on each call, so the buffer handed out is free of
+        the previous invocation's in-flight AG traffic (paired with the 2-set AG-semaphore
+        ping-pong from get_ag_ping_pong_semaphore). The pool lives as long as this CCLManager.
+
+        The caller is responsible for creating the buffer correctly for its parameters (shape,
+        num_links, weight/RoPE, norm type) inside `create_buffer` and for encoding those in
+        `key`; num_links MUST match the op's num_preferred_links or the gather geometry desyncs.
+
+        Returns the buffer to pass as persistent_output_buffer, or None on the no-AG path.
+        """
+        entry = self._fused_norm_stats_buffer_cache.get(key)
+        if entry is None:
+            entry = {"bufs": [create_buffer() for _ in range(2)], "idx": 0}
+            self._fused_norm_stats_buffer_cache[key] = entry
+            # Barrier before first use: ensure every device has allocated the persistent
+            # stats buffer (and its DRAM scratch is live) before any device launches the op
+            # and writes/atomic-incs into a peer's copy over fabric.
+            if entry["bufs"][0] is not None:
+                ttnn.synchronize_device(self.mesh_device)
+        bufs = entry["bufs"]
+        if bufs[0] is None:
+            return None
+        buf = bufs[entry["idx"]]
+        entry["idx"] = (entry["idx"] + 1) % len(bufs)
+        return buf
 
     def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
         """

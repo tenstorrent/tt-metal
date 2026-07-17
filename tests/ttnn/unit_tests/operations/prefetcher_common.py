@@ -419,7 +419,8 @@ def run_prefetcher_mm(
         )
         program_configs.append(program_config)
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,

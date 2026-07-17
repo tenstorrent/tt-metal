@@ -10,14 +10,18 @@ show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Run fabric tests on 4x8, 4x32, or 8x16 cluster configuration.
+Run fabric tests on 4x8, 4x8wh, 4x32, or 8x16 cluster configuration.
 
 Required Options:
-    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8)
+    --hosts <host-list>                 Comma-separated list of hosts (single host for 4x8/4x8wh)
     --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
-    --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|8x4x4z>  Mesh configuration (default: 4x32)
+    --config <4x8|4x8wh|4x32|8x16|4x8z|2x4x4z|4x32z|<N>x32x4|8x4x4z>  Mesh configuration (default: 4x32)
+                                        4x8   = single BlackHole galaxy as one 8x4 2D torus (single host).
+                                        4x8wh = single Wormhole (WORMHOLE_B0) galaxy as one 8x4 2D torus
+                                                (single host); same single-mesh launch as 4x8 but with the
+                                                Wormhole galaxy descriptor and the WH neighbor-exchange config.
                                         <N>x32x4 (N in 2..9) is a multi-mesh config of N fully-connected
                                         32x4 torus meshes. Each 32x4 mesh is built from 4 BH galaxies
                                         (host_topology 4x1), one galaxy per host, so it needs 4*N hosts
@@ -35,6 +39,7 @@ Optional:
     --output <directory>                Output directory for log files (default: fabric_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file (overrides --config)
                                         4x8 default:   tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+                                        4x8wh default: tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto
                                         4x32 default:  tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         8x16 default:  tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
                                         4x8z default:  tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto
@@ -51,6 +56,7 @@ Optional:
                                         (default: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml)
+                                        (4x8wh default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_wh_neighbor_exchange.yaml)
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
@@ -83,6 +89,8 @@ HOSTS=""
 DOCKER_IMAGE=""
 OUTPUT_DIR="fabric_test_logs"
 MESH_GRAPH_DESC_PATH_4x8="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+# 4x8wh: single Wormhole (WORMHOLE_B0) galaxy as one 8x4 2D torus, single host.
+MESH_GRAPH_DESC_PATH_4x8wh="tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32="tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_8x16="tt_metal/fabric/mesh_graph_descriptors/16x8_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x8z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_4x4x2_z_graph_descriptor.textproto"
@@ -107,6 +115,9 @@ TEST_CONFIG_EXPLICIT=false
 # with an inter-mesh Z fabric (its Linear/Ring/Torus setups trip the tensix
 # datamover buffer-index assert), so it must not be the default here.
 TEST_CONFIG_Z="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_sanity_common.yaml"
+# 4x8wh uses the Wormhole neighbor-exchange sanity config by default (single 8x4
+# torus mesh), unless the user explicitly passes --test-config.
+TEST_CONFIG_4x8wh="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_wh_neighbor_exchange.yaml"
 FILTER=""
 NUM_PACKETS=""
 MPI_IF=""
@@ -139,8 +150,8 @@ while [[ $# -gt 0 ]]; do
             fi
             CONFIG="$2"
             # The Nx32x4 family (2x32x4 .. 9x32x4) is matched by regex; everything else is an exact match.
-            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" && ! "$CONFIG" =~ ^[2-9]x32x4$ ]]; then
-                echo "Error: --config must be one of '4x8', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', '8x4x4z', or '<N>x32x4' (N in 2..9)"
+            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x8wh" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" && ! "$CONFIG" =~ ^[2-9]x32x4$ ]]; then
+                echo "Error: --config must be one of '4x8', '4x8wh', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', '8x4x4z', or '<N>x32x4' (N in 2..9)"
                 echo ""
                 show_help
                 exit 1
@@ -276,6 +287,8 @@ fi
 if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
     if [[ "$CONFIG" == "4x8" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8"
+    elif [[ "$CONFIG" == "4x8wh" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x8wh"
     elif [[ "$CONFIG" == "4x32" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32"
     elif [[ "$CONFIG" == "8x16" ]]; then
@@ -297,6 +310,12 @@ fi
 # multi-mesh sanity config unless the user explicitly passed --test-config.
 if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n "$NX32X4_NUM_MESHES" || "$CONFIG" == "8x4x4z" ) ]]; then
     TEST_CONFIG="$TEST_CONFIG_Z"
+fi
+
+# 4x8wh is a single Wormhole galaxy torus; default it to the WH neighbor-exchange
+# sanity config unless the user explicitly passed --test-config.
+if [[ "$TEST_CONFIG_EXPLICIT" == false && "$CONFIG" == "4x8wh" ]]; then
+    TEST_CONFIG="$TEST_CONFIG_4x8wh"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1003,9 +1022,9 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || -n
     fi
 elif [[ "$DOCKER_IMAGE" == "none" ]]; then
     # No-docker path: invoke mpirun-ulfm directly against the local build.
-    if [[ "$CONFIG" == "4x8" ]]; then
+    if [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
         SINGLE_HOST="${HOSTS%%,*}"
-        echo "Running single-host 4x8 on: $SINGLE_HOST (no docker)"
+        echo "Running single-host $CONFIG on: $SINGLE_HOST (no docker)"
         echo ""
 
         mpirun-ulfm \
@@ -1033,9 +1052,9 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             --host "$HOSTS" \
             "${NONZ_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     fi
-elif [[ "$CONFIG" == "4x8" ]]; then
+elif [[ "$CONFIG" == "4x8" || "$CONFIG" == "4x8wh" ]]; then
     SINGLE_HOST="${HOSTS%%,*}"
-    echo "Running single-host 4x8 on: $SINGLE_HOST"
+    echo "Running single-host $CONFIG on: $SINGLE_HOST"
     echo ""
 
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \

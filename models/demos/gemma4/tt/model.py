@@ -588,20 +588,25 @@ class Gemma4Model:
         # Return as list of per-layer tensors
         return [per_layer_inputs[:, :, i, :].to(torch.bfloat16) for i in range(n_layers)]
 
-    def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False):
+    def _get_rope_mats(self, layer_idx, seq_len=None, for_decode=False, start_pos=0):
         """Get (cos, sin) for a given layer.
 
         Args:
             seq_len: If set, slice 4D cache to this length (prefill).
             for_decode: If True, return 2D caches [max_seq_len, head_dim] for embedding lookup.
+            start_pos: Absolute position of the first token in this prefill call.
+                Non-zero only for generator-level multi-chunk prefill (chunk N starts
+                at ``N*chunk_size``); the RoPE slice must cover
+                ``[start_pos, start_pos+seq_len)`` so chunk tokens get their true
+                positions instead of restarting at 0.
         """
         layer_type = self.hf_config.layer_types[layer_idx]
         if for_decode:
             return self.rope_caches_2d[layer_type]
         cos, sin = self.rope_caches[layer_type]
         if seq_len is not None:
-            cos = cos[:, :, :seq_len, :]
-            sin = sin[:, :, :seq_len, :]
+            cos = cos[:, :, start_pos : start_pos + seq_len, :]
+            sin = sin[:, :, start_pos : start_pos + seq_len, :]
         return (cos, sin)
 
     def __call__(
@@ -625,6 +630,8 @@ class Gemma4Model:
         return_hidden=False,
         sequential_kv_write=False,
         packed=None,
+        chunk_start_idx=None,
+        chunk_page_table=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -743,7 +750,11 @@ class Gemma4Model:
                 # Decode fallback: return 2D caches for on-device embedding lookup
                 layer_rope = self._get_rope_mats(i, for_decode=True)
             else:
-                layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len)
+                # Generator-level multi-chunk prefill: chunk N's tokens occupy
+                # absolute positions [chunk_start_idx, chunk_start_idx+seq_len);
+                # offset the RoPE slice so they aren't re-encoded from 0.
+                rope_start_pos = int(chunk_start_idx) if chunk_start_idx is not None else 0
+                layer_rope = self._get_rope_mats(i, seq_len=rope_seq_len, start_pos=rope_start_pos)
 
             # Convert per-layer input to device tensor if available
             pli_tt = None
@@ -816,6 +827,8 @@ class Gemma4Model:
                 sequential_kv_write=sequential_kv_write,
                 rope_presliced=rope_presliced,
                 packed=layer_packed,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1433,7 +1446,7 @@ class Gemma4Model:
         *before* lm_head — slicing after would still allocate full-seq
         logits first.
         """
-        del rot_mats_global, rot_mats_local, chunk_page_table, chunk_start_idx, kwargs
+        del rot_mats_global, rot_mats_local, kwargs
         if input_ids_torch is None:
             input_ids_torch = self._prefill_input_ids_torch
         if embeds_torch is None:
@@ -1454,6 +1467,8 @@ class Gemma4Model:
             page_tables_per_layer=page_tables_per_layer,
             batch_size=batch_size,
             user_id=user_id,
+            chunk_start_idx=chunk_start_idx,
+            chunk_page_table=chunk_page_table,
         )
 
     def process_output_prefill(self, tt_out, last_token_idx):

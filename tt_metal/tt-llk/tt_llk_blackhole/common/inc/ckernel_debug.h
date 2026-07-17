@@ -195,11 +195,8 @@ inline void dbg_copy_dest_tile(
     constexpr std::uint32_t TILE_ELEMENTS = TILE_HEIGHT * TILE_WIDTH;
 
     const std::uint8_t dest_type = fmt_to_dest_type(fmt);
-    const bool is_signed = (fmt != DataFormat::UInt8) && (fmt != DataFormat::UInt16) && (fmt != DataFormat::UInt32);
 
-    set_dest_fmt<thread_id>(dest_type);
-    set_dest_enable_swizzling<thread_id>(enable_swizzle);
-    set_dest_int8_int16_signed<thread_id>(is_signed);
+    configure_dest_access<thread_id>(fmt, enable_swizzle);
     tensix_sync();
 
     const std::uint32_t offset = tile_id * TILE_ELEMENTS;
@@ -359,8 +356,6 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     }
 
     // Disable debug control
-    dbg_array_rd_cmd.val = 0;
-    reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, dbg_array_rd_cmd.val);
     dbg_array_rd_en.val = 0;
     reg_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_EN, dbg_array_rd_en.val);
 

@@ -1,14 +1,8 @@
 name: "ttnn - model trace sweep validation"
 
-run-name: >-
-  ${{
-    github.event_name == 'schedule' && 'ttnn - model trace sweep validation (scheduled)' ||
-    'ttnn - model trace sweep validation'
-  }}
+run-name: "ttnn - model trace sweep validation"
 
 on:
-  schedule:
-    - cron: "0 5 * * *"  # Daily at 5:00 AM UTC (after sweep runs complete)
   workflow_dispatch:
     inputs:
       scope-targets:

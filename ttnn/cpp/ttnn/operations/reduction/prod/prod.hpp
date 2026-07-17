@@ -18,7 +18,7 @@ Tensor prod(
 Tensor prod(
     const Tensor& input,
     const Tensor& output,
-    SmallVector<int64_t>& dims,
+    ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 }  // namespace ttnn

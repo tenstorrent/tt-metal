@@ -903,7 +903,7 @@ class Operation:
                 global_tensor_comparison_records = []
                 global_golden_function_output = []
 
-                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL, _internal=True)
 
                 try:
                     if cq_id is None:

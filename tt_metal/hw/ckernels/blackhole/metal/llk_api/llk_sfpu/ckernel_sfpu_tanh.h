@@ -50,7 +50,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
 
     e = i + 126;
     r = r * s + f;
-    scale = sfpi::setexp(sfpi::vConst0, e);
+    scale = sfpi::setexp(sfpi::vFloat(0.0f), e);
     bias0 = scale - w;
 
     // If a=±inf, converts to a finite value, otherwise if a=±NaN, converts to ±inf or ±NaN.

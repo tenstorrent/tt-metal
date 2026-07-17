@@ -548,6 +548,70 @@ def test_tilize_width_sharded_dram_input_45331(device, shard_shape):
     assert torch.equal(torch_tensor, torch_out), "tilize round-trip mismatch"
 
 
+def test_tilize_width_sharded_dram_input_to_l1_sharded_output_49107(device):
+    torch.manual_seed(0)
+    num_cores = device.dram_grid_size().x
+    shard_shape = (32, 64)
+    tensor_shape = (shard_shape[0], shard_shape[1] * num_cores)
+
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=input_mem_config,
+        device=device,
+    )
+    tt_output = ttnn.tilize(tt_input, memory_config=output_mem_config, use_multicore=True)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    assert tt_output.memory_config().buffer_type == ttnn.BufferType.L1
+    assert_equal(torch_tensor, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize(
+    "shard_type,shard_shape",
+    [
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (512, 64)),
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (32, 128)),
+    ],
+    ids=["height_sharded_dram", "width_sharded_dram"],
+)
+def test_tilize_dram_backed_sharded_input(device, shard_type, shard_shape):
+    torch.manual_seed(0)
+    num_cores = 4
+    shard_h, shard_w = shard_shape
+    if shard_type == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        tensor_shape = (shard_h * num_cores, shard_w)
+    else:
+        tensor_shape = (shard_h, shard_w * num_cores)
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    dram_sharded_cfg = ttnn.MemoryConfig(shard_type, ttnn.BufferType.DRAM, shard_spec)
+
+    tt_rm = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=dram_sharded_cfg,
+        device=device,
+    )
+
+    tt_tile = ttnn.tilize(tt_rm, memory_config=dram_sharded_cfg, use_multicore=True)
+    assert tt_tile.layout == ttnn.TILE_LAYOUT
+    torch_out = ttnn.to_torch(tt_tile)
+    assert torch.equal(torch_tensor, torch_out), "tilize round-trip mismatch on DRAM-backed sharded input"
+
+
 # fp8 is a valid tile INPUT (it tilizes to any float TILE output) though ROW_MAJOR-only as a dtype. Even
 # tile-widths only (odd fp8 widths hit a separate reader NoC bug); golden is the host-quantized fp8 source.
 @run_for_blackhole()

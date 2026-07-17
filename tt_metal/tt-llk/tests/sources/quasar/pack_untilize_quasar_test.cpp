@@ -136,7 +136,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
             {
-                _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, block_ct);
+                _llk_math_eltwise_unary_datacopy_(block_ct);
             }
             _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
         }

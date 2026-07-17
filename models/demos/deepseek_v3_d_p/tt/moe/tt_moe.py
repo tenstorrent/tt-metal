@@ -380,6 +380,7 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+            activation=ttnn.RoutedExpertActivation.Silu,
         )
 
         # Initialize shared expert (col axis: axis 1)

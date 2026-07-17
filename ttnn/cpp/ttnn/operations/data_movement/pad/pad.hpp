@@ -27,7 +27,7 @@ struct PadSpecDim {
 // to a different code path than Python-driven tests cover.
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<operations::data_movement::PadSpecDim>& padding,
+    const ttsl::SmallVector<operations::data_movement::PadSpecDim>& padding,
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
@@ -35,7 +35,7 @@ ttnn::Tensor pad(
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
+    const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,

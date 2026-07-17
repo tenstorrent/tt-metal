@@ -94,8 +94,13 @@ MeshTensor enqueue_write_tensor(
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         const auto& old_spec = host_tensor.tensor_spec();
-        tensor_spec_overriden_memory_config =
-            TensorSpec(old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(*memory_config));
+        tensor_spec_overriden_memory_config = TensorSpec(
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                *memory_config,
+                old_spec.tensor_layout().get_alignment()));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -220,7 +225,11 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         std::move(*mesh_buffer),
         TensorSpec(
             host_tensor.tensor_spec().logical_shape(),
-            host_tensor.tensor_spec().tensor_layout().with_memory_config(device_tensor.memory_config())),
+            TensorLayout(
+                host_tensor.tensor_spec().tensor_layout().get_data_type(),
+                host_tensor.tensor_spec().tensor_layout().get_page_config(),
+                device_tensor.memory_config(),
+                host_tensor.tensor_spec().tensor_layout().get_alignment())),
         host_tensor.tensor_topology());
 }
 
@@ -331,8 +340,13 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
         const auto& old_spec = host_tensor.tensor_spec();
-        tensor_spec_overriden_memory_config =
-            TensorSpec(old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(*memory_config));
+        tensor_spec_overriden_memory_config = TensorSpec(
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                *memory_config,
+                old_spec.tensor_layout().get_alignment()));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -408,7 +422,12 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
     device_tensor = MeshTensor::from_buffer(
         std::move(*mesh_buffer),
         TensorSpec(
-            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         topology);
 }
 
@@ -507,7 +526,12 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     device_tensor = MeshTensor::from_buffer(
         std::move(*mesh_buffer),
         TensorSpec(
-            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
+            old_spec.logical_shape(),
+            TensorLayout(
+                old_spec.tensor_layout().get_data_type(),
+                old_spec.tensor_layout().get_page_config(),
+                device_tensor.memory_config(),
+                old_spec.tensor_layout().get_alignment())),
         host_tensor.tensor_topology());
 
     return coords;

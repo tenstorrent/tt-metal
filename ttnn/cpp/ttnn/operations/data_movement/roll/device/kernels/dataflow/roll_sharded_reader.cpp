@@ -4,7 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 // Native sharded roll copy kernel — supports both L1-sharded and DRAM-sharded tensors.
 //
@@ -60,6 +63,8 @@ void kernel_main() {
     CircularBuffer scratch_cb(scratch_cb_id);
     const uint32_t scratch_base = scratch_cb.get_write_ptr();
 
+    Noc noc;
+
     uint32_t arg_idx = 0;
 
     if constexpr (mode == 2) {
@@ -73,6 +78,8 @@ void kernel_main() {
         const uint32_t src_base[2] = {src_cbs[0].get_write_ptr(), src_cbs[1].get_write_ptr()};
         const uint32_t dst_base = dst_cb.get_write_ptr();
 
+        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+
         const uint32_t dst_bank_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t dst_bank_base = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t num_src = get_arg_val<uint32_t>(arg_idx++);
@@ -80,9 +87,14 @@ void kernel_main() {
         for (uint32_t s = 0; s < num_src; s++) {
             const uint32_t bank_id = get_arg_val<uint32_t>(arg_idx++);
             const uint32_t bank_addr = get_arg_val<uint32_t>(arg_idx++);
-            noc_async_read(get_noc_addr_from_bank_id<true>(bank_id, bank_addr), src_base[s], shard_size);
+            noc.async_read(
+                dram_bank,
+                CoreLocalMem<uint32_t>(src_base[s]),
+                shard_size,
+                {.bank_id = bank_id, .addr = bank_addr},
+                {});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         const uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
         for (uint32_t t = 0; t < num_transfers; t++) {
@@ -100,12 +112,19 @@ void kernel_main() {
             }
         }
 
-        noc_async_write(dst_base, get_noc_addr_from_bank_id<true>(dst_bank_id, dst_bank_base), shard_size);
-        noc_async_write_barrier();
+        noc.async_write(
+            CoreLocalMem<uint32_t>(dst_base),
+            dram_bank,
+            shard_size,
+            {},
+            {.bank_id = dst_bank_id, .addr = dst_bank_base});
+        noc.async_write_barrier();
 
     } else if constexpr (mode == 1) {
         // DRAM mode: source is a DRAM bank, destination is a DRAM bank.
         // Per-core header: dst_bank_id, dst_bank_base_addr.
+        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+
         const uint32_t dst_bank_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t dst_bank_base = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t num_transfers = get_arg_val<uint32_t>(arg_idx++);
@@ -121,14 +140,22 @@ void kernel_main() {
 
             for (uint32_t row = 0; row < num_rows; row++) {
                 // Read tile-sized chunk from DRAM source into L1 scratch.
-                const uint64_t src_noc = get_noc_addr_from_bank_id<true>(src_bank_id, src_bank_addr);
-                noc_async_read(src_noc, scratch_base, copy_size);
-                noc_async_read_barrier();
+                noc.async_read(
+                    dram_bank,
+                    CoreLocalMem<uint32_t>(scratch_base),
+                    copy_size,
+                    {.bank_id = src_bank_id, .addr = src_bank_addr},
+                    {});
+                noc.async_read_barrier();
 
                 // Write from L1 scratch to DRAM destination.
-                const uint64_t dst_noc = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_bank_base + dst_offset);
-                noc_async_write(scratch_base, dst_noc, copy_size);
-                noc_async_write_barrier();
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(scratch_base),
+                    dram_bank,
+                    copy_size,
+                    {},
+                    {.bank_id = dst_bank_id, .addr = dst_bank_base + dst_offset});
+                noc.async_write_barrier();
 
                 src_bank_addr += src_stride;
                 dst_offset += dst_stride;
@@ -159,14 +186,18 @@ void kernel_main() {
                 const uint32_t pre_pad = off & (alignment - 1);
                 uint32_t read_size = pre_pad + copy_size;
                 read_size = (read_size + alignment - 1) & ~(alignment - 1);
-                const uint64_t noc_addr = get_noc_addr(src_noc_x, src_noc_y, src_cb_base + (off - pre_pad));
-                noc_async_read(noc_addr, half_base, read_size);
+                noc.async_read(
+                    UnicastEndpoint{},
+                    CoreLocalMem<uint32_t>(half_base),
+                    read_size,
+                    {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = src_cb_base + (off - pre_pad)},
+                    {});
                 return pre_pad;
             };
 
             uint32_t buf = 0;
             uint32_t pre = issue_read(src_l1_offset, scratch_base);
-            noc_async_read_barrier();
+            noc.async_read_barrier();
             for (uint32_t row = 0; row < num_rows; row++) {
                 const uint32_t cur_half = scratch_base + buf * scratch_half;
                 const bool has_next = (row + 1) < num_rows;
@@ -177,7 +208,7 @@ void kernel_main() {
                 }
                 local_copy(cur_half + pre, dst_base + dst_offset, copy_size);
                 if (has_next) {
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
                 src_l1_offset += src_stride;
                 dst_offset += dst_stride;

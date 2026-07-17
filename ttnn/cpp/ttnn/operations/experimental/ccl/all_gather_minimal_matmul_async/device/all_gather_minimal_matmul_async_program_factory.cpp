@@ -204,7 +204,8 @@ all_gather_minimal_matmul_async_factory_helper(
     uint32_t fsdp_ring_size,
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
-    ttnn::ccl::Topology fsdp_topology) {
+    ttnn::ccl::Topology fsdp_topology,
+    bool fuse_swiglu = false) {
     auto* device = input_tensor.device();
 
     if (!config.has_value()) {
@@ -324,8 +325,17 @@ all_gather_minimal_matmul_async_factory_helper(
      * Most output blocks are the full block size, but the last block in M or N can be partial.
      */
     uint32_t padded_M_tiles = tt::round_up(M_tiles, in0_parallel_axis_cores);
-    uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
     uint32_t padded_K_tiles = tt::round_up(K_tiles, K_block_tiles);
+
+    // SwiGLU partitions on gate/up PAIRS (= output tiles) so a pair never splits across cores.
+    uint32_t padded_N_tiles;
+    if (fuse_swiglu) {
+        uint32_t out_N_tiles = N_tiles / 2;
+        uint32_t padded_out_N_tiles = tt::round_up(out_N_tiles, in1_parallel_axis_cores);
+        padded_N_tiles = 2 * padded_out_N_tiles;
+    } else {
+        padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
+    }
 
     // K is sharded equally across devices (validated upstream: K_tiles % ring_size == 0).
     // Within a device, K_per_device tiles are processed in K_blocks_per_device blocks (div_up).
@@ -341,6 +351,16 @@ all_gather_minimal_matmul_async_factory_helper(
 
     uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
+
+    if (fuse_swiglu) {
+        TT_FATAL(
+            N_tiles % 2 == 0 && N_tiles_per_core % 2 == 0 && N_block_tiles % 2 == 0,
+            "all_gather_minimal_matmul_async fuse_swiglu requires N_tiles ({}), N_tiles_per_core ({}) and "
+            "N_block_tiles ({}) all even",
+            N_tiles,
+            N_tiles_per_core,
+            N_block_tiles);
+    }
 
     log_debug(tt::LogOp, "M_tiles_per_core: {}", M_tiles_per_core);
     log_debug(tt::LogOp, "N_tiles_per_core: {}", N_tiles_per_core);
@@ -366,7 +386,9 @@ all_gather_minimal_matmul_async_factory_helper(
     const uint32_t double_buffer_factor = 2;
     uint32_t in0_cb_num_tiles = in0_block_num_tiles * double_buffer_factor;
     uint32_t in1_cb_num_tiles = in1_block_num_tiles * double_buffer_factor;
-    uint32_t out_cb_num_tiles = out_block_num_tiles;     // single-buffered
+    // SwiGLU writes half the N tiles per block (one per gate/up pair); the intermediate
+    // still holds the full (2N) block.
+    uint32_t out_cb_num_tiles = fuse_swiglu ? (out_block_num_tiles / 2) : out_block_num_tiles;  // single-buffered
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
@@ -623,6 +645,11 @@ all_gather_minimal_matmul_async_factory_helper(
     std::map<std::string, std::string> in0_fabric_defines;
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
+    }
+    // Added to `defines` before the per-kernel copies below (in0/in1/compute) so every
+    // kernel containing output-writer or compute code sees FUSE_SWIGLU.
+    if (fuse_swiglu) {
+        defines["FUSE_SWIGLU"] = "1";
     }
     if (use_fused_ternary) {
         defines["FUSE_TERNARY"] = "1";
@@ -1651,7 +1678,8 @@ all_gather_minimal_matmul_async_factory(
     uint32_t fsdp_ring_size,
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
-    ttnn::ccl::Topology fsdp_topology) {
+    ttnn::ccl::Topology fsdp_topology,
+    bool fuse_swiglu) {
     tt::tt_metal::Program program{};
 
     return {
@@ -1689,7 +1717,8 @@ all_gather_minimal_matmul_async_factory(
             fsdp_ring_size,
             fsdp_ring_index,
             fsdp_semaphore,
-            fsdp_topology)};
+            fsdp_topology,
+            fuse_swiglu)};
 }
 
 ttnn::device_operation::CachedProgram<AllGatherMinimalMatmulAsyncProgramFactory::shared_variables_t>
@@ -1765,7 +1794,8 @@ AllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.fsdp_ring_size,
         fsdp_ring_index,
         attributes.fsdp_semaphore,
-        attributes.fsdp_topology);
+        attributes.fsdp_topology,
+        attributes.fuse_swiglu);
 }
 
 }  // namespace ttnn::experimental::prim

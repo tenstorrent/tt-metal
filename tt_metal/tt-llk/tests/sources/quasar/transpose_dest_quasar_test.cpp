@@ -135,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
         {
-            _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, params.DST_INDEX + i);
+            _llk_math_eltwise_unary_datacopy_(params.DST_INDEX + i);
         }
     }
 

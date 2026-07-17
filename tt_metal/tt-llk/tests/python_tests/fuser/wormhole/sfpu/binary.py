@@ -91,12 +91,13 @@ class BinarySfpu(Sfpu):
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         approx_mode = self.approx_mode.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
         iterations = self.iterations
         format = self._format_arg(config)
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
-            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
+            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {dest_acc}, {op}, {iterations}, {format}>();\n"
         )
 
     def calculate(
