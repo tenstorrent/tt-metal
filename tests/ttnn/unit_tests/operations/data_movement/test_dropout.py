@@ -88,8 +88,36 @@ def test_dropout_seed_distinguishes_cache_entries(device, in_place):
     out_c = run(5678)
     entries_c = device.num_program_cache_entries()
 
+    assert entries_a == 1, "the first dispatch must create exactly one cache entry"
     assert entries_b == entries_a, "same seed must reuse the cached program"
     assert entries_c == entries_a, "a different seed must NOT add a cache entry -- seed is dynamic, not hashed"
     assert not torch.equal(out_a, out_c), "a different seed must change the dropout mask (seed re-patched on fast path)"
+
+    device.disable_and_clear_program_cache()
+
+
+def test_dropout_cache_hit_rederives_buffer_address(device):
+    """On a cache hit the override must re-derive the input/output buffer addresses from the current
+    tensors (not reuse the first-miss addresses). Reallocate a fresh input with different VALUES between
+    two same-shape dispatches: the kept (non-dropped) outputs must reflect the second input, proving the
+    program read the new buffer address."""
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    scale = 2.0
+    shape = (1, 1, 32, 64)
+
+    a = ttnn.from_torch(torch.ones(shape), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn.to_torch(ttnn.experimental.dropout(a, probability=0.5, scale=scale, seed=1234))  # miss
+
+    b = ttnn.from_torch(torch.full(shape, 3.0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    out_b = ttnn.to_torch(ttnn.experimental.dropout(b, probability=0.5, scale=scale, seed=1234)).float()
+
+    assert device.num_program_cache_entries() == 1, "same-shape dispatch must reuse the cached program"
+    nonzero = out_b[out_b != 0.0]
+    assert nonzero.numel() > 0, "expected some elements to survive dropout"
+    assert torch.allclose(
+        nonzero, torch.full_like(nonzero, 3.0 * scale)
+    ), "kept outputs must be 3.0*scale -- proves the hit re-derived the new input buffer address"
 
     device.disable_and_clear_program_cache()

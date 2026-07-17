@@ -33,13 +33,14 @@ struct DropoutDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // seed is excluded from the program hash (so calls differing only in seed cache-hit); it is
-    // DYNAMIC and re-applied to the cached program on every dispatch (per-device offset applied when
-    // use_per_device_seed). Must mirror the compute-kernel seed runtime arg in the factory.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& args,
+    // Re-derives ALL per-dispatch state (seed, buffer addresses) on every cache hit by re-running the
+    // selected factory's create_descriptor. seed is hash-excluded (per-device offset applied when
+    // use_per_device_seed); supersedes get_dynamic_runtime_args and resolve_bindings.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& output,
+        tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
