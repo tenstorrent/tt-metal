@@ -34,28 +34,19 @@ WAIVED = {
     "reduce": "covered by the dedicated reduce harness (test_sfpu_reduce.py)",
     # -- dead / placeholder enum ---------------------------------------------
     "unused": "placeholder enumerator, no kernel behind it",
+    # add/sub uint enumerators are declared in SfpuType but no kernel/init keys on them:
+    # int add/sub dispatch through _add_int_ / _sub_int_ (SFPU_BINARY_INIT(unused)) and the
+    # int32 unary scalar path (calculate_add_int32), none of which reference these names.
+    "add_uint32": "dead: enumerator declared but no kernel/dispatch keys on it (add uses _add_int_/calculate_add_int32)",
+    "add_uint16": "dead: enumerator declared but no kernel/dispatch keys on it (add uses _add_int_)",
+    "sub_uint16": "dead: enumerator declared but no kernel/dispatch keys on it (sub uses _sub_int_)",
     # -- GROUP B: integer / format-typed variants -----------------------------
-    # The integer *unary* harness now exists (test_eltwise_unary_sfpu_int): shifts and
-    # unary max/min int32/uint32 are wired and removed from this ledger. The entries
-    # below are the remaining integer gaps.
-    #   unary-with-scalar arithmetic: kernels exist (calculate_add_int32 / binop_with_scalar
-    #   unsigned variants) and can now use the int harness, but each needs its own scalar
-    #   plumbing + golden; left as a focused follow-up.
-    "add_uint32": "gap(B): uint32 add-with-scalar; int harness ready, needs scalar plumbing + golden",
-    "add_uint16": "gap(B): uint16 add-with-scalar; int harness ready, needs scalar plumbing + golden",
-    "sub_uint16": "gap(B): uint16 sub-with-scalar; int harness ready, needs scalar plumbing + golden",
-    "mul_uint16": "gap(B): uint16 mul-with-scalar; int harness ready, needs scalar plumbing + golden",
-    "remainder_int32": "gap(B): int32 remainder; int harness ready, needs golden+dispatch",
-    "remainder_uint32": "gap(B): uint32 remainder; int harness ready, needs golden+dispatch",
-    "fmod_int32": "gap(B): int32 fmod; int harness ready, needs golden+dispatch",
-    #   binary integer ops belong in the binary harness (test_sfpu_binary.py), not the
-    #   unary int harness added here.
-    "eq_int": "gap(B): int32 binary eq; needs binary-int path",
-    "ne_int": "gap(B): int32 binary ne; needs binary-int path",
-    "max_int32": "gap(B): int32 binary max; needs binary-int path",
-    "min_int32": "gap(B): int32 binary min; needs binary-int path",
-    "max_uint32": "gap(B): uint32 binary max; needs binary-int path",
-    "min_uint32": "gap(B): uint32 binary min; needs binary-int path",
+    # The integer *unary* harness (test_eltwise_unary_sfpu_int) covers the shifts and unary
+    # max/min int32/uint32. The 32-bit binary integer ops are now wired in the *binary*
+    # harness (test_sfpu_binary.py) via dedicated BinaryOp enumerators and removed from this
+    # ledger: eq_int, ne_int, max/min_{int32,uint32}, remainder_{int32,uint32}, fmod_int32.
+    # Only the 16-bit variant remains:
+    "mul_uint16": "gap(B): uint16 binary mul; 16-bit binary path (unpack_to_dest=False) returns zeros in the shared runner, needs a dedicated 16-bit load path",
     # -- GROUP C: quantization -----------------------------------------------
     "quant_int32": "gap(C): quantization; scalar scale/zero-point golden pending",
     "requant_int32": "gap(C): requantization; scalar scale/zero-point golden pending",
