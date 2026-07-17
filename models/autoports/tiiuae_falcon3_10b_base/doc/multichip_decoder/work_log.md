@@ -306,6 +306,12 @@ three alternating O4/O2 pairs and O2 selection, final PCC/cache/trace/context
 contracts, memory arithmetic, Tracy row attribution, watcher controls, and
 stage-scope isolation.
 
+The stage-owned checkpoint is
+`64e3199158e765e2558115bbfcc1ed2e4edcd68a` (`Add Falcon3 TP4 multichip
+decoder`). It contains only the requested autoport paths. The follow-up
+documentation commit that records this checkpoint is reported in the final
+handoff because it cannot contain its own SHA. Neither commit is pushed.
+
 The first checkpoint attempt ran repository hooks before refusing the retained
 1.0 MB raw triage log under the generic 500 KB limit. Before stopping, the hook
 applied Black-only line wrapping to the implementation and test and normalized

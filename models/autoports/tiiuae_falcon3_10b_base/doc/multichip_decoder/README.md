@@ -11,6 +11,7 @@ Final source provenance:
 - `tt/multichip_decoder.py` SHA256: `25d9b50dd182a626f5195db56e194d897ab495e53b16c7f107465ac62fdd41e9`
 - `tests/test_multichip_decoder.py` SHA256: `09f8eec582af3ac057ca0b3d5194fb5bdfb2ab0e8f56b57a99d63ca92a277075`
 - final independent `$stage-review`: `clean-pass`
+- local stage checkpoint: `64e3199158e765e2558115bbfcc1ed2e4edcd68a`
 
 Most initial hardware evidence was collected immediately before the commit hook
 applied Black-only line wrapping to those two Python files. Review remediation
