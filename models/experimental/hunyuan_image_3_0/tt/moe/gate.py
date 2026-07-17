@@ -22,7 +22,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 from ..cache import cache_file
-from ..matmul_utils import to_interleaved_if_sharded
+from ..matmul_utils import l1_sharded_linear, to_interleaved_if_sharded
 from ..parallel_utils import decode_mm_program_config
 
 
@@ -95,23 +95,25 @@ class HunyuanTtTopKGate(LightweightModule):
         # Upcast activations to match the fp32 router weight (mirrors the
         # reference, which casts hidden states to fp32 before the projection).
         # Keep the caller-owned activation alive — MoE reuses ``x`` for experts.
-        # DRAM linear only: L1 width-sharded matmul must not consume shared ``x``.
         act = x
         owns_act = False
         if self.weight_dtype == ttnn.float32 and x.get_dtype() != ttnn.float32:
             act = ttnn.typecast(x, ttnn.float32)
             owns_act = True
 
-        # Router projection (M-tiny decode, K=4096, N=num_experts=64). Prefer DRAM
-        # linear so MoE can reuse ``x`` across gate/experts; 1D split-N program
-        # config still recovers decode latency vs auto (see gate sweep).
+        # Router projection (K=4096, N=num_experts=64). Skinny-N: decode_mm picks
+        # gather-K (mcast_in0=False) — BH 25.4us split-N → 17.7us gather-K nc=8
+        # (test_matmul_shard_sweep / decode_mm skinny-N path). Returns None for Mt>=8.
+        # allow_width_shard=False: MoE reuses this same ``x`` for every expert body.
+        # The default width-shard path (taken when gate_pc is None, e.g. S=1 decode)
+        # deallocates its activation input — which then TT_FATALs in expert linear.
         gate_pc = decode_mm_program_config(self.device, act.shape[-2], act.shape[-1], self.wg.shape[-1])
-        logits = ttnn.linear(
+        logits = l1_sharded_linear(
             act,
             self.wg,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=gate_pc,
+            allow_width_shard=False,
         )  # [B, S, num_experts]
         if owns_act:
             ttnn.deallocate(act)
