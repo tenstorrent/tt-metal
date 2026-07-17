@@ -266,4 +266,85 @@ def shared_validate_record(record: Record) -> List[str]:
     if missing:
         errors.append(f"{record.kind} 'params' missing {missing}")
 
+    if record.kind == "Conv2d":
+        errors.extend(_validate_conv2d_consistency(record))
+
+    return errors
+
+
+def _as_pair(value: Any) -> Optional[Tuple[int, int]]:
+    """Coerce a scalar or length-2 sequence of ints into a (h, w) pair, else None."""
+    if is_int(value):
+        return (int(value), int(value))
+    if isinstance(value, (list, tuple)) and len(value) == 2 and all(is_int(v) for v in value):
+        return (int(value[0]), int(value[1]))
+    return None
+
+
+def _validate_conv2d_consistency(record: Record) -> List[str]:
+    """Cross-check a Conv2d record's ``params`` against its 4D NCHW shapes.
+
+    Guarded to run only when the shapes and required params are well-formed, so a
+    malformed record surfaces the primary structural error rather than a cascade.
+    Verifies channel/batch agreement, ``groups`` divisibility, and that the output
+    spatial dims match the standard conv formula. These are the invariants the
+    ttnn.conv2d replay relies on, so an inconsistent manifest fails fast here
+    (in both the preflight validator and the harness) instead of deep in ttnn.
+    """
+    errors: List[str] = []
+
+    if not is_valid_shape(record.in_shape) or not is_valid_shape(record.out_shape):
+        return errors
+    if missing_params(record.kind, record.params):
+        return errors
+
+    params = record.params
+    n_in, c_in, h_in, w_in = (int(d) for d in record.in_shape)
+    n_out, c_out, h_out, w_out = (int(d) for d in record.out_shape)
+
+    in_channels = params.get("in_channels")
+    out_channels = params.get("out_channels")
+    groups = params.get("groups")
+    if not all(is_int(v) for v in (in_channels, out_channels, groups)):
+        errors.append("Conv2d 'params' in_channels/out_channels/groups must be ints")
+        return errors
+    in_channels, out_channels, groups = int(in_channels), int(out_channels), int(groups)
+
+    if in_channels != c_in:
+        errors.append(f"Conv2d 'in_channels' ({in_channels}) != in_shape channels ({c_in})")
+    if out_channels != c_out:
+        errors.append(f"Conv2d 'out_channels' ({out_channels}) != out_shape channels ({c_out})")
+    if n_in != n_out:
+        errors.append(f"Conv2d in_shape batch ({n_in}) != out_shape batch ({n_out})")
+
+    if groups <= 0:
+        errors.append(f"Conv2d 'groups' ({groups}) must be positive")
+    else:
+        if in_channels % groups != 0:
+            errors.append(f"Conv2d 'in_channels' ({in_channels}) not divisible by 'groups' ({groups})")
+        if out_channels % groups != 0:
+            errors.append(f"Conv2d 'out_channels' ({out_channels}) not divisible by 'groups' ({groups})")
+
+    kernel = _as_pair(params.get("kernel_size"))
+    stride = _as_pair(params.get("stride"))
+    padding = _as_pair(params.get("padding"))
+    dilation = _as_pair(params.get("dilation"))
+    if None in (kernel, stride, padding, dilation):
+        errors.append("Conv2d 'params' kernel_size/stride/padding/dilation must be ints or length-2 int pairs")
+        return errors
+
+    for dim, (in_sz, out_sz, k, s, p, d) in (
+        ("height", (h_in, h_out, kernel[0], stride[0], padding[0], dilation[0])),
+        ("width", (w_in, w_out, kernel[1], stride[1], padding[1], dilation[1])),
+    ):
+        if s <= 0:
+            errors.append(f"Conv2d {dim} 'stride' ({s}) must be positive")
+            continue
+        expected = (in_sz + 2 * p - d * (k - 1) - 1) // s + 1
+        if expected != out_sz:
+            errors.append(
+                f"Conv2d output {dim} ({out_sz}) inconsistent with in={in_sz}, "
+                f"kernel={k}, stride={s}, padding={p}, dilation={d} (expected {expected})"
+            )
+
     return errors

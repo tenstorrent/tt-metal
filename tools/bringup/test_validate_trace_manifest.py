@@ -273,6 +273,51 @@ def test_shape_consistency_real_torch(tmp_path):
     assert main(["--manifest", str(path)]) == 1
 
 
+# ── §7 Conv2d shape/param consistency ─────────────────────────────────────────
+
+
+def test_conv2d_consistent_record_passes(tmp_path):
+    # in_shape=[1,3,8,8], out_shape=[1,4,8,8], k=3/s=1/p=1/d=1 -> output H/W == 8.
+    path = _write_manifest(tmp_path, [_valid_record(tmp_path)])
+    assert main(["--manifest", str(path), "--no-shape-check"]) == 0
+
+
+def test_conv2d_in_channels_mismatch_fails(tmp_path, capsys):
+    rec = _valid_record(tmp_path)
+    rec["params"]["in_channels"] = 5  # in_shape channels is 3
+    path = _write_manifest(tmp_path, [rec])
+    assert main(["--manifest", str(path), "--no-shape-check"]) == 1
+    out = capsys.readouterr().out
+    assert "in_channels" in out and "in_shape channels" in out
+
+
+def test_conv2d_out_channels_mismatch_fails(tmp_path, capsys):
+    rec = _valid_record(tmp_path)
+    rec["params"]["out_channels"] = 9  # out_shape channels is 4
+    path = _write_manifest(tmp_path, [rec])
+    assert main(["--manifest", str(path), "--no-shape-check"]) == 1
+    out = capsys.readouterr().out
+    assert "out_channels" in out and "out_shape channels" in out
+
+
+def test_conv2d_output_spatial_mismatch_fails(tmp_path, capsys):
+    rec = _valid_record(tmp_path)
+    rec["params"]["padding"] = [0, 0]  # with k=3/s=1 -> output 6x6, not 8x8
+    path = _write_manifest(tmp_path, [rec])
+    assert main(["--manifest", str(path), "--no-shape-check"]) == 1
+    out = capsys.readouterr().out
+    assert "inconsistent" in out and "expected 6" in out
+
+
+def test_conv2d_groups_not_dividing_channels_fails(tmp_path, capsys):
+    rec = _valid_record(tmp_path)
+    rec["params"]["groups"] = 2  # in_channels=3 not divisible by 2
+    path = _write_manifest(tmp_path, [rec])
+    assert main(["--manifest", str(path), "--no-shape-check"]) == 1
+    out = capsys.readouterr().out
+    assert "groups" in out and "divisible" in out
+
+
 def test_shape_check_without_torch_errors(tmp_path, monkeypatch, capsys):
     # Simulate torch being unavailable when a shape check is requested.
     import builtins

@@ -1,5 +1,7 @@
 import argparse
 import json
+import os
+import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -7,6 +9,11 @@ from typing import Any, Dict, List, Tuple
 import torch
 import torch.nn as nn
 
+# Ensure sibling tool modules resolve regardless of cwd (this file may be run as
+# a script from anywhere).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from trace_manifest_validation import format_report, validate_manifest
 from unet_vgg19 import UNetVGG19
 
 
@@ -175,10 +182,19 @@ def main():
         "records": [asdict(r) for r in records],
     }
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    manifest_path = out_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    print(f"Saved Phase 1 manifest: {out_dir / 'manifest.json'}")
+    print(f"Saved Phase 1 manifest: {manifest_path}")
     print(f"Saved tensors under: {tensors_dir}")
+
+    # Self-validate the manifest we just wrote using the same rules the Phase-2
+    # harness enforces, so a faulty/inconsistent manifest is never handed off.
+    report = validate_manifest(manifest_path, check_shapes=True)
+    print("")
+    print(format_report(manifest_path, report), end="")
+    if report.errors:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

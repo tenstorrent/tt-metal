@@ -236,15 +236,26 @@ def run_record(
         w_t = _load_torch_tensor(_resolve_artifact_path(manifest_path, record.w_path)) if record.w_path else None
         b_t = _load_torch_tensor(_resolve_artifact_path(manifest_path, record.b_path)) if record.b_path else None
 
+        # ttnn.conv2d requires weight/bias as ttnn.Tensor (not torch). Bias must be
+        # shaped [1, 1, 1, out_channels]; the recorded bias is 1D [out_channels].
+        w_tt = ttnn.from_torch(w_t, dtype=ttnn.float32) if w_t is not None else None
+        b_tt = ttnn.from_torch(b_t.reshape(1, 1, 1, -1), dtype=ttnn.float32) if b_t is not None else None
+
         x_act = _nchw_to_hw_c(x)
         x_tt = ttnn.from_torch(x_act, device=tt_device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+        # device / batch_size / input_height / input_width are mandatory args of the
+        # ttnn.conv2d binding; derive the shape ones from the recorded in_shape.
         y_tt = ttnn.conv2d(
             input_tensor=x_tt,
-            weight_tensor=w_t,
-            bias_tensor=b_t,
+            weight_tensor=w_tt,
+            bias_tensor=b_tt,
+            device=tt_device,
             in_channels=int(params["in_channels"]),
             out_channels=int(params["out_channels"]),
+            batch_size=n,
+            input_height=h,
+            input_width=w,
             kernel_size=tuple(params["kernel_size"]),
             stride=tuple(params["stride"]),
             padding=tuple(params["padding"]),
@@ -285,7 +296,7 @@ def run_record(
     if score < float(pcc_threshold):
         raise AssertionError(
             f"PCC={score:.6f} < {float(pcc_threshold):.6f} "
-            f"(rec_id={record.idx}, kind={kind}, in_shape={in_shape}, out_shape={out_shape})"
+            f"(rec_id={record.idx}, kind={kind}, in_shape={record.in_shape}, out_shape={record.out_shape})"
         )
     return score
 
