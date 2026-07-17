@@ -116,7 +116,7 @@ class Profiler:
         if self.disabled and not force_enable:
             return
 
-        self.start_times[key] = time.time()
+        self.start_times[key] = time.perf_counter_ns()
 
     def end(self, key, PERF_CNT=1, force_enable=False):
         if self.disabled and not force_enable:
@@ -125,7 +125,7 @@ class Profiler:
         if key not in self.start_times:
             return
 
-        diff = time.time() - self.start_times[key]
+        diff = (time.perf_counter_ns() - self.start_times[key]) / 1e9
 
         if key not in self.times:
             self.times[key] = []
