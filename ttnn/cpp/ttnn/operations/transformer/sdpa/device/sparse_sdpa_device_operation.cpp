@@ -213,8 +213,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         // different cache size is a distinct program). A plain interleaved kv keeps T out of the hash (sentinel
         // shape) so changing T does not recompile.
         (t.kv.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.kv.logical_shape() : tt::tt_metal::Shape{},
-        // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is a dynamic runtime arg
-        // (see get_dynamic_runtime_args), so indexing into a different slot reuses the same program.
+        // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is re-applied per dispatch
+        // (see override_runtime_arguments), so indexing into a different slot reuses the same program.
         attrs.has_indexed_kv_cache(),
         // Block-cyclic remap configuration is compile-time; distinct sp/chunk_local/cache-size values produce
         // distinct programs (T is hashed above). No runtime remap arg.
@@ -223,46 +223,6 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype());
-}
-
-std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_runtime_args(
-    const SparseSDPAParams& attrs,
-    const SparseSDPAInputs& t,
-    Tensor& /*output*/,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // kv_batch_page_offset = cache_batch_idx*T depends on the runtime SLOT (and T, which is NOT hashed for an
-    // interleaved kv), so the same program is reused across slots/T — create_descriptor bakes it at build time
-    // and on a program-cache HIT it would be STALE, so re-apply it from the current slot/T every dispatch. The
-    // Block-cyclic remap configuration is compile-time, so only indexed programs need dynamic patching.
-    const bool indexed = attrs.has_indexed_kv_cache();
-    if (!indexed) {
-        return {};
-    }
-    const uint32_t T = t.kv.logical_shape()[2];
-    const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value() * T;
-    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
-    const uint32_t num_cores = grid.x * grid.y;
-    // Arg slots/kernel indices are defined once in sparse_sdpa_rt (header), shared with the program factory's
-    // emit order so a reorder can't silently desync this re-apply path from the factory. The value is the same
-    // on every core but the slot is per-core, so emit one entry per core per kernel.
-    std::vector<tt::tt_metal::DynamicRuntimeArg> args;
-    args.reserve(static_cast<size_t>(2) * num_cores);
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        args.push_back(
-            {sparse_sdpa_rt::kReaderKernelIdx,
-             core,
-             sparse_sdpa_rt::kReaderBatchOffsetArg,
-             kv_batch_page_offset,
-             /*is_common=*/false});
-        args.push_back(
-            {sparse_sdpa_rt::kWriterKernelIdx,
-             core,
-             sparse_sdpa_rt::kWriterBatchOffsetArg,
-             kv_batch_page_offset,
-             /*is_common=*/false});
-    }
-    return args;
 }
 
 Tensor sparse_sdpa(

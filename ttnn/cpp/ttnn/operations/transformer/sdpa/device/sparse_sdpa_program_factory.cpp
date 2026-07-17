@@ -293,17 +293,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
     // Indexed KV cache: the gather page ids are offset by cache_batch_idx * T to select the cache's batch
-    // slot. Baked here for the cache-miss build; re-applied on every dispatch by get_dynamic_runtime_args
-    // (so changing the slot doesn't recompile). 0 when not indexed (kv is a single [1,1,T,K_DIM] cache).
+    // slot. Re-derived here from the current attrs/tensor T on every dispatch (this factory is the single
+    // source of truth run by override_runtime_arguments on a hit). 0 when not indexed (single [1,1,T,K_DIM]).
     const uint32_t kv_T = t.kv.logical_shape()[2];
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value_or(0) * kv_T;
     for (uint32_t i = 0; i < num_cores; ++i) {
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        // kv_batch_page_offset sits at a fixed index (sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg), re-applied
-        // on a cache hit by get_dynamic_runtime_args (the slot changes per dispatch). If you reorder the args
-        // before it, update those constants or the re-apply targets the wrong slot.
         reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
         writer_desc.emplace_runtime_args(
             core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});  // kv_buf: writer K-half gather
@@ -314,6 +311,18 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));
     return desc;
+}
+
+void SparseSDPAOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const SparseSDPAParams& operation_attributes,
+    const SparseSDPAInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Re-derive the descriptor from the single source of truth (create_descriptor) and re-apply its per-core
+    // args + tensor-backed CB/buffer addresses to the cached program. No rebuild; supersedes get_dynamic.
+    auto desc = SparseSDPAProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::prim
