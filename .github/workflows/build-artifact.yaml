@@ -420,6 +420,21 @@ jobs:
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
       VERSION: ${{ needs.parse-platform.outputs.version }}
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
+      # The exact image the container below actually compiles inside. It's the compiler/
+      # runtime environment -- affects compiled output just as much as toolchain/build-type
+      # do -- so it belongs in the canonical key and manifest too (see compute-artifact-key
+      # calls below). NOTE: this expression is intentionally IDENTICAL to container.image
+      # below, duplicated rather than factored into one place, because the `env` context is
+      # documented as available in `jobs.<job_id>.container` but is not actually honored
+      # there in practice (github/docs#25520) -- referencing env.BUILD_IMAGE from
+      # container.image fails workflow validation. Keep both expressions in sync by hand.
+      BUILD_IMAGE: >-
+        ${{
+          (inputs.ci-build-docker-image != '' &&
+            format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image)) ||
+          format('{0}{1}', inputs.harbor-prefix,
+            needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
+        }}
       CCACHE_S3_BUCKET: ccache
       CCACHE_S3_PREFIX: tt-metal
       CCACHE_S3_READONLY: "false"
@@ -541,6 +556,7 @@ jobs:
           architecture: ${{ inputs.architecture }}
           build-type: ${{ inputs.build-type }}
           toolchain: ${{ env.TOOLCHAIN }}
+          build-image: ${{ env.BUILD_IMAGE }}
           tracy: ${{ inputs.tracy }}
           distributed: ${{ inputs.distributed }}
           enable-lto: ${{ inputs.enable-lto }}
@@ -747,6 +763,7 @@ jobs:
           architecture: ${{ inputs.architecture }}
           build-type: ${{ inputs.build-type }}
           toolchain: ${{ env.TOOLCHAIN }}
+          build-image: ${{ env.BUILD_IMAGE }}
           tracy: ${{ inputs.tracy }}
           distributed: ${{ inputs.distributed }}
           enable-lto: ${{ inputs.enable-lto }}
@@ -797,6 +814,7 @@ jobs:
           architecture: ${{ inputs.architecture }}
           build-type: ${{ inputs.build-type || 'Release' }}
           toolchain: ${{ env.TOOLCHAIN }}
+          build-image: ${{ env.BUILD_IMAGE }}
           tracy: ${{ inputs.tracy }}
           distributed: ${{ inputs.distributed }}
           enable-lto: ${{ inputs.enable-lto }}

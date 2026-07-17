@@ -33,6 +33,14 @@ inputs:
   toolchain:
     required: true
     description: "Raw toolchain path, e.g. cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+  build-image:
+    required: true
+    description: >-
+      The exact resolved container image the build actually compiles inside
+      (e.g. ghcr.io/.../ci-build:<hash> or a caller-supplied override via
+      ci-build-docker-image). This is the compiler/runtime environment -- it
+      affects compiled output as much as toolchain/build-type do, so it's
+      part of the canonical key and manifest for every kind, not just build.
   tracy:
     required: true
   distributed:
@@ -102,6 +110,7 @@ runs:
         architecture=${{ inputs.architecture }}
         build-type=${{ inputs.build-type }}
         toolchain=${TOOLCHAIN_CLEANED}
+        build-image=${{ inputs.build-image }}
         tracy=${TRACY}
         distributed=${DISTRIBUTED}
         enable-lto=${ENABLE_LTO}
@@ -148,6 +157,7 @@ runs:
           "architecture": "${{ inputs.architecture }}",
           "build-type": "${{ inputs.build-type }}",
           "toolchain": "${TOOLCHAIN_CLEANED}",
+          "build-image": "${{ inputs.build-image }}",
           "tracy": ${TRACY},
           "distributed": ${DISTRIBUTED},
           "enable-lto": ${ENABLE_LTO},
