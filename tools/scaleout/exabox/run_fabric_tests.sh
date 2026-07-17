@@ -55,7 +55,7 @@ Optional:
     --test-binary <path>                Path to test binary
                                         (default: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric)
     --test-config <path>                Path to test configuration file
-                                        (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml)
+                                        (default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml)
                                         (4x8wh default: tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml)
                                         (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
@@ -107,7 +107,7 @@ CONFIG="4x32"
 MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
 TEST_BINARY="./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
-TEST_CONFIG="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_stability.yaml"
+TEST_CONFIG="tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml"
 TEST_CONFIG_EXPLICIT=false
 # Multi-mesh (Z) configs default to the multi-mesh sanity config, whose
 # neighbor_exchange/all_to_all patterns route across mesh boundaries (Z links).
