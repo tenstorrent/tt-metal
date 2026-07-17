@@ -24,10 +24,18 @@ import ttnn
 # Optional env-gated diagnostics for generate():
 #   VV_PROFILE=1 — device-synced timing breakdown per phase
 #   VV_DEBUG=1   — per-AR-step token + phase logs (also set by demo_ttnn.py --debug)
+#   VV_PROFILE_PREFILL=1 — Tracy signposts ``start``/``stop`` around LM prefill
+#     (``_lm_prefill`` only). Use with ``python -m tracy …`` then
+#     ``tt-perf-report <csv> --start-signpost start --end-signpost stop``.
+#   VV_PROFILE_PREFILL_EXIT=1 — return from generate() right after LM prefill (no AR).
 
 
 def _vv_profile_enabled() -> bool:
     return os.environ.get("VV_PROFILE", "0") == "1"
+
+
+def _vv_profile_prefill_enabled() -> bool:
+    return os.environ.get("VV_PROFILE_PREFILL", "0") == "1"
 
 
 def _vv_debug_enabled() -> bool:
@@ -1138,10 +1146,33 @@ class TTVibeVoiceGenerator:
             kv_cache_pos = create_kv_cache(cfg.num_hidden_layers)
             kv_cache_neg = create_kv_cache(cfg.num_hidden_layers)
 
+        _profile_prefill = _vv_profile_prefill_enabled() and self._ref_lm is None
+        if _profile_prefill:
+            import tracy
+
+            ttnn.synchronize_device(device)
+            tracy.signpost("start")
+            _vv_debug(f"Tracy signpost start: LM prefill seq_len={prefill_len}")
         with prof.section("lm_prefill"):
             logits_pos, prefill_hidden = self._lm_prefill(inputs_embeds, kv_cache_pos)
+        if _profile_prefill:
+            import tracy
+
+            ttnn.synchronize_device(device)
+            tracy.signpost("stop")
+            _vv_debug(f"Tracy signpost stop: LM prefill seq_len={prefill_len}")
         _t_prefill_end = time.perf_counter()
         _vv_debug(f"lm_prefill done: kv_cache_pos size={prefill_len + max_steps + 8}")
+
+        if _profile_prefill and os.environ.get("VV_PROFILE_PREFILL_EXIT", "0") == "1":
+            _vv_debug("VV_PROFILE_PREFILL_EXIT=1 — ending generate after LM prefill")
+            prof.report()
+            return TTVibeVoiceOutput(
+                sequences=input_ids.clone(),
+                speech_outputs=[],
+                prefill_wall_s=_t_prefill_end - _t_prefill_start,
+                decode_wall_s=0.0,
+            )
 
         neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
         neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
