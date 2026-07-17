@@ -1042,6 +1042,9 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
         program.impl().validate_circular_buffer_core_ranges(validation_device);
         program.impl().validate_circular_buffer_region(validation_device);
         program.impl().allocate_dataflow_buffers(validation_device);
+        // Pre-size Metal 2.0 RTA/CRTA buffers from schema when not already reserved
+        // (e.g. MakeProgramFromSpec). Idempotent if SetProgramRunArgs already sized them.
+        program.impl().reserve_runtime_arg_buffers();
         // Metal 2.0 scratchpads stack on the DFB allocations, so allocate them AFTER the DFBs are placed.
         // Scratchpads are passed as implicit CRTAs, so they must be allocated before the CRTAs are committed.
         program.impl().allocate_scratchpads(validation_device);
