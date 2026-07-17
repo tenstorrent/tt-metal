@@ -519,7 +519,19 @@ Result conv2d_L1(
         const uint32_t per_core_h_ntiles = opt_conv_op_parallel_config.per_core_out_matrix_height_ntile;
         const uint32_t max_act_block_h =
             worst_units_per_h == 0 ? per_core_h_ntiles : (kDfbRingUnitCap / worst_units_per_h);
-        const uint32_t hi = max_act_block_h < per_core_h_ntiles ? max_act_block_h : per_core_h_ntiles;
+        uint32_t hi = max_act_block_h < per_core_h_ntiles ? max_act_block_h : per_core_h_ntiles;
+        // Honor a user act_block_h_override (in rows) as an UPPER bound on the height block. QUASAR reader bug:
+        // the no-spill full-window gather (read_activation_data) mis-reads output rows beyond ~4 M-tiles in a
+        // SINGLE gather -> M-tiles >=4 come out wrong (tzrb_qsr: PCC by M-quarter 1,0,1,0). WH never hit it
+        // (per_core_M=4). Capping act_block_h (=> more, smaller height blocks; the reader gathers each block
+        // separately) keeps every gather inside the validated <=4-M-tile range. The real fix belongs in
+        // read_activation_data; this bounds the gather until then.
+        if (conv_config.act_block_h_override > 0) {
+            const uint32_t override_tiles = conv_config.act_block_h_override / tt::constants::TILE_HEIGHT;
+            if (override_tiles > 0 && override_tiles < hi) {
+                hi = override_tiles;
+            }
+        }
         // Keep act_block_h a multiple of the (already-valid) out_subblock height AND a divisor of the per-core
         // output height, so the compute subblocking stays valid (factory asserts act_block_h % out_subblock_h
         // == 0) and no partial M-block is produced. out_subblock_h divides the per-core height, so it is
