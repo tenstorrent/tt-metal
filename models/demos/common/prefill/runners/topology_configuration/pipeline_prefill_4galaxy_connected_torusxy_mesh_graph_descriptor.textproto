@@ -1,0 +1,45 @@
+# CONNECTED 4-galaxy mesh graph descriptor for the D2D-socket pipeline prefill.
+#
+# Four 8x4 BH-galaxy meshes chained mesh 0 <-> 1 <-> 2 <-> 3 by inter-galaxy fabric links, one per
+# pipeline boundary (rank r sends to rank r+1). Mirrors the decode superpod MGD's connection format
+# (consecutive mesh_ids, count:8 RELAXED, discovery / no pinnings) but with the prefill 8x4 geometry.
+#
+# Host order matters: discovery maps mesh 0 -> first --host, mesh 1 -> second, etc., and the chained
+# connections require consecutive hosts to be physically cabled. List the --host slots in the order
+# the galaxies are cabled in the superpod chain (verify with the UMD topology tool if a boundary's
+# fabric fails to train).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
