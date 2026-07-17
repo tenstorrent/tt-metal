@@ -17,6 +17,7 @@ from loguru import logger
 import ttnn
 
 from ..layers.module import Module
+from . import walltime
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -172,7 +173,8 @@ def load_model(
             "Loading transformer weights from PyTorch state dict. "
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
-        tt_model.load_torch_state_dict(get_torch_state_dict())
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+            tt_model.load_torch_state_dict(get_torch_state_dict())
         if post_load_hook is not None:
             post_load_hook(tt_model)
         ttnn.distributed_context_barrier()
@@ -180,7 +182,8 @@ def load_model(
 
     if _cache_is_complete(cache_dir, tt_model, key):
         logger.info(f"loading cache at '{cache_dir}'.")
-        tt_model.load(cache_dir)
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
+            tt_model.load(cache_dir)
         if post_load_hook is not None:
             post_load_hook(tt_model)
         ttnn.distributed_context_barrier()
@@ -190,7 +193,8 @@ def load_model(
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
-    tt_model.load_torch_state_dict(get_torch_state_dict())
+    with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+        tt_model.load_torch_state_dict(get_torch_state_dict())
 
     # Hook (e.g. quant typecast) must run BEFORE save so the cache holds the post-hook
     # weight dtype; otherwise a dynamic-load reload reads stale-dtype tensorbins into a
