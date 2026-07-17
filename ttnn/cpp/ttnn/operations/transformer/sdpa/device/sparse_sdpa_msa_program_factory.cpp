@@ -288,7 +288,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
              v_batch_tile_offset,
              k_group_tile_stride,
              v_group_tile_stride,
-             chunk_start_local});  // arg 10: baked per-coordinate; re-patched on cache hits (get_dynamic_runtime_args)
+             chunk_start_local});  // arg 10: baked per-coordinate; re-applied on cache hits
+                                   // (override_runtime_arguments)
         // Writer args 5/6 are the K/V cache-slot offsets patched on cache hits.
         writer_desc.emplace_runtime_args(
             core,
