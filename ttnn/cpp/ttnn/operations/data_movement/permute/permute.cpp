@@ -200,7 +200,20 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& di
     return true;
 }
 
+// A permutation is a layout no-op (safe to route through reshape instead of an actual data
+// move) iff the size>1 axes keep their relative order in the output. This must be checked on
+// axis INDICES, not on the sizes themselves: comparing only the size>1 *values* would
+// false-positive whenever two or more size>1 axes share the same extent (e.g. permuting
+// [0, 3, 1, 2] on shape (1, 64, 64, 64)) — the size lists would match even though the axes were
+// genuinely swapped, silently routing a real transpose through a zero-copy reshape and
+// producing wrong data.
 bool is_permute_layout_nop(const ttnn::Tensor& a, const ttsl::SmallVector<uint32_t>& dims) {
+    // Only ROW_MAJOR has a physical layout where this axis-order check is valid; TILE's
+    // tiled last-two-dims storage can make an axis reorder non-trivial even when it satisfies
+    // the check below, so it must never reach this shortcut.
+    if (a.layout() != Layout::ROW_MAJOR) {
+        return false;
+    }
     if (a.is_sharded()) {
         return false;
     }
