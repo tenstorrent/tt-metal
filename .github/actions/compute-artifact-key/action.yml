@@ -75,6 +75,24 @@ runs:
         SANITIZED_REF=$(echo "${{ inputs.ref }}" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
         SHA12="${SANITIZED_REF:0:12}"
 
+        # Defensive boolean normalization: some of these inputs are only
+        # declared under this workflow's `workflow_call.inputs` and NOT under
+        # `workflow_dispatch.inputs` (e.g. skip-tt-train, build-ttnn-import-artifact).
+        # When triggered via workflow_dispatch, referencing such an input
+        # yields an EMPTY string, not its workflow_call default -- verified
+        # live (a workflow_dispatch smoke-test run produced a literal empty
+        # value here, breaking the JSON below). Coerce every boolean-ish
+        # field to a real "true"/"false" so the manifest is always valid
+        # JSON and the hash is stable regardless of which trigger fired.
+        norm_bool() { [ "$1" = "true" ] && echo "true" || echo "false"; }
+        TRACY=$(norm_bool "${{ inputs.tracy }}")
+        DISTRIBUTED=$(norm_bool "${{ inputs.distributed }}")
+        ENABLE_LTO=$(norm_bool "${{ inputs.enable-lto }}")
+        SKIP_TT_TRAIN=$(norm_bool "${{ inputs.skip-tt-train }}")
+        BUILD_UMD_TESTS=$(norm_bool "${{ inputs.build-umd-tests }}")
+        PROFILE=$(norm_bool "${{ inputs.profile }}")
+        BUILD_TTNN_IMPORT_ARTIFACT=$(norm_bool "${{ inputs.build-ttnn-import-artifact }}")
+
         # Canonical, order-independent parameter tuple. Every field that
         # affects compiled output must be listed here.
         CANONICAL=$(cat <<EOF
@@ -84,18 +102,18 @@ runs:
         architecture=${{ inputs.architecture }}
         build-type=${{ inputs.build-type }}
         toolchain=${TOOLCHAIN_CLEANED}
-        tracy=${{ inputs.tracy }}
-        distributed=${{ inputs.distributed }}
-        enable-lto=${{ inputs.enable-lto }}
-        skip-tt-train=${{ inputs.skip-tt-train }}
-        build-umd-tests=${{ inputs.build-umd-tests }}
-        profile=${{ inputs.profile }}
+        tracy=${TRACY}
+        distributed=${DISTRIBUTED}
+        enable-lto=${ENABLE_LTO}
+        skip-tt-train=${SKIP_TT_TRAIN}
+        build-umd-tests=${BUILD_UMD_TESTS}
+        profile=${PROFILE}
         EOF
         )
 
         if [ "${{ inputs.kind }}" = "ttnn-import" ]; then
           CANONICAL="${CANONICAL}
-        build-ttnn-import-artifact=${{ inputs.build-ttnn-import-artifact }}"
+        build-ttnn-import-artifact=${BUILD_TTNN_IMPORT_ARTIFACT}"
         fi
 
         CANONICAL_SORTED=$(echo "$CANONICAL" | sort)
@@ -106,7 +124,7 @@ runs:
             NAME="packages-${SHA12}-${CFGHASH}"
             ;;
           build)
-            TRACY_SUFFIX="${{ (inputs.tracy == 'true' && '_profiler') || '' }}"
+            TRACY_SUFFIX="$([ "$TRACY" = "true" ] && echo '_profiler' || echo '')"
             NAME="TTMetal_build_any${TRACY_SUFFIX}_${SHA12}_${CFGHASH}"
             ;;
           ttnn-import)
@@ -130,13 +148,13 @@ runs:
           "architecture": "${{ inputs.architecture }}",
           "build-type": "${{ inputs.build-type }}",
           "toolchain": "${TOOLCHAIN_CLEANED}",
-          "tracy": ${{ inputs.tracy }},
-          "distributed": ${{ inputs.distributed }},
-          "enable-lto": ${{ inputs.enable-lto }},
-          "skip-tt-train": ${{ inputs.skip-tt-train }},
-          "build-umd-tests": ${{ inputs.build-umd-tests }},
-          "profile": ${{ inputs.profile }},
-          "build-ttnn-import-artifact": ${{ inputs.build-ttnn-import-artifact || false }},
+          "tracy": ${TRACY},
+          "distributed": ${DISTRIBUTED},
+          "enable-lto": ${ENABLE_LTO},
+          "skip-tt-train": ${SKIP_TT_TRAIN},
+          "build-umd-tests": ${BUILD_UMD_TESTS},
+          "profile": ${PROFILE},
+          "build-ttnn-import-artifact": ${BUILD_TTNN_IMPORT_ARTIFACT},
           "cfg-hash": "${CFGHASH}"
         }
         JSON
