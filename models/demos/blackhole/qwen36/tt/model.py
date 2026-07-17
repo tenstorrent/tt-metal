@@ -1515,7 +1515,8 @@ class Qwen36Model:
                 dtype=k_cache.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # L1 to match the request-time fill's L1 K/V (slice's cache key is buffer-type-specific).
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
             for w in range(1, num_blocks_in_seq(bucket, block_size) + 1):
