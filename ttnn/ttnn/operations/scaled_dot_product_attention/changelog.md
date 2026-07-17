@@ -424,3 +424,52 @@
   precision matrix (R2) cover the win + the tight-tolerance-regression gate. The 201-cell
   regression is caught by the existing golden suite (`test_golden.py`), which is the net
   that forced the fp32_dest_acc_en gate.
+
+## Refinement 3d — Close the flagged-shape util gap after the fast-exp win (matmul + reduce, or FA-3 overlap) (partial)
+- Date: 2026-07-17
+- What was done: Implemented lever 1 (the **V-ones-column trick** — fold the online-softmax
+  row-sum reduce into the PV matmul by appending a ones tile-column to V, so the PV matmul's
+  extra output column carries `l`) **in full**, gated NARROWLY to bf16 + fp32_dest_acc_en=False
+  (the perf-flagged regime, reusing R3c's fast-exp gate so every other cell stays byte-identical).
+  Proved by **clock-controlled on-device measurement** that it is a **REGRESSION**, then **reverted**
+  it (op byte-identical to R3c) and filed the correct next lever as **R3e**.
+  * **Implementation** (reverted): reader `fill_col_ones_tile` appends a bf16 column-of-ones tile
+    per KV row to the augmented V CB (`Dt → Dt+1`, K-major, mirroring production
+    `generate_bcast_col_scalar`); PV matmul N grows to `Dt_v = Dt+1`; the O rescale (phase 8) and
+    accumulate (phase 10) carry `l` in the extra column through the flash recurrence for free (the
+    per-chunk `reduce<SUM,REDUCE_ROW>` phase 7 is dropped); normalize strided-gathers `l` (raw
+    `copy_tile` — the only step with no kernel_lib helper, confirmed via header review) then divides;
+    writer drops the trailing column. All widths derive from a single `Dt_v` / `fold_rowsum` source.
+  * **Numerically correct**: all-ones → 1.0 (bf16 rounding), random-V matches torch to maxdiff 0.002,
+    flagged shape soft PCC≥0.997 held.
+- Perf measured (Blackhole p150b, 110 cores; device FW ns, warm median of 5, fresh cache;
+  **same-session back-to-back A/B via an `SDPA_FOLD_ROWSUM` env toggle** to defeat the AICLK drift):
+  fold OFF **5.803 ms** vs fold ON **6.701 ms** = **0.866× (a 15% REGRESSION)**. The fold-off baseline
+  reproduced R3c's 5.796 ms, so the clock was steady (not drift).
+- Root cause (structural — no setting fixes it, so reverted per the perf-lever rule): the flagged
+  shape has **tile-aligned D=128** (Dt=4), so the rowsum needs a **whole extra tile-column** on the
+  PV matmul. PV is **short-K** (K=Skv_chunk_t=8, operand-load-bound), so one extra N tile-column
+  costs a full K operand-load pass (+25% of PV) + 25% wider O rescale/accumulate — **more** than the
+  cheap 1-wide `reduce<SUM>` it replaced (~14%). The waste is **intra-tile** (31 of the ones tile's
+  32 columns are ×0), which the tile-granular FMA cannot avoid (no subblock/`last_in1_subblock_w_valid`
+  knob helps). **Production SDPA deliberately avoids the V-ones trick for exactly this reason** — it
+  keeps `l` in a separate CB, L1-accumulates the partial sum DURING the exp pack, and finishes with a
+  single 1-wide ones-vector `matmul_reduce` after the loop.
+- Accuracy achieved: N/A (lever reverted; op byte-identical to R3c). Reverted state green:
+  flagged-shape soft PCC≥0.997 + R3 guard set (test_scaled_dot_product_attention_perf.py) **9 passed**;
+  golden suite unchanged by construction (kernels + descriptor restored to the R3c HEAD, which was
+  1181 passed / 1088 xfailed / 0 failed).
+- Golden test progress: **1181 passed / 1088 xfailed / 0 failed** (byte-identical to R3c; no
+  SUPPORTED change — perf refinement).
+- Issues encountered: the priority lever (V-ones) is a measured dead end for the flagged
+  tile-aligned short-K shape. The efficient alternative (production's L1-accumulate-during-exp) needs
+  a **raw-LLK dual-pack** — the kernel_lib eltwise chain is single-terminal (`PackTile` /
+  `OutputLifecycle::L1Accumulation` pack to ONE output), so it cannot co-pack `cb_exp` and the rowsum
+  in one DEST window; the fusion is not expressible with helpers. Filed as **R3e** with the exact
+  mechanism + production references.
+- Why **[~] partial**: the priority lever was implemented in full and rigorously measured (clock
+  controlled) as a regression, root-caused as structural, and reverted — no perf win banked, but the
+  investigation redirects the queue from a dead end (V-ones) to the correct lever (R3e:
+  L1-accumulate-during-exp, raw-LLK). No SUPPORTED change; op green.
+- Tests added: none new (used the R3 flagged-shape perf harness + guard set; probes
+  probe_013/probe_014 document the fold-correctness verification and are retained).

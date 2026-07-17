@@ -392,7 +392,7 @@ phases (exp/reduce/sub/mul over S² tiles) run serially with the QKᵀ/PV matmul
 helper owns all 3 TRISCs), so the FPU idles during the softmax — a **scheme-change** to
 overlap them, not a knob-turn. Filed as **R3c**.
 
-### [~] Refinement 3c — Overlap the softmax vector phases with the matmul (lift FPU util past ~0.08)
+### [x] Refinement 3c — Overlap the softmax vector phases with the matmul (lift FPU util past ~0.08)
 
 **Type**: perf
 
@@ -447,7 +447,7 @@ bf16+fp32-DEST 0.05) → gated to fp32_dest_acc_en=False (loose 0.12; the max-pr
 regime keeps exact exp, byte-identical). `[~]` because the named overlap scheme was not
 built and the 0.35 aspiration has large headroom — filed as **Refinement 3d**.
 
-### [ ] Refinement 3d — Close the flagged-shape util gap after the fast-exp win (matmul + reduce, or FA-3 overlap)
+### [~] Refinement 3d — Close the flagged-shape util gap after the fast-exp win (matmul + reduce, or FA-3 overlap)
 
 **Type**: perf
 
@@ -486,6 +486,72 @@ zone cycles) and the soft `pcc_threshold=0.997`.
 
 **Done when**: measured device-ns improves further on the flagged shape beyond R3c's
 5.796 ms (toward the 0.35 util goal), soft `pcc_threshold=0.997` holds, golden green, no
+regression across the config-spanning guard set.
+
+**Landed (R3d, partial)**: implemented lever 1 (the **V-ones-column trick**) in full and
+proved by **clock-controlled measurement** that it is a **REGRESSION** on the flagged shape,
+then reverted it and filed the correct next lever (**R3e**). Evidence chain:
+- **Full implementation, gated to bf16 + fp32_dest_acc_en=False** (the flagged regime, reusing
+  R3c's fast-exp gating so every other cell stays byte-identical): reader appends a ones
+  tile-column to V (`fill_col_ones_tile`, mirroring production `generate_bcast_col_scalar`);
+  the PV matmul N grows `Dt → Dt+1`; the O rescale/accumulate carry `l` in the extra column
+  for free through the flash recurrence (no separate row-sum reduce); normalize strided-gathers
+  `l` (raw `copy_tile`, the only step with no helper — confirmed) and divides. **Verified
+  numerically correct** (all-ones → 1.0; random-V matches torch to maxdiff 0.002; flagged shape
+  soft PCC≥0.997 held).
+- **Measured (Blackhole p150b, 110 cores; device FW ns, warm median of 5, SAME-SESSION
+  back-to-back A/B via an `SDPA_FOLD_ROWSUM` env toggle to defeat the AICLK drift):
+  fold OFF 5.803 ms vs fold ON 6.701 ms = 0.866× — a 15% REGRESSION.** (Baseline reproduced
+  R3c's 5.796 ms, so the clock was steady; not drift.)
+- **Root cause (structural, not fixable):** the flagged shape has **tile-aligned D=128** (Dt=4),
+  so the rowsum needs a **whole extra tile-column** on the PV matmul. PV is **short-K**
+  (K=Skv_chunk_t=8, operand-load-bound), so adding one N tile-column costs a full K operand-load
+  pass (+25% of PV) plus +25% on the O rescale/accumulate — **more** than the cheap 1-wide
+  `reduce<SUM,REDUCE_ROW>` (the ~14% it replaced). The waste is intra-tile (31 of the ones
+  tile's 32 columns are ×0), which the tile-granular FMA cannot avoid — no `last_in1_subblock_w_valid`
+  or subblock knob fixes it. **Production SDPA deliberately avoids the V-ones trick for exactly
+  this reason** (it keeps `l` in a separate CB, L1-accumulates the partial sum **during the exp
+  pack**, and finishes with a single 1-wide ones-vector `matmul_reduce` after the loop).
+- **The correct lever is production's L1-accumulate-during-exp**, which eliminates the row-sum
+  reduce with **no added matmul work** — but it needs a **raw-LLK dual-pack** (pack exp→cb_exp
+  AND `pack_tile<true>`+`llk_pack_reconfig_l1_acc` accumulate rowsum→cb_sum in the SAME DEST
+  window). The kernel_lib chain is **single-terminal** (`OutputLifecycle::L1Accumulation` /
+  `DestAccumulation` pack to one output), so it **cannot** co-pack exp and the rowsum — the fusion
+  is not expressible with helpers. Filed as **R3e**. Levers 2/3/4 unchanged: lever 4 (DM batching)
+  is ablation-proven hidden at 9.0 ms (R3a) and still hidden at 5.8 ms (util 0.13, reads ≪ compute
+  per chunk); lever 3 (FA-3 overlap) is helper-infeasible (R3c). `[~]` because the priority lever
+  was tried in full + measured as a dead end and the winning lever (R3e) is a raw-LLK scheme-change,
+  not a knob-turn; no perf win banked, no SUPPORTED change, op byte-identical to R3c (green).
+
+### [ ] Refinement 3e — Eliminate the per-chunk row-sum reduce via L1-accumulate-during-exp (raw-LLK dual-pack)
+
+**Type**: perf
+
+**Goal** (sharper follow-up from R3d — the exact next lever): R3d proved the V-ones-column
+trick loses on the flagged tile-aligned shape (adds a full tile-column to the short-K PV matmul,
++15%). The **correct** way to eliminate the ~14% per-chunk `reduce<SUM,REDUCE_ROW>` (still one of
+the two dominant reduces at ~29%) is **production SDPA's approach**: fuse the partial row-sum into
+the **exp pack** via packer **L1 accumulation** — while the exp results are in DEST, pack them to
+`cb_exp` (for PV) AND `pack_tile<true>` + `llk_pack_reconfig_l1_acc(1)` accumulate each row's
+tile-columns into a (rows×1) column of `cb_sum_chunk`, then finish the intra-tile reduction with a
+single **1-wide ones-vector `matmul_reduce`** ONCE after the KV loop. This adds **no matmul N work**
+(unlike V-ones) and re-uses the exp's already-loaded DEST (no cb_exp re-read, unlike the current
+dedicated reduce), so it removes the reduce nearly for free.
+
+**Verifier notes**: no SUPPORTED change (perf). This is a **raw-LLK helper substitution** of the
+exp phase — the kernel_lib eltwise chain is single-terminal (`PackTile` packs to ONE output;
+`OutputLifecycle::L1Accumulation`/`DestAccumulation` exist but cannot co-pack `cb_exp` AND the
+rowsum in one DEST window), so the fused dual-pack must be hand-written in raw LLK. Document the
+substitution + argument at the kernel-file head (helper limitation: no dual-terminal pack). Gate any
+precision trade to fp32_dest_acc_en=False (R3c's pattern). This is the same regime that failed the
+gate in R3c's overlap attempts, so land it carefully: build a deterministic debug test first
+(all-ones → l = effective count), validate the full golden suite for no regression (the exp phase
+is central), then measure clock-invariantly (DeviceZoneScopedN cycles or same-session A/B).
+Reference production `compute_common.hpp:344-366` (`sub_exp_block_bcast_cols_inplace` do_reduce path)
+and `:1042,1879` (`matmul_reduce`). If it exposes the reads, re-measure the parked R3 DM batching.
+
+**Done when**: measured device-ns improves on the flagged shape beyond R3c's 5.796 ms via the
+L1-accumulate-during-exp row-sum fusion, soft `pcc_threshold=0.997` holds, golden green, no
 regression across the config-spanning guard set.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode = causal)
