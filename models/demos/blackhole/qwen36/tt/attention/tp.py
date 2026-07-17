@@ -3,7 +3,7 @@
 """Tensor-parallel full-attention for Qwen3.5 (validated 64k+ on 27B).
 
 Q/K-norm: HF-correct (1+weight) uniformly at prefill and decode.
-Keep Q bf16 into SDPA (bf8-Q causes long-context degeneration; QWEN_SDPA_BF8_Q=1 restores it).
+Keep Q bf16 into SDPA unless bf8 mode (QWEN_SDPA_BF8=1).
 Weights interleaved per device; x replicated in, output reduce-scattered on dim=3.
 """
 import os
@@ -102,7 +102,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wo.dramshard" if wo_sharded else "wo"),
         dtype=ttnn.bfloat8_b,
     )
-    # QK norms: HF-correct (1+weight), used uniformly at prefill AND decode
+    # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     return tw
@@ -123,6 +123,8 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
+        # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
+        self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -131,27 +133,8 @@ class TPAttention:
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
         self._fuse_agmm = self._fused_qkv
-        # Fuse decode wo out-proj + reduce-scatter (matmul_reduce_scatter_async). DEFAULT OFF because
-        # decode MM-RS regresses: the fused op's 2D matmul collapses to ~8 cores at M=1. The fused op
-        # takes the DRAM-interleaved wo weight, not the DRAM-width-sharded path).
-        self._fuse_wo_mmrs = (
-            not self._wo_sharded and args.num_devices > 1 and os.environ.get("QWEN36_FUSE_ATTN_WO_MMRS", "0") == "1"
-        )
-        if self._fuse_wo_mmrs:
-            self._wo_mmrs_pc, self._wo_mmrs_interm, self._wo_mmrs_out = tpc.build_mmrs_decode_state(
-                mesh, args.max_batch_size, args.attn_out_dim_tp, args.dim, args.num_devices
-            )
-        # PREFILL wo out-proj fusion (matmul_reduce_scatter, (8,8) grid) — DEFAULT OFF: measured a
-        # small TTFT regression at both short and long ISL (bf16 RS is too small to overlap-win the
-        # way the fp32 GDN-out does, so the fixed warmup/compile cost dominates).
-        self._fuse_wo_mmrs_prefill = (
-            not self._wo_sharded
-            and args.num_devices > 1
-            and os.environ.get("QWEN36_FUSE_ATTN_WO_MMRS_PREFILL", "0") == "1"
-        )
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
-        # QWEN36_NLP_DECODE_HEADS=0 falls back to the plain reshape/slice path.
-        self._use_nlp_decode_heads = os.environ.get("QWEN36_NLP_DECODE_HEADS", "1") == "1"
+        self._use_nlp_decode_heads = True
         self.k_caches = None
         self.v_caches = None
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
@@ -444,16 +427,7 @@ class TPAttention:
                 ttnn.fill_cache(self.k_caches[h], ttnn.slice(k, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
                 ttnn.fill_cache(self.v_caches[h], ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
 
-        # Keep Q/K/V bf16 into SDPA (QWEN_SDPA_BF8_Q=1 restores bf8 cast)
-        if os.environ.get("QWEN_SDPA_BF8_Q") == "1":
-            q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
-            k8 = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
-            v8 = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
-            ttnn.deallocate(q)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
-        else:
-            q8, k8, v8 = q, k, v
+        q8, k8, v8 = q, k, v
         padded = max(32, ((S + 31) // 32) * 32)
         ch = min(128 if S >= 2048 else 64, padded)  # 128 beats 256
         sdpa_cfg = ttnn.SDPAProgramConfig(
@@ -476,18 +450,6 @@ class TPAttention:
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
-        if self._fuse_wo_mmrs_prefill:
-            out = tpc.matmul_reduce_scatter_prefill(
-                gated,
-                tw["wo"],
-                self.tt_ccl,
-                self.compute_cfg,
-                self.args.ccl_topology(),
-                self.args.num_devices,
-                ttnn.bfloat16,
-            )
-            ttnn.deallocate(gated)
-            return out
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
         return tt_all_reduce(
@@ -575,6 +537,7 @@ class TPAttention:
             v_sh = ttnn.to_memory_config(v_p, self.args.kv_update_shard_cfg)
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
+            # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
             ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             ttnn.deallocate(k_sh)
@@ -647,21 +610,6 @@ class TPAttention:
         else:
             gated_flat = ttnn.reshape(gated, (1, B, NH * HD))
             ttnn.deallocate(gated)
-        # Fused wo out-proj + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
-        if self._fuse_wo_mmrs:
-            x_wo = ttnn.reshape(gated_flat, (1, 1, B, gated_flat.shape[-1]))
-            out = tpc.matmul_reduce_scatter_decode(
-                x_wo,
-                tw["wo"],
-                self.tt_ccl,
-                self._wo_mmrs_interm,
-                self._wo_mmrs_out,
-                self._wo_mmrs_pc,
-                self.compute_cfg,
-                self.args.ccl_topology(),
-            )
-            ttnn.deallocate(gated_flat)
-            return out
         wo_partial = self._wo_proj(gated_flat, tw["wo"])
         ttnn.deallocate(gated_flat)
         wo_partial = ttnn.reshape(wo_partial, (1, 1, B, wo_partial.shape[-1]))
@@ -715,6 +663,15 @@ class TPAttention:
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
+        # bf8 SDPA: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
+        if self._sdpa_bf8:
+            _k8 = ttnn.typecast(k, ttnn.bfloat8_b)
+            ttnn.deallocate(k)
+            k = _k8
+            _v8 = ttnn.typecast(v, ttnn.bfloat8_b)
+            ttnn.deallocate(v)
+            v = _v8
+
         # Fill this chunk into the paged cache
         k_paged, v_paged = self.paged_k, self.paged_v
         block_size = k_paged.shape[2]
@@ -733,16 +690,18 @@ class TPAttention:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Chunked SDPA over paged cache; keep Q bf16 (QWEN_SDPA_BF8_Q=1 restores bf8)
-        if os.environ.get("QWEN_SDPA_BF8_Q") == "1":
+        # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
+        # makes the KV cache bf8 -> full bf8 matmul
+        if self._sdpa_bf8:
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             ttnn.deallocate(q)
         else:
             q8 = q
 
-        # chunk_start_idx % q_chunk_size == 0; FLEXIBLE path uses q/k_chunk=64 for one program per trace
+        # chunk_start_idx % q_chunk_size == 0; FLEXIBLE path uses one program per trace.
+        # q/k_chunk=128 is valid (chunk_start always divisible by 2048) and faster than 64/256.
         if chunk_start_idx_tensor is not None:
-            qk_chunk = 64
+            qk_chunk = 128
         else:
             cap = 128 if S >= 2048 else 64  # 128 beats 256
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
@@ -803,18 +762,6 @@ class TPAttention:
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
-        if self._fuse_wo_mmrs_prefill:
-            out = tpc.matmul_reduce_scatter_prefill(
-                gated,
-                tw["wo"],
-                self.tt_ccl,
-                self.compute_cfg,
-                self.args.ccl_topology(),
-                self.args.num_devices,
-                ttnn.bfloat16,
-            )
-            ttnn.deallocate(gated)
-            return out
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
         return tt_all_reduce(

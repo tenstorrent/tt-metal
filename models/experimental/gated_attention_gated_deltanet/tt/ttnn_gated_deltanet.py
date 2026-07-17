@@ -215,27 +215,30 @@ def _causal_conv1d_fir(
             )
 
     total_len = (kernel_size - 1) + T
+    _dram = ttnn.DRAM_MEMORY_CONFIG
+    # Depthwise K-tap FIR via multiply + addcmul; re-tilize k>=1 slices (only k=0 is tile-aligned).
     out = None
     for k in range(kernel_size):
         x_slice = x_padded[:, k : k + T]
-        x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
-        term = ttnn.multiply(x_slice, weight_taps[k], memory_config=mc)
-        out = term if out is None else ttnn.add(out, term, memory_config=mc)
+        if k != 0:
+            x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
+        if out is None:
+            out = ttnn.multiply(x_slice, weight_taps[k], memory_config=mc)
+        else:
+            out = ttnn.addcmul(out, x_slice, weight_taps[k], memory_config=mc)
 
-    # Apply bias
+    # Bias (+ fused SiLU when a bias is present) else standalone SiLU. Conv output lands in DRAM.
+    _silu = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]
     if bias_dev is not None:
-        out = ttnn.add(out, bias_dev, memory_config=mc)
-    elif bias is not None:
-        pass
-
+        return ttnn.add(out, bias_dev, activations=_silu, memory_config=_dram), new_state
+    if bias is not None:
         bias_torch = ttnn.to_torch(bias).reshape(1, 1, D).contiguous()
         bias_dev_tmp = ttnn.from_torch(
             bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
         )
-        out = ttnn.add(out, bias_dev_tmp, memory_config=mc)
-
+        return ttnn.add(out, bias_dev_tmp, activations=_silu, memory_config=_dram), new_state
     # Conv output in DRAM (feeds gated_delta_attn_seq; MAC still ran in L1 when mc=L1)
-    return ttnn.silu(out, memory_config=ttnn.DRAM_MEMORY_CONFIG), new_state
+    return ttnn.silu(out, memory_config=_dram), new_state
 
 
 def causal_conv1d_ttnn(

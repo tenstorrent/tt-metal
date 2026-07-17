@@ -191,10 +191,8 @@ class RMSNorm(LightweightModule):
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
         assert self.tt_ccl is not None, "Distributed RMSNorm requires tt_ccl"
 
-        # Explicit output placement is opt-in (None preserves each op's pre-existing default: the
-        # pre/post all-gather ops inherit the input tensor's own memory config, exactly as they did
-        # before this override existed; the all_gather step was already hardcoded to DRAM).
-        mc = output_memory_config
+        # Interleaved output placement for the 3 ops; default DRAM (matches the prior hardcoded behavior).
+        mc = output_memory_config if output_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -208,7 +206,7 @@ class RMSNorm(LightweightModule):
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
             topology=self.ccl_topology,
-            memory_config=mc if mc is not None else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mc,
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             chunks_per_sync=10,
             num_workers_per_link=2,

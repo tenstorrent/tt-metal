@@ -24,6 +24,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     model_path,
     parametrize_mesh_tp,
     replicate_to_device,
+    shard_to_device,
     tp_composer,
 )
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
@@ -90,7 +91,9 @@ def test_mlp_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     xf = x.to(torch.float32)[0, 0]  # [T, dim]
     ref = (torch.nn.functional.silu(xf @ g.T) * (xf @ u.T)) @ d.T  # [T, dim]
 
-    x_tt = replicate_to_device(mesh_device, x)
+    # Prefill fused gate/up AGMM expects a K-sharded input (ff_norm skips its
+    # post-norm all-gather in the real model); the op gathers it back internally.
+    x_tt = shard_to_device(mesh_device, x, dim=-1) if nd > 1 else replicate_to_device(mesh_device, x)
     out = mlp.forward(x_tt)
     out_torch = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].to(torch.float32)  # [T, dim]
 

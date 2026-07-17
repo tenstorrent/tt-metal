@@ -1,25 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3.5-9B model configuration for Blackhole P150.
+"""Qwen3.5-9B config for Blackhole P150.
 
-Subclasses ``tt_transformers.ModelArgs`` (the framework convention). ``HF_MODEL`` is
-the single source of truth and must be exported (the base raises a clear error if it
-is unset). It may be a local checkpoint directory OR a hub id; a hub id is resolved to
-a local snapshot directory via ``snapshot_download`` (same as the vLLM wrapper) because
-``AutoConfig.from_pretrained`` on a bare hub id is unreliable in this transformers
-version. Config, weights and the tokenizer are loaded with ``trust_remote_code=True``.
-The base class resolves the checkpoint from ``HF_MODEL`` (``self.CKPT_DIR``) and parses the HF config via
-``AutoConfig``. No JSON config override and no ``checkpoint_dir`` constructor param remain.
-
-Everything Qwen3.5-specific (hybrid Gated DeltaNet + Gated Full Attention layers,
-DeltaNet key/value heads + conv kernel, partial rotary factor) is read from the
-parsed HF text config and set on top of the base params after ``super().__init__()``.
-
-Weight loading (``load_state_dict``) and the bfp8/bf16 cache path
-(``weight_cache_path``) are overridden: the 9B uses its own remapped key scheme,
-NOT the framework's meta-style wq/wk/wv keys. Weights come from
-``transformers.AutoModelForCausalLM.from_pretrained`` (resolves to the text-only
-``Qwen3_5ForCausalLM`` — no vision tower) and are remapped to the internal scheme.
+Subclasses tt_transformers.ModelArgs. HF_MODEL env var is canonical (hub id or local dir);
+hub ids are snapshot_download'd first (AutoConfig on bare hub id is unreliable here).
+Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text config.
+load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
 import os
 from pathlib import Path
@@ -31,7 +17,7 @@ GDN_CONV1D_L1_SMALL_SIZE = 24576
 
 
 class Qwen36ModelArgs(ModelArgs):
-    """Model configuration for Qwen3.5-9B on Blackhole P150."""
+    """Qwen3.5-9B ModelArgs for Blackhole P150."""
 
     def __init__(
         self,
@@ -40,15 +26,8 @@ class Qwen36ModelArgs(ModelArgs):
         max_seq_len=2048,
         **kwargs,
     ):
-        # HF_MODEL (set in the environment) is the single source of truth: the base
-        # ModelArgs reads it into self.CKPT_DIR. It defaults to the Qwen/Qwen3.6-27B hub
-        # id when unset, so no local checkpoint path is ever hardcoded.
-        # Unless HF_MODEL already points at a local checkpoint dir (one containing
-        # config.json), resolve it to a local snapshot dir via snapshot_download (same
-        # as the vLLM wrapper): AutoConfig.from_pretrained on a bare hub id is unreliable
-        # in this transformers version, but works on a directory path. The config.json
-        # check (rather than os.path.isdir) avoids being fooled by a stray relative dir
-        # created by the weight tensor cache when an unresolved hub id was used before.
+        # HF_MODEL is canonical (defaults to Qwen/Qwen3.6-27B). Snapshot hub ids unless
+        # config.json exists locally (avoids cache-dir false positives).
         hf_model = os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.6-27B")
         if not os.path.isfile(os.path.join(hf_model, "config.json")):
             from huggingface_hub import snapshot_download
@@ -57,23 +36,14 @@ class Qwen36ModelArgs(ModelArgs):
             os.environ["HF_MODEL"] = snapshot_download(hf_model, local_files_only=offline)
         super().__init__(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, **kwargs)
 
-        # The base resolves the checkpoint dir from HF_MODEL into self.CKPT_DIR; mirror
-        # it onto self.checkpoint_dir so weight_cache_path / load_state_dict keep working.
+        # Mirror CKPT_DIR -> checkpoint_dir for weight_cache_path / load_state_dict.
         self.checkpoint_dir = self.CKPT_DIR
 
-        # ------------------------------------------------------------------
-        # Qwen3.5-specific params the base does not know about. Read from the
-        # parsed HF text config (Qwen3_5TextConfig). The base already set
-        # head_dim, dim, n_heads, n_kv_heads, n_layers, vocab_size, norm_eps, etc.
-        # ------------------------------------------------------------------
+        # Qwen3.5-specific params from HF text config (base sets dim, heads, layers, etc.).
         text_config = self.hf_config.get_text_config()
 
-        # RoPE — both rope_theta and partial_rotary_factor live nested under rope_parameters in
-        # these checkpoints; read them there FIRST. Some configs (e.g. 3.6-27B) also hoist
-        # partial_rotary_factor to the top level, but others (3.5-27B / 3.5-27B-FP8) only nest it —
-        # reading the top level alone silently fell back to 1.0 for those, rotating the full
-        # head_dim instead of the trained 0.25 fraction and scrambling RoPE at long context
-        # (fine short, degrades past ~32k). Prefer nested, then top-level, then the 1.0 default.
+        # RoPE: read partial_rotary_factor from rope_parameters first (some configs nest only there).
+        # Top-level-only read silently used 1.0 and broke long-context RoPE on 3.5-27B.
         rope_params = getattr(text_config, "rope_parameters", None) or {}
         self.rope_theta = rope_params.get("rope_theta", 10_000_000)
         self.partial_rotary_factor = rope_params.get(
@@ -100,9 +70,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.linear_value_head_dim = getattr(text_config, "linear_value_head_dim", 128)
         self.linear_conv_kernel_dim = getattr(text_config, "linear_conv_kernel_dim", 4)
 
-        # Layer type list — base only reads layer_types into a local (to derive
-        # sliding_window_pattern); the 9B needs the full list to dispatch DeltaNet
-        # vs. full-attention layers.
+        # Full layer_types list for DeltaNet vs full-attn dispatch.
         self.attention_type_list = getattr(text_config, "layer_types", None) or (
             ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 8
         )
@@ -112,7 +80,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.linear_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
         self.linear_v_dim = self.linear_num_value_heads * self.linear_value_head_dim
 
-        # Blackhole P150 device config (lazy import to allow CPU-only testing)
+        # Lazy import for CPU-only testing.
         if mesh_device is not None:
             import ttnn
 
@@ -122,42 +90,30 @@ class Qwen36ModelArgs(ModelArgs):
             self.weight_dtype = None
             self.act_dtype = None
 
-        # ------------------------------------------------------------------
-        # Tensor-parallel (multi-device) config. Inert on a single device:
-        # the entire block only runs when num_devices > 1, so the validated
-        # 9B single-device path is byte-for-byte unchanged. For 27B on a (1,4)
-        # mesh this sets the per-device sharded dims + DRAM-sharded matmul
-        # configs ported from models/demos/qwen35_27b. See tt/tp_common.py.
-        # ------------------------------------------------------------------
+        # TP config (num_devices>1 only). 27B (1,4) sharded dims + DRAM matmul cfgs; see tp_common.py.
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
         if mesh_device is not None and self.num_devices > 1:
             self._init_tp_config(mesh_device)
 
     def _init_tp_config(self, mesh_device):
-        """Set per-device sharded dims + DRAM-sharded matmul/mem configs for TP.
-
-        Only called when num_devices > 1. All dims are derived from the
-        HF-config values already parsed above (dim, n_heads, head_dim, and the
-        linear_* GDN dims) so the same code serves any Qwen3.5 size whose head
-        counts divide evenly by the device count.
-        """
+        """Per-device sharded dims + DRAM matmul/mem configs for TP (num_devices>1)."""
         import ttnn
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         tp = self.num_devices
         self.cluster_shape = list(mesh_device.shape)
 
-        # GDN dims (named to match the qwen35_27b reference helpers)
+        # GDN dims (match qwen35_27b reference names).
         self.gdn_nk = self.linear_num_key_heads
         self.gdn_dk = self.linear_key_head_dim
         self.gdn_nv = self.linear_num_value_heads
         self.gdn_dv = self.linear_value_head_dim
         self.gdn_conv_kernel_size = self.linear_conv_kernel_dim
-        self.gdn_key_dim = self.linear_q_dim  # = nk * dk  (q and k are equal)
-        self.gdn_value_dim = self.linear_v_dim  # = nv * dv
+        self.gdn_key_dim = self.linear_q_dim  # q and k equal
+        self.gdn_value_dim = self.linear_v_dim
         self.gdn_qkv_dim = self.linear_q_dim + self.linear_k_dim + self.linear_v_dim
         self.gdn_z_dim = self.linear_v_dim
-        self.gdn_chunk_size = 128  # gated_delta_attn_seq kernel requires 128
+        self.gdn_chunk_size = 128  # GDN seq kernel requires 128
 
         # Per-device (sharded) dims
         assert self.n_heads % tp == 0, f"n_heads {self.n_heads} not divisible by TP={tp}"
@@ -179,7 +135,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.attn_out_dim_tp = (self.n_heads * self.head_dim) // tp
         kv_dim_per_device = self.n_local_kv_heads * self.head_dim
 
-        # DRAM-sharded weight memory configs ─ column-parallel: [hidden, out_tp]
+        # DRAM-sharded weights: column-parallel [hidden, out_tp]
         self.gdn_qkvz_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.gdn_qkvz_dim_tp)
         self.gdn_qkvzab_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.gdn_qkvzab_dim_tp)
         self.attn_qg_weight_memcfg = tpc.create_dram_sharded_mem_config(
@@ -197,7 +153,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.attn_wo_weight_memcfg = None
         self.mlp_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(self.hidden_dim // tp, self.dim)
 
-        # DRAM-sharded matmul program configs (decode, m=1)
+        # DRAM-sharded matmul progcfgs (decode, M=1)
         M = 1
         self.gdn_qkvz_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.gdn_qkvz_dim_tp)
         self.gdn_qkvzab_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.gdn_qkvzab_dim_tp)
@@ -278,9 +234,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.act_shard_gdn_value = tpc.create_activation_shard_config(self.gdn_value_dim_tp)
         self.act_shard_attn_out = tpc.create_activation_shard_config(self.attn_out_dim_tp)
 
-        # KV-cache height-shard config for paged_update_cache (decode). The op
-        # dispatches one user per core, so the grid must have exactly
-        # max_batch_size cores (B=32 → 8x4; B=1 → 1x1).
+        # KV-cache height shard for paged_update_cache (one user per core).
         _B = max(1, self.max_batch_size)
         _cols = next(c for c in range(min(8, _B), 0, -1) if _B % c == 0)
         _rows = _B // _cols
@@ -293,8 +247,7 @@ class Qwen36ModelArgs(ModelArgs):
         )
 
     def _set_hf_params(self, checkpoint_dir):
-        # Load the HF config with trust_remote_code=True. Set the
-        # flag before delegating so the base AutoConfig.from_pretrained call uses it.
+        # trust_remote_code before base AutoConfig load.
         self.trust_remote_code_hf = True
         super()._set_hf_params(checkpoint_dir)
 
@@ -324,23 +277,15 @@ class Qwen36ModelArgs(ModelArgs):
         return Path(root) / suffix
 
     def load_state_dict(self):
-        """Load + remap this checkpoint's weights via transformers from_pretrained.
-
-        HF_MODEL (self.CKPT_DIR) is the single source — a hub name or local path.
-        AutoModelForCausalLM resolves to the TEXT-ONLY Qwen3_5ForCausalLM (no vision
-        tower is built), whose state_dict uses the `model.` prefix; remap_qwen36_state_dict
-        normalizes that to the internal key scheme. This OVERRIDES the base meta-key
-        (wq/wk/wv) loader — the 9B uses its own scheme.
-        """
+        """Load + remap weights via AutoModelForCausalLM (text-only Qwen3_5ForCausalLM).
+        Overrides base meta-key loader."""
         from models.demos.blackhole.qwen36.tt.weight_mapping import (
             is_fp8_checkpoint,
             load_qwen36_state_dict_fp8,
             remap_qwen36_state_dict,
         )
 
-        # Block-wise FP8 checkpoints (e.g. Qwen3.5-27B-FP8) cannot go through
-        # AutoModelForCausalLM here; dequant + remap to the TP key scheme that
-        # the multi-device weight loaders consume.
+        # Block FP8 checkpoints: dequant + remap for TP loaders (skip AutoModelForCausalLM).
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 

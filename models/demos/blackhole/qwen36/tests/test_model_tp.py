@@ -178,7 +178,7 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     _, pcc = comp_pcc(ref.reshape(-1), c_logits.reshape(-1), 0.99)
     logger.info(f"traced vs eager chunk-outer prefill (T={T}) logits PCC = {pcc}")
     assert float(pcc) >= 0.99, f"traced chunk-outer prefill PCC below 0.99 at T={T}: {pcc}"
-    logger.info(f"PASSED: TP traced chunk-outer prefill matches bespoke single-pass (B=1, T={T})")
+    logger.info(f"PASSED: TP traced chunk-outer prefill matches eager chunk-outer (B=1, T={T})")
 
 
 @parametrize_mesh_tp()

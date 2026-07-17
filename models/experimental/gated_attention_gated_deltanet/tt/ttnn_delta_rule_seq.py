@@ -131,28 +131,31 @@ def chunk_gated_delta_rule_seq_adapter(
     # Relayout untilize/permute in L1; land kernel inputs in DRAM (CBs ~1.36MB/core clash with L1).
     _L1 = ttnn.L1_MEMORY_CONFIG
 
+    def _tilize_f32(t):
+        # Tilize + fp32 cast in one op (main #49565), avoiding a separate typecast pass.
+        return ttnn.to_layout(t, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=_DRAM)
+
     def _to_bhtd(t, D, Hh, l2=False):  # [B,T,Hh,D] (or flat [B,T,Hh*D]) -> [B*Hh,T,D] float32 TILE
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)  # untilize -> L1
         t = ttnn.reshape(t, [B, T, Hh, D])  # head-split (no-op if already 4D)
         t = ttnn.permute(t, (0, 2, 1, 3))
         t = ttnn.reshape(t, [B * Hh, T, D])
-        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # kernel input in DRAM
         if l2:
-            # Per-head L2 on [BH,T,D] bf16 — bit-identical to pre-split norm.
+            # Per-head L2 on [BH,T,D] bf16 (before the fp32 cast) — bit-identical to pre-split norm,
+            # so keep tilize/typecast separate here (fused f32 tilize would norm in fp32 instead).
+            t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # kernel input in DRAM
             t = l2_norm_ttnn(t, dim=-1)
-        if t.dtype != ttnn.float32:
-            t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
-        return t
+            if t.dtype != ttnn.float32:
+                t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
+            return t
+        return _tilize_f32(t)  # non-normed (v): fused tilize+cast
 
     def _to_bht(t):  # [B,T,H] -> [BH,T] float32 TILE
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)  # untilize -> L1
         t = ttnn.reshape(t, [B, T, H])
         t = ttnn.permute(t, (0, 2, 1))
         t = ttnn.reshape(t, [BH, T])
-        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)  # kernel input in DRAM
-        if t.dtype != ttnn.float32:
-            t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
-        return t
+        return _tilize_f32(t)  # no norm on g/beta -> fused tilize+cast is safe
 
     q_bh = _to_bhtd(q, K, Hq, l2=_defer_l2)
     k_bh = _to_bhtd(k, K, Hq, l2=_defer_l2)
