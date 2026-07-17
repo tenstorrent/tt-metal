@@ -153,6 +153,22 @@ baseline = −2e-5, noise; the rope op is 0.999999 vs manual) / decode **0.99989
 The warm per-chunk win is what matters for the long (13k/64k) prefills.
 
 **Investigated, no safe win (don't re-explore):**
+- **bf8_b weights on the prefill matmuls:** measured ~1.0× (qkv/o_proj/gate/up/down) to 1.1× (lm_head)
+  — NO speedup. Despite the "58 % DRAM / SLOW" report tag, halving the weight bytes doesn't reduce time,
+  so these matmuls are **not weight-BW-bound at M=256**; they're latency/occupancy-bound (both FLOPs and
+  BW ~50 %, the skinny-matmul signature: M=256 = 8 tiles across ~100 cores). bf8 only saves footprint and
+  costs a little PCC (0.99999→0.99997). Not worth it.
+- **Sharding (width/height/block/DRAM-sharded):** auto config beats all hand-tuned 2D/width/block configs
+  (up to 10× slower) — see `matmul_prefill_sweep.py`. More cores makes the latency-bound case worse.
+  DRAM-sharded is the M=1-decode BW specialist and won't help M=256 (bf8 proved it's not BW-bound).
+- **Larger prefill chunk_size** (the real fix for skinny-M — 1024-tok prefill 219.8→123.1 ms at chunk 512):
+  **fails the PCC gate** — overall prefill PCC 0.99536→0.98723 (S=512) / 0.99363→0.98588 (S=1024). The fp32
+  attention error compounds over the larger score matrix; this is exactly why chunk_size is pinned at 256.
+- **bf16 flash-SDPA prefill, retried with `fp32_dest_acc_en=True`** (`ttnn.transformer.scaled_dot_product_attention`,
+  is_causal, HiFi4): single-layer PCC 0.9998 but **compounds to 0.987 over 28 layers → fails 0.99**. fp32_dest_acc
+  does NOT save it (the bf16 Q/K/V inputs are the irreducible loss). **fp32 SDPA inputs are rejected** by the op
+  (TT_FATAL). So flash-SDPA prefill cannot hold the gate — the fp32 manual attention stays. (This is *the* thing
+  that would let chunks grow / kill the fp32 tail; it's blocked on op precision, not on our code.)
 - **Best matmul program configs (M=256):** swept auto vs tuned 2D-mcast (grid/in0_block_w/subblock)
   for qkv 1536→2048, o_proj 1536→1536, gate/up 1536→8960, down 8960→1536, lm_head 1536→151936
   (`tests/perf/matmul_prefill_sweep.py`). **Auto wins every shape** — hand-tuned 2D configs were up to
