@@ -473,3 +473,67 @@
   L1-accumulate-during-exp, raw-LLK). No SUPPORTED change; op green.
 - Tests added: none new (used the R3 flagged-shape perf harness + guard set; probes
   probe_013/probe_014 document the fold-correctness verification and are retained).
+
+## Refinement 3e — Eliminate the per-chunk row-sum reduce via L1-accumulate-during-exp (raw-LLK dual-pack)
+- Date: 2026-07-17
+- What was done: Implemented production SDPA's L1-accumulate-during-exp row-sum
+  fusion as a **raw-LLK dual-pack**, eliminating the per-chunk
+  `reduce<SUM,REDUCE_ROW>` (one of the two dominant reduces, ~14% of per-chunk
+  compute). Compile-gated `fuse_rowsum = !fp32_dest` (the fp32_dest_acc_en=False
+  throughput regime, same gate as R3c's fast-exp); the max-precision fp32-DEST path
+  keeps the exact per-chunk reduce and is **byte-identical → zero regression**.
+  * **New compute helper `fused_exp_dual_pack` (raw LLK).** For each Q row it
+    subtracts the running max (bcast-col), fast-exps (`exp_tile<true>`, matching
+    `ckl::Exp<Approx::Fast>`) into one DEST window, then packs that window TWICE:
+    (a) a normal `pack_tile<true>` to `cb_exp` (row-major, for the PV matmul), and
+    (b) `pack_reconfig_l1_acc` + `pack_tile<true>` L1-accumulating the row's `skv`
+    column tiles into a single `cb_sum_chunk[i]` — a (rows×1, 32-col, un-reduced)
+    partial row-sum. No dedicated reduce re-reads `cb_exp`.
+  * **Deferred column collapse.** The running sum `l` is kept in partial (32-col)
+    form across the whole KV loop — per chunk: `alpha`-rescale (bcast-col mul) +
+    `add` the chunk partial — and collapsed to the scalar denominator **once** after
+    the KV loop with a single `reduce<SUM,REDUCE_ROW>` (the FPU matmul-with-ones).
+    Exact because rowsum is linear (commutes with the alpha rescale + accumulate).
+  * **`cb_sum_chunk` → `interm_format`** (bf16 in this regime) so the two dual-pack
+    targets share a data format → no per-pack `pack_reconfig_data_format`.
+  * **Why raw LLK (helper limitation, documented at the kernel head):** the
+    kernel_lib eltwise chain is single-terminal — a chain using
+    `OutputLifecycle::L1Accumulation` static-asserts every pack be L1-accumulating
+    to ONE CB, so it cannot co-pack `cb_exp` + the L1-acc `cb_sum_chunk` from one
+    DEST window. The fusion is not expressible with helpers.
+- Perf measured (Blackhole p150b, 110 cores; device FW ns, warm median of 5, fresh
+  cache; **same-session A/B via `SDPA_FUSE_ROWSUM` env toggle** to defeat the ~1.8×
+  AICLK drift between fresh invocations): flagged `1×10×9472×128` (bf16, HiFi2,
+  fp32_dest_acc_en=False) **reduce path 5.804 ms (reproduces R3c's 5.796 ms) →
+  fused 5.440 ms = 1.067× (6.27%, −364 µs)**. The 364 µs gap is ≈29× the fused-run
+  std (12.7 µs) → above noise. Meets the Done-when (improves beyond R3c's 5.796 ms).
+- Accuracy achieved: flagged-shape soft PCC≥0.997 held (both A/B variants). Golden
+  `TOLERANCES` met across the suite. Deterministic fused-rowsum debug test (all-ones
+  → exact denominator; multi-chunk; random; none/custom masks) all pass.
+- Golden test progress: **1181 passed / 1088 xfailed / 0 failed** (no SUPPORTED
+  change — perf refinement; identical cartesian to R2/R3c/R3d). Unit dir
+  **351 passed / 112 skipped** (core + debug + nonaligned + coarse-chunk + new
+  fused-rowsum + precision-baseline + precision-matrix + perf flagged-shape + R3
+  guard set 8/8).
+- Issues encountered: **a state-carry regression during bring-up, root-caused +
+  fixed.** The first cut initialized the dual-pack with a full `init_bcast`
+  (complete packer hw-configure) every KV chunk. That clobbered the boot-time
+  `matmul_block_init` packer state the per-chunk matmul `InitMode::Short` relies on
+  (Short does not fully re-issue the packer config — the same R1b caveat), which
+  drifted across chunks × work-units and regressed 4 golden cells
+  (`Q1x71x2048x64` MQA custom-mask, >1 work-unit/core, pcc≈0.90 / rms≈0.43). Root
+  cause isolated by probe (error grew with work-units/core, present only >1 wu/core;
+  1-wu/core cases including 8-chunk MHA passed clean). Fixed by switching to the
+  lightweight reconfig the eltwise_chain itself uses (`reconfig_data_format` +
+  `sub_bcast_cols_init_short` + `exp_tile_init` + `pack_reconfig_data_format`, no
+  full pack re-init) → all 4 cells back to rms≈0.021, golden restored to 1181/0.
+  The parked R3 DM-batching knob stays parked: reads were ablation-proven hidden at
+  5.8 ms (R3d) and a 6% compute speedup to 5.44 ms (FPU util ≈0.14, still
+  compute-bound) does not expose them.
+- Tests added:
+  `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_fused_rowsum.py`
+  (deterministic fused-path correctness: all-ones exact denominator, multi-chunk,
+  random, none/custom masks) and
+  `test_scaled_dot_product_attention_r3e_ab.py` (same-session A/B perf harness,
+  `SDPA_FUSE_ROWSUM` toggle). Descriptor gains a measurement-only env knob
+  (`SDPA_FUSE_ROWSUM=0` forces the reduce path; unset → normal gate, no-op default).

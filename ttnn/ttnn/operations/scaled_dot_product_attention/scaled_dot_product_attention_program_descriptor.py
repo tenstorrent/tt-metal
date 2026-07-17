@@ -11,6 +11,7 @@ Blocking model (see op_design.md, binding):
     (Sq_chunk_t, Skv_chunk_t, KV_DEPTH) + Dt — no CB grows with S_q or S_kv.
 """
 
+import os
 import struct
 from pathlib import Path
 
@@ -346,6 +347,12 @@ def create_program_descriptor(
     # bf16 so the dual-pack targets (cb_exp + cb_sum_chunk) share a format, and the
     # max-precision fp32-DEST regime keeps the exact per-chunk reduce (byte-identical).
     fuse_rowsum = 0 if fp32_dest else 1
+    # Perf A/B knob (measurement only, defaults to no-op): SDPA_FUSE_ROWSUM=0 forces
+    # the pre-R3e reduce<SUM> row-sum path even in the fp32_dest_acc_en=False regime,
+    # so the fused dual-pack can be compared same-session against its own baseline
+    # (defeats the AICLK drift between fresh invocations). Unset/other => normal gate.
+    if os.environ.get("SDPA_FUSE_ROWSUM") == "0":
+        fuse_rowsum = 0
     compute_ct = [
         Dt,
         Sq_chunk_t,

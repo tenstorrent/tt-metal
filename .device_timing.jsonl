@@ -108,3 +108,6 @@
 {"source":"tt-probe","pid":1471580,"started_at_ms":1784255464532,"wait_ms":221,"run_ms":58091,"test_path":"scaled_dot_product_attention","exit_code":0}
 {"source":"tt-probe","pid":1472816,"started_at_ms":1784255694787,"wait_ms":221,"run_ms":55770,"test_path":"scaled_dot_product_attention","exit_code":0}
 {"source":"run_safe_pytest","pid":1473440,"started_at_ms":1784255770086,"wait_ms":2,"run_ms":208682,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1477816,"started_at_ms":1784256008688,"wait_ms":3,"run_ms":63855,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1479607,"started_at_ms":1784256146758,"wait_ms":2,"run_ms":38753,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_r3e_ab.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1480736,"started_at_ms":1784256279460,"wait_ms":3,"run_ms":12605,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_fused_rowsum.py","exit_code":0}

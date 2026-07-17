@@ -523,7 +523,7 @@ then reverted it and filed the correct next lever (**R3e**). Evidence chain:
   was tried in full + measured as a dead end and the winning lever (R3e) is a raw-LLK scheme-change,
   not a knob-turn; no perf win banked, no SUPPORTED change, op byte-identical to R3c (green).
 
-### [ ] Refinement 3e — Eliminate the per-chunk row-sum reduce via L1-accumulate-during-exp (raw-LLK dual-pack)
+### [x] Refinement 3e — Eliminate the per-chunk row-sum reduce via L1-accumulate-during-exp (raw-LLK dual-pack)
 
 **Type**: perf
 
@@ -553,6 +553,39 @@ and `:1042,1879` (`matmul_reduce`). If it exposes the reads, re-measure the park
 **Done when**: measured device-ns improves on the flagged shape beyond R3c's 5.796 ms via the
 L1-accumulate-during-exp row-sum fusion, soft `pcc_threshold=0.997` holds, golden green, no
 regression across the config-spanning guard set.
+
+**Landed (R3e)**: implemented production SDPA's L1-accumulate-during-exp row-sum fusion as a
+**raw-LLK dual-pack** (compile-gated `fuse_rowsum = !fp32_dest`, the fp32_dest_acc_en=False
+throughput regime; the max-precision path keeps the exact per-chunk `reduce<SUM>`,
+byte-identical → zero regression). New compute helper `fused_exp_dual_pack`: for each Q row it
+subtracts the running max (bcast-col), fast-exps into DEST, then packs that ONE DEST window
+**twice** — a normal `pack_tile<true>` to `cb_exp` (for PV) AND a `pack_reconfig_l1_acc(1)` +
+`pack_tile<true>` L1-accumulation of the row's `skv` column tiles into a (rows×1, 32-col,
+un-reduced) `cb_sum_chunk[i]`. The running sum `l` is then kept in that partial form across the
+KV loop (per-chunk `alpha`-rescale bcast-col + `add`), and collapsed to the scalar denominator
+**once** after the loop with a single `reduce<SUM,REDUCE_ROW>` (the FPU matmul-with-ones) — so
+the per-chunk row-sum reduce is eliminated (exact: rowsum is linear, so it commutes with the
+alpha rescale). `cb_sum_chunk` is promoted to `interm_format` (bf16 here) so the two pack
+targets share a format (no per-pack `pack_reconfig_data_format`). **Why raw LLK**: the
+kernel_lib eltwise chain is single-terminal — a chain using `OutputLifecycle::L1Accumulation`
+static-asserts that *every* pack be L1-accumulating to *one* CB, so it cannot co-pack `cb_exp`
++ the L1-acc `cb_sum_chunk` from one DEST window; documented at the compute-kernel head.
+**Measured (Blackhole p150b, 110 cores; same-session A/B via `SDPA_FUSE_ROWSUM` env toggle to
+defeat AICLK drift; warm median of 5, fresh cache):** flagged `1×10×9472×128` (bf16,
+fp32_dest_acc_en=False) **5.804 ms (reduce, reproduces R3c 5.796) → 5.440 ms (fused) = 1.067×
+(6.27%, −364 µs)**; gap ≈29× the fused-run std → above noise; soft PCC≥0.997 held.
+**Bug found + fixed during bring-up**: the first cut used a full `init_bcast` (complete packer
+hw-configure) each KV chunk, which clobbered the boot-time `matmul_block_init` packer state
+that the per-chunk matmul `InitMode::Short` relies on (Short doesn't fully re-issue packer
+cfg); this drifted across chunks×work-units and regressed 4 golden cells
+(`Q1x71x2048x64` MQA custom, >1 wu/core, pcc≈0.90). Isolated by probe to the multi-work-unit
+regime; fixed by switching to the lightweight reconfig the eltwise_chain itself uses
+(`reconfig_data_format` + `sub_bcast_cols_init_short` + `pack_reconfig_data_format`, no full
+pack re-init). **Golden 1181 passed / 1088 xfailed / 0 failed** (no SUPPORTED change — perf);
+unit + fused-debug + precision-matrix + perf/guard **351 passed / 112 skipped**; guard set
+8/8. The parked R3 DM-batching knob stays parked: the reads were ablation-proven hidden at
+5.8 ms (R3d), and a 6% compute speedup to 5.44 ms (FPU util ≈0.14, still compute-bound) does
+not expose them.
 
 ### [ ] Refinement 4 — Causal masking (mask_mode = causal)
 
