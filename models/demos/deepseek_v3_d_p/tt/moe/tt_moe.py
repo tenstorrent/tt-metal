@@ -512,8 +512,8 @@ class TtMoe(LightweightModule):
         # with a shortened dispatch loop. In other gate modes padded tokens keep real
         # expert indices, so dispatch must process the full range -> padding_config=None.
         padding_config = None
-        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
-            padding_config = self.gate.build_padding_config(actual_isl, padding_side)
+        # if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+        #     padding_config = self.gate.build_padding_config(actual_isl, padding_side)
 
         scores, indices, gate_logits = self.gate(
             ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])),

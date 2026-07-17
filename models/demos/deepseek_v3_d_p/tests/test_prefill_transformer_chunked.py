@@ -51,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils import moe_input_capture
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
@@ -1352,42 +1353,48 @@ def run_chunked_transformer_no_pcc(
         signpost("PROFILE_MEASURE_START")
 
     profiler.start("tt_forward")
-    for it in range(num_iters):
-        iter_start = time.time()
-        chunk_times: list[float] = []
-        for c in range(n_chunks):
-            kv_actual = preload_isl + c * CHUNK
-            tt_tokens = ttnn.from_torch(
-                chunk_tok_host[c],
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
-            )
-            chunk_start = time.time()
-            # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
-            # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
-            # uses self.indexed_rope. The small (first_token) return is discarded.
-            transformer.forward(
-                tt_tokens,
-                tt_kvpe_cache,
-                actual_isl=CHUNK,
-                actual_start=kv_actual,
-                actual_end=kv_actual + CHUNK,
-                cache_user_id=0,
-                return_intermediates=False,
-                index_kv_cache=tt_index_kv_cache,
-            )
-            ttnn.synchronize_device(mesh_device)
-            ttnn.deallocate(tt_tokens)
-            chunk_times.append(time.time() - chunk_start)
-        iter_total = time.time() - iter_start
-        iteration_chunk_times.append(chunk_times)
-        logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
-        # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
-        if it == 0:
-            reset_block_timings()
+    capturing_moe = moe_input_capture.enable_from_env()
+    try:
+        for it in range(num_iters):
+            iter_start = time.time()
+            chunk_times: list[float] = []
+            for c in range(n_chunks):
+                kv_actual = preload_isl + c * CHUNK
+                if capturing_moe and it == 0:
+                    moe_input_capture.set_chunk(c)
+                tt_tokens = ttnn.from_torch(
+                    chunk_tok_host[c],
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+                )
+                chunk_start = time.time()
+                # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
+                # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
+                # uses self.indexed_rope. The small (first_token) return is discarded.
+                transformer.forward(
+                    tt_tokens,
+                    tt_kvpe_cache,
+                    actual_isl=CHUNK,
+                    actual_start=kv_actual,
+                    actual_end=kv_actual + CHUNK,
+                    cache_user_id=0,
+                    return_intermediates=False,
+                    index_kv_cache=tt_index_kv_cache,
+                )
+                ttnn.synchronize_device(mesh_device)
+                ttnn.deallocate(tt_tokens)
+                chunk_times.append(time.time() - chunk_start)
+            iter_total = time.time() - iter_start
+            iteration_chunk_times.append(chunk_times)
+            logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
+            # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
+            if it == 0:
+                reset_block_timings()
+    finally:
+        moe_input_capture.disable()
     profiler.end("tt_forward")
 
     profiler.end("total_test_time")

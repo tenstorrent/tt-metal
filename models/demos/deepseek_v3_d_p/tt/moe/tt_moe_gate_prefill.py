@@ -665,8 +665,8 @@ class TtMoEGatePrefill(LightweightModule):
         dispatch op). Otherwise one is built locally and freed here.
         """
         owns_padding_config = padding_config is None
-        if owns_padding_config:
-            padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
+        # if owns_padding_config:
+        #     padding_config = self.build_padding_config(actual_isl, padding_side) if actual_isl is not None else None
 
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
         bias_f32 = ttnn.typecast(self.bias, ttnn.float32)
