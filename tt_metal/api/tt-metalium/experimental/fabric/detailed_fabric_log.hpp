@@ -25,8 +25,8 @@ inline constexpr uint64_t DETAILED_FABRIC_LOG_DRAM_BUFFER_SIZE = 4ull << 20;    
 inline constexpr uint64_t DETAILED_FABRIC_SENDER_LOG_DRAM_BASE = 0xC0000000ull;  // 3 GiB (per-bank byte offset)
 inline constexpr uint64_t DETAILED_FABRIC_RECEIVER_LOG_DRAM_BASE =
     DETAILED_FABRIC_SENDER_LOG_DRAM_BASE + DETAILED_FABRIC_LOG_DRAM_BUFFER_SIZE;  // 3 GiB + 4 MiB
-constexpr std::size_t RECEIVER_LOG_BUFFER_SIZE = 4096;                            // 1024 uint32 words
-constexpr std::size_t SENDER_LOG_BUFFER_SIZE = 4096;                              // 1024 uint32 words
+constexpr std::size_t RECEIVER_LOG_BUFFER_SIZE = 4096;  // L1 carve: header + diff state + 8 B word buffer
+constexpr std::size_t SENDER_LOG_BUFFER_SIZE = 4096;    // L1 carve: header + diff state + 8 B word buffer
 
 // [debug] Drain the receiver ([rxlog]) and sender ([txlog]) detailed flow-control traces that the fabric routers
 // flushed to DRAM during the last logging window, and write one text file per (device, eth core) so every file

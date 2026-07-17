@@ -6,18 +6,17 @@
 // to DRAM during a logging window. See dump_detailed_fabric_logs() in detailed_fabric_log.hpp for the contract.
 //
 // Design (host readback, not on-device DEVICE_PRINT):
-//   - The kernel appends delta-encoded records to an L1 log region and, on overflow (and again at the STOP
-//     marker for the tail), bulk-writes them to a per-router DRAM buffer in a per-core DRAM bank (bank =
-//     ordinal-among-active-eth-channels % num_dram_banks). At the STOP marker it also flushes a small header
-//     (magic, per-window baseline gaps, record count) to the FRONT of that buffer. So each DRAM buffer is laid
-//     out as [header region | packed record array] -- everything the reader needs is in DRAM; nothing is read
-//     from L1.
-//   - So per router we (1) read the header from the front of the DRAM buffer to detect a valid trace and recover
-//     the reconstruction baseline, then (2) bulk-read the packed records back from DRAM (just past the header
-//     region), (3) reconstruct the cumulative columns exactly as the on-device dump would, and (4) write one
-//     file per (device, eth core), named/tagged like the DPRINT files so the two sit side by side.
-//
-// This keeps the large traces (the ones that spill to DRAM in the first place) off the DEVICE_PRINT path.
+//   - The kernel appends 8-byte log WORDS to an L1 region and, on overflow (and again at the STOP marker for the
+//     tail), bulk-writes them to a per-router DRAM buffer in a per-core DRAM bank (bank = ordinal-among-active-
+//     eth-channels % num_dram_banks). At the STOP marker it also flushes a small header (magic, per-channel
+//     baseline gaps, word count) to the FRONT of that buffer. So each DRAM buffer is [header region | packed word
+//     array] -- everything the reader needs is in DRAM; nothing is read from L1.
+//   - The word stream is self-describing (see detailed_fabric_logs.hpp): a COMMON word (byte0 = count >= 1) opens
+//     an iteration sample carrying the shared iter/ts deltas, then `count` CHANNEL words (byte0 = 0) each carry one
+//     channel's delta-encoded state. So per router we (1) read the header to detect a valid trace + recover the
+//     reconstruction baselines, then (2) bulk-read the words back, (3) walk them reconstructing the CUMULATIVE
+//     columns AND absolute iteration/time (not deltas), and (4) write one file per (device, eth core), tagged like
+//     the DPRINT files so the two sit side by side.
 
 #include <tt-metalium/experimental/fabric/detailed_fabric_log.hpp>
 #include <tt-metalium/experimental/fabric/detailed_fabric_logs.hpp>
@@ -27,7 +26,6 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -51,17 +49,17 @@ namespace tt::tt_fabric {
 namespace {
 
 // ============================================================================
-// The on-device log layouts (the DRAM-flushed *LogHeader framing + the packed *LogRecord arrays and their
-// magics) come from the shared detailed_fabric_logs.hpp, so this reader and the fabric router share ONE
-// definition -- there is no hand-maintained host mirror to drift. Both host and device are little-endian, so the
-// raw DRAM bytes map straight onto the structs. Each per-router DRAM buffer is [header region | packed records].
+// The on-device log layouts (the DRAM-flushed *LogHeader framing, the 8 B word codec, and the nibble-packed
+// channel id) come from the shared detailed_fabric_logs.hpp, so this reader and the fabric router share ONE
+// definition -- there is no hand-maintained host mirror to drift. Both host and device are little-endian, so raw
+// DRAM bytes map straight onto the structs / uint64_t words. Each per-router DRAM buffer is [header region | words].
 // ============================================================================
 
 // Read `size` bytes from a router's DRAM log buffer at per-bank byte offset `base`. `bank_id` is the kernel's
 // LOG_DRAM_BANK_ID; for DRAM it indexes the DRAM channel directly (matches the interleaved-read path in
-// tt_metal.cpp). We add the allocator's DRAM bank offset to mirror get_noc_addr_from_bank_id() used by the
-// kernel write (0 on architectures with one bank per channel, e.g. Blackhole -- harmless there, correct if it
-// ever becomes nonzero).
+// tt_metal.cpp). We add the allocator's DRAM bank offset to mirror get_noc_addr_from_bank_id() used by the kernel
+// write (0 on architectures with one bank per channel, e.g. Blackhole -- harmless there, correct if it ever
+// becomes nonzero).
 std::vector<uint8_t> read_dram(tt::tt_metal::IDevice* device, uint32_t bank_id, uint64_t base, uint32_t size) {
     std::vector<uint8_t> bytes(size);
     if (size == 0) {
@@ -83,6 +81,13 @@ HeaderT read_dram_header(tt::tt_metal::IDevice* device, uint32_t bank_id, uint64
     return h;
 }
 
+// Read one 8-byte log word from a packed byte buffer at word index `i` (little-endian -> uint64_t).
+uint64_t word_at(const std::vector<uint8_t>& bytes, uint32_t i) {
+    uint64_t w = 0;
+    std::memcpy(&w, bytes.data() + static_cast<size_t>(i) * sizeof(uint64_t), sizeof(uint64_t));
+    return w;
+}
+
 std::string file_header(
     int device_id,
     int physical_chip,
@@ -91,12 +96,12 @@ std::string file_header(
     uint32_t bank,
     const char* tag,
     uint32_t window_id,
-    uint32_t dram_records,
+    uint32_t dram_words,
     uint32_t dropped) {
     return fmt::format(
         "# {} fabric flow-control trace\n"
         "# device_id={} physical_chip={} eth_core=(x={},y={}) eth_channel={} dram_bank={}\n"
-        "# window_id={} records={} dropped={}\n",
+        "# window_id={} words={} dropped={}\n",
         tag,
         device_id,
         physical_chip,
@@ -105,29 +110,41 @@ std::string file_header(
         eth_chan,
         bank,
         window_id,
-        dram_records,
+        dram_words,
         dropped);
 }
 
-// [debug] Decode the per-channel sender block-reason code (mirror of SenderSendReason in
-// detailed_fabric_logs.hpp) into a readable label for the dumped [txlog] lines.
+// [debug] Decode the per-channel sender block-reason code (SenderSendReason) into a readable label.
 const char* sender_reason_str(uint32_t reason) {
     switch (reason) {
-        case 0: return "IDLE";     // no send, no obvious block (nothing pending / turn skipped)
-        case 1: return "SENT";     // transmitted a packet this pass
-        case 2: return "STARVED";  // downstream credit + txq free, but no unsent packet from the producer
-        case 3: return "RXFULL";   // unsent packet + txq free, but no downstream receiver credit
-        case 4: return "TXQBUSY";  // unsent packet + downstream credit, but the eth txq is busy
+        case SENDER_REASON_IDLE: return "IDLE";        // no send, no obvious block (nothing pending / turn skipped)
+        case SENDER_REASON_SENT: return "SENT";        // transmitted a packet this pass
+        case SENDER_REASON_STARVED: return "STARVED";  // downstream credit + txq free, but no unsent packet
+        case SENDER_REASON_RXFULL: return "RXFULL";    // unsent packet + txq free, but no downstream receiver credit
+        case SENDER_REASON_TXQBUSY: return "TXQBUSY";  // unsent packet + downstream credit, but the eth txq is busy
         default: return "UNKNOWN";
     }
 }
 
-// [debug] conn (ch_flags bit3/bit7) = channel_connection_established: whether an upstream worker (the tensix
-// producer) currently holds an OPEN fabric connection to this VC0 sender channel this pass. "UP" = a worker is
-// connected; "DN" = none attached (e.g. before the first open / after teardown, or a window edge). Reading it
-// alongside reason=STARVED disambiguates "connected worker not producing fast enough" (conn=UP) from "no
-// producer attached this pass" (conn=DN).
-const char* sender_conn_str(uint32_t conn_bit) { return conn_bit ? "UP" : "DN"; }
+// [debug] conn (flags bit3) = channel_connection_established: whether an upstream worker (the tensix producer)
+// currently holds an OPEN fabric connection to this sender channel this pass. "UP" = connected; "DN" = none.
+const char* sender_conn_str(bool conn) { return conn ? "UP" : "DN"; }
+
+// Per-channel reconstruction accumulators, keyed by the nibble-packed channel id. Seeded from the header's
+// [vc][local] baseline gaps the first time a channel id is seen, so every counter is 0-based on completion.
+struct ReceiverAccum {
+    uint32_t ack = 0;
+    uint32_t wr_sent = 0;
+    uint32_t wr_flush = 0;
+    uint32_t cmpl = 0;
+    bool seeded = false;
+};
+struct SenderAccum {
+    uint32_t sent = 0;
+    uint32_t acked = 0;
+    uint32_t cmpl = 0;
+    bool seeded = false;
+};
 
 }  // namespace
 
@@ -142,7 +159,7 @@ void dump_detailed_fabric_logs(const tt::tt_metal::distributed::MeshDevice& mesh
     const auto& cluster = metal_ctx.get_cluster();
 
     // Bail cleanly if fabric never built its routers (nothing to drain). The DRAM buffer geometry is fixed and
-    // shared by every router, so no per-router L1 lookup is needed anymore.
+    // shared by every router, so no per-router L1 lookup is needed.
     const auto& fabric_ctx = control_plane.get_fabric_context();
     if (!fabric_ctx.has_builder_context()) {
         fmt::print(stderr, "[fabric-log] fabric builder context unavailable; no traces to drain\n");
@@ -198,7 +215,7 @@ void dump_detailed_fabric_logs(const tt::tt_metal::distributed::MeshDevice& mesh
                             bank,
                             DETAILED_FABRIC_RECEIVER_LOG_DRAM_BASE + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
                             h.dram_write_offset);
-                        const uint32_t n = h.dram_write_offset / sizeof(ReceiverLogRecord);
+                        const uint32_t n_words = h.dram_write_offset / sizeof(uint64_t);
 
                         const auto path =
                             dir /
@@ -213,34 +230,50 @@ void dump_detailed_fabric_logs(const tt::tt_metal::distributed::MeshDevice& mesh
                             bank,
                             "[rxlog]",
                             h.window_id,
-                            h.dram_records,
+                            h.dram_words,
                             h.dropped);
 
-                        // Reconstruct the cumulative columns from the delta-encoded records: accumulators seeded
-                        // with the base gaps so every counter is 0-based on completion; occupied = rdy + (ack -
-                        // cmpl). free = slots - occupied is left to the reader (the per-channel slot count is a
-                        // kernel-side constant).
-                        uint32_t iter_acc = 0, cmpl_acc = 0;
-                        uint32_t ack_acc = h.base_ack_gap, wsent_acc = h.base_wr_sent_gap,
-                                 wflush_acc = h.base_wr_flush_gap;
-                        for (uint32_t r = 0; r < n; ++r) {
-                            ReceiverLogRecord rec{};
-                            std::memcpy(&rec, bytes.data() + r * sizeof(ReceiverLogRecord), sizeof(ReceiverLogRecord));
-                            iter_acc += rec.iter_delta;
-                            ack_acc += rec.ack_delta;
-                            wsent_acc += rec.wr_sent_delta;
-                            wflush_acc += rec.wr_flush_delta;
-                            cmpl_acc += rec.completion_delta;
-                            const uint32_t occupied = rec.ready + (ack_acc - cmpl_acc);
+                        // Walk the word stream. A common word advances the shared timeline (absolute iter + t);
+                        // each following channel word accumulates that channel's counters (seeded from the header
+                        // base gaps) and emits one line tagged with the parent common word's reconstructed
+                        // iter/t. occupied = rdy + (ack - cmpl); free = slots - occupied is left to the reader.
+                        uint32_t iter_acc = 0, ts_acc = 0;
+                        std::map<uint8_t, ReceiverAccum> accum;
+                        for (uint32_t i = 0; i < n_words; ++i) {
+                            const uint64_t w = word_at(bytes, i);
+                            if (!log_word_is_channel(w)) {
+                                iter_acc += common_log_word_iter_delta(w);
+                                ts_acc += common_log_word_ts_delta(w);
+                                continue;
+                            }
+                            const uint8_t cid = channel_log_word_channel_id(w);
+                            const uint32_t vc = channel_id_vc(cid);
+                            const uint32_t local = channel_id_local(cid);
+                            auto& a = accum[cid];
+                            if (!a.seeded) {
+                                a.ack = h.base_ack_gap[vc][local];
+                                a.wr_sent = h.base_wr_sent_gap[vc][local];
+                                a.wr_flush = h.base_wr_flush_gap[vc][local];
+                                a.cmpl = 0;
+                                a.seeded = true;
+                            }
+                            const uint32_t ready = receiver_channel_log_word_ready(w);
+                            a.ack += receiver_channel_log_word_ack_delta(w);
+                            a.wr_sent += receiver_channel_log_word_wr_sent_delta(w);
+                            a.wr_flush += receiver_channel_log_word_wr_flush_delta(w);
+                            a.cmpl += receiver_channel_log_word_completion_delta(w);
+                            const uint32_t occupied = ready + (a.ack - a.cmpl);
                             f << fmt::format(
-                                "[rxlog] iter={} dt={} rdy={} ack={} wsent={} wflush={} cmpl={} occ={}\n",
+                                "[rxlog] iter={} t={} vc={} ch={} rdy={} ack={} wsent={} wflush={} cmpl={} occ={}\n",
                                 iter_acc,
-                                rec.ts_delta,
-                                rec.ready,
-                                ack_acc,
-                                wsent_acc,
-                                wflush_acc,
-                                cmpl_acc,
+                                ts_acc,
+                                vc,
+                                local,
+                                ready,
+                                a.ack,
+                                a.wr_sent,
+                                a.wr_flush,
+                                a.cmpl,
                                 occupied);
                         }
                         ++files_written;
@@ -273,7 +306,7 @@ void dump_detailed_fabric_logs(const tt::tt_metal::distributed::MeshDevice& mesh
                             bank,
                             DETAILED_FABRIC_SENDER_LOG_DRAM_BASE + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
                             h.dram_write_offset);
-                        const uint32_t n = h.dram_write_offset / sizeof(SenderLogRecord);
+                        const uint32_t n_words = h.dram_write_offset / sizeof(uint64_t);
 
                         const auto path =
                             dir /
@@ -288,49 +321,49 @@ void dump_detailed_fabric_logs(const tt::tt_metal::distributed::MeshDevice& mesh
                             bank,
                             "[txlog]",
                             h.window_id,
-                            h.dram_records,
+                            h.dram_words,
                             h.dropped);
 
-                        // Reconstruct the two output lines per record (ch0, ch1): per-channel counters seeded
-                        // with the base gaps. ch_flags packs reason/conn per channel.
-                        uint32_t iter_acc = 0;
-                        uint32_t sent0 = h.base_sent_gap[0], ack0 = h.base_acked_gap[0], cmpl0 = 0;
-                        uint32_t sent1 = h.base_sent_gap[1], ack1 = h.base_acked_gap[1], cmpl1 = 0;
-                        for (uint32_t r = 0; r < n; ++r) {
-                            SenderLogRecord rec{};
-                            std::memcpy(&rec, bytes.data() + r * sizeof(SenderLogRecord), sizeof(SenderLogRecord));
-                            iter_acc += rec.iter_delta;
-                            sent0 += rec.ch0_sent_delta;
-                            ack0 += rec.ch0_acked_delta;
-                            cmpl0 += rec.ch0_cmpl_delta;
-                            sent1 += rec.ch1_sent_delta;
-                            ack1 += rec.ch1_acked_delta;
-                            cmpl1 += rec.ch1_cmpl_delta;
-                            const uint32_t fl = rec.ch_flags;
-                            const uint32_t dncr = rec.dn_credits;
+                        // Same walk as the receiver: common word advances the timeline; each sender channel word
+                        // accumulates its counters (seeded from the header base gaps) and emits one line. dn_credits
+                        // is shared across channels of the same VC (same vc nibble). ch_flags packs reason/conn.
+                        uint32_t iter_acc = 0, ts_acc = 0;
+                        std::map<uint8_t, SenderAccum> accum;
+                        for (uint32_t i = 0; i < n_words; ++i) {
+                            const uint64_t w = word_at(bytes, i);
+                            if (!log_word_is_channel(w)) {
+                                iter_acc += common_log_word_iter_delta(w);
+                                ts_acc += common_log_word_ts_delta(w);
+                                continue;
+                            }
+                            const uint8_t cid = channel_log_word_channel_id(w);
+                            const uint32_t vc = channel_id_vc(cid);
+                            const uint32_t local = channel_id_local(cid);
+                            auto& a = accum[cid];
+                            if (!a.seeded) {
+                                a.sent = h.base_sent_gap[vc][local];
+                                a.acked = h.base_acked_gap[vc][local];
+                                a.cmpl = 0;
+                                a.seeded = true;
+                            }
+                            a.sent += sender_channel_log_word_sent_delta(w);
+                            a.acked += sender_channel_log_word_acked_delta(w);
+                            a.cmpl += sender_channel_log_word_cmpl_delta(w);
+                            const uint8_t flags = sender_channel_log_word_flags(w);
                             f << fmt::format(
-                                "[txlog] iter={} dt={} ch=0 occ={} sent={} ack={} cmpl={} dncr={} reason={} "
+                                "[txlog] iter={} t={} vc={} ch={} occ={} sent={} ack={} cmpl={} dncr={} reason={} "
                                 "conn={}\n",
                                 iter_acc,
-                                rec.ts_delta,
-                                rec.ch0_local_occ,
-                                sent0,
-                                ack0,
-                                cmpl0,
-                                dncr,
-                                sender_reason_str(fl & 0x7),
-                                sender_conn_str((fl >> 3) & 0x1));
-                            f << fmt::format(
-                                "[txlog] iter={} dt=0 ch=1 occ={} sent={} ack={} cmpl={} dncr={} reason={} "
-                                "conn={}\n",
-                                iter_acc,
-                                rec.ch1_local_occ,
-                                sent1,
-                                ack1,
-                                cmpl1,
-                                dncr,
-                                sender_reason_str((fl >> 4) & 0x7),
-                                sender_conn_str((fl >> 7) & 0x1));
+                                ts_acc,
+                                vc,
+                                local,
+                                sender_channel_log_word_local_occ(w),
+                                a.sent,
+                                a.acked,
+                                a.cmpl,
+                                sender_channel_log_word_dn_credits(w),
+                                sender_reason_str(sender_flags_reason(flags)),
+                                sender_conn_str(sender_flags_conn(flags)));
                         }
                         ++files_written;
                     }

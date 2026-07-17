@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>  // offsetof
 #include <cstdint>
 
 #include <tt-metalium/experimental/fabric/detailed_fabric_log.hpp>
@@ -12,420 +13,447 @@
 // [debug] PRODUCER-side machinery for the fabric detailed flow-control traces ([rxlog]/[txlog]).
 //
 // This header owns everything only the on-device fabric router needs to GENERATE the traces: the L1 working
-// structs (the shared header from detailed_fabric_logs.hpp plus the delta-encoding working state -- last_*
-// baselines, live per-channel totals, per-pass stashes), and the functions that reset / append / flush them.
-// None of this is visible to the host reader, which only ever sees the shared header + record arrays in DRAM.
-// The fabric router kernel (fabric_erisc_router.cpp) should just CALL into these functions.
+// structs (the shared DRAM header from detailed_fabric_logs.hpp, the per-channel diff state, and the 8-byte word
+// buffer), and the functions that init / diff / append / flush / finalize them. None of this is visible to the
+// host reader, which only ever sees the shared header + word arrays in DRAM. The fabric router kernel
+// (fabric_erisc_router.cpp) just CALLS into these functions.
 //
 // Not a standalone translation unit: include it ONLY from the fabric router kernel TU, AFTER its compile-time
-// args and channel-serviced tables are in scope. It relies on those ambient symbols (same convention as the
-// other edm_fabric kernel headers):
+// args and channel-serviced tables are in scope. It relies on those ambient symbols (same convention as the other
+// edm_fabric kernel headers):
 //   - CT-arg constexprs: receiver_log_buffer_addr, sender_log_buffer_addr, {receiver,sender}_log_dram_buffer_base,
-//     {receiver,sender}_log_dram_buffer_size, log_dram_bank_id
-//   - channel tables: is_receiver_channel_serviced[], is_sender_channel_serviced[], VC0_RECEIVER_CHANNEL,
-//     NUM_SENDER_CHANNELS
+//     {receiver,sender}_log_dram_buffer_size, log_dram_bank_id, NUM_SENDER_CHANNELS, NUM_RECEIVER_CHANNELS,
+//     ACTUAL_VC0/VC1/VC2_SENDER_CHANNELS, VC1/VC2_SENDER_CHANNEL_START
+//   - channel tables: is_receiver_channel_serviced[], is_sender_channel_serviced[], VC0_RECEIVER_CHANNEL
 //   - device intrinsics: get_timestamp_32b, get_noc_addr_from_bank_id, noc_async_write[_barrier], FORCE_INLINE
 //
-// DRAM buffer layout per log per router is [header region | packed record array] (see detailed_fabric_logs.hpp):
-// records are flushed during the window to (base + HEADER_REGION); the header is flushed to `base` at STOP.
+// The trace is a self-describing stream of 8-byte words (see detailed_fabric_logs.hpp): per hot-loop iteration in
+// which any serviced channel changed, one COMMON word (shared iter/ts timeline + a count) followed by one CHANNEL
+// word per changed channel. DRAM buffer layout per log is [header region | packed word array]: words flush during
+// the window (whole buffer at a time -> even word count -> 16 B-aligned), the header flushes to `base` at STOP.
 
 namespace tt::tt_fabric {
 
 // [debug] Window gate: set while a detailed-logging window is open (the router's telemetry marker is nonzero).
 // A 1-byte .bss global (not in the carved L1 region) because it is read on *every* send attempt to gate the
-// instrumentation, and a local-RAM read is far cheaper than a volatile L1 read. Log writes only happen while
-// the window is open, so their L1 cost is confined to the active region.
+// instrumentation, and a local-RAM read is far cheaper than a volatile L1 read.
 bool detailed_log_window_active = false;
+
+// [debug] Transient per-iteration scratch: the channel words produced this pass, before they are framed by a
+// common word and appended. .bss globals (local RAM, not the carved L1 region) so building them costs no L1
+// traffic; sized to the max serviced channel count for each domain. Reset to count=0 at the start of each pass.
+// Receiver and sender have separate scratch so a single-eRisc (Wormhole) router can build both in one pass.
+struct PendingLogWords {
+    uint32_t count;
+    uint64_t words[NUM_SENDER_CHANNELS > NUM_RECEIVER_CHANNELS ? NUM_SENDER_CHANNELS : NUM_RECEIVER_CHANNELS];
+};
+PendingLogWords receiver_pending_words;
+PendingLogWords sender_pending_words;
+
+// [debug] True iff this eRisc drives the receiver / sender trace. A router eRisc services either all receiver
+// channels or all sender channels (or both, single-eRisc), so keying off VC0's serviced flag / sender channel 0
+// tells us which trace(s) this eRisc owns. VC0 (receiver channel 0, sender channel 0) always exists.
+constexpr bool receiver_log_enabled() { return is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]; }
+constexpr bool sender_log_enabled() { return is_sender_channel_serviced[0]; }
+// True iff sender channel `ch` feeds the [txlog] trace: in range and serviced (all serviced senders are logged).
+constexpr bool sender_log_channel_enabled(uint32_t ch) {
+    return ch < NUM_SENDER_CHANNELS && is_sender_channel_serviced[ch];
+}
+
+// [debug] Flat sender channel index -> (VC id, index within VC). Pure function of the per-VC sender counts, which
+// are contiguous ranges [0,VC0)|[VC0,VC0+VC1)|[VC0+VC1,...). Used to stamp the nibble-packed channel id so the
+// host can group same-VC senders (they share a downstream credit pool) with no host-side build state.
+constexpr uint32_t sender_flat_to_vc(uint32_t flat) {
+    if (flat < ACTUAL_VC0_SENDER_CHANNELS) {
+        return 0;
+    }
+    if (flat < VC2_SENDER_CHANNEL_START) {
+        return 1;
+    }
+    return 2;
+}
+constexpr uint32_t sender_flat_to_local(uint32_t flat) {
+    if (flat < ACTUAL_VC0_SENDER_CHANNELS) {
+        return flat;
+    }
+    if (flat < VC2_SENDER_CHANNEL_START) {
+        return flat - VC1_SENDER_CHANNEL_START;
+    }
+    return flat - VC2_SENDER_CHANNEL_START;
+}
+
+// ============================================================================
+// L1 word-buffer geometry. Even capacities so every full-buffer flush moves a 16 B multiple (16 B-aligned DRAM
+// writes); the final partial tail flush at STOP may be an odd word count (nothing follows it). Sized to leave the
+// per-log carve (RECEIVER/SENDER_LOG_BUFFER_SIZE = 4096 B) room for the header + diff state (static_assert'd).
+// ============================================================================
+inline constexpr uint32_t RECEIVER_LOG_WORD_CAPACITY = 480;
+inline constexpr uint32_t SENDER_LOG_WORD_CAPACITY = 448;
+static_assert(RECEIVER_LOG_WORD_CAPACITY % 2 == 0, "receiver word capacity must be even for 16 B-aligned flushes");
+static_assert(SENDER_LOG_WORD_CAPACITY % 2 == 0, "sender word capacity must be even for 16 B-aligned flushes");
 
 // ============================================================================
 // [debug] Receiver flow-control trace ([rxlog]) -- producer side.
 // ============================================================================
 
-// L1 working struct for the receiver trace: the shared (DRAM-flushed) header, then producer-only working state
-// used for the delta encoding, then the record ring. Kept in the carved L1 log region rather than in kernel
-// .bss so it does not eat the eRisc's tight data/stack budget. Records land at offset 64 (32 B header + 32 B
-// of working state), matching the builder's 4096 B RECEIVER_LOG_BUFFER_SIZE carve (64 + 252*16 = 4096).
-struct ReceiverLog {
-    ReceiverLogHeader header;  // shared contract (flushed to DRAM at STOP)
-    // Producer-only working state (never seen by the reader): the previous recorded row's absolute values,
-    // seeded by reset_receiver_log() from a live snapshot at the window start, plus the L1-resident tail count.
-    uint32_t count;  // number of valid records still resident in `records` (the tail; the rest are in DRAM)
-    uint32_t last_ts;
-    uint32_t last_iter;
+// Per-channel diff state (kernel-only): the immutable nibble-packed channel id plus the previous recorded row's
+// absolute values, seeded by init_receiver_channel_state() from a live snapshot at window open. The receiver
+// reads live hardware counters each pass, so there are no running totals here.
+struct ReceiverChannelState {
+    uint8_t channel_id;
     uint32_t last_ready;
     uint32_t last_ack;
     uint32_t last_wr_sent;
     uint32_t last_wr_flush;
     uint32_t last_completion;
-    ReceiverLogRecord records[RECEIVER_LOG_CAPACITY];
 };
-static_assert(
-    sizeof(ReceiverLog) <= RECEIVER_LOG_BUFFER_SIZE, "ReceiverLog exceeds the carved receiver_log_buffer region");
 
-// Accessor folds to the constant base address (receiver_log_buffer_addr is a CT-arg constexpr), so it
-// occupies no storage in local RAM.
-FORCE_INLINE volatile ReceiverLog* receiver_log() {
-    return reinterpret_cast<volatile ReceiverLog*>(receiver_log_buffer_addr);
-}
+// L1 working struct for the receiver trace: shared DRAM header, then producer-only working state (the shared
+// timeline baseline + word-buffer cursor + per-channel diff state), then the 8-byte word buffer.
+struct ReceiverLog {
+    static constexpr uint32_t WORD_CAPACITY = RECEIVER_LOG_WORD_CAPACITY;
+    ReceiverLogHeader header;  // shared contract (flushed to DRAM at STOP)
+    uint32_t last_ts;          // ts of the previous common word (shared timeline delta baseline)
+    uint32_t last_iter;        // iter of the previous common word
+    uint32_t word_count;       // words currently resident in `words` (the tail; the rest are in DRAM)
+    ReceiverChannelState channels[NUM_RECEIVER_CHANNELS];
+    // alignas(16): the word array is the NOC flush SOURCE, whose start must be 16 B-aligned. The carve base
+    // (receiver_log_buffer_addr) is 16 B-aligned by the builder, so a 16 B-aligned offset makes the absolute
+    // source address 16 B-aligned (static_assert'd below).
+    alignas(16) uint64_t words[WORD_CAPACITY];
+};
+static_assert(sizeof(ReceiverLog) <= RECEIVER_LOG_BUFFER_SIZE, "ReceiverLog exceeds the carved receiver_log_buffer");
+static_assert(offsetof(ReceiverLog, words) % 16 == 0, "receiver word array must be 16 B-aligned for NOC flush");
 
-// [debug] Blocking bulk-flush of `bytes` of packed records (starting at records_l1_src in L1) to this router's
-// DRAM record array. The array lives in a single bank at a fixed per-bank byte offset (records_dram_base); the
-// write targets exactly that bank via get_noc_addr_from_bank_id, so it never straddles a bank boundary. The
-// caller passes bytes = num_records * sizeof(record) and we advance *dram_write_offset by exactly that, so
-// successive flushes lay their records down contiguously -- DRAM ends up holding one packed record array, not a
-// series of fixed-size chunks. Returns false WITHOUT writing once the array region would overflow
-// (records_dram_size), so the caller can account the drop.
-//
-// Alignment: records_l1_src is &records[0] (16 B-aligned: the region base and the record-array offset are 16 B
-// multiples) and records_dram_base is 16 B-aligned (buffer base + the 16 B-aligned HEADER_REGION). Every full-
-// buffer flush moves CAPACITY*sizeof(record) -- a 16 B multiple for both logs (252*16, 128*20) -- so the DRAM
-// offset stays 16 B-aligned and each write's start addresses satisfy the NOC 16 B write-alignment requirement
-// (only the start addresses must be aligned, not the length). Only the final partial flush can move a
-// non-multiple, and nothing follows it.
-//
-// Plain blocking noc_async_write: flushes happen only when an L1 buffer fills (every few hundred logged
-// state-changes = dozens+ of tokens), so the stall is rare and coarse enough not to materially perturb the
-// flow-control timing being measured.
-FORCE_INLINE bool flush_log_records_to_dram(
-    uint32_t records_l1_src,
-    uint32_t bytes,
-    uint32_t records_dram_base,
-    uint32_t records_dram_size,
-    uint32_t bank,
-    volatile uint32_t* dram_write_offset) {
-    uint32_t off = *dram_write_offset;
+// Accessor folds to the constant base address (receiver_log_buffer_addr is a CT-arg constexpr).
+FORCE_INLINE ReceiverLog* receiver_log() { return reinterpret_cast<ReceiverLog*>(receiver_log_buffer_addr); }
+
+// ============================================================================
+// [debug] Sender flow-control trace ([txlog]) -- producer side.
+// ============================================================================
+
+// Per-channel diff state (kernel-only): the immutable nibble-packed channel id, the running monotonic totals
+// (bumped by the accumulate hooks in the sender step while the window is open), the per-pass stash (occ / reason /
+// conn / dn_credits, written by stash_sender_flow_state), and the previous recorded row's baseline (last_*).
+struct SenderChannelState {
+    uint8_t channel_id;
+    uint8_t occ;         // this-pass local backlog level (stashed)
+    uint8_t reason;      // this-pass block-reason annotation (stashed)
+    uint8_t conn;        // this-pass connection flag (stashed)
+    uint8_t dn_credits;  // this-pass downstream free slots at the remote receiver (stashed; per-VC pool)
+    uint8_t last_occ;    // previous recorded backlog level
+    uint8_t last_dn_credits;
+    uint32_t sent;  // running monotonic totals (bumped at the event sites in the sender step)
+    uint32_t acked;
+    uint32_t cmpl;
+    uint32_t last_sent;  // previous recorded totals
+    uint32_t last_acked;
+    uint32_t last_cmpl;
+};
+
+struct SenderLog {
+    static constexpr uint32_t WORD_CAPACITY = SENDER_LOG_WORD_CAPACITY;
+    SenderLogHeader header;
+    uint32_t last_ts;
+    uint32_t last_iter;
+    uint32_t word_count;
+    SenderChannelState channels[NUM_SENDER_CHANNELS];
+    alignas(16) uint64_t words[WORD_CAPACITY];  // NOC flush source -- 16 B-aligned (see ReceiverLog::words)
+};
+static_assert(sizeof(SenderLog) <= SENDER_LOG_BUFFER_SIZE, "SenderLog exceeds the carved sender_log_buffer");
+static_assert(offsetof(SenderLog, words) % 16 == 0, "sender word array must be 16 B-aligned for NOC flush");
+
+FORCE_INLINE SenderLog* sender_log() { return reinterpret_cast<SenderLog*>(sender_log_buffer_addr); }
+
+// ============================================================================
+// [debug] Shared word-buffer append / flush machinery (domain-agnostic: operates on any log that exposes
+// header.{dram_write_offset,dram_words,dropped}, word_count, words[], and WORD_CAPACITY).
+// ============================================================================
+
+// Blocking bulk-flush of `num_words` words (from the front of the L1 word buffer) to this router's DRAM word
+// array. The array lives in a single bank at a fixed per-bank byte offset; the write targets exactly that bank
+// via get_noc_addr_from_bank_id, so it never straddles a bank boundary. Full-buffer flushes move WORD_CAPACITY
+// (even) words = a 16 B multiple, keeping the DRAM offset 16 B-aligned; only the final tail flush may move an odd
+// word count (nothing follows it). Accounts the words as dropped WITHOUT writing once the array would overflow.
+template <typename LogT>
+__attribute__((noinline)) void log_flush_words_to_dram(
+    LogT* log, uint32_t num_words, uint32_t records_dram_base, uint32_t records_dram_size, uint32_t bank) {
+    if (num_words == 0) {
+        return;
+    }
+    uint32_t bytes = num_words * sizeof(uint64_t);
+    uint32_t off = log->header.dram_write_offset;
     if (off + bytes > records_dram_size) {
-        return false;  // DRAM record array full -> caller accounts the drop
+        log->header.dropped += num_words;  // DRAM word array full -> account the drop
+        return;
     }
     uint64_t dst = get_noc_addr_from_bank_id<true>(bank, records_dram_base + off);
-    noc_async_write(records_l1_src, dst, bytes);
+    noc_async_write(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&log->words[0])), dst, bytes);
     noc_async_write_barrier();
-    *dram_write_offset = off + bytes;
-    return true;
+    log->header.dram_write_offset = off + bytes;
+    log->header.dram_words += num_words;
 }
 
-// [debug] Blocking flush of the shared log header to the FRONT of this router's DRAM buffer (offset 0 in the
-// header region), so the host reader can frame + reconstruct the record array without ever touching L1. Called
-// once at STOP, after the record tail has been flushed (so dram_write_offset/dram_records are final). Only the
-// start address must satisfy NOC 16 B alignment (buffer base is 16 B-aligned); the length may be any size.
-FORCE_INLINE void flush_log_header_to_dram(
-    uint32_t header_l1_src, uint32_t bytes, uint32_t dram_buffer_base, uint32_t bank) {
+// Append one word to the L1 buffer, first bulk-flushing (and wrapping) the full buffer to DRAM if it is full.
+// Flushing when full means the flush always moves WORD_CAPACITY (even) words -> 16 B-aligned. A flush may land
+// between a common word and its channel words; that is fine because the stream is self-describing.
+template <typename LogT>
+FORCE_INLINE void log_append_word(
+    LogT* log, uint64_t word, uint32_t records_dram_base, uint32_t records_dram_size, uint32_t bank) {
+    if (log->word_count >= LogT::WORD_CAPACITY) {
+        log_flush_words_to_dram(log, LogT::WORD_CAPACITY, records_dram_base, records_dram_size, bank);
+        log->word_count = 0;
+    }
+    log->words[log->word_count++] = word;
+}
+
+// Blocking flush of the shared log header to the FRONT of this router's DRAM buffer (offset 0), so the host reader
+// can frame + reconstruct the word array without ever touching L1. Called once at STOP after the tail flush.
+template <typename HeaderT>
+FORCE_INLINE void flush_log_header_to_dram(HeaderT* header, uint32_t dram_buffer_base, uint32_t bank) {
     uint64_t dst = get_noc_addr_from_bank_id<true>(bank, dram_buffer_base);
-    noc_async_write(header_l1_src, dst, bytes);
+    noc_async_write(
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(header)), dst, static_cast<uint32_t>(sizeof(HeaderT)));
     noc_async_write_barrier();
 }
 
-// [debug] Reset the receiver trace at the start marker: clear the log and snapshot the current flow-control
-// state as the delta baseline. Every row in the window is stored as a delta against this snapshot. Counters are
-// rebased to the completion snapshot (base_*_gap), so reconstructed values are 0-based on completion and stay
-// correctly ordered even if the window opens with packets still in flight.
-FORCE_INLINE void reset_receiver_log(
-    uint32_t window_id,
-    uint32_t window_start_cycles,
-    uint32_t iter,
+// [debug] Build the per-iteration COMMON word (shared timeline) and advance the delta baseline. Called once per
+// pass that produced >=1 channel word, just before dumping. `count` is that channel-word count (always >= 1, so
+// it never collides with the channel-word sentinel).
+template <typename LogT>
+FORCE_INLINE uint64_t build_common_log_word(LogT* log, uint32_t iter, uint32_t count) {
+    uint32_t now = get_timestamp_32b();
+    uint32_t iter_delta = iter - log->last_iter;  // full range; pack clamps to 24 bit across multi-ms stalls
+    uint32_t ts_delta = now - log->last_ts;       // 32 bit (wraps, pre-existing)
+    log->last_iter = iter;
+    log->last_ts = now;
+    return pack_common_log_word(static_cast<uint8_t>(count), iter_delta, ts_delta);
+}
+
+// ============================================================================
+// [debug] Receiver: init (#6/#7), per-channel diff (#4), dump (#5), finalize (#8).
+// ============================================================================
+
+// #6: seed a receiver channel's diff baseline from a live snapshot at window open.
+FORCE_INLINE void init_receiver_channel_state(
+    ReceiverChannelState& st,
+    uint8_t channel_id,
     uint32_t ready,
     uint32_t ack,
     uint32_t wr_sent,
     uint32_t wr_flush,
     uint32_t completion) {
-    volatile ReceiverLog* log = receiver_log();
-    log->header.magic = RECEIVER_LOG_MAGIC;
-    log->header.dropped = 0;
-    log->header.window_id = window_id;  // correlation/batch id from start_detailed_logging (the marker value)
-    log->header.dram_write_offset = 0;
-    log->header.dram_records = 0;
-    log->count = 0;
-    log->last_ts = window_start_cycles;
-    log->last_iter = iter;
-    log->last_ready = ready;
-    log->last_ack = ack;
-    log->last_wr_sent = wr_sent;
-    log->last_wr_flush = wr_flush;
-    log->last_completion = completion;
-    // Initial in-flight backlog: each counter's gap above completion at window open. ack/wr_sent always lead
-    // completion, but wr_flush is frozen at 0 in fused builds (fuse_receiver_flush_and_completion_ptr) while
-    // completion advances -- so clamp to avoid an unsigned underflow that would poison the wflush column.
-    log->header.base_ack_gap = ack >= completion ? ack - completion : 0;
-    log->header.base_wr_sent_gap = wr_sent >= completion ? wr_sent - completion : 0;
-    log->header.base_wr_flush_gap = wr_flush >= completion ? wr_flush - completion : 0;
+    st.channel_id = channel_id;
+    st.last_ready = ready;
+    st.last_ack = ack;
+    st.last_wr_sent = wr_sent;
+    st.last_wr_flush = wr_flush;
+    st.last_completion = completion;
 }
 
-// [debug] Append a record iff the flow-control state changed since the last recorded row. Gated by the caller
-// on detailed_log_window_active. Cheap when nothing changed: 5 compares and an early return. Everything is
-// stored as a delta against the previous recorded row (reset seeds the baseline): the monotonic counter deltas
-// are 0/1 per pass so they never overflow a byte; ts_delta/iter_delta are full 32b so a long idle gap is
-// captured exactly (no saturation); `ready` is stored absolute.
-FORCE_INLINE void record_receiver_flow_state(
-    uint32_t iter, uint32_t ready, uint32_t ack, uint32_t wr_sent, uint32_t wr_flush, uint32_t completion) {
-    volatile ReceiverLog* log = receiver_log();
-    if (ready == log->last_ready && ack == log->last_ack && wr_sent == log->last_wr_sent &&
-        wr_flush == log->last_wr_flush && completion == log->last_completion) {
+// #7: capture a receiver channel's initial in-flight backlog into the header (indexed [vc][local] from the id).
+// Clamped: wr_flush is frozen at 0 in fused builds while completion advances, so guard the unsigned subtraction.
+FORCE_INLINE void capture_receiver_base_gaps(
+    ReceiverLogHeader& h, uint8_t channel_id, uint32_t ack, uint32_t wr_sent, uint32_t wr_flush, uint32_t completion) {
+    uint32_t vc = channel_id_vc(channel_id);
+    uint32_t local = channel_id_local(channel_id);
+    h.base_ack_gap[vc][local] = log_clamp_u8(ack >= completion ? ack - completion : 0);
+    h.base_wr_sent_gap[vc][local] = log_clamp_u8(wr_sent >= completion ? wr_sent - completion : 0);
+    h.base_wr_flush_gap[vc][local] = log_clamp_u8(wr_flush >= completion ? wr_flush - completion : 0);
+}
+
+// #7 (scalars): reset the receiver header framing and zero the per-channel base-gap table at window open.
+FORCE_INLINE void reset_receiver_header(ReceiverLogHeader& h, uint32_t window_id) {
+    h.magic = RECEIVER_LOG_MAGIC;
+    h.dropped = 0;
+    h.window_id = window_id;
+    h.dram_write_offset = 0;
+    h.dram_words = 0;
+    for (uint32_t vc = 0; vc < DETAILED_FABRIC_MAX_VCS; vc++) {
+        for (uint32_t c = 0; c < DETAILED_FABRIC_MAX_RECEIVER_CH_PER_VC; c++) {
+            h.base_ack_gap[vc][c] = 0;
+            h.base_wr_sent_gap[vc][c] = 0;
+            h.base_wr_flush_gap[vc][c] = 0;
+        }
+    }
+}
+
+// #4: append a receiver channel word iff its flow-control state changed since the last recorded row. ready is
+// stored absolute; the monotonic counters as clamped byte deltas (0/1 per pass, never clamped in practice).
+FORCE_INLINE void make_diff_against(
+    ReceiverChannelState& st,
+    PendingLogWords& pending,
+    uint32_t ready,
+    uint32_t ack,
+    uint32_t wr_sent,
+    uint32_t wr_flush,
+    uint32_t completion) {
+    if (ready == st.last_ready && ack == st.last_ack && wr_sent == st.last_wr_sent && wr_flush == st.last_wr_flush &&
+        completion == st.last_completion) {
         return;  // no change -> collapse
     }
+    pending.words[pending.count++] = pack_receiver_channel_log_word(
+        st.channel_id,
+        log_clamp_u8(ready),
+        log_clamp_u8(ack - st.last_ack),
+        log_clamp_u8(wr_sent - st.last_wr_sent),
+        log_clamp_u8(wr_flush - st.last_wr_flush),
+        log_clamp_u8(completion - st.last_completion));
+    st.last_ready = ready;
+    st.last_ack = ack;
+    st.last_wr_sent = wr_sent;
+    st.last_wr_flush = wr_flush;
+    st.last_completion = completion;
+}
 
-    uint32_t idx = log->count;
-    if (idx >= RECEIVER_LOG_CAPACITY) {
-        // L1 buffer full: bulk-flush its CAPACITY records to DRAM and wrap in place, preserving the delta
-        // baseline (last_*/base_*_gap) so the reconstructed counter chain continues seamlessly across the
-        // flushed boundary. If the DRAM buffer is also full, we cannot persist these CAPACITY records, so
-        // account them as dropped (symmetric to the flushed case's dram_records += CAPACITY) and wrap anyway;
-        // later fills will keep dropping CAPACITY at a time until the window ends.
-        if (flush_log_records_to_dram(
-                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&log->records[0])),
-                RECEIVER_LOG_CAPACITY * sizeof(ReceiverLogRecord),
-                static_cast<uint32_t>(receiver_log_dram_buffer_base) + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
-                static_cast<uint32_t>(receiver_log_dram_buffer_size) - DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
-                log_dram_bank_id,
-                &log->header.dram_write_offset)) {
-            log->header.dram_records += RECEIVER_LOG_CAPACITY;
-        } else {
-            log->header.dropped += RECEIVER_LOG_CAPACITY;
-        }
-        log->count = 0;
-        idx = 0;
+// #5: frame the pending channel words with a common word and append the batch to L1 (flushing to DRAM as needed).
+FORCE_INLINE void dump_receiver_log_words(ReceiverLog* log, uint64_t common_word, PendingLogWords& pending) {
+    const uint32_t base = static_cast<uint32_t>(receiver_log_dram_buffer_base) + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION;
+    const uint32_t size = static_cast<uint32_t>(receiver_log_dram_buffer_size) - DETAILED_FABRIC_LOG_DRAM_HEADER_REGION;
+    log_append_word(log, common_word, base, size, log_dram_bank_id);
+    for (uint32_t i = 0; i < pending.count; i++) {
+        log_append_word(log, pending.words[i], base, size, log_dram_bank_id);
     }
-    uint32_t now = get_timestamp_32b();
+}
 
-    // Deltas against the previous recorded row. Counters are monotonic so these are non-negative. ts/iter are
-    // full 32b (stored verbatim, no saturation); the single-byte counter deltas are 0/1 per pass so they never
-    // reach their clamp.
-    uint32_t ts_d = now - log->last_ts;
-    uint32_t iter_d = iter - log->last_iter;
-    uint32_t ack_d = ack - log->last_ack;
-    uint32_t wr_sent_d = wr_sent - log->last_wr_sent;
-    uint32_t wr_flush_d = wr_flush - log->last_wr_flush;
-    uint32_t completion_d = completion - log->last_completion;
-
-    volatile ReceiverLogRecord* rec = &log->records[idx];
-    rec->ts_delta = ts_d;      // full 32b: capture long idle gaps without saturating
-    rec->iter_delta = iter_d;  // full 32b
-    rec->ready = ready > 0xFF ? 0xFF : static_cast<uint8_t>(ready);
-    rec->ack_delta = ack_d > 0xFF ? 0xFF : static_cast<uint8_t>(ack_d);
-    rec->wr_sent_delta = wr_sent_d > 0xFF ? 0xFF : static_cast<uint8_t>(wr_sent_d);
-    rec->wr_flush_delta = wr_flush_d > 0xFF ? 0xFF : static_cast<uint8_t>(wr_flush_d);
-    rec->completion_delta = completion_d > 0xFF ? 0xFF : static_cast<uint8_t>(completion_d);
-
-    log->last_ts = now;
-    log->last_iter = iter;
-    log->last_ready = ready;
-    log->last_ack = ack;
-    log->last_wr_sent = wr_sent;
-    log->last_wr_flush = wr_flush;
-    log->last_completion = completion;
-
-    log->count = idx + 1;
+// #8: flush the L1 word tail then the completed header to DRAM at STOP, so the DRAM buffer holds the COMPLETE
+// trace ([header | packed words]). No-op on eRiscs that do not service the receiver channels.
+static __attribute__((noinline)) void finalize_receiver_log() {
+    if constexpr (receiver_log_enabled()) {
+        ReceiverLog* log = receiver_log();
+        const uint32_t base =
+            static_cast<uint32_t>(receiver_log_dram_buffer_base) + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION;
+        const uint32_t size =
+            static_cast<uint32_t>(receiver_log_dram_buffer_size) - DETAILED_FABRIC_LOG_DRAM_HEADER_REGION;
+        if (log->word_count > 0) {
+            log_flush_words_to_dram(log, log->word_count, base, size, log_dram_bank_id);
+            log->word_count = 0;
+        }
+        flush_log_header_to_dram(&log->header, static_cast<uint32_t>(receiver_log_dram_buffer_base), log_dram_bank_id);
+    }
 }
 
 // ============================================================================
-// [debug] Sender flow-control trace ([txlog]) -- producer side. Sender-side analog of the receiver trace, on
-// the sender eRisc: one COMBINED record per main-loop pass covers BOTH serviced VC0 sender channels
-// (ch0 = local worker, ch1 = forward). Per channel: monotonic sent/acked/completed totals + local occupancy;
-// dn_credits is VC-shared (stored once); reason/conn are a per-pass annotation.
+// [debug] Sender: init (#6/#7), per-channel diff (#4), dump (#5), finalize (#8). Sender channel state lives in
+// the log struct (hooks maintain the running totals; stash writes the per-pass annotation), so diff/init walk it
+// with a compile-time unroll over the serviced channels.
 // ============================================================================
 
-// L1 working struct for the sender trace: shared header, then producer-only working state (per-channel
-// monotonic totals, the per-pass level stash + reason/conn annotation + VC-shared dn_credits, the previous-
-// recorded-row baseline last_*, and the L1-resident tail count), then the record ring. Records land at offset
-// 112, matching the builder's SENDER_LOG_BUFFER_SIZE (4096) carve (112 + 128*20 = 2672 <= 4096).
-struct SenderLog {
-    SenderLogHeader header;  // shared contract (flushed to DRAM at STOP)
-    uint32_t count;          // records still resident in `records` (the tail; the rest are in DRAM)
-    uint32_t sent[SENDER_LOG_NUM_CHANNELS];
-    uint32_t acked[SENDER_LOG_NUM_CHANNELS];
-    uint32_t cmpl[SENDER_LOG_NUM_CHANNELS];
-    uint32_t dn_credits;  // VC-shared downstream free slots (last writer in a pass wins)
-    uint32_t last_ts;
-    uint32_t last_iter;
-    uint32_t last_dn_credits;
-    uint32_t last_sent[SENDER_LOG_NUM_CHANNELS];
-    uint32_t last_acked[SENDER_LOG_NUM_CHANNELS];
-    uint32_t last_cmpl[SENDER_LOG_NUM_CHANNELS];
-    uint8_t occ[SENDER_LOG_NUM_CHANNELS];       // per-pass local backlog level
-    uint8_t last_occ[SENDER_LOG_NUM_CHANNELS];  // previous recorded backlog level
-    uint8_t reason[SENDER_LOG_NUM_CHANNELS];    // per-pass block-reason annotation
-    uint8_t conn[SENDER_LOG_NUM_CHANNELS];      // per-pass connection flag
-    SenderLogRecord records[SENDER_LOG_CAPACITY];
-};
-static_assert(sizeof(SenderLog) <= SENDER_LOG_BUFFER_SIZE, "SenderLog exceeds the carved sender_log_buffer region");
-
-FORCE_INLINE volatile SenderLog* sender_log() { return reinterpret_cast<volatile SenderLog*>(sender_log_buffer_addr); }
-
-// [debug] True iff sender channel `ch` should feed the [txlog] trace: serviced, and one of the two VC0 senders.
-constexpr bool sender_log_channel_enabled(uint32_t ch) {
-    return ch < SENDER_LOG_NUM_CHANNELS && is_sender_channel_serviced[ch];
-}
-constexpr bool sender_log_enabled() { return sender_log_channel_enabled(0) || sender_log_channel_enabled(1); }
-// The [txlog] dump indexes SENDER_NUM_BUFFERS_ARRAY[0..1], so require >= 2 sender channels when it is active.
-static_assert(
-    !sender_log_enabled() || NUM_SENDER_CHANNELS >= SENDER_LOG_NUM_CHANNELS,
-    "sender [txlog] trace assumes at least 2 sender channels");
-
-// [debug] Stash this pass's per-channel levels + annotation into the L1 log struct (called from
-// run_sender_channel_step_impl while the window is active). The monotonic totals are bumped at their event
-// sites (see the accumulate hooks in the sender step), not here.
+// [debug] Stash this pass's per-channel level + annotation into the log (called from run_sender_channel_step_impl
+// while the window is active). The monotonic totals are bumped at their event sites, not here.
 FORCE_INLINE void stash_sender_flow_state(
     uint32_t ch, uint32_t local_occ, uint32_t dn_credits, uint8_t reason, bool conn) {
-    volatile SenderLog* log = sender_log();
-    log->occ[ch] = local_occ > 0xFF ? 0xFF : static_cast<uint8_t>(local_occ);
-    log->reason[ch] = reason;
-    log->conn[ch] = conn ? 1 : 0;
-    log->dn_credits = dn_credits;
+    SenderChannelState& st = sender_log()->channels[ch];
+    st.occ = log_clamp_u8(local_occ);
+    st.reason = reason;
+    st.conn = conn ? 1 : 0;
+    st.dn_credits = log_clamp_u8(dn_credits);
 }
 
-// [debug] Reset the sender trace at the start marker: clear the log and snapshot the current per-channel totals
-// as the delta baseline, so reconstructed counters read 0-based within the window. noinline (non-static so it
-// never trips -Wunused-function on the receiver eRisc, where it is not called): keeps its locals out of
-// kernel_main's frame. Called once per window.
-__attribute__((noinline)) void reset_sender_log(uint32_t window_id, uint32_t window_start_cycles, uint32_t iter) {
-    volatile SenderLog* log = sender_log();
-    log->header.magic = SENDER_LOG_MAGIC;
-    log->header.dropped = 0;
-    log->header.window_id = window_id;  // correlation/batch id from start_detailed_logging (the marker value)
-    log->header.dram_write_offset = 0;
-    log->header.dram_records = 0;
-    log->count = 0;
-    log->last_ts = window_start_cycles;
-    log->last_iter = iter;
-    log->last_dn_credits = log->dn_credits;
-    for (uint32_t ch = 0; ch < SENDER_LOG_NUM_CHANNELS; ch++) {
-        log->last_occ[ch] = log->occ[ch];
-        log->last_sent[ch] = log->sent[ch];
-        log->last_acked[ch] = log->acked[ch];
-        log->last_cmpl[ch] = log->cmpl[ch];
-        // Initial backlog gaps above completion at window open. Clamped: sent/acked are in-window-only event
-        // counts, so across window boundaries a completion counted here for an event NOT counted (its send/ack
-        // fell outside any window) could push cmpl above them -- clamp to 0 rather than underflow.
-        log->header.base_sent_gap[ch] = log->sent[ch] >= log->cmpl[ch] ? log->sent[ch] - log->cmpl[ch] : 0;
-        log->header.base_acked_gap[ch] = log->acked[ch] >= log->cmpl[ch] ? log->acked[ch] - log->cmpl[ch] : 0;
+// #6: seed a sender channel's diff baseline from its current running totals + stash at window open.
+FORCE_INLINE void init_sender_channel_state(SenderChannelState& st, uint8_t channel_id) {
+    st.channel_id = channel_id;
+    st.last_occ = st.occ;
+    st.last_dn_credits = st.dn_credits;
+    st.last_sent = st.sent;
+    st.last_acked = st.acked;
+    st.last_cmpl = st.cmpl;
+}
+
+// #7: capture a sender channel's initial backlog gaps into the header (indexed [vc][local] from the id). Clamped:
+// sent/acked are in-window-only event counts, so cmpl can exceed them across window boundaries -> clamp to 0.
+FORCE_INLINE void capture_sender_base_gaps(SenderLogHeader& h, const SenderChannelState& st) {
+    uint32_t vc = channel_id_vc(st.channel_id);
+    uint32_t local = channel_id_local(st.channel_id);
+    h.base_sent_gap[vc][local] = log_clamp_u8(st.sent >= st.cmpl ? st.sent - st.cmpl : 0);
+    h.base_acked_gap[vc][local] = log_clamp_u8(st.acked >= st.cmpl ? st.acked - st.cmpl : 0);
+}
+
+// #7 (scalars): reset the sender header framing and zero the per-channel base-gap table at window open.
+FORCE_INLINE void reset_sender_header(SenderLogHeader& h, uint32_t window_id) {
+    h.magic = SENDER_LOG_MAGIC;
+    h.dropped = 0;
+    h.window_id = window_id;
+    h.dram_write_offset = 0;
+    h.dram_words = 0;
+    for (uint32_t vc = 0; vc < DETAILED_FABRIC_MAX_VCS; vc++) {
+        for (uint32_t c = 0; c < DETAILED_FABRIC_MAX_SENDER_CH_PER_VC; c++) {
+            h.base_sent_gap[vc][c] = 0;
+            h.base_acked_gap[vc][c] = 0;
+        }
     }
 }
 
-// [debug] Emit one combined record iff any channel's occupancy/counters (or the shared dn_credits) changed
-// since the last recorded row. reason/conn flip every pass, so they are excluded from the change test and
-// stored as a snapshot annotation. Called once per pass (after both sender steps) while the window is active.
-// noinline (non-static, see reset_sender_log): its delta/reconstruction locals stay out of kernel_main's frame.
-// The call is gated on detailed_log_window_active, so it costs nothing outside the monitored window.
-__attribute__((noinline)) void record_sender_flow_state(uint32_t iter) {
-    volatile SenderLog* log = sender_log();
-    bool changed = log->dn_credits != log->last_dn_credits;
-    for (uint32_t ch = 0; ch < SENDER_LOG_NUM_CHANNELS; ch++) {
-        changed = changed || log->occ[ch] != log->last_occ[ch] || log->sent[ch] != log->last_sent[ch] ||
-                  log->acked[ch] != log->last_acked[ch] || log->cmpl[ch] != log->last_cmpl[ch];
-    }
-    if (!changed) {
+// #4: append a sender channel word iff its state changed since the last recorded row. reason/conn flip every pass,
+// so they are excluded from the change test and stored as a snapshot annotation. Reads the current values from the
+// channel state (hooks/stash maintain them); the counters go out as clamped byte deltas.
+FORCE_INLINE void make_diff_against(SenderChannelState& st, PendingLogWords& pending) {
+    if (st.sent == st.last_sent && st.acked == st.last_acked && st.cmpl == st.last_cmpl && st.occ == st.last_occ &&
+        st.dn_credits == st.last_dn_credits) {
         return;  // no change -> collapse
     }
-
-    uint32_t idx = log->count;
-    if (idx >= SENDER_LOG_CAPACITY) {
-        // L1 full: bulk-flush its CAPACITY records to DRAM and wrap in place, preserving the delta baseline so
-        // the reconstructed chain stays continuous across the boundary. If DRAM is full too, account the
-        // CAPACITY unflushable records as dropped (symmetric to dram_records += CAPACITY) and wrap anyway.
-        if (flush_log_records_to_dram(
-                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&log->records[0])),
-                SENDER_LOG_CAPACITY * sizeof(SenderLogRecord),
-                static_cast<uint32_t>(sender_log_dram_buffer_base) + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
-                static_cast<uint32_t>(sender_log_dram_buffer_size) - DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
-                log_dram_bank_id,
-                &log->header.dram_write_offset)) {
-            log->header.dram_records += SENDER_LOG_CAPACITY;
-        } else {
-            log->header.dropped += SENDER_LOG_CAPACITY;
-        }
-        log->count = 0;
-        idx = 0;
-    }
-    uint32_t now = get_timestamp_32b();
-    uint32_t ts_d = now - log->last_ts;
-    uint32_t iter_d = iter - log->last_iter;
-    uint32_t sent0_d = log->sent[0] - log->last_sent[0];
-    uint32_t acked0_d = log->acked[0] - log->last_acked[0];
-    uint32_t cmpl0_d = log->cmpl[0] - log->last_cmpl[0];
-    uint32_t sent1_d = log->sent[1] - log->last_sent[1];
-    uint32_t acked1_d = log->acked[1] - log->last_acked[1];
-    uint32_t cmpl1_d = log->cmpl[1] - log->last_cmpl[1];
-
-    volatile SenderLogRecord* rec = &log->records[idx];
-    rec->ts_delta = ts_d;      // full 32b: capture long idle gaps without saturating
-    rec->iter_delta = iter_d;  // full 32b
-    rec->dn_credits = log->dn_credits > 0xFF ? 0xFF : static_cast<uint8_t>(log->dn_credits);
-    rec->ch_flags = static_cast<uint8_t>(
-        (log->reason[0] & 0x7) | (log->conn[0] ? 0x8 : 0) | ((log->reason[1] & 0x7) << 4) | (log->conn[1] ? 0x80 : 0));
-    rec->ch0_local_occ = log->occ[0];
-    rec->ch0_sent_delta = sent0_d > 0xFF ? 0xFF : static_cast<uint8_t>(sent0_d);
-    rec->ch0_acked_delta = acked0_d > 0xFF ? 0xFF : static_cast<uint8_t>(acked0_d);
-    rec->ch0_cmpl_delta = cmpl0_d > 0xFF ? 0xFF : static_cast<uint8_t>(cmpl0_d);
-    rec->ch1_local_occ = log->occ[1];
-    rec->ch1_sent_delta = sent1_d > 0xFF ? 0xFF : static_cast<uint8_t>(sent1_d);
-    rec->ch1_acked_delta = acked1_d > 0xFF ? 0xFF : static_cast<uint8_t>(acked1_d);
-    rec->ch1_cmpl_delta = cmpl1_d > 0xFF ? 0xFF : static_cast<uint8_t>(cmpl1_d);
-
-    log->last_ts = now;
-    log->last_iter = iter;
-    log->last_dn_credits = log->dn_credits;
-    for (uint32_t ch = 0; ch < SENDER_LOG_NUM_CHANNELS; ch++) {
-        log->last_occ[ch] = log->occ[ch];
-        log->last_sent[ch] = log->sent[ch];
-        log->last_acked[ch] = log->acked[ch];
-        log->last_cmpl[ch] = log->cmpl[ch];
-    }
-    log->count = idx + 1;
+    pending.words[pending.count++] = pack_sender_channel_log_word(
+        st.channel_id,
+        pack_sender_flags(st.reason, st.conn != 0),
+        st.occ,
+        log_clamp_u8(st.sent - st.last_sent),
+        log_clamp_u8(st.acked - st.last_acked),
+        log_clamp_u8(st.cmpl - st.last_cmpl),
+        st.dn_credits);
+    st.last_sent = st.sent;
+    st.last_acked = st.acked;
+    st.last_cmpl = st.cmpl;
+    st.last_occ = st.occ;
+    st.last_dn_credits = st.dn_credits;
 }
 
-// [debug] Finalize the receiver flow-control trace ([rxlog]) at the STOP marker: flush the final partial run of
-// records still resident in L1 to DRAM, then flush the shared header to the front of the DRAM buffer, so this
-// router's DRAM buffer holds the COMPLETE trace ([header | packed record array]). The host reader
-// (dump_detailed_fabric_logs) then reads header + records straight from DRAM -- it never touches L1, and there
-// is NO on-device print. Empty body on eRiscs that do not service the VC0 receiver channel. noinline: keeps its
-// frame out of kernel_main (bounded by -Werror=stack-usage). Runs once per window.
-static __attribute__((noinline)) void finalize_receiver_log() {
-    if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
-        volatile ReceiverLog* rlog = receiver_log();
-        if (rlog->count > 0) {
-            if (flush_log_records_to_dram(
-                    static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&rlog->records[0])),
-                    rlog->count * sizeof(ReceiverLogRecord),
-                    static_cast<uint32_t>(receiver_log_dram_buffer_base) + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
-                    static_cast<uint32_t>(receiver_log_dram_buffer_size) - DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
-                    log_dram_bank_id,
-                    &rlog->header.dram_write_offset)) {
-                rlog->header.dram_records += rlog->count;
-            } else {
-                rlog->header.dropped += rlog->count;
-            }
+// Compile-time unroll: diff every serviced sender channel into the pending scratch (#4 over all channels).
+template <uint32_t CH>
+FORCE_INLINE void diff_serviced_sender_channels(SenderLog* log, PendingLogWords& pending) {
+    if constexpr (CH < NUM_SENDER_CHANNELS) {
+        if constexpr (sender_log_channel_enabled(CH)) {
+            make_diff_against(log->channels[CH], pending);
         }
-        flush_log_header_to_dram(
-            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&rlog->header)),
-            sizeof(ReceiverLogHeader),
-            static_cast<uint32_t>(receiver_log_dram_buffer_base),
-            log_dram_bank_id);
+        diff_serviced_sender_channels<CH + 1>(log, pending);
     }
 }
 
-// [debug] Finalize the sender flow-control trace ([txlog]) at the STOP marker: flush the L1 record tail then the
-// shared header to DRAM, same as finalize_receiver_log. Empty body on eRiscs that do not service the VC0 sender
-// channels.
+// Compile-time unroll: init every serviced sender channel's diff state + base gaps at window open (#6 + #7).
+template <uint32_t CH>
+FORCE_INLINE void init_serviced_sender_channels(SenderLog* log) {
+    if constexpr (CH < NUM_SENDER_CHANNELS) {
+        if constexpr (sender_log_channel_enabled(CH)) {
+            constexpr uint8_t cid = make_channel_id(sender_flat_to_vc(CH), sender_flat_to_local(CH));
+            init_sender_channel_state(log->channels[CH], cid);
+            capture_sender_base_gaps(log->header, log->channels[CH]);
+        }
+        init_serviced_sender_channels<CH + 1>(log);
+    }
+}
+
+// #5: frame the pending sender channel words with a common word and append the batch to L1 (flush as needed).
+FORCE_INLINE void dump_sender_log_words(SenderLog* log, uint64_t common_word, PendingLogWords& pending) {
+    const uint32_t base = static_cast<uint32_t>(sender_log_dram_buffer_base) + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION;
+    const uint32_t size = static_cast<uint32_t>(sender_log_dram_buffer_size) - DETAILED_FABRIC_LOG_DRAM_HEADER_REGION;
+    log_append_word(log, common_word, base, size, log_dram_bank_id);
+    for (uint32_t i = 0; i < pending.count; i++) {
+        log_append_word(log, pending.words[i], base, size, log_dram_bank_id);
+    }
+}
+
+// #8: flush the L1 word tail then the completed header to DRAM at STOP. No-op on eRiscs that do not service senders.
 static __attribute__((noinline)) void finalize_sender_log() {
     if constexpr (sender_log_enabled()) {
-        volatile SenderLog* slog = sender_log();
-        if (slog->count > 0) {
-            if (flush_log_records_to_dram(
-                    static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&slog->records[0])),
-                    slog->count * sizeof(SenderLogRecord),
-                    static_cast<uint32_t>(sender_log_dram_buffer_base) + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
-                    static_cast<uint32_t>(sender_log_dram_buffer_size) - DETAILED_FABRIC_LOG_DRAM_HEADER_REGION,
-                    log_dram_bank_id,
-                    &slog->header.dram_write_offset)) {
-                slog->header.dram_records += slog->count;
-            } else {
-                slog->header.dropped += slog->count;
-            }
+        SenderLog* log = sender_log();
+        const uint32_t base =
+            static_cast<uint32_t>(sender_log_dram_buffer_base) + DETAILED_FABRIC_LOG_DRAM_HEADER_REGION;
+        const uint32_t size =
+            static_cast<uint32_t>(sender_log_dram_buffer_size) - DETAILED_FABRIC_LOG_DRAM_HEADER_REGION;
+        if (log->word_count > 0) {
+            log_flush_words_to_dram(log, log->word_count, base, size, log_dram_bank_id);
+            log->word_count = 0;
         }
-        flush_log_header_to_dram(
-            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&slog->header)),
-            sizeof(SenderLogHeader),
-            static_cast<uint32_t>(sender_log_dram_buffer_base),
-            log_dram_bank_id);
+        flush_log_header_to_dram(&log->header, static_cast<uint32_t>(sender_log_dram_buffer_base), log_dram_bank_id);
     }
 }
 
