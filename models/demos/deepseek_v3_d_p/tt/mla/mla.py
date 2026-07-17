@@ -1339,11 +1339,18 @@ class ttMLA:
     # ----------------------------------------------------------------------------------------
 
     def _all_gather(self, t, dim, cluster_axis):
-        """All-gather across a mesh cluster axis → replicated on that axis. factor==1: no-op.
-        cluster_axis picks SP (sequence) or TP; the guard reads the matching mesh factor."""
+        """All-gather across a mesh cluster axis → replicated on that axis. factor==1: no-op
+        (preserves tensor identity for callers' `is not` dealloc checks). cluster_axis picks SP
+        (sequence) or TP; the guard reads the matching mesh factor.
+
+        ROW_MAJOR inputs (the uncompressed sparse KVPE) use the RM-native ttnn.all_gather, which
+        gathers them directly and manages its own semaphores / fabric specialization, instead of the
+        TILE round-trip the legacy all_gather_async forces. TILE inputs stay on all_gather_async."""
         factor = self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor
         if factor == 1:
             return t
+        if t.layout == ttnn.ROW_MAJOR_LAYOUT:
+            return ttnn.all_gather(t, dim=dim, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.experimental.all_gather_async(
             t,
             dim=dim,
