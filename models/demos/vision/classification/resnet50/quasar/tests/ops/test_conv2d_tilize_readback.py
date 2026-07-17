@@ -132,11 +132,11 @@ def test_quasar_conv2d_tilize_readback(mesh_device):
         packer_l1_acc=True,
     )
 
-    # Program A only (tilize-only + batched UNP_DEST tilize), and STOP before the Program B matmul so the op
-    # returns the tilized activation itself. Restore envs after so they don't leak across tests.
+    # Program A only (tilize-only), STOP before the Program B matmul so the op returns the tilized activation.
+    # NO TT_METAL_QSR_TILIZE_UNPACK_TO_DEST -> uses the DATACOPY (MOVA2D) tilize path with the per-tile FPU
+    # dest-dvalid clear (the 0x19 fix), NOT the racy UNP_DEST path. Restore envs after so they don't leak.
     to_set = {
         "TT_METAL_QSR_CONV_SPLIT_PROGRAM": "1",
-        "TT_METAL_QSR_TILIZE_UNPACK_TO_DEST": "1",
         "TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL": "1",
     }
     prev = {k: os.environ.get(k) for k in to_set}
