@@ -36,7 +36,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -459,17 +459,20 @@ def run_model(
     )
 
     # Sparse single-shot is folded onto the block-cyclic path, so (like chunked) it needs the caller-owned,
-    # user-major layer-stacked indexer key cache [num_users*num_layers, 1, T, D_idx], allocated with the
-    # SAME num_kvpe_cache_layers=num_layers as the KVPE cache. Dense variants use no index cache.
+    # user-major layer-stacked indexer key cache [num_users*index_cache_layers, 1, T, D_idx]. Unlike the
+    # per-layer KVPE cache, the indexer stride is the COMPACTED full-indexer count (num_full_indexer_layers)
+    # for GLM-5.2 cross-layer reuse — "shared" layers reuse a "full" layer's cache and get no slot of their
+    # own — falling back to num_layers when there is no indexer_types map. Dense variants use no index cache.
     tt_index_kv_cache = None
     if has_indexer:
+        index_cache_layers = num_full_indexer_layers(config) or num_layers
         tt_index_kv_cache = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
             mesh_device=mesh_device,
             seq_len=isl_total,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
-            num_kvpe_cache_layers=num_layers,
+            num_kvpe_cache_layers=index_cache_layers,
             num_users=1,
             dtype=ttnn.bfloat8_b,
         )
