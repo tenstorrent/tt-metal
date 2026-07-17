@@ -63,7 +63,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("global_spec").none(),
             nb::arg("fifo_size_bytes"),
-            nb::arg("max_socket_page_size_bytes"),
+            nb::arg("max_socket_page_size_bytes") = 0u,
             nb::arg("mapper").none() = nb::none(),
             nb::arg("composer_config").none() = nb::none(),
             nb::arg("worker_cores").none() = nb::none(),

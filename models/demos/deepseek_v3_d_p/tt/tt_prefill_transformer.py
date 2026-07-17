@@ -296,6 +296,8 @@ class TtPrefillTransformer(LightweightModule):
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
+        d2h_service=None,
+        record_dev: Optional[ttnn.Tensor] = None,
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
@@ -320,11 +322,12 @@ class TtPrefillTransformer(LightweightModule):
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
             temperature: Temperature for sampling. Can be a single float or list of floats.
                         If list, returns first temperature result but stores all in intermediates.
-            on_layer_complete: optional callback invoked by MLA after fill_cache_for_user_().
-                Called as on_layer_complete(layer_idx). Used for KV cache
-                migration in disaggregated prefill/decode. When set, MLA also zeros
-                the padding region of the cache before fill so migration sees valid KV
-                + zero padding. When None, no migration or zeroing.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                        each layer's KV cache has been populated on device. When set, each block zeros the
+                        cache pad window and enqueues the ack via the outbound_socket_service_sync device op
+                        on the same CQ (no host sync). When None, no ack or zeroing.
+            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+                        d2h_service is set.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next
@@ -382,6 +385,8 @@ class TtPrefillTransformer(LightweightModule):
                 cache_layer_idx=i,
                 return_intermediates=return_intermediates,
                 on_layer_complete=on_layer_complete,
+                d2h_service=d2h_service,
+                record_dev=record_dev,
                 actual_start=actual_start,
                 actual_end=actual_end,
                 cache_user_id=cache_user_id,

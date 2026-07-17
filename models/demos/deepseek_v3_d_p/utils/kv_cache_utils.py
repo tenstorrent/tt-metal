@@ -10,6 +10,7 @@ import socket
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
@@ -19,15 +20,6 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 # disaggregation address-table striding must both use the device's actual count to stay consistent.
 BH_NUM_DRAM_BANKS = 8
 PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
-
-
-def get_num_dram_banks(mesh_device):
-    """Usable DRAM banks on this device. Full Blackhole = 8; harvested parts expose fewer (e.g. 7).
-
-    The KV cache ND-shards round-robin across these banks and the disaggregation address table replays
-    that exact striping (`curr_bank_id = (curr_bank_id + 1) % num_banks`), so both MUST derive the count
-    from the same device. dram_grid_size().x is the number of DRAM cores/banks the device exposes."""
-    return mesh_device.dram_grid_size().x
 
 
 def create_kv_chunk_address_table_ds(
@@ -168,41 +160,6 @@ def create_kv_chunk_address_table_ds(
 
 
 def create_kv_chunk_address_table_kimi(
-    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users=1
-):
-    """
-    Create and populate a KV chunk address table for disaggregation (Kimi K2.6 model - non-balanced).
-
-    Args:
-        config: KvChunkAddressTableConfig
-        mesh_device: Mesh device for TT
-        mesh_shape: Shape of mesh device
-        seq_len: Sequence length
-        sp_axis: Sequence parallel axis
-        tt_kvpe_cache: Initialized KVPE cache on device
-        chunk_size_bytes: Size of each chunk in bytes
-        num_users: Number of users (slots) sharing the buffer; cache batch dim folds them as user * num_layers + layer
-
-    Returns:
-        lookup_table: Populated KvChunkAddressTable
-    """
-    lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
-    return populate_kv_chunk_address_table_kimi(
-        lookup_table=lookup_table,
-        config=config,
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        seq_len=seq_len,
-        sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
-        chunk_size_bytes=chunk_size_bytes,
-        num_users=num_users,
-        config_id=0,
-    )
-
-
-def populate_kv_chunk_address_table_kimi(
-    lookup_table,
     config,
     mesh_device,
     mesh_shape,
@@ -211,57 +168,67 @@ def populate_kv_chunk_address_table_kimi(
     tt_kvpe_cache,
     chunk_size_bytes,
     num_users=1,
-    config_id=0,
+    first_layer_idx=0,
+    num_my_layers=None,
+    stage_layout=None,
 ):
     """
-    Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
+    Create and populate a KV chunk address table for disaggregation (Kimi K2.6 model - non-balanced).
 
-    Factored out of create_kv_chunk_address_table_kimi so a single multi-config table can hold several
-    caches at once (the serving convention is config 0 = the MLA KVPE cache, config 1 = the block-cyclic
-    index-key cache); each config carries its own grid + chunk_size_bytes and is addressed by config_id.
-    The device-group
-    side table and fabric-node host map are SHARED across configs — re-registering them here per config is
-    safe (add_device_group dedups identical replica sets; set_fabric_node_host is idempotent).
+    Builds ONE table spanning every pipeline stage's layers, following tt-blaze's layer->mesh merge:
+    each rank owns a contiguous LAYER range on its full mesh, and the table places each global layer's
+    chunks on its OWNING stage's devices / KV base address. The per-(slot, layer, chunk) address math
+    is unchanged from the original single-stage builder (a bank round-robin from the stage's base
+    addr, per SP row); only the layer index is offset to the global range and the base/mesh/host come
+    from the owning stage.
 
     Args:
-        lookup_table: an existing KvChunkAddressTable (single- or multi-config).
-        config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
-        config_id: which config of the table to populate (default 0, the single-config case).
-        (remaining args as in create_kv_chunk_address_table_kimi)
+        config: KvChunkAddressTableConfig (its num_layers is overwritten with the gathered global total)
+        mesh_device: this rank's MeshDevice (its full SP x TP mesh)
+        mesh_shape: (rows, cols) of that mesh; rows == SP, cols == TP
+        seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users: as before
+        first_layer_idx: this rank's first global layer id (from compute_layer_split)
+        num_my_layers: this rank's layer count (defaults to config.num_layers for single-stage callers)
+        stage_layout: optional pre-gathered per-rank stage layout from allgather_kv_stage_layout().
+            Pass it when the COLLECTIVE all-gather has already run on all ranks (so only rank 0 builds);
+            leave None to run the all-gather inline (single-rank / tests).
 
     Returns:
-        lookup_table: the same table, with config_id populated.
+        lookup_table: Populated KvChunkAddressTable
     """
-    host_name = socket.gethostname()
+    num_my_layers = num_my_layers if num_my_layers is not None else config.num_layers
 
-    rank = ttnn.distributed_context_get_rank()
-    size = ttnn.distributed_context_get_size()
-    total_rows = mesh_shape[0]
-    rank_row_start = int(rank) * total_rows // int(size)
-    rank_row_end = rank_row_start + total_rows // int(size)
+    # COLLECTIVE (all ranks) unless already gathered: each rank reports its layer range + full mesh +
+    # KV base + host. The merge below then covers every layer across every stage. The publish path
+    # hoists this so all ranks participate while only rank 0 builds; tests/single-rank run it inline.
+    if stage_layout is None:
+        stage_layout = allgather_kv_stage_layout(mesh_device, tt_kvpe_cache, mesh_shape, first_layer_idx, num_my_layers)
 
-    num_layers = config.num_layers
+    rows = mesh_shape[0]
 
-    # Data is replicated across each column of the mesh, so one device group per row.
-    device_group_idx_per_row = []
-    all_fabric_node_ids = []
-    for row in range(rank_row_start, rank_row_end):
-        fabric_node_ids = []
-        for col in range(mesh_shape[1]):
-            fabric_node_ids.append(mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col)))
-        all_fabric_node_ids.extend(fabric_node_ids)
-        device_group_idx_per_row.append(lookup_table.add_device_group(fabric_node_ids))
+    # This (building) rank's cache must hold exactly its own stage's layers, folded with num_users.
+    assert (
+        tt_kvpe_cache.shape[0] == num_users * num_my_layers
+    ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_my_layers({num_my_layers})"
 
-    for fid in all_fabric_node_ids:
-        lookup_table.set_fabric_node_host(fid, host_name=host_name)
-        logger.debug(
-            f"Set host name for fabric node id: mesh_id={int(fid.mesh_id)}, chip_id={int(fid.chip_id)} to {host_name}"
-        )
+    # Stages must tile [0, effective_num_layers) contiguously, no gaps/overlaps (tt-blaze's
+    # missing-layer guard). compute_layer_split produces a contiguous partition, so this should hold.
+    effective_num_layers = sum(s["count"] for s in stage_layout)
+    expected = 0
+    for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
+        if s["first_layer"] != expected:
+            raise RuntimeError(
+                f"gathered layer ranges are not contiguous: expected next stage at layer {expected} but got "
+                f"first_layer={s['first_layer']} (stages={[(x['first_layer'], x['count']) for x in stage_layout]})"
+            )
+        expected += s["count"]
+
+    # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
+    config.num_layers = effective_num_layers
+    lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
 
     tokens_per_chunk_local = PREFILL_CHUNK_OUTPUT_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
-    num_chunks_per_seq_len = (
-        seq_len // PREFILL_CHUNK_OUTPUT_TOKENS
-    )  # number of 5k chunks contained in the sequence length
+    num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS  # number of 5k chunks in the seq len
 
     assert (
         seq_len % PREFILL_CHUNK_OUTPUT_TOKENS == 0
@@ -272,33 +239,41 @@ def populate_kv_chunk_address_table_kimi(
         f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
     )
 
-    assert (
-        tt_kvpe_cache.shape[0] == num_users * num_layers
-    ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
+    # tt-blaze-style merge: for every STAGE place its layers' chunks on ITS mesh at ITS base addr.
+    # Within a stage we replay the original single-stage build exactly (one device group per SP row, an
+    # independent bank round-robin per row sequencing slot -> local layer -> chunk), but write to the
+    # GLOBAL layer index (first_layer + local_layer) so every stage lands in one table.
+    for stage in stage_layout:
+        dram_bank_base_addr = stage["base_addr"]
+        num_dram_banks = stage["num_banks"]
+        host_name = f"host-{stage['host_tag']:08x}"  # crc32 tag rebuilt to a string (int-only allgather)
+        first = stage["first_layer"]
+        count = stage["count"]
+        stage_fnids = stage["fnids"]
+        for row in range(rows):
+            # Data is replicated across each TP column, so one device group per (stage, SP row).
+            fnids_row = stage_fnids[row]
+            group_idx = lookup_table.add_device_group(fnids_row)
+            for fid in fnids_row:
+                lookup_table.set_fabric_node_host(fid, host_name=host_name)
+            curr_bank_id = 0
+            curr_bank_offset = 0
+            for slot in range(num_users):
+                for local_layer in range(count):
+                    global_layer = first + local_layer
+                    for seq_chunk in range(num_chunks_per_seq_len):
+                        chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + row * tokens_per_chunk_local
+                        chunk_token_end = chunk_token_start + tokens_per_chunk_local
+                        for position in range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                            location = ttnn.experimental.disaggregation.KvCacheLocation()
+                            location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
+                            location.size_bytes = chunk_size_bytes
+                            location.device_group_index = group_idx
+                            lookup_table.set(global_layer, position, slot, location)
 
-    dram_bank_base_addr = tt_kvpe_cache.buffer_address()
-    # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
-    num_dram_banks = get_num_dram_banks(mesh_device)
-    for local_idx, global_row in enumerate(range(rank_row_start, rank_row_end)):
-        group_idx = device_group_idx_per_row[local_idx]
-        curr_bank_id = 0
-        curr_bank_offset = 0
-
-        for slot in range(num_users):
-            for layer in range(num_layers):
-                for seq_chunk in range(num_chunks_per_seq_len):
-                    chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + global_row * tokens_per_chunk_local
-                    chunk_token_end = chunk_token_start + tokens_per_chunk_local
-                    for position in range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                        location = ttnn.experimental.disaggregation.KvCacheLocation()
-                        location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
-                        location.size_bytes = chunk_size_bytes
-                        location.device_group_index = group_idx
-                        lookup_table.set(layer, position, slot, location, config_id)
-
-                        curr_bank_id = (curr_bank_id + 1) % num_dram_banks
-                        if curr_bank_id == 0:
-                            curr_bank_offset += chunk_size_bytes
+                            curr_bank_id = (curr_bank_id + 1) % num_dram_banks
+                            if curr_bank_id == 0:
+                                curr_bank_offset += chunk_size_bytes
 
     return lookup_table
 

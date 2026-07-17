@@ -93,6 +93,11 @@ class TtPrefillRuntime:
         assert config.model_cfg is not None, "TtPrefillRuntimeConfig.model_cfg must be set by the model adapter"
         # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
         self._on_layer_complete = None
+        # Per-layer completion sink (pipelined mode), set by set_layer_completion_sink().
+        # Signature: sink(layer_idx, request_id). prefill() binds the current request_id into
+        # a fresh per-call closure, so there is no shared mutable chunk-index for the callback
+        # to race on (immune even if the threading model changes).
+        self._layer_completion_sink = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -223,6 +228,9 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
+        request_id: int = 0,
+        d2h_service=None,
+        record_dev: Optional[ttnn.Tensor] = None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -238,7 +246,8 @@ class TtPrefillRuntime:
         may be pad, so actual_end < actual_start + chunk_size). actual_end is the migration pad-zero
         boundary, passed straight through to MLA. The caller drives chunked prefill by
         calling this once per chunk, in order; a chunk's KV must be populated before the next reads
-        it. If a LayerAck channel is registered (set_layer_ack_channel), the model bumps it per layer.
+        it. If d2h_service + record_dev are passed, the model sends one per-layer ack completion signal back
+        to host (via the outbound_socket_service_sync device op) once each layer's KV cache is populated.
 
         Always returns None: no token is sampled. (When `kv_only_last_layer` is set on the config the
         last layer's compute is stripped down to the KV cache fill, which migration consumes, and the
@@ -255,6 +264,12 @@ class TtPrefillRuntime:
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real token.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                each layer's KV cache has been populated on device. When set, each block zeros the cache
+                pad window and enqueues the ack via the outbound_socket_service_sync device op on the same
+                CQ (no host sync). When None, no ack or zeroing.
+            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+                d2h_service is set.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -267,11 +282,26 @@ class TtPrefillRuntime:
             actual_start <= actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
 
+        # Bind this chunk's request_id into a fresh per-call callback. The pipelined sink needs it to
+        # build a globally-dense key (seq = request_id*num_layers + layer_idx); capturing by value per
+        # call means there is no shared mutable chunk-index for the synchronously-fired callback to race
+        # on. Single-host layer-ack mode ignores request_id.
+        if self._layer_completion_sink is not None:
+            sink = self._layer_completion_sink
+
+            def on_layer_complete(layer_idx: int) -> None:
+                sink(layer_idx, request_id)
+
+        else:
+            on_layer_complete = self._on_layer_complete
+
         out = self.model.forward(
             input_tensor,
             kv_caches[0],
             actual_isl=actual_end - actual_start,
-            on_layer_complete=self._on_layer_complete,
+            on_layer_complete=on_layer_complete,
+            d2h_service=d2h_service,
+            record_dev=record_dev,
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
@@ -302,32 +332,74 @@ class TtPrefillRuntime:
 
         self._on_layer_complete = on_layer_complete
 
-    def build_kv_chunk_table(self, kv_caches: KvCaches, path: str) -> str:
+    def build_kv_chunk_table(
+        self,
+        kv_caches: KvCaches,
+        path: str,
+        *,
+        first_layer_idx: int = 0,
+        num_my_layers: Optional[int] = None,
+        stage_layout=None,
+    ) -> str:
         """Build + serialize the KV-chunk address table for the engine-owned `KvCaches` to
-        `path` and return it.
+        `path` and return it. Model-specific: DeepSeek/Kimi's MLA block-cyclic cache layout.
 
         The table maps each natural KV position to its true block-cyclic storage chip + offset
         (the MLA chunked-prefill cache layout), so the migration worker copies the right chunks.
         The runner publishes the serialized table to the worker — this method only describes the
-        cache layout; it issues no migration comms. Single-rank only (config.num_layers == the
-        full model).
+        cache layout; it issues no migration comms. The generic config-setup + protobuf serialize
+        lives in ``serialize_kv_chunk_table`` (model-agnostic); this method supplies the model's
+        block-cyclic builder + chunk constants.
 
-        For a sparse/DSA model (a secondary cache at index 1), the result is a single MERGED table
-        describing BOTH caches — config 0 = the KVPE cache, config 1 = the index-key cache. A dense
-        model (only index 0) → the usual single-config table over the KVPE cache alone."""
-        from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+        Multi-rank (pipeline-parallel): this rank owns layers [first_layer_idx, first_layer_idx +
+        num_my_layers). The runner runs the all-ranks all-gather and passes the merged `stage_layout`
+        so ONLY rank 0 builds the table spanning every stage; the single-rank default (stage_layout
+        None) covers config.num_layers == the full model.
 
-        return build_and_serialize_kv_chunk_table(
-            mesh_device=self.mesh_device,
-            kvpe_cache=kv_caches[0],
-            seq_len=self.config.max_seq_len,
+        Describes the primary KVPE cache (`kv_caches[0]`) only; the single-config builder does not
+        emit a sparse model's secondary index-key cache (config 1).
+
+        ``config.chunk_size`` is the block-cyclic period; the kimi builder hardcodes it as
+        PREFILL_CHUNK_OUTPUT_TOKENS, so a non-default period is rejected here rather than mismapped."""
+        from models.demos.common.prefill.runners.migration import serialize_kv_chunk_table
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+            NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+            PREFILL_CHUNK_OUTPUT_TOKENS,
+            create_kv_chunk_address_table_kimi,
+        )
+
+        # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
+        chunk_size_bytes = 19584
+        assert self.config.chunk_size == PREFILL_CHUNK_OUTPUT_TOKENS, (
+            f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
+            f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but config.chunk_size="
+            f"{self.config.chunk_size}. A different period would mismap every position; re-introduce a "
+            f"parametrized builder if needed."
+        )
+
+        def _builder(*, config, chunk_size_bytes, num_users):
+            return create_kv_chunk_address_table_kimi(
+                config=config,
+                mesh_device=self.mesh_device,
+                mesh_shape=self.config.mesh_shape,
+                seq_len=self.config.max_seq_len,
+                sp_axis=self.config.sp_axis,
+                tt_kvpe_cache=kv_caches[0],
+                chunk_size_bytes=chunk_size_bytes,
+                num_users=num_users,
+                first_layer_idx=first_layer_idx,
+                num_my_layers=num_my_layers,
+                stage_layout=stage_layout,
+            )
+
+        return serialize_kv_chunk_table(
+            table_builder=_builder,
             num_layers=self.config.num_layers,
-            mesh_shape=self.config.mesh_shape,
-            sp_axis=self.config.sp_axis,
+            max_seq_len=self.config.max_seq_len,
             num_users=self.config.num_users,
-            chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
+            chunk_n_tokens=NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+            chunk_size_bytes=chunk_size_bytes,
             path=path,
-            index_kv_cache=kv_caches[1] if len(kv_caches) > 1 else None,
         )
 
     def kv_cache_pcc_check(
@@ -342,3 +414,19 @@ class TtPrefillRuntime:
         return kv_cache_pcc_check(
             self, kv_caches[0], slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=first_layer_idx
         )
+
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register a per-layer completion sink for pipelined prefill.
+
+        `sink` is called once per layer as `sink(layer_idx, request_id)` — the
+        global layer index plus the current request/chunk id, which prefill()
+        binds per call (so the sink need not read any mutable runtime state). It
+        replaces the direct counter-channel inject used in single-host mode:
+        instead of bumping a counter, the runner pushes a full completion
+        {seq, source_rank, layer_idx, request_id} into the host-local
+        LayerCompletionQueue, and the LayerCompletionRouter routes it to the
+        master host and re-emits it (in seq order) into the scheduler-facing
+        counter channel (see runners/pipelined_prefill/).
+        """
+        assert self.compiled, "Call compile() before set_layer_completion_sink()"
+        self._layer_completion_sink = sink
