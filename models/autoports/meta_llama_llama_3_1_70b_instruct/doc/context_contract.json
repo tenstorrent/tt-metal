@@ -1,20 +1,48 @@
 {
   "hf_model": "meta-llama/Llama-3.1-70B-Instruct",
   "hf_advertised_context": 131072,
-  "current_supported_context": 18,
-  "limiting_reason": "device_dram",
+  "current_supported_context": 131072,
+  "limiting_reason": null,
   "capacity_evidence": {
     "captured_batch": 32,
     "captured_cache_length": 128,
+    "validated_advertised_context_batch": 1,
+    "target_hardware": "4 Blackhole p300c ASICs",
+    "target_mesh": "logical 1x4 ring over the four-chip physical cycle",
+    "tensor_parallel_degree": 4,
+    "per_device_kv_heads": 2,
+    "page_block_size": 64,
+    "page_pool_blocks_per_batch1_sequence": 2048,
     "device_allocator_dram_bytes": 34178731008,
-    "device_allocator_probe": "TT_VISIBLE_DEVICES=2,3; ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM): 8 banks * 4272341376 bytes per bank",
-    "advertised_context_bf16_kv_cache_bytes": 17179869184,
-    "advertised_context_bf16_input_bytes": 68719476736,
-    "minimum_combined_bytes": 85899345920,
-    "formula": "KV: 32 batch * 8 KV heads * 131072 positions * 128 head_dim * 2 (K,V) * 2 bf16 bytes. Input: 1 * 32 batch * 131072 positions * 8192 hidden * 2 bf16 bytes.",
-    "stage_scope": "The 80 GiB minimum for only the BF16 input and KV cache exceeds the allocator-reported 34178731008 DRAM bytes before full layer weights, RoPE tables, output/residual tensors, and operation temporaries. This stage validates the compiler-captured functional starting point, not advertised-context prefill."
+    "device_allocator_probe": "ttnn.get_memory_view: 8 DRAM banks * 4272341376 bytes per bank on each target Blackhole",
+    "bfp4_tile_bytes": 576,
+    "per_device_80_layer_decoder_weight_bytes": 9628549120,
+    "per_device_embedding_plus_lm_head_bytes": 295501824,
+    "per_device_batch1_full_context_bf16_kv_cache_bytes": 10737418240,
+    "per_device_batch1_full_context_bf16_input_bytes": 2147483648,
+    "per_device_weight_plus_kv_bytes": 20661469184,
+    "headroom_before_activations_trace_and_allocator_overhead_bytes": 13517261824,
+    "unchunked_unbounded_peak_live_activation_bytes": 23689428992,
+    "prefill_mlp_chunk_size": 4096,
+    "prefill_chunking_contract": "Internal starts are tile-aligned, but the final chunk preserves any positive logical tail; the public prefill sequence need not be tile- or page-aligned.",
+    "full_hidden_bf16_tensor_bytes": 2147483648,
+    "peak_live_full_hidden_tensor_equivalents": 5,
+    "peak_live_explicit_activation_bytes": 10737418240,
+    "peak_live_activation_lifetime_proof": "Conservative maximum of five full [1,1,131072,8192] BF16 equivalents: the residual/attention boundary, normalized or projection output, retained completed MLP chunks, final concatenation allocation, and output/residual allocation. Per-chunk packed gate/up and SwiGLU temporaries are bounded by 4096 tokens and deallocated after their last enqueued consumer; attention Q/K/V and projection partials are likewise explicitly released. This is a maximum concurrent lifetime bound, not a sum of all graph outputs.",
+    "shared_constants_and_metadata_reserve_bytes": 134217728,
+    "trace_region_reserve_bytes": 100000000,
+    "ccl_reduce_scatter_reserve_bytes": 536870912,
+    "ccl_reserve_contract": "Conservative full-stack reserve covering persistent L1 decode RS intermediate/scatter/gather buffers plus mesh CCL bookkeeping; decode uses two BF16 RS+AG pairs per layer, two links, ring topology, 10 chunks per sync, two workers per link, and two buffers per channel.",
+    "allocator_and_fragmentation_reserve_bytes": 1073741824,
+    "total_full_stack_peak_reserved_bytes": 33243717888,
+    "remaining_peak_margin_bytes": 935013120,
+    "formula": "Persistent: TP4 BFP4 decoder weights plus TP4 embedding/LM-head reserve plus 80-layer BF16 KV at 2 local heads. Peak explicit activation: 5 * (1 batch * 131072 positions * 8192 hidden * 2 BF16 bytes), including all retained 4096-token MLP chunk outputs plus concat allocation. Additional reserves: 128 MiB shared constants/metadata, 100000000-byte trace region, one H/4 reduce-scatter temporary, and 1 GiB allocator/fragmentation. Intermediate TTNN buffers are explicitly deallocated after their final enqueued consumer.",
+    "largest_feasible_advertised_context_batch": 1,
+    "validated_full_context_local_cache_shape": "K and V each [2048,2,64,128] per device",
+    "stacked_decoder_boundary": "Replicated [1,B,S,8192] BF16; validated by feeding one real TP4 layer output directly into a second invocation with independent layer-local K/V caches.",
+    "stage_scope": "The selected flat TP4 layout restores the complete 131072-token HF context at batch 1. The one-layer stage validates full-size local cache allocation and shape; an 80-layer construction is deliberately deferred to full-model. Shared RoPE constants and a single prefill/decode weight copy prevent per-layer duplication. Larger batches trade batch for context and do not reduce the advertised batch-1 capability."
   },
-  "notes": "The current context is the largest prefill sequence validated by this functional stage. The source capture uses prefill sequence 18 and decode cache length 128 at batch 32. Downstream stages must establish a feasible long-context policy; none is begun here.",
+  "notes": "The multichip decoder preserves arbitrary logical sequence lengths and advertises the model's full 131072-token context at batch 1. Correctness uses chunked nonaligned sequence length 39 with a seven-token final MLP chunk, advancing positions 39 and 40, position 64, refreshable nonidentity page tables, and paged caches. The source capture's batch-32/length-18 shape remains provenance rather than a public limit.",
   "paths": {
     "prefill": {
       "status": "translated",
@@ -45,12 +73,13 @@
     "representative_layer": 39,
     "captured_mesh": "2x2",
     "tensor_parallel_degree": 4,
-    "translation_mesh": "1x1",
-    "collective_collapse": "The emitted two-dimensional TP projection shards and all-reduces are replaced by dense matmuls over canonical full Hugging Face weights."
+    "translation_mesh": "1x1 functional and optimized baseline; 1x4 selected multichip ring",
+    "collective_collapse": "The captured 2x2 mapping was implemented first. The selected logical 1x4 TP4 ring keeps QKV/gate/up column parallel and output/down row parallel, reducing decode to two full-mesh all-reduces."
   },
   "dtype_policy": {
     "functional_baseline": "bf16 weights and activations; TILE layout; DRAM memory by default",
     "emitted_weights": "BF8 for most projection weights and BF4 for gate/up projection weights",
-    "deferred": "Restoring the compiler precision policy belongs to later datatype selection after correctness."
+    "multichip": "BFP4/LoFi projection weights, BF16 activations/norms/collectives/cache, matching the optimized single-chip baseline precision policy",
+    "deferred": "A later datatype sweep may choose a lower cache or collective precision; it is not required for advertised-context feasibility."
   }
 }

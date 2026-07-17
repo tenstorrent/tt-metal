@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="32.132" timestamp="2026-07-17T13:43:57.830503+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_multichip_decoder" name="test_00_single_chip_optimized_reference[blackhole-single-chip-optimized-reference]" time="10.062"><properties><property name="start_timestamp" value="2026-07-17T13:43:58" /><property name="single_prefill_ms" value="3.186911" /><property name="single_decode_ms" value="1.857131" /><property name="end_timestamp" value="2026-07-17T13:44:08" /></properties></testcase><testcase classname="models.autoports.meta_llama_llama_3_1_70b_instruct.tests.test_multichip_decoder" name="test_01_multichip_correctness_paged_trace_and_perf[blackhole-blackhole-2x2]" time="21.385"><properties><property name="start_timestamp" value="2026-07-17T13:44:08" /><property name="end_timestamp" value="2026-07-17T13:44:29" /></properties><failure message="RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()&#10;info:&#10;Could not find any forwarding direction from src (M0, D1) to dst (M0, D2)&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x7b28b8) [0x7aeaabfb28b8]&#10; --- void tt::tt_fabric::append_fabric_connection_rt_args&lt;tt::tt_metal::Program&gt;(tt::tt_fabric::FabricNodeId const&amp;, tt::tt_fabric::FabricNodeId const&amp;, unsigned int, tt::tt_metal::Program&amp;, tt::xy_pair const&amp;, std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt;&amp;, tt::CoreType)&#10; --- std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt; tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args&lt;tt::tt_metal::Program&gt;(tt::tt_fabric::FabricNodeId const&amp;, tt::tt_fabric::FabricNodeId const&amp;, unsigned int, tt::tt_metal::Program&amp;, tt::xy_pair const&amp;) const&#10; --- ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(tt::tt_metal::Program&amp;, tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, tt::tt_metal::distributed::MeshCoordinate const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshCoordinate&gt; const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshCoordinate&gt; const&amp;, tt::tt_metal::Tensor&amp;, unsigned int, unsigned int, unsigned int, unsigned int, tt::tt_fabric::Topology, std::vector&lt;tt::tt_metal::GlobalSemaphore, std::allocator&lt;tt::tt_metal::GlobalSemaphore&gt; &gt; const&amp;, std::optional&lt;tt::tt_metal::GlobalSemaphore&gt; const&amp;, bool, std::optional const&amp;)&#10; --- ttnn::experimental::prim::LineReduceScatterMeshWorkloadFactory::create_at(ttnn::experimental::prim::ReduceScatterMinimalAsyncParams const&amp;, tt::tt_metal::distributed::MeshCoordinate const&amp;, ttnn::experimental::prim::ReduceScatterMinimalAsyncInputs const&amp;, std::vector&lt;tt::tt_metal::Tensor, std::allocator&lt;tt::tt_metal::Tensor&gt; &gt;&amp;)&#10; --- ttnn::experimental::prim::LineReduceScatterMeshWorkloadFactory::create_mesh_workload(ttnn::experimental::prim::ReduceScatterMinimalAsyncParams const&amp;, tt::tt_metal::distributed::MeshCoordinateRangeSet const&amp;, ttnn::experimental::prim::ReduceScatterMinimalAsyncInputs const&amp;, std::vector&lt;tt::tt_metal::Tensor, std::allocator&lt;tt::tt_metal::Tensor&gt; &gt;&amp;)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1013d89) [0x7aeaadc13d89]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_12experimental4prim40ReduceScatterMinimalAsyncDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_13program_cache6detail12ProgramCacheERKNSN_15ProgramCacheKeyE+0xed) [0x7aeaadc0d8bd]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim40ReduceScatterMinimalAsyncDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x174) [0x7aeaadc0be24]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim40ReduceScatterMinimalAsyncDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x3ca) [0x7aeaadbf718a]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim28reduce_scatter_minimal_asyncERKN2tt8tt_metal6TensorERKSt8optionalIS3_ES9_jjjNS2_12MemoryConfigES6_ISA_ENS1_9tt_fabric8TopologyESt6vectorINS2_15GlobalSemaphoreESaISF_EES6_ISF_EbS6_IN4ttsl10StrongTypeIhNS2_14SubDeviceIdTagEEEES6_IjESO_SO_SO_S6_INS_19ComputeKernelConfigEE+0x3bb) [0x7aeaadbe4afb]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn12experimental28reduce_scatter_minimal_asyncERKN2tt8tt_metal6TensorERKSt8optionalISt6vectorIS3_SaIS3_EEEiRKS7_INS2_15GlobalSemaphoreESaISD_EERKS6_ISD_ES6_IjERKS6_INS2_12MemoryConfigEESP_NS1_9tt_fabric8TopologyES6_IN4ttsl10StrongTypeIhNS2_14SubDeviceIdTagEEEESL_SL_SL_SL_S6_INS_19ComputeKernelConfigEE+0x514) [0x7aeaadbe4314]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn12experimental16all_reduce_asyncERKN2tt8tt_metal6TensorEjRKSt6vectorINS2_15GlobalSemaphoreESaIS7_EESB_SB_N16reduction_common10ReduceTypeERKSt8optionalINS2_12MemoryConfigEENS1_9tt_fabric8TopologyESE_ImESE_IN4ttsl10StrongTypeIhNS2_14SubDeviceIdTagEEEE+0x536) [0x7aeaadc48a46]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x363ac6) [0x7aeaaed63ac6]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7aeaaed15575]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7aeaf52041ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7aeaf520428b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]">mesh_device = MeshDevice(2x2 grid, 4 devices)
+record_property = &lt;function record_property.&lt;locals&gt;.append_property at 0x7aea5d9c8400&gt;
+
+    @_mesh_test
+    def test_01_multichip_correctness_paged_trace_and_perf(mesh_device, record_property):
+        assert _REFERENCE is not None, "run the ordered single-chip reference item first"
+        reference = _REFERENCE
+        config = _config()
+        state = _real_state()
+        batch = 1
+        seq_len = 7
+        decoder = MultiChipDecoder.from_state_dict(
+            state,
+            hf_config=config,
+            layer_idx=LAYER_IDX,
+            mesh_device=mesh_device,
+            batch=batch,
+            max_cache_len=MAX_CACHE_LEN,
+            tt_ccl=get_tt_ccl(mesh_device),
+        )
+        assert decoder.tt_ccl is get_tt_ccl(mesh_device)
+        assert decoder.hidden_size == 8192
+        assert decoder.num_heads == 16
+        assert decoder.num_kv_heads == 2
+        assert decoder.intermediate_size == 7168
+
+        prefill_input = _mesh_input(reference["prefill_input"], mesh_device)
+        decode_input = _mesh_input(reference["decode_input"], mesh_device)
+        key_cache, value_cache = _mesh_contiguous_caches(config, mesh_device, batch=batch)
+&gt;       prefill_output = decoder.prefill_forward(prefill_input, key_cache, value_cache)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+models/autoports/meta_llama_llama_3_1_70b_instruct/tests/test_multichip_decoder.py:263:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1330: in prefill_forward
+    attention = self._all_reduce_flat(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/meta_llama_llama_3_1_70b_instruct/tt/multichip_decoder.py:1218: in _all_reduce_flat
+    reduced = ttnn.experimental.all_reduce_async(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.experimental.all_reduce_async', function=&lt;ttnn._ttnn.operations.experi...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[-4.9561e-02,  1.2109e-01,  ...,  1.1572e-01, -4.3701e-02],
+     ...-02,  ...,  1.9836e-03, -1.4282e-02]]]], shape=Shape([1, 1, 7, 8192]), dtype=DataType::BFLOAT16, layout=Layout::TILE),)
+function_kwargs = {'ag_global_semaphores': [&lt;ttnn._ttnn.global_semaphore.global_semaphore object at 0x7aea5e537210&gt;, &lt;ttnn._ttnn.global_...VED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), ...}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/fabric/fabric.cpp:153: forwarding_direction.has_value()
+E               info:
+E               Could not find any forwarding direction from src (M0, D1) to dst (M0, D2)
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x7b28b8) [0x7aeaabfb28b8]
+E                --- void tt::tt_fabric::append_fabric_connection_rt_args&lt;tt::tt_metal::Program&gt;(tt::tt_fabric::FabricNodeId const&amp;, tt::tt_fabric::FabricNodeId const&amp;, unsigned int, tt::tt_metal::Program&amp;, tt::xy_pair const&amp;, std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt;&amp;, tt::CoreType)
+E                --- std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt; tt::tt_fabric::FabricMuxConfig::get_fabric_mux_run_time_args&lt;tt::tt_metal::Program&gt;(tt::tt_fabric::FabricNodeId const&amp;, tt::tt_fabric::FabricNodeId const&amp;, unsigned int, tt::tt_metal::Program&amp;, tt::xy_pair const&amp;) const
+E                --- ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(tt::tt_metal::Program&amp;, tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, tt::tt_metal::distributed::MeshCoordinate const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshCoordinate&gt; const&amp;, std::optional&lt;tt::tt_metal::distributed::MeshCoordinate&gt; const&amp;, tt::tt_metal::Tensor&amp;, unsigned int, unsigned int, unsigned int, unsigned int, tt::tt_fabric::Topology, std::vector&lt;tt::tt_metal::GlobalSemaphore, std::allocator&lt;tt::tt_metal::GlobalSemaphore&gt; &gt; const&amp;, std::optional&lt;tt::tt_metal::GlobalSemaphore&gt; const&amp;, bool, std::optional const&amp;)
+E                --- ttnn::experimental::prim::LineReduceScatterMeshWorkloadFactory::create_at(ttnn::experimental::prim::ReduceScatterMinimalAsyncParams const&amp;, tt::tt_metal::distributed::MeshCoordinate const&amp;, ttnn::experimental::prim::ReduceScatterMinimalAsyncInputs const&amp;, std::vector&lt;tt::tt_metal::Tensor, std::allocator&lt;tt::tt_metal::Tensor&gt; &gt;&amp;)
+E                --- ttnn::experimental::prim::LineReduceScatterMeshWorkloadFactory::create_mesh_workload(ttnn::experimental::prim::ReduceScatterMinimalAsyncParams const&amp;, tt::tt_metal::distributed::MeshCoordinateRangeSet const&amp;, ttnn::experimental::prim::ReduceScatterMinimalAsyncInputs const&amp;, std::vector&lt;tt::tt_metal::Tensor, std::allocator&lt;tt::tt_metal::Tensor&gt; &gt;&amp;)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1013d89) [0x7aeaadc13d89]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_12experimental4prim40ReduceScatterMinimalAsyncDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_13program_cache6detail12ProgramCacheERKNSN_15ProgramCacheKeyE+0xed) [0x7aeaadc0d8bd]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim40ReduceScatterMinimalAsyncDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x174) [0x7aeaadc0be24]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim40ReduceScatterMinimalAsyncDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0x3ca) [0x7aeaadbf718a]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn4prim28reduce_scatter_minimal_asyncERKN2tt8tt_metal6TensorERKSt8optionalIS3_ES9_jjjNS2_12MemoryConfigES6_ISA_ENS1_9tt_fabric8TopologyESt6vectorINS2_15GlobalSemaphoreESaISF_EES6_ISF_EbS6_IN4ttsl10StrongTypeIhNS2_14SubDeviceIdTagEEEES6_IjESO_SO_SO_S6_INS_19ComputeKernelConfigEE+0x3bb) [0x7aeaadbe4afb]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn12experimental28reduce_scatter_minimal_asyncERKN2tt8tt_metal6TensorERKSt8optionalISt6vectorIS3_SaIS3_EEEiRKS7_INS2_15GlobalSemaphoreESaISD_EERKS6_ISD_ES6_IjERKS6_INS2_12MemoryConfigEESP_NS1_9tt_fabric8TopologyES6_IN4ttsl10StrongTypeIhNS2_14SubDeviceIdTagEEEESL_SL_SL_SL_S6_INS_19ComputeKernelConfigEE+0x514) [0x7aeaadbe4314]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn12experimental16all_reduce_asyncERKN2tt8tt_metal6TensorEjRKSt6vectorINS2_15GlobalSemaphoreESaIS7_EESB_SB_N16reduction_common10ReduceTypeERKSt8optionalINS2_12MemoryConfigEENS1_9tt_fabric8TopologyESE_ImESE_IN4ttsl10StrongTypeIhNS2_14SubDeviceIdTagEEEE+0x536) [0x7aeaadc48a46]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x363ac6) [0x7aeaaed63ac6]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7aeaaed15575]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7aeaf52041ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7aeaf520428b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError</failure></testcase></testsuite></testsuites>
