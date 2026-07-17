@@ -289,3 +289,6 @@ confirmed the final selected defaults, 9/9 correctness/trace/context, 9/9
 worker watcher, full context contract, current profiler rows, recovery smoke,
 and stage-only commit scope.  Local checkpoint SHAs are recorded below after
 creation; no push is performed.
+
+- Implementation and evidence clean-pass checkpoint: `8ef1520f95abddb4a0f8220bad079f375dc66afa`.
+- Provenance documentation checkpoint: this follow-up commit; no push.
