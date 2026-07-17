@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
@@ -1543,17 +1544,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         }
         reader_args.push_back(static_cast<uint32_t>(is_mux_writer_valid));
 
-        // Per-link semaphore addresses for chunk-level sync. These occupy per-core reader slots
-        // exp_ring_joint_sdpa_dynamic::kReaderSemaphoreArgBase .. +num_links-1. They are hash-excluded, so
-        // they are baked here for the cache-miss build and re-applied every dispatch by
-        // get_dynamic_runtime_args(); if you reorder the args above, update kReaderSemaphoreArgBase (and
-        // thus the re-apply target) accordingly.
+        // Per-link semaphore addresses for chunk-level sync. Hash-excluded, so baked here for the
+        // cache-miss build and re-applied every dispatch by override_runtime_arguments().
         reader_args.push_back(args.num_links);
         for (uint32_t lnk = 0; lnk < args.num_links; ++lnk) {
             reader_args.push_back(static_cast<uint32_t>(
                 args.semaphore[lnk]
                     .address()));  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every dispatch
-                                   // via ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args
+                                   // via ExpRingJointSDPADeviceOperation::override_runtime_arguments
         }
 
         // Inject fused-op synchronization RT args: ring_size, ring_index, direction (3 values)
@@ -1630,15 +1628,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
             // MUX writer RT args: out_ready_sem, injector coords, AG params, op signaler.
             if (link_in_range) {
-                // out_ready_sem_addr occupies per-core fabric-writer slot
-                // exp_ring_joint_sdpa_dynamic::kWriterFabricOutReadySemArg. It is a hash-excluded
-                // global-semaphore address, so it is baked here for the cache-miss build and re-applied
-                // every dispatch by get_dynamic_runtime_args(); if you reorder the args above, update
-                // kWriterFabricOutReadySemArg (and thus the re-apply target) accordingly.
+                // out_ready_sem_addr is a hash-excluded global-semaphore address, baked here for the
+                // cache-miss build and re-applied every dispatch by override_runtime_arguments().
                 const uint32_t out_ready_sem_addr = args.semaphore[link].address();
                 writer_args.push_back(
                     out_ready_sem_addr);  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every
-                                          // dispatch via ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args
+                                          // dispatch via ExpRingJointSDPADeviceOperation::override_runtime_arguments
 
                 // Find the injector core for this MUX writer's (batch, head)
                 const auto& mux_head_work = core_work.at(i).head_work;
@@ -1764,6 +1759,20 @@ tt::tt_metal::WorkloadDescriptor ExpRingJointSDPAProgramFactory::create_workload
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return wd;
+}
+
+// Cache-hit re-derivation: rebuild this coordinate's ProgramDescriptor from the single source of truth
+// (the per-coord builder) and re-apply ALL rt-args + CB addresses to the cached program. No rebuild of
+// workload-scoped resources; supersedes get_dynamic_runtime_args (hash-excluded semaphore addresses).
+void ExpRingJointSDPADeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    auto desc = build_exp_ring_joint_sdpa_program_descriptor(
+        operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::prim
