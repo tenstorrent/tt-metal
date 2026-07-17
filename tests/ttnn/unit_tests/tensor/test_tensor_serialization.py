@@ -6,6 +6,7 @@ import pytest
 
 import os
 import pathlib
+import re
 
 import torch
 import numpy as np
@@ -14,6 +15,14 @@ import ttnn
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, TORCH_INTEGER_DTYPES
 
 pytestmark = pytest.mark.use_module_device
+
+
+def _kmd_supports_read_only_page_pinning():
+    version_path = pathlib.Path("/sys/module/tenstorrent/version")
+    if not version_path.exists():
+        return False
+    match = re.match(r"(\d+)\.(\d+)\.(\d+)", version_path.read_text().strip())
+    return match is not None and tuple(int(component) for component in match.groups()) >= (2, 9, 0)
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 64, 96)])
@@ -57,6 +66,23 @@ def test_serialization(tmp_path, shape, tt_dtype):
 
     passing = torch.allclose(torch_tensor, torch_tensor_from_file, **allclose_kwargs)
     assert passing
+
+
+def test_large_read_only_file_backed_tensor_upload(tmp_path, device):
+    if not _kmd_supports_read_only_page_pinning():
+        pytest.skip("Device-read-only page pinning requires KMD 2.9.0 or newer")
+
+    # 1024 * 9216 * 4 bytes = 36 MiB, above Metal's 32 MiB pinned H2D threshold.
+    shape = (1, 1, 1024, 9216)
+    torch_tensor = torch.full(shape, 1.25, dtype=torch.float32)
+    host_tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.float32)
+    file_name = tmp_path / "large_read_only.tensorbin"
+    ttnn.dump_tensor(str(file_name), host_tensor)
+
+    # load_tensor opens the file O_RDONLY and maps it PROT_READ | MAP_PRIVATE before uploading.
+    device_tensor = ttnn.load_tensor(str(file_name), device=device)
+    result = ttnn.to_torch(device_tensor)
+    assert torch.equal(result, torch_tensor)
 
 
 core_ranges = ttnn.num_cores_to_corerangeset(56, [8, 7], True)
