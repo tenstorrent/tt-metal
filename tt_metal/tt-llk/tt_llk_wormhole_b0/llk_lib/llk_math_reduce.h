@@ -163,6 +163,11 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
             constexpr std::uint32_t inner_loops    = high_fidelity ? to_underlying(math_fidelity) : 1;
             const std::uint32_t replay_start       = ckernel::math::replay_buf_offset;
 
+            // #50224: seed the SrcB CR-base to row 16 so ADDR_MOD_2's cr reload lands on
+            // the right-column faces (F1/F3) instead of re-reading F0/F2 (which dropped
+            // full-model PCC 0.9383 -> 0.7696 on asymmetric data).
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 16, 0, p_setrwc::SET_B);
+
             lltt::record(replay_start, replay_buf_len);
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
             TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
@@ -377,7 +382,10 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
 
             addr_mod_t {
                 .srca = {.incr = 16},
-                .srcb = {.incr = 16, .cr = 1},
+                // #50224: cr reloads SrcB from its CR-base (seeded to row 16 before the
+                // replay), so do NOT combine .incr with .cr here — mirrors the
+                // "cr=16 before" contract in llk_math_matmul.h.
+                .srcb = {.cr = 1},
                 .dest = {.cr = 1},
             }
                 .set(ADDR_MOD_2);
