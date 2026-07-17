@@ -26,6 +26,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/nlp_concat_heads_boltz_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_gdn/nlp_create_qkv_heads_gdn_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_nanobind.hpp"
@@ -102,6 +103,7 @@ void py_module(nb::module_& mod) {
     transformer::detail::bind_concatenate_heads(mod);
     transformer::detail::bind_split_qkv(mod);
     transformer::detail::bind_nlp_create_qkv_heads(mod);
+    transformer::detail::bind_nlp_create_qkv_heads_gdn(mod);
     transformer::detail::bind_create_qkv_heads_from_separate_tensors(mod);
     nlp_concat_heads_decode::detail::bind_nlp_concat_heads_decode(mod);
     nlp_concat_heads::detail::bind_nlp_concat_heads(mod);

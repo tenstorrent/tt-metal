@@ -22,6 +22,7 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops i
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
+    _create_heads,
     chunk_gated_delta_rule_seq_adapter,
     create_chunk_masks_seq,
 )
@@ -366,14 +367,23 @@ class TPGatedDeltaNet:
 
         kd = self.key_dim_tp
         rf = Nv // Nk
-        # Head-split in ROW_MAJOR, so that the reshapes are free
-        conv = ttnn.to_layout(conv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
-        k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
-        v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp)), (1, T, Nv, Dv))
-        ttnn.deallocate(conv)
-        q = ttnn.repeat_interleave(q, rf, dim=2)
-        k = ttnn.repeat_interleave(k, rf, dim=2)
+        # create_gdn_heads (default on): hand the fused TILE conv to nlp_create_qkv_heads_gdn inside
+        # the adapter, folding the host-side head-split (RM cast + slices + reshapes) AND the
+        # adapter's token->head permute into one address-arithmetic op. conv is TILE here (pre-RM).
+        # QWEN_GDN_CREATE_HEADS=0 restores the legacy host-side head-split below. Bit-identical.
+        if _create_heads():
+            q = k = v = None
+            fused_qkv, fused_hc = conv, (Nk, Nk, Nv, Dk)
+        else:
+            fused_qkv = fused_hc = None
+            # Head-split in ROW_MAJOR, so that the reshapes are free
+            conv = ttnn.to_layout(conv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, T, kd)), (1, T, Nk, Dk))
+            k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (1, T, 2 * kd)), (1, T, Nk, Dk))
+            v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, T, self.qkv_dim_tp)), (1, T, Nv, Dv))
+            ttnn.deallocate(conv)
+            q = ttnn.repeat_interleave(q, rf, dim=2)
+            k = ttnn.repeat_interleave(k, rf, dim=2)
 
         beta = ttnn.reshape(ttnn.sigmoid(b), (1, T, Nv))
         ttnn.deallocate(b)
@@ -392,6 +402,8 @@ class TPGatedDeltaNet:
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
             valid_len=valid_len,
+            fused_qkv=fused_qkv,
+            fused_hc=fused_hc,
         )
         B, D = 1, self.qkv_dim_tp
         # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
