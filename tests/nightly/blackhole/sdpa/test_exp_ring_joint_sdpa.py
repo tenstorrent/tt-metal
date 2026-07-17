@@ -196,7 +196,7 @@ def run_exp_ring_joint_sdpa_nightly(
     per-link GlobalSemaphore addresses are hash-excluded) AND that every iteration matches the PyTorch
     reference (PCC/MSE). If a semaphore address froze on the cache-hit fast path, iterations 1+ would
     sync on iteration 0's stale semaphore and either hang or produce a wrong result. This exercises
-    ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args re-applying the addresses every dispatch.
+    ExpRingJointSDPADeviceOperation::override_runtime_arguments re-applying the addresses every dispatch.
     """
     num_devices = detect_devices_without_opening()
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
@@ -492,7 +492,7 @@ def run_exp_ring_joint_sdpa_nightly(
                 logger.info(f"[cache-hit iter {i}] PCC: {out_pcc}, MSE: {mse:.2e}")
                 assert out_pass, (
                     f"Iteration {i}: PCC {out_pcc} below threshold {pcc_threshold}. On a cache HIT the "
-                    "per-link GlobalSemaphore addresses must be re-applied via get_dynamic_runtime_args; "
+                    "per-link GlobalSemaphore addresses must be re-applied via override_runtime_arguments; "
                     "a frozen (stale) address would sync on an earlier iteration's semaphore and corrupt "
                     "the output."
                 )
@@ -692,7 +692,7 @@ def test_exp_ring_joint_attention_sdpa_semaphore_realloc_cache_hit(
     The per-link GlobalSemaphore addresses are excluded from exp_ring_joint_sdpa's program-cache
     hash, so calls that differ only in which semaphores they pass still cache-hit. That makes the
     addresses DYNAMIC: the factory bakes them on the cache-miss build and
-    ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args() must re-apply them on every dispatch.
+    ExpRingJointSDPADeviceOperation::override_runtime_arguments() must re-apply them on every dispatch.
     If an address froze on the cache-hit fast path, a later dispatch reusing the cached program with
     a freshly-allocated semaphore set would sync on the stale address and hang or produce garbage.
 

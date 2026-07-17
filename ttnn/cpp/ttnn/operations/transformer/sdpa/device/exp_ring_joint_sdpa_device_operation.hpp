@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <tt-metalium/program.hpp>
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 
@@ -28,12 +29,10 @@ struct ExpRingJointSDPADeviceOperation {
     static tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
 
-    // The per-link GlobalSemaphore addresses are excluded from the program-cache hash
-    // (ExpRingJointSDPAParams::attribute_values omits `semaphore`), so they are DYNAMIC: the factory
-    // bakes them for the cache-miss build and this method re-applies them to the cached program on
-    // every dispatch, so a cache hit with a different semaphore set cannot reuse a frozen address.
-    // Slot layout mirrors the factory via the shared exp_ring_joint_sdpa_dynamic constants.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    // Re-derives ALL per-dispatch state (hash-excluded per-link semaphore addresses, buffer/CB addrs)
+    // from the per-coord builder for this coordinate and re-applies it to the cached program on hit.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
