@@ -27,7 +27,17 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/profcons.bin $(BUILD)/profcons_split.bin $(BUILD)/eccscrub.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin $(BUILD)/pollmp.bin $(BUILD)/gridilp.bin $(BUILD)/d2hbw.bin $(BUILD)/profrelay.bin $(BUILD)/profcons.bin $(BUILD)/profcons_split.bin $(BUILD)/eccscrub.bin $(BUILD)/rdrbench.bin
+
+$(BUILD)/rdrbench.o: src/rdrbench.c include/noc.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/rdrbench.elf: $(BUILD)/entry.o $(BUILD)/rdrbench.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/rdrbench.o
+
+$(BUILD)/rdrbench.bin: $(BUILD)/rdrbench.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "rdrbench.bin: $$(wc -c < $@) bytes"
 
 $(BUILD)/eccscrub.o: src/eccscrub.c | $(BUILD) toolchain
 	$(CC) $(CFLAGS) -c -o $@ $<
