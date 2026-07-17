@@ -754,16 +754,11 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     if (split_program_tilize_only && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") == nullptr) {
         dst_full_sync_en = true;
     }
-    // SyncFull for the UTD tilize — RE-ENABLED now that the tilize uses the SEMAPHORE scheme (not the old
-    // dvalid scheme). The earlier SyncFull corruption (dprint_tr7/tr8) was the DVALID scheme's 2-bank slot
-    // addressing + CLEARDVALID-reset-to-bank0, which is GONE. Under the semaphore scheme SyncFull means a single
-    // DEST bank, max=1, and the SEC-base flip (llk_*_tilize_dest_release advance) is gated on SyncHalf -> NO flip
-    // -> fully serialized UNPACK-fills-bank0 / PACK-drains-bank0. This removes the SyncHalf double-buffer per-core
-    // race (dprint_tr11: core0 did all 32 blocks, core1 stalled at 6 -> non-deterministic 2-bank concurrency).
-    // Slower (no unpack/pack overlap) but deterministic. If this is green every run, SyncFull is the workaround.
-    if (arch_is_quasar && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") != nullptr) {
-        dst_full_sync_en = true;
-    }
+    // SyncFull for the UTD tilize — TRIED, REVERTED (dprint_tr12): under the semaphore scheme SyncFull stalled
+    // EARLIER than SyncHalf (both cores stuck at 6/2 blocks vs SyncHalf's core0=32). Single-bank serialization is
+    // not the fix, and it rules out the SyncHalf bank-FLIP as the cause (SyncFull has no flip yet stalls sooner).
+    // The residual stall is at the UNPACR_TILIZE->DEST fill / semaphore boundary itself, not the double-buffer.
+    // Left as SyncHalf (semaphore scheme; core0 completes all 32, core1 stalls -> LLK-level DEST-fill issue).
 
     // OPTION B — Program A must produce the FULL im2col contraction dim K, not just one act_block_w K-sub-block.
     // On Quasar force_conv_no_spill is off, so full_inner_dim does NOT bump act_block_w to the full K; here
