@@ -850,3 +850,40 @@ def test_paged_fill_cache_negative_asymmetric_num_heads_byte_count_mismatch(devi
 
     with pytest.raises(RuntimeError, match="geometry mismatch"):
         ttnn.experimental.paged_fill_cache(cache_tt, xt, page_table_tt, batch_idx=0, block_size=view_block_size)
+
+
+def test_paged_fill_cache_program_cache_scalar_batch_idx(device):
+    """Program-cache hit with a DIFFERENT scalar ``batch_idx`` must still fill the
+    correct physical block. ``batch_idx`` is excluded from the program hash and baked
+    into a writer runtime arg, so a frozen value would re-route the 2nd fill to the
+    1st user's block. Two fills reuse one cache entry; each re-allocates its input so
+    buffer addresses differ across the hit too.
+    """
+    torch.manual_seed(20)
+    num_users = 2
+    num_kv_heads = 1
+    block_size = 64
+    head_dim = 256
+    input_seq_len = block_size  # one block per user
+
+    cache_tt, cache_torch = _make_paged_cache(num_users, num_kv_heads, block_size, head_dim, device)
+    ref = cache_torch.clone()
+
+    # page_table[u] = [u]: user u -> physical block u. A frozen batch_idx would send
+    # both fills to block 0 and leave block 1 unchanged.
+    page_table = torch.arange(num_users, dtype=torch.int32).reshape(num_users, 1)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+    entries_before = device.num_program_cache_entries()
+    for u in range(num_users):
+        x = torch.randn([1, num_kv_heads, input_seq_len, head_dim]).bfloat16().float()
+        xt = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+        ttnn.experimental.paged_fill_cache(cache_tt, xt, page_table_tt, batch_idx=u)
+        ref[u, 0:num_kv_heads, :, :] = x[0, :, :, :]
+
+    # Second fill reuses the first fill's entry (only batch_idx differs, which is unhashed).
+    assert device.num_program_cache_entries() - entries_before == 1
+
+    got = _read_paged_cache(cache_tt)
+    eq, msg = comp_equal(ref, got)
+    assert eq, f"program-cache fill mismatch (frozen batch_idx?): {msg}"
