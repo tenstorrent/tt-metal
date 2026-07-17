@@ -33,6 +33,39 @@ _FUSED_GELU_VARIANTS = {
 }
 
 
+def maybe_cast_activation(x: ttnn.Tensor, activation_dtype) -> ttnn.Tensor:
+    """Cast an activation that is about to cross the fabric, if a quant config asked for it.
+
+    Must be applied BEFORE the collective, never after: the win is in the bytes the gather moves,
+    and the gather's page size is the tile size of the gathered dtype (bfloat8_b tiles are 1088 B
+    vs bfloat16's 2048 B). A cast placed after the gather buys nothing and costs a full pass.
+
+    The op-level constraint that makes this legal: the AG-matmul validates the activation and the
+    weight dtypes independently, so a bf8 activation composes with the bf16-weight carve-out the
+    fused addcmul epilogue requires.
+    """
+    if activation_dtype is None or x.get_dtype() == activation_dtype:
+        return x
+    return ttnn.typecast(x, activation_dtype)
+
+
+def resolve_output_dtype(dtype, x: ttnn.Tensor):
+    """Pin a block-float-fed matmul's output back to bf16 unless the caller asked for something else.
+
+    The matmuls default their output dtype to the input's (``output_dtype.value_or(in0.dtype())``), so a
+    quantized activation would otherwise push bf8 downstream — into the residual stream, and into
+    ``DistributedRMSNorm``, which rejects anything but bf16. The lever is input-side (fewer bytes over
+    the fabric and into the matmul) and must stop at the output.
+
+    Keyed on the input's dtype rather than on the configured ``activation_dtype`` so it also covers an
+    input that arrived block-float from upstream (e.g. an SDPA output under an SDPA-input quant). bf16
+    and fp32 inputs keep their existing default.
+    """
+    if dtype is None and x.get_dtype() in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        return ttnn.bfloat16
+    return dtype
+
+
 class Linear(Module):
     """
     Linear layer with replicated weights
@@ -167,6 +200,14 @@ class ColParallelLinear(Module):
             assert self.mesh_axis != self.fsdp_mesh_axis
             assert self.ccl_manager is not None
 
+        # Optional cast of the *input* activation, set by a quant config. This is the only Linear
+        # variant that honours it, because it is the only one whose input crosses the fabric: at
+        # TP>1 the input is the payload of the fused all-gather, and the gather's page size follows
+        # the dtype of the gathered tensor. Casting a RowParallel/replicated Linear's input would
+        # buy matmul-internal precision only while paying a full typecast pass — and RowParallel's
+        # input is the 4x-wide FFN intermediate, so that trade is strictly negative.
+        self.activation_dtype = None
+
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=MATH_FIDELITY[dtype],
@@ -225,6 +266,9 @@ class ColParallelLinear(Module):
         Return output fractured on columns.
         If chunks is set, returns a list of tensors split along the output dimension.
         """
+        x = maybe_cast_activation(x, self.activation_dtype)
+        dtype = resolve_output_dtype(dtype, x)
+
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
             weight = self.ccl_manager.all_gather_persistent_buffer(

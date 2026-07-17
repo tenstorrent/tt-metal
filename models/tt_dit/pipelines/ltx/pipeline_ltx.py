@@ -45,6 +45,12 @@ from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
+# Default DiT-linear quant preset. bf8 weights are the shipped 1080p tier: the perf targets and the
+# VBench floors are calibrated against it. LTX_QUANT="" opts back to the bf16 baseline; LTX_QUANT
+# names any other QuantConfig preset. The weight-cache name derives from the same value, so the
+# reader here and set_quant_config must resolve it identically or a run hits a stale-precision cache.
+LTX_QUANT_DEFAULT = "all_bf8_lofi"
+
 DEFAULT_NEGATIVE_PROMPT = (
     "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
     "grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, "
@@ -296,6 +302,9 @@ class LTXPipeline:
         if self.checkpoint_name is not None:
             self._instantiate_modules(extra_transformer_variants or [])
             self._register_coresident_exclusions()
+            # Installed before _prime_caches so Parameter.load typecasts DiT-linear weights to the
+            # preset dtype as they load, and re-typecasts after every dynamic_load reload.
+            self._maybe_apply_quant_config()
             self._prime_caches()
             valid_shape = num_frames > 0 and height > 0 and width > 0
             if (run_warmup or traced) and valid_shape:
@@ -599,6 +608,26 @@ class LTXPipeline:
         self._prepare_audio_decoder()
         self._prepare_transformer(0)
 
+    def _maybe_apply_quant_config(self) -> None:
+        """Install a DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
+
+        LTX_QUANT="" selects the bf16 baseline."""
+        preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
+        if not preset:
+            return
+        from .quant_config import QuantConfig, apply_quant_config
+
+        factory = getattr(QuantConfig, preset, None)
+        if factory is None or not callable(factory):
+            logger.warning(f"LTX_QUANT='{preset}' is not a QuantConfig preset; running baseline (bf16/HiFi2)")
+            return
+        logger.info(f"LTX_QUANT='{preset}': applying DiT-linear quant config")
+        # Apply post-load only (via the hook in _prepare_transformer), never before: this load path
+        # brings bf16 from the base cache and strictly checks Parameter dtype, so the typecast must
+        # follow the weights, not precede them. dynamic_load is False here, so a single apply holds.
+        config = factory()
+        self._transformer_post_load_hook = lambda model: apply_quant_config(model, config)
+
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
         state.checkpoint.load(
@@ -608,6 +637,11 @@ class LTXPipeline:
             is_fsdp=self.is_fsdp,
             lora_specs=state.lora_specs,
         )
+        # A registered quant preset typecasts the DiT-linear weights in place after each (re)load;
+        # a dynamic_load reload lands bf16, so this must run every call, not just the first.
+        hook = getattr(self, "_transformer_post_load_hook", None)
+        if hook is not None:
+            hook(state.model)
         self.transformer = state.model
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:

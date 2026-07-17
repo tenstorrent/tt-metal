@@ -242,12 +242,22 @@ def prepare_video_rope(
     mesh_device: ttnn.MeshDevice,
     parallel_config: DiTParallelConfig,
     fps: float = 24.0,
+    anchor_frames: list[int] | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Compute video RoPE in INTERLEAVED layout, SP×TP sharded onto the mesh."""
+    """Compute video RoPE in INTERLEAVED layout, SP×TP sharded onto the mesh.
+
+    ``anchor_frames`` appends, at the tail, one h×w block of positions per listed latent frame,
+    reusing that frame's own (temporal+spatial) coordinates. Append-token interior keyframes ride
+    there so the anchor carries the exact RoPE phase of the free grid frame it conditions."""
     v_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width)
     v_coords = video_get_patch_grid_bounds(v_shape)
     v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
     v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps
+    if anchor_frames:
+        hw = latent_height * latent_width
+        v_positions = torch.cat(
+            [v_positions] + [v_positions[:, :, f * hw : (f + 1) * hw, :] for f in anchor_frames], dim=2
+        )
 
     cos_freq, sin_freq = precompute_freqs_cis(
         v_positions,
@@ -326,6 +336,7 @@ def prepare_av_cross_pe(
     parallel_config: DiTParallelConfig,
     fps: float = 24.0,
     cross_pe_max_pos: int = 20,
+    anchor_frames: list[int] | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """Temporal-only cross positional embeddings for A↔V cross-attention.
 
@@ -345,6 +356,13 @@ def prepare_av_cross_pe(
     v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
     v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps  # temporal axis → seconds
     v_temporal = v_positions[:, 0:1, :]  # (1, 1, video_N, 2)
+    if anchor_frames:
+        # Append-token anchors ride the tail carrying their target frame's temporal phase, so the
+        # video cross-PE stays length-matched to the extended video token sequence.
+        hw = latent_height * latent_width
+        v_temporal = torch.cat(
+            [v_temporal] + [v_temporal[:, :, f * hw : (f + 1) * hw, :] for f in anchor_frames], dim=2
+        )
 
     a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
     a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, audio_N_real, 2)
