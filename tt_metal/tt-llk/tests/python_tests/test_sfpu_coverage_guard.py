@@ -30,8 +30,8 @@ from helpers.llk_params import MathOperation
 # ---------------------------------------------------------------------------
 WAIVED = {
     # -- covered through a non-unary / separate harness (not a gap) -----------
-    "left_shift": "covered via binary LSHFT (test_sfpu_binary.py)",
-    "right_shift": "covered via binary RSHFT/LOGICAL_RSHFT (test_sfpu_binary.py)",
+    "left_shift": "unary form is a ttnn composite over the binary LSHFT kernel (covered in test_sfpu_binary.py)",
+    "right_shift": "unary form is a ttnn composite over the binary RSHFT/LOGICAL_RSHFT kernel (covered in test_sfpu_binary.py)",
     "div_int32_trunc": "exercised via binary DIV_INT32 (calculate_div_int32_trunc)",
     "reduce": "covered by the dedicated reduce harness (test_sfpu_reduce.py)",
     # -- dead / placeholder enum ---------------------------------------------
@@ -68,11 +68,9 @@ WAIVED = {
     "max_pool_with_indices": "gap(D): pooling+indices; needs dedicated driver",
     # -- GROUP E: non-deterministic; need a statistical (non-PCC) test -------
     "dropout": "gap(E): stochastic; needs distributional test (no PCC golden)",
-    # -- GROUP A leftovers: base/approx variants; deferred -------------------
-    "exp_with_base": "gap(A): exp(base*x) variant; base-arg plumbing pending",
-    "log_with_base": "gap(A): log_base(x) variant; base-arg plumbing pending",
-    "gelu_derivative": "gap(A): d/dx gelu; golden+dispatch pending",
-    "gelu_appx": "gap(A): approximate gelu variant; golden+dispatch pending",
+    # -- GROUP A leftovers: covered elsewhere / dead enum --------------------
+    "gelu_appx": "covered via Gelu(ApproximationMode.Yes): calculate_gelu approx path dispatches calculate_gelu_appx",
+    "exp_with_base": "dead/legacy enumerator: no kernel dispatch or production caller (WH+BH)",
 }
 
 
