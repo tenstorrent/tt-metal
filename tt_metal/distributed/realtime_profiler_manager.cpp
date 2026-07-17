@@ -2069,7 +2069,7 @@ void RealtimeProfilerManager::shutdown() {
                 try {
                     constexpr uint64_t kTrajCount = 0x0801C100ull;
                     constexpr uint64_t kTrajBase = 0x0801D000ull;
-                    constexpr uint32_t kTrajCap = 4096, kTrajStride = 32;
+                    constexpr uint32_t kTrajCap = 2048, kTrajStride = 48;
                     uint64_t cnt = dev_state.x280_driver->lim_rd_u64(kTrajCount);
                     uint32_t n = cnt < kTrajCap ? static_cast<uint32_t>(cnt) : kTrajCap;
                     if (n > 0) {
@@ -2079,26 +2079,30 @@ void RealtimeProfilerManager::shutdown() {
                         std::string path = std::string(home && *home ? home : "/tmp") + "/x280_traj_dev" +
                                            std::to_string(dev_state.chip_id) + ".csv";
                         std::ofstream csv(path);
-                        csv << "t_us,l1_0,l1_1,mirror,single,d2h\n";
+                        csv << "t_us,l1_0,l1_1,mirror,single,d2h,cloop_us,rp0_us,rp1_us\n";
                         uint64_t t0 = 0;
-                        uint32_t pl1 = 0, pmir = 0, psin = 0, pd2h = 0;
-                        uint64_t tl1 = 0, tmir = 0, tsin = 0, td2h = 0;
+                        uint32_t pl1 = 0, pmir = 0, psin = 0, pd2h = 0, pcl = 0;
+                        uint64_t tl1 = 0, tmir = 0, tsin = 0, td2h = 0, tcl = 0;
                         for (uint32_t k = 0; k < n; k++) {
                             uint32_t idx = (cnt <= kTrajCap) ? k : static_cast<uint32_t>((cnt + k) % kTrajCap);
                             const uint8_t* s = raw.data() + static_cast<size_t>(idx) * kTrajStride;
                             uint64_t t = 0;
-                            uint32_t l1a = 0, l1b = 0, mir = 0, sin = 0, d2h = 0;
+                            uint32_t l1a = 0, l1b = 0, mir = 0, sin = 0, d2h = 0, cl = 0, rp0 = 0, rp1 = 0;
                             std::memcpy(&t, s + 0, 8);
                             std::memcpy(&l1a, s + 8, 4);
                             std::memcpy(&l1b, s + 12, 4);
                             std::memcpy(&mir, s + 16, 4);
                             std::memcpy(&sin, s + 20, 4);
                             std::memcpy(&d2h, s + 24, 4);
+                            std::memcpy(&cl, s + 28, 4);
+                            std::memcpy(&rp0, s + 32, 4);
+                            std::memcpy(&rp1, s + 36, 4);
                             if (k == 0) {
                                 t0 = t;
                             }
                             uint64_t tus = (t - t0) / 1000;  // X280 ~1 GHz: cycles -> ns, /1000 -> us
-                            csv << tus << "," << l1a << "," << l1b << "," << mir << "," << sin << "," << d2h << "\n";
+                            csv << tus << "," << l1a << "," << l1b << "," << mir << "," << sin << "," << d2h << ","
+                                << cl << "," << rp0 << "," << rp1 << "\n";
                             uint32_t l1 = l1a > l1b ? l1a : l1b;
                             if (l1 > pl1) {
                                 pl1 = l1;
@@ -2116,12 +2120,17 @@ void RealtimeProfilerManager::shutdown() {
                                 pd2h = d2h;
                                 td2h = tus;
                             }
+                            if (cl > pcl) {
+                                pcl = cl;
+                                tcl = tus;
+                            }
                         }
                         csv.close();
                         log_info(
                             tt::LogMetal,
                             "[Real-time profiler] Device {}: fill-trajectory ({} samples) -> {}; peaks: "
-                            "L1={}/512 @{}us, mirror={}/512 @{}us, single={}/4096 @{}us, D2H={}B @{}us",
+                            "L1={}/512 @{}us, mirror={}/512 @{}us, single={}/4096 @{}us, D2H={}B @{}us, "
+                            "collect-loop peak={}us @{}us (idle ~40us -- balloons under load)",
                             dev_state.chip_id,
                             n,
                             path,
@@ -2132,12 +2141,88 @@ void RealtimeProfilerManager::shutdown() {
                             psin,
                             tsin,
                             pd2h,
-                            td2h);
+                            td2h,
+                            pcl,
+                            tcl);
                     }
                 } catch (const std::exception& e) {
                     log_warning(
                         tt::LogMetal,
                         "[Real-time profiler] Device {}: fill-trajectory dump failed: {}",
+                        dev_state.chip_id,
+                        e.what());
+                }
+                // Burst-window cycle-breakdown: the relay latched the reader/collect cumulative
+                // counters at burst-onset (idle->active edge) and at the fall-behind (sustained stall).
+                // The diff is the time distribution over JUST the burst -- the terminal totals are
+                // ~96% idle and hide it. Answers "where do the reader/collect cores spend the burst?"
+                try {
+                    constexpr uint64_t kGauge = 0x08016400ull;
+                    constexpr uint64_t kOnset = kGauge + 0x180, kStall = kGauge + 0x200, kFlags = kGauge + 0x280;
+                    uint64_t onset_valid = dev_state.x280_driver->lim_rd_u64(kFlags + 0);
+                    uint64_t stall_valid = dev_state.x280_driver->lim_rd_u64(kFlags + 8);
+                    if (onset_valid && stall_valid) {
+                        auto rd = [&](uint64_t base, int i) { return dev_state.x280_driver->lim_rd_u64(base + i * 8); };
+                        auto pct = [](uint64_t part, uint64_t whole) -> double {
+                            return whole ? 100.0 * static_cast<double>(part) / static_cast<double>(whole) : 0.0;
+                        };
+                        // rdr0[0..4]=poll,bulk,mwait,backoff,wall  rdr1[5..9]  col[10..14]=cwall,copy,swait,scan,prod
+                        for (int h = 0; h < 2; h++) {
+                            int b = h * 5;
+                            uint64_t poll = rd(kStall, b + 0) - rd(kOnset, b + 0);
+                            uint64_t bulk = rd(kStall, b + 1) - rd(kOnset, b + 1);
+                            uint64_t mwait = rd(kStall, b + 2) - rd(kOnset, b + 2);
+                            uint64_t backoff = rd(kStall, b + 3) - rd(kOnset, b + 3);
+                            uint64_t wall = rd(kStall, b + 4) - rd(kOnset, b + 4);
+                            uint64_t parse =
+                                wall > (poll + bulk + mwait + backoff) ? wall - (poll + bulk + mwait + backoff) : 0;
+                            log_info(
+                                tt::LogMetal,
+                                "[Real-time profiler] Device {}: BURST reader-{} ({} us): poll(NoC ctrl)={:.1f}%  "
+                                "bulk(NoC copy)={:.1f}%  mwait(mirror full)={:.1f}%  parse/other(LIM)={:.1f}%  "
+                                "backoff(idle)={:.1f}%",
+                                dev_state.chip_id,
+                                h,
+                                wall / 1000,
+                                pct(poll, wall),
+                                pct(bulk, wall),
+                                pct(mwait, wall),
+                                pct(parse, wall),
+                                pct(backoff, wall));
+                        }
+                        uint64_t cwall = rd(kStall, 10) - rd(kOnset, 10);
+                        uint64_t copy = rd(kStall, 11) - rd(kOnset, 11);
+                        uint64_t swait = rd(kStall, 12) - rd(kOnset, 12);
+                        uint64_t scan = rd(kStall, 13) - rd(kOnset, 13);
+                        uint64_t prod = rd(kStall, 14) - rd(kOnset, 14);
+                        uint64_t reshape = copy > swait ? copy - swait : 0;
+                        uint64_t empty = cwall > copy ? cwall - copy : 0;
+                        log_info(
+                            tt::LogMetal,
+                            "[Real-time profiler] Device {}: BURST collect ({} us): scan-empty(round-robin)={:.1f}%  "
+                            "reshape={:.1f}%  swait(relay full)={:.1f}%  | mirror-visits={} productive={} ({:.1f}% "
+                            "hit)",
+                            dev_state.chip_id,
+                            cwall / 1000,
+                            pct(empty, cwall),
+                            pct(reshape, cwall),
+                            pct(swait, cwall),
+                            scan,
+                            prod,
+                            pct(prod, scan));
+                    } else {
+                        log_info(
+                            tt::LogMetal,
+                            "[Real-time profiler] Device {}: BURST breakdown unavailable (onset_valid={}, "
+                            "stall_valid={} -- no sustained stall this run)",
+                            dev_state.chip_id,
+                            onset_valid,
+                            stall_valid);
+                    }
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: burst-breakdown dump failed: {}",
                         dev_state.chip_id,
                         e.what());
                 }

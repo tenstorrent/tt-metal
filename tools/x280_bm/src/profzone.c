@@ -128,16 +128,34 @@
 #define G_MIRROR (GAUGE_BASE + 0x20)             /* max LIM mirror fill (words, /MIRROR_DEPTH) this loop */
 #define G_SINGLE (GAUGE_BASE + 0x28)             /* single-SPSC fill (pages, /SINGLE_NREC) */
 #define G_D2H (GAUGE_BASE + 0x30)                /* D2H FIFO fill (bytes, /fifo_total) */
+/* Service-rate gauges: the per-loop/per-pass time (us). ~40us when buffers are empty (pure scan),
+ * but balloons under load (scan + reshape/bulk of the active streams) -> far fewer sweeps happen
+ * during a burst than the empty rate implies. Sampled next to the fills to catch the collapse. */
+#define G_CLOOP (GAUGE_BASE + 0x38)                        /* collect: last full-loop time (us) */
+#define G_RPASS(h) (GAUGE_BASE + 0x40 + (uint64_t)(h) * 8) /* reader h: last full-pass time (us) */
+
+/* Live cumulative cycle-breakdown, published every pass/loop so the relay can snapshot the split
+ * DURING the burst (the terminal RES/COLLECT_STATS totals are ~96% idle and useless for that).
+ * The relay latches all of these at burst-onset (idle->active edge) and at stall (freeze); the host
+ * diffs the two snapshots to get the reader/collect time distribution over just the burst window. */
+#define LIVE_RDR(h) (GAUGE_BASE + 0x80 + (uint64_t)(h) * 0x28) /* 5 u64: poll,bulk,mwait,backoff,wall */
+#define LIVE_COL (GAUGE_BASE + 0x140)                          /* 5 u64: cwall,copy,swait,scanned,productive */
+#define SNAP_ONSET (GAUGE_BASE + 0x180)                        /* rdr0[5] rdr1[5] col[5] = 15 u64 */
+#define SNAP_STALL (GAUGE_BASE + 0x200)                        /* rdr0[5] rdr1[5] col[5] = 15 u64 */
+#define SNAP_FLAGS (GAUGE_BASE + 0x280)                        /* +0 onset_valid, +8 stall_valid */
 
 /* Fill-trajectory ring: the relay (idle-ish) appends a time-stamped snapshot of all four gauges
  * every TRAJ_PERIOD_CYC, so the host can reconstruct fill-vs-time (which queue climbs to capacity,
  * and when -- e.g. does a queue ramp monotonically until ~op 90?). Fixed region between SINGLECTL
  * and the mirrors (0x08040000), so placement is independent of num_cores. 32 B/sample. */
 #define TRAJ_BASE 0x0801D000UL
-#define TRAJ_CAP 4096u /* 4096 * 32 B = 128 KiB, ends 0x0803D000 < MIRROR_BASE (0x08040000) */
-#define TRAJ_STRIDE 32u
+#define TRAJ_CAP 2048u /* 2048 * 48 B = 96 KiB, ends 0x08035000 < MIRROR_BASE (0x08040000) */
+#define TRAJ_STRIDE 48u
 #define TRAJ_COUNT (SINGLECTL + 0x100) /* total samples written (host reads count, then the ring) */
-#define TRAJ_PERIOD_CYC 200000u        /* ~200 us @ 1 GHz -> 4096 samples covers ~0.8 s (ring wraps) */
+#define TRAJ_PERIOD_CYC                                                               \
+    10000u /* ~10 us @ 1 GHz. Only ACTIVE samples are recorded (idle skipped), so the \
+            * 4096-sample ring keeps the most-recent ~active window across replays -- \
+            * i.e. the LAST/real stall, not the first transient blip. */
 
 static inline uint32_t r32(uint64_t a) { return *(volatile uint32_t*)a; }
 static inline void w32(uint64_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
@@ -148,6 +166,15 @@ static inline uint64_t rdcycle_(void) {
     uint64_t c;
     __asm__ volatile("rdcycle %0" : "=r"(c));
     return c;
+}
+/* Latch the live reader/collect cycle-breakdown into a snapshot region (rdr0[5] rdr1[5] col[5]),
+ * so the host can diff burst-onset vs stall and get the time distribution over just the burst. */
+static inline void snapshot_breakdown(uint64_t dst) {
+    for (int i = 0; i < 5; i++) {
+        *(volatile uint64_t*)(dst + 0 + i * 8) = *(volatile uint64_t*)(LIVE_RDR(0) + i * 8);  /* rdr0 */
+        *(volatile uint64_t*)(dst + 40 + i * 8) = *(volatile uint64_t*)(LIVE_RDR(1) + i * 8); /* rdr1 */
+        *(volatile uint64_t*)(dst + 80 + i * 8) = *(volatile uint64_t*)(LIVE_COL + i * 8);    /* col */
+    }
 }
 /* copy one 64 B page as a single wide vector load+store (LIM->FIFO or LIM->LIM) */
 static inline void page_copy(uint64_t src, uint64_t dst) {
@@ -288,6 +315,7 @@ int main(uint64_t hartid) {
             uint64_t progressed = 0;
             passes++;
             uint32_t pass_l1max = 0; /* fullest L1 ring (words) seen this pass -> G_L1 gauge */
+            uint64_t rpt = rdcycle_();
             for (uint64_t c = lo; c < hi; c++) {
                 uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
                 uint64_t rbufs = cbase + 128;
@@ -363,6 +391,15 @@ int main(uint64_t hartid) {
                 }
             }
             w64(G_L1(hartid), pass_l1max); /* publish fullest L1 ring this pass (host samples over time) */
+            w64(G_RPASS(hartid), (uint64_t)((rdcycle_() - rpt) / 1000u)); /* last full-pass time (us) */
+            if (hartid < 2) { /* publish live cumulative breakdown so the relay can snapshot it (readers 0,1) */
+                uint64_t lr = LIVE_RDR(hartid);
+                w64(lr + 0, cyc_poll);
+                w64(lr + 8, cyc_bulk);
+                w64(lr + 16, cyc_mwait);
+                w64(lr + 24, cyc_backoff);
+                w64(lr + 32, rdcycle_() - t_start);
+            }
             if (!progressed) {
                 if (r64(P_STOP)) {
                     break;
@@ -426,6 +463,7 @@ int main(uint64_t hartid) {
             uint64_t progressed = 0;
             loops++;
             uint32_t loop_mirror_max = 0; /* fullest mirror (words) this loop -> G_MIRROR gauge */
+            uint64_t clt = rdcycle_();
             for (uint64_t i = 0; i < nmirror; i++) {
                 uint32_t mtail = r32(MTAIL(i));
                 uint32_t mh = chead[i];
@@ -500,8 +538,14 @@ int main(uint64_t hartid) {
                 }
             }
             w64(G_MIRROR, loop_mirror_max); /* publish fullest mirror this loop (host samples over time) */
+            w64(G_CLOOP, (uint64_t)((rdcycle_() - clt) / 1000u)); /* last full collect-loop time (us) */
             w64(COLLECT_STATS + 0, moved);
             w64(COLLECT_STATS + 8, loops);
+            w64(LIVE_COL + 0, rdcycle_() - t_start); /* live cumulative breakdown for relay snapshots */
+            w64(LIVE_COL + 8, cyc_copy);
+            w64(LIVE_COL + 16, cyc_swait);
+            w64(LIVE_COL + 24, scanned);
+            w64(LIVE_COL + 32, productive);
             if (!progressed) {
                 /* done when stopping AND every reader finished AND all mirrors drained. */
                 if (r64(P_STOP)) {
@@ -596,6 +640,12 @@ int main(uint64_t hartid) {
     uint64_t t_start = rdcycle_();
     uint64_t traj_next = t_start; /* fill-trajectory sampler cadence */
     uint64_t traj_n = 0;
+    uint64_t traj_post = 0; /* freeze countdown once a SUSTAINED producer stall is detected */
+    uint32_t traj_hi = 0;   /* consecutive ticks with L1 >= 500 */
+    int traj_frozen = 0;
+    int prev_active = 0;    /* for the idle->active edge that latches the burst-onset breakdown snapshot */
+    w64(SNAP_FLAGS + 0, 0); /* LIM persists across FW handoffs -> clear stale snapshot-valid flags */
+    w64(SNAP_FLAGS + 8, 0);
     w64(TRAJ_COUNT, 0);
     for (;;) {
         uint64_t progressed = 0;
@@ -652,18 +702,56 @@ int main(uint64_t hartid) {
         w64(G_D2H, (uint64_t)(uint32_t)(bytes_sent - r32(backed_addr))); /* D2H FIFO bytes in flight */
         {
             uint64_t now = rdcycle_();
-            if (now >= traj_next) { /* time-gated snapshot of all 4 gauges -> trajectory ring */
-                uint64_t slot = TRAJ_BASE + (traj_n % TRAJ_CAP) * TRAJ_STRIDE;
-                w64(slot + 0, now);
-                w32(slot + 8, (uint32_t)r64(G_L1(0)));
-                w32(slot + 12, (uint32_t)r64(G_L1(1)));
-                w32(slot + 16, (uint32_t)r64(G_MIRROR));
-                w32(slot + 20, (uint32_t)(r32(S_PROD) - cn));
-                w32(slot + 24, (uint32_t)(bytes_sent - r32(backed_addr)));
-                w32(slot + 28, 0);
-                traj_n++;
-                w64(TRAJ_COUNT, traj_n);
+            if (!traj_frozen && now >= traj_next) {
                 traj_next = now + TRAJ_PERIOD_CYC;
+                uint32_t mir = (uint32_t)r64(G_MIRROR);
+                uint32_t l1a = (uint32_t)r64(G_L1(0));
+                uint32_t l1b = (uint32_t)r64(G_L1(1));
+                int active = (mir >= 8u || l1a >= 32u || l1b >= 32u);
+                /* Latch the reader/collect breakdown at the idle->active edge (burst onset). The LAST
+                 * such edge before the freeze is the sustained burst; overwriting is intended. */
+                if (active && !prev_active) {
+                    snapshot_breakdown(SNAP_ONSET);
+                    w64(SNAP_FLAGS + 0, 1);
+                }
+                prev_active = active;
+                /* Record only ACTIVE samples (skip the ~96% idle) so the ring is dense with burst data. */
+                if (active) {
+                    uint64_t slot = TRAJ_BASE + (traj_n % TRAJ_CAP) * TRAJ_STRIDE;
+                    w64(slot + 0, now);
+                    w32(slot + 8, l1a);
+                    w32(slot + 12, l1b);
+                    w32(slot + 16, mir);
+                    w32(slot + 20, (uint32_t)(r32(S_PROD) - cn));
+                    w32(slot + 24, (uint32_t)(bytes_sent - r32(backed_addr)));
+                    w32(slot + 28, (uint32_t)r64(G_CLOOP));    /* collect loop time (us) */
+                    w32(slot + 32, (uint32_t)r64(G_RPASS(0))); /* reader-0 pass time (us) */
+                    w32(slot + 36, (uint32_t)r64(G_RPASS(1))); /* reader-1 pass time (us) */
+                    w32(slot + 40, 0);
+                    w32(slot + 44, 0);
+                    traj_n++;
+                    w64(TRAJ_COUNT, traj_n);
+                }
+                /* Freeze 256 ticks (~2.56 ms) after a SUSTAINED producer stall (L1 >= 500 for >= 8
+                 * consecutive ticks ~= 80 us), so the ring keeps the lead-up to the REAL sustained stall
+                 * (op ~106) and ignores brief mirror-only transients (op ~94). */
+                uint32_t l1 = l1a > l1b ? l1a : l1b;
+                if (traj_post > 0) {
+                    if (--traj_post == 0) {
+                        traj_frozen = 1;
+                    }
+                } else if (l1 >= 500u) {
+                    if (++traj_hi >= 8u) {
+                        traj_post = 256;
+                        /* Latch the breakdown at the moment we fall behind (sustained stall detected),
+                         * so SNAP_STALL - SNAP_ONSET covers the onset->fall-behind window, not the
+                         * post-stall aftermath (producers blocked, readers draining full rings). */
+                        snapshot_breakdown(SNAP_STALL);
+                        w64(SNAP_FLAGS + 8, 1);
+                    }
+                } else {
+                    traj_hi = 0;
+                }
             }
         }
         if (!progressed) {
