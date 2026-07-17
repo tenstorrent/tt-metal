@@ -84,6 +84,14 @@ struct ChannelTrimmingGlobalOverrides {
 // Parse a previously exported channel trimming capture YAML and return per-router overrides.
 ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& yaml_path);
 
+// Read the optional top-level `preserve_vc0_forwarding` flag from a capture profile YAML.
+// When true, VC0 must be kept topology-complete (all VC0 sender/receiver channels serviced
+// and the VC0 fast-path collapse suppressed) regardless of what a single capture observed.
+// This is required for workloads with data-dependent, multi-hop all-to-all routing (e.g.
+// DeepSeek prefill MoE dispatch/combine) whose VC0 forwarding paths one capture run cannot
+// fully cover. Defaults to false when the key is absent.
+bool load_channel_trimming_preserve_vc0_forwarding(const std::string& yaml_path);
+
 // Parse a channel trimming global override YAML and return global overrides.
 ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std::string& yaml_path);
 

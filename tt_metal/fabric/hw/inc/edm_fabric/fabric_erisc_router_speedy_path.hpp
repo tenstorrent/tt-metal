@@ -131,6 +131,17 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
             const size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
 
+            // Mirror the channel-usage recording in the normal send_next_data path
+            // (fabric_erisc_router.cpp): without this, a sender serviced via the speedy
+            // path records zero usage, so a re-capture on an already-trimmed config would
+            // under-record and could trim a still-needed channel. Compiled out entirely
+            // unless capturing.
+            if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
+                channel_trimming_usage_recorder.set_sender_channel_used(sender_channel_index);
+                channel_trimming_usage_recorder.update_sender_channel_packet_size(
+                    sender_channel_index, static_cast<uint16_t>(payload_size_bytes));
+            }
+
             bool busy = internal_::eth_txq_is_busy(sender_txq_id);
 
             const auto dest_addr = outbound_to_receiver_channel_pointers.remote_receiver_channel_address_ptr;

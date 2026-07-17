@@ -91,31 +91,32 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
-    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
-    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,  // Enable experimental VC1 inter-mesh pass-through
-    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
-    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
-    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
-    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,             // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,             // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                         // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,                      // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                         // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,                       // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,          // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,                  // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,                 // Path to channel trimming global override YAML
+    TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING,  // Stamp preserve_vc0_forwarding into captured profile
+    TT_METAL_ENABLE_FABRIC_VC2,                        // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,          // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FORCE_REINIT,                             // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,                 // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,             // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,                       // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,              // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,                // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                          // Disable DMA operations
+    RELIABILITY_MODE,                                  // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,                     // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                              // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                        // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,                     // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                           // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,           // Simulator tensor preload bypasses FD CQ copies
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -674,6 +675,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_FABRIC_TRIMMING_OVERRIDE=/path/to/override.yaml
         case EnvVarID::TT_METAL_FABRIC_TRIMMING_OVERRIDE:
             this->fabric_trimming_override_path = std::string(value);
+            break;
+
+        // TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING
+        // When capturing (TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE=1), stamp
+        // `preserve_vc0_forwarding: true` into the exported capture YAML so that applying it later
+        // keeps VC0 topology-complete. Required for data-dependent all-to-all workloads (e.g. MoE
+        // dispatch/combine) whose VC0 forwarding paths one capture run cannot fully cover.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING=1
+        case EnvVarID::TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING:
+            this->preserve_vc0_forwarding_in_capture = true;
             break;
 
         // TT_METAL_ENABLE_FABRIC_VC2

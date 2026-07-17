@@ -208,6 +208,14 @@ ChannelTrimmingOverrideMap load_channel_trimming_overrides(const std::string& ya
     return overrides;
 }
 
+bool load_channel_trimming_preserve_vc0_forwarding(const std::string& yaml_path) {
+    YAML::Node root = YAML::LoadFile(yaml_path);
+    if (root["preserve_vc0_forwarding"]) {
+        return root["preserve_vc0_forwarding"].as<bool>();
+    }
+    return false;
+}
+
 ChannelTrimmingGlobalOverrides load_channel_trimming_global_overrides(const std::string& yaml_path) {
     log_info(tt::LogFabric, "Loading channel trimming global overrides from: {}", yaml_path);
 

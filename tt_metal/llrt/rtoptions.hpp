@@ -312,6 +312,9 @@ class RunTimeOptions {
     // Path to channel trimming global override YAML
     std::string fabric_trimming_override_path;
 
+    // When capturing, stamp `preserve_vc0_forwarding: true` into the exported capture YAML
+    bool preserve_vc0_forwarding_in_capture = false;
+
     // Enable fabric VC2 (neighbour exchange, single-hop)
     bool enable_fabric_vc2 = false;
 
@@ -759,6 +762,10 @@ public:
     bool has_fabric_trimming_override() const { return !fabric_trimming_override_path.empty(); }
     const std::string& get_fabric_trimming_override_path() const { return fabric_trimming_override_path; }
     void set_fabric_trimming_override_path(const std::string& path) { fabric_trimming_override_path = path; }
+
+    // When true, a channel trimming capture export stamps `preserve_vc0_forwarding: true`
+    bool get_preserve_vc0_forwarding_in_capture() const { return preserve_vc0_forwarding_in_capture; }
+    void set_preserve_vc0_forwarding_in_capture(bool enable) { preserve_vc0_forwarding_in_capture = enable; }
 
     // Fabric VC2 enable
     bool get_enable_fabric_vc2() const { return enable_fabric_vc2; }
