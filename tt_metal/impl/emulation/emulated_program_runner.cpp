@@ -261,7 +261,7 @@ extern "C" void __emule_fiber_park_locked(const void* key) {
 }
 extern "C" void __emule_fiber_wake(const void* key) { efib::FiberScheduler::instance().wake(key); }
 extern "C" void __emule_fiber_yield(void) { efib::FiberScheduler::instance().yield(); }
-extern "C" void __emule_fiber_read_latency(void) { efib::FiberScheduler::instance().latency_park(); }
+extern "C" void __emule_fiber_defer_to_quiescence(void) { efib::FiberScheduler::instance().quiescence_park(); }
 extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
@@ -327,7 +327,7 @@ extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
 // silicon clears the bit and the sender NIU drops the packet at itself ->
 // include_self=false. Sender coords come from the TLS that thread launch
 // wires up (my_x[0], my_y[0]).
-extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self) {
+extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self, uint8_t noc) {
     uint32_t x_end = (mcast_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t y_end = (mcast_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint32_t x_start = (mcast_addr >> (NOC_LOCAL_BITS + 2 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
@@ -350,9 +350,37 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t self_x = my_x[0];
     uint32_t self_y = my_y[0];
 
+    // NOC1 rectangles arrive with start<->end SWAPPED: silicon describes a NOC1
+    // multicast in NOC1's reflected coordinate frame (paired with the DYNAMIC_NOC_X/Y
+    // reflection). Emule models NOC coordinates as identity (DYNAMIC_NOC_X/Y is
+    // identity), so no reflection happens and the swap alone leaves the rectangle
+    // reversed. Undo it so the walk below runs on physical (NOC0-frame) coordinates
+    // for both NOCs. Without this, canonical NOC1 in0/in1-mcast ops (matmul/linear,
+    // multicore argmax) present start>end and the torus walk misreads it as a
+    // wraparound → receivers never see their semaphore → quiescent deadlock.
+    if (noc != 0) {
+        uint32_t t;
+        t = x_start; x_start = x_end; x_end = t;
+        t = y_start; y_start = y_end; y_end = t;
+    }
+
+    // Torus-wraparound walk on physical coords. Silicon's NOC treats the rectangle on
+    // a torus, so a rectangle whose cores straddle the worker-grid seam encodes
+    // start > end and wraps around the NOC node space rather than covering the min..max
+    // bounding box; SDPA S-block multicasts (NOC0) rely on this. Walk each axis
+    // start->end stepping +1 mod the node space; coords with no core in the map are
+    // skipped. For a non-wrapping rectangle (start <= end) this is identical to
+    // min..max — the post-un-swap NOC1 case (matmul/argmax in0-mcast).
+    auto axis_count = [](uint32_t s, uint32_t e) -> uint32_t {
+        return (e >= s ? (e - s) : ((NOC_NODE_MASK + 1 - s) + e)) + 1;
+    };
+    const uint32_t nx = axis_count(x_start, x_end);
+    const uint32_t ny = axis_count(y_start, y_end);
     uint32_t delivered = 0;
-    for (uint32_t x = std::min(x_start, x_end); x <= std::max(x_start, x_end); x++) {
-        for (uint32_t y = std::min(y_start, y_end); y <= std::max(y_start, y_end); y++) {
+    for (uint32_t ix = 0; ix < nx; ix++) {
+        const uint32_t x = (x_start + ix) & NOC_NODE_MASK;
+        for (uint32_t iy = 0; iy < ny; iy++) {
+            const uint32_t y = (y_start + iy) & NOC_NODE_MASK;
             if (!include_self && x == self_x && y == self_y) {
                 continue;
             }

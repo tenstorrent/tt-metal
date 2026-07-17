@@ -10,6 +10,7 @@
 #   team: The team that owns the test.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
+# Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 # Non-nightly smoke tests
 - name: tt-train cpp smoke tests
@@ -18,6 +19,6 @@
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
   skus:
     wh_n150_civ2:
-      timeout: 20
+      timeout: 15
   owner_id: U07K00A281X # Kevin Wu
   team: train

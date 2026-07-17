@@ -7,28 +7,29 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, get_num_dram_banks
+from models.demos.common.prefill.adapter import KvCaches
+
+# DRAM ND-shard geometry for the packed prefill KV cache — M3-local (decoupled from the DeepSeek substrate
+# so they can diverge). The sequence is tiled into NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token blocks that
+# round-robin across BH_NUM_DRAM_BANKS DRAM banks. The address-table builder must match both values.
+NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
+BH_NUM_DRAM_BANKS = 8
 
 
 @dataclass
-class MiniMaxKVCache:
-    """Externally-owned, user-major packed prefill KV caches for the SP chunked-KV path.
+class MiniMaxKVCache(KvCaches):
+    """M3's on-device prefill KV cache: three persistent, user-major packed device caches, each per-chip
+    shape ``[num_users*num_layers, 1, seq_local, head_dim]`` on the DRAM ND-shard substrate, written in
+    place by ``ttnn.experimental.deepseek_prefill.update_padded_kv_cache(slot_idx, layer_idx, ...)``:
 
-    Three persistent device caches, each per-chip shape ``[num_users*num_layers, 1, seq_local, head_dim]``
-    (DeepSeek chunked-KV NdShard DRAM layout). They are written by
-    ``ttnn.experimental.deepseek_prefill.update_padded_kv_cache(slot_idx, layer_idx, ...)``:
+      * ``k`` / ``v``  — GQA K/V. Under TP=cols each chip holds one head (heads sharded on the TP cols);
+                         the sequence is SP-sharded block-cyclic on the ``sp`` rows.
+      * ``index_k``    — MSA lightning-indexer key (one shared head, REPLICATED across the TP cols); only
+                         the MSA layers populate it — dense layers leave their slots zeroed.
 
-      * ``k``, ``v``   — main GQA K/V. Under TP=cols each chip holds 1 head (heads sharded on the TP cols
-                         at write time); the sequence is SP-sharded block-cyclic on the ``sp`` rows.
-      * ``index_k``    — MSA lightning-indexer key (a single shared head). Same per-chip shape; at write
-                         time it is REPLICATED across the TP cols (one shared head, NOT head-sharded), and
-                         only the MSA layers (3-59) populate it — dense layers leave their slots zeroed.
-
-    The batch dim is user-major: ``slot = user_id * num_layers + layer_idx`` so each user's layers stay
-    contiguous, matching ``update_padded_kv_cache``'s ``slot_idx`` / ``layer_idx`` indexing.
-
-    STEP 1: allocation + plumbing only. The write (step 2) and the cache-read attention path (step 4)
-    are not wired yet — the single-shot prefill still runs the no-cache forward for its logits.
+    Batch dim is user-major (``slot = user_id * num_layers + layer_idx``) so each user's layers stay
+    contiguous, matching ``update_padded_kv_cache``'s indexing. The adapter allocates this once and the
+    engine holds it as an opaque handle, passing it back into every runtime call that touches it.
     """
 
     k: ttnn.Tensor
@@ -70,8 +71,7 @@ def allocate_kv_caches(
     seq_local = max_seq_len // sp
 
     core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0))
-        for bank_id in range(get_num_dram_banks(mesh_device))
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
     ]
     nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],

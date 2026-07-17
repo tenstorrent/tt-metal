@@ -5,9 +5,16 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/arch.hpp>
 
+#include <cstdlib>
+#include <optional>
+#include <string>
+
 #include "impl/context/metal_context.hpp"
+#include "impl/profiler/profiler_state.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
 #include "llrt/tt_cluster.hpp"
 
@@ -117,6 +124,72 @@ TEST_F(MockDeviceAPIFixture, SwitchFromMockToRealHardware) {
     auto desc = experimental::get_mock_cluster_desc();
     ASSERT_TRUE(desc.has_value());
     EXPECT_EQ(*desc, "wormhole_N300.yaml");
+}
+
+class MockDeviceProfilerFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+#if !defined(TRACY_ENABLE)
+        GTEST_SKIP() << "Requires a Tracy-enabled build (ENABLE_TRACY=ON).";
+#endif
+        // The profiler-enabled flag is parsed from the environment when RunTimeOptions is
+        // constructed (i.e. when the MetalContext is first created). Set it now and drop any
+        // pre-existing context so the mock context created by the test picks the flag up.
+        const char* prev = getenv("TT_METAL_DEVICE_PROFILER");
+        prev_device_profiler_ = prev != nullptr ? std::optional<std::string>(prev) : std::nullopt;
+        setenv("TT_METAL_DEVICE_PROFILER", "1", /*overwrite=*/1);
+        if (MetalContext::instance_exists()) {
+            detail::ReleaseOwnership();
+        }
+    }
+
+    void TearDown() override {
+#if !defined(TRACY_ENABLE)
+        return;
+#endif
+        experimental::disable_mock_mode();
+        // Restore the flag to whatever it was before the test rather than clobbering a value the
+        // surrounding environment may have set.
+        if (prev_device_profiler_.has_value()) {
+            setenv("TT_METAL_DEVICE_PROFILER", prev_device_profiler_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv("TT_METAL_DEVICE_PROFILER");
+        }
+        // Drop the profiler-enabled context so later tests start from a clean state.
+        if (MetalContext::instance_exists()) {
+            detail::ReleaseOwnership();
+        }
+    }
+
+    std::optional<std::string> prev_device_profiler_;
+};
+
+// Verify that the device profiler is not enabled on mock device.
+TEST_F(MockDeviceProfilerFixture, DeviceProfilerIsNotStartedOnMockDevice) {
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
+
+    ASSERT_TRUE(MetalContext::instance().rtoptions().get_profiler_enabled())
+        << "Test expects device profiler option to be enabled.";
+    ASSERT_TRUE(MetalContext::instance().get_cluster().is_mock_or_emulated()) << "Test should run on mock device.";
+
+    // Even though profiling was requested, getDeviceProfilerState() must report it as disabled for
+    // a mock/emulated context.
+    EXPECT_FALSE(getDeviceProfilerState(MetalContext::instance().get_context_id()))
+        << "getDeviceProfilerState() must be false for a mock context even when profiling is "
+           "requested";
+
+    auto devices = detail::CreateDevices({0});
+    ASSERT_FALSE(devices.empty());
+    const ChipId mock_device_id = devices.begin()->first;
+
+    // The device profiler must never register a mock device.
+    const auto& profiler_state_manager = MetalContext::instance().profiler_state_manager();
+    ASSERT_NE(profiler_state_manager, nullptr);
+    EXPECT_FALSE(profiler_state_manager->device_profiler_map.contains(mock_device_id))
+        << "Device profiler was started on mock device " << mock_device_id
+        << " -- the profiler must be skipped for mock/emulated clusters";
+
+    detail::CloseDevices(devices);
 }
 
 }  // namespace tt::tt_metal

@@ -56,11 +56,16 @@ def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int,
     return ttnn.CoreRangeSet(cores)
 
 
-def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers, row_offset=0):
+def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers, row_offset=0, dual_senders=False):
     """Build a DRAM-sender GCB sized to the prefetcher's per-receiver-per-block push.
 
     `row_offset` shifts the receiver grid down; the multi-GCB switching test uses
     it to place two GCBs on disjoint receiver rows for the same prefetcher.
+
+    `dual_senders` requests the two-sender-per-bank GCB variant. With recv_per_bank=1
+    each bank has a single receiver that cannot split, so every bank falls back to its
+    primary sender — the mapping is identical to a single-sender GCB and stays
+    K-row-major compatible.
 
     Returns (tt_weight, addrs, gcb, num_iters_total, push_page_size_bytes, ring_size).
     """
@@ -112,7 +117,9 @@ def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_la
         for b in range(num_dram_banks)
     ]
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    )
 
     num_iters_total = num_layers * ring_size
     return tt_weight, addrs, gcb, num_iters_total, push_page_size, ring_size
@@ -414,7 +421,7 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
     # prefetcher actually slices by the supplied rotation values rather than the bare ring index.
     # Empty == batched. The same rotation is handed to the validator so it expects the matching order.
     rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
-    with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
+    with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(
             device, [(tt_weight, ring_size, rotation)] * num_layers, global_cb=gcb
         )
@@ -426,6 +433,30 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
             global_cb=gcb,
             streaming=streaming,
             rotation=rotation,
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,num_layers", [(448, 1792, ttnn.bfloat16, 2)])
+def test_validator_dram_sender_dual_single_receiver_bank(device, K, N, dtype, num_layers):
+    """dual_senders_per_bank=True with a single receiver per bank (recv_per_bank=1).
+
+    A single receiver cannot split across two senders, so every bank falls back to its
+    primary sender and the mapping is identical to a single-sender GCB — previously this
+    was rejected with a TT_FATAL. num_blocks == num_dram_banks keeps it on the K-row-major
+    path (which the validator addresses uniformly), so this validates the fallback end to
+    end. Same shape as test_validator_dram_sender[bench_default], only dual_senders flipped.
+    """
+    tt_weight, addrs, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_dram_sender(
+        device, K, N, dtype, recv_per_bank=1, num_layers=num_layers, dual_senders=True
+    )
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            tt_weight,
+            num_layers=num_layers,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
         )
 
 
@@ -464,7 +495,7 @@ def test_validator_dram_sender_recv_contig_shard_contiguous(
     # Cyclic shift by 1 (empty == batched); same rotation handed to the validator so it expects the
     # matching contiguous-order delivery.
     rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
-    with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
+    with tensor_prefetcher_session(device):
         ttnn.experimental.queue_tensor_prefetcher_request(
             device, [(tt_weight, ring_size, rotation)] * num_layers, global_cb=gcb
         )

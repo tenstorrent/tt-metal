@@ -7,7 +7,8 @@
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_QUASAR
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #else
 #include "ckernel_sfpu_binary.h"
 #include "ckernel_sfpu_binary_comp.h"
@@ -39,7 +40,15 @@ namespace ckernel {
 // clang-format on
 ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_binary_sfpu_binop_div<APPROX, ckernel::BinaryOp::DIV, DST_ACCUM_MODE>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (APPROX, ckernel::BinaryOp::DIV, DST_ACCUM_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -55,7 +64,15 @@ ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 
 ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_binary_sfpu_binop_mul<APPROX, ckernel::BinaryOp::MUL, DST_ACCUM_MODE>(idst0, idst1, odst)));
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (APPROX, ckernel::BinaryOp::MUL, DST_ACCUM_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -69,8 +86,18 @@ ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #endif
 }
 
-#ifndef ARCH_QUASAR
 ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#ifdef ARCH_QUASAR
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (APPROX, ckernel::BinaryOp::ADD, DST_ACCUM_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -80,9 +107,21 @@ ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#ifdef ARCH_QUASAR
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (APPROX, ckernel::BinaryOp::SUB, DST_ACCUM_MODE),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -92,8 +131,10 @@ ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
+#ifndef ARCH_QUASAR
 ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -195,22 +236,13 @@ ALWI void ge_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * Please refer to documentation for any_init.
  */
 ALWI void div_binary_tile_init() {
-#ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::DIV>()));
-#else
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::DIV))));
-#endif
 }
 
 ALWI void mul_binary_tile_init() {
-#ifdef ARCH_QUASAR
-    MATH((llk_math_eltwise_binary_sfpu_binop_init<APPROX, ckernel::BinaryOp::MUL>()));
-#else
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
-#endif
 }
 
-#ifndef ARCH_QUASAR
 ALWI void add_binary_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::ADD))));
 }
@@ -219,6 +251,7 @@ ALWI void sub_binary_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::SUB))));
 }
 
+#ifndef ARCH_QUASAR
 ALWI void rsub_binary_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::RSUB))));
 }

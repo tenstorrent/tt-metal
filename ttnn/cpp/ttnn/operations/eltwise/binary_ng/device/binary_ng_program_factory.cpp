@@ -11,6 +11,9 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 
 #include <algorithm>
 #include <variant>
@@ -396,17 +399,17 @@ struct BinaryNgPerCoreArgs {
 };
 
 // SINGLE SOURCE OF TRUTH for binary_ng per-core runtime args.  Run by BOTH create_descriptor()
-// (cache miss) and BinaryNgDeviceOperation::get_dynamic_runtime_args() (cache hit).
+// (cache miss) and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit).
 //
 // binary_ng's compute_program_hash intentionally EXCLUDES the tensor volume, so one cached program
 // is shared across differently-shaped calls.  On a cache hit the descriptor is NOT rebuilt, so every
 // shape/work-split-dependent per-core arg (c_start_id, per-core tile counts, strides, D/N/C/Ht/Wt,
 // compute_tiles, freq/counter, packed scalar, ...) would otherwise stay frozen at the first-miss
-// shape and corrupt results.  get_dynamic_runtime_args() re-runs THIS builder for the current tensors
-// and re-applies each arg every dispatch.  Because the work-core set itself changes with volume (a
-// core can flip between work and noop across hits), the builder emits args for ALL num_cores_total
-// cores -- noop cores get zero-filled lists sized to match the work-core layout -- and
-// get_dynamic_runtime_args re-applies every slot (buffer slots via their current address), so nothing
+// shape and corrupt results.  override_runtime_arguments() re-runs THIS builder for the current
+// tensors and re-applies each arg every dispatch.  Because the work-core set itself changes with
+// volume (a core can flip between work and noop across hits), the builder emits args for ALL
+// num_cores_total cores -- noop cores get zero-filled lists sized to match the work-core layout -- and
+// override_runtime_arguments re-applies every slot (buffer slots via their current address), so nothing
 // is left frozen regardless of how the partition shifts.
 BinaryNgPerCoreArgs build_per_core_runtime_args(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
@@ -1328,7 +1331,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // === Per-core runtime arguments ===
     // Built via the shared single-source-of-truth builder so create_descriptor() (cache miss, here)
-    // and BinaryNgDeviceOperation::get_dynamic_runtime_args() (cache hit) stay byte-identical.
+    // and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit) stay byte-identical.
     {
         auto per_core = build_per_core_runtime_args(operation_attributes, a, b, c);
         for (size_t i = 0; i < per_core.cores.size(); ++i) {
@@ -1345,27 +1348,27 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> BinaryNgDeviceOperation::get_dynamic_runtime_args(
+void BinaryNgDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& c,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // binary_ng's compute_program_hash EXCLUDES the tensor volume, so one cached program is reused
-    // across differently-shaped calls.  On a cache hit the descriptor is never rebuilt, so every
-    // shape-/work-split-dependent per-core arg baked at the first miss would stay frozen and corrupt a
-    // later, differently-shaped call.  Re-run the SAME builder create_descriptor() uses and re-apply
-    // every per-core arg for the CURRENT tensors.
+    // Re-apply ALL per-dispatch state to the cached program on a program-cache hit (the descriptor-era
+    // override_runtime_arguments()).  compute_program_hash EXCLUDES the tensor volume, so one cached
+    // program is reused across differently-shaped and differently-allocated (incl. in-place, out=x)
+    // calls; every shape-/work-split-dependent per-core arg AND every tensor-backed CB base address
+    // would otherwise stay frozen at the first miss.  We re-derive them for the CURRENT tensors from
+    // the SAME shared builder create_descriptor() uses, so the two stay byte-identical by construction.
     //
-    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).
+    // This is correct where address inference (resolve_bindings' std::find) was not: nothing is guessed
+    // from Buffer* identity, so an in-place alias (input_a == output) or a mixed in-place/out-of-place
+    // reuse of one cache entry writes each slot from the tensor it actually belongs to.
     //
-    // The work-core partition itself shifts with the volume (a core can flip between work and noop), so
-    // we re-apply ALL cores' args, not just the work cores: noop cores get zero-filled lists (harmless,
-    // they do no work), and any core that becomes a work core on this hit gets its full args here.  For
-    // that reason we ALSO re-apply the buffer-address slots (via the current Buffer address) rather than
-    // relying solely on the Buffer* bindings: bindings are resolved once at cache-miss time and only
-    // cover the cores that were work cores THEN, so a core promoted to a work core on a later hit would
-    // otherwise be left with a stale/zero base address.  Indices match create_descriptor() by
-    // construction because both walk the identical builder output.
+    // Kernel push order in create_descriptor(): reader(0), writer(1), compute(2).  The work-core
+    // partition shifts with the volume (a core can flip between work and noop), so the builder emits
+    // args for ALL cores; we re-apply every one, buffer-address slots included (via the current Buffer
+    // address), so a core promoted to a work core on this hit is never left with a stale base address.
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
 
@@ -1375,34 +1378,45 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> BinaryNgDeviceOperation::get_dynami
     constexpr uint32_t kWriterKernelIdx = 1;
     constexpr uint32_t kComputeKernelIdx = 2;
 
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    // Reserve the exact number of args we're about to emit (reader + writer + compute per core).
-    size_t total_args = 0;
-    for (size_t i = 0; i < per_core.cores.size(); ++i) {
-        total_args += per_core.reader[i].size() + per_core.writer[i].size() + per_core.compute[i].size();
-    }
-    dynamic_args.reserve(total_args);
-
-    auto emit = [&](uint32_t kernel_idx,
-                    const CoreCoord& core,
-                    const std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>& args) {
-        for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
+    auto apply = [&](uint32_t kernel_idx,
+                     const CoreCoord& core,
+                     const std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>& args) {
+        auto& data = tt::tt_metal::GetRuntimeArgs(program, kernel_idx, core);
+        for (uint32_t arg_idx = 0; arg_idx < static_cast<uint32_t>(args.size()); ++arg_idx) {
             const auto& slot = args[arg_idx];
-            uint32_t value = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
-                                 ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
-                                 : std::get<uint32_t>(slot);
-            dynamic_args.push_back({kernel_idx, core, arg_idx, value});
+            data[arg_idx] = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
+                                ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
+                                : std::get<uint32_t>(slot);
         }
     };
 
     for (size_t i = 0; i < per_core.cores.size(); ++i) {
         const auto& core = per_core.cores[i];
-        emit(kReaderKernelIdx, core, per_core.reader[i]);
-        emit(kWriterKernelIdx, core, per_core.writer[i]);
-        emit(kComputeKernelIdx, core, per_core.compute[i]);
+        apply(kReaderKernelIdx, core, per_core.reader[i]);
+        apply(kWriterKernelIdx, core, per_core.writer[i]);
+        apply(kComputeKernelIdx, core, per_core.compute[i]);
     }
 
-    return dynamic_args;
+    // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
+    // binary_ng convention: c_0 = input_a, c_1 = input_b, c_2 = output.  Addressing by CBIndex (not by
+    // enumeration order) is what makes the in-place alias correct: the output CB always tracks the
+    // output buffer even when it shares a Buffer* with an input.
+    tt::tt_metal::Buffer* a_buffer = a.buffer();
+    tt::tt_metal::Buffer* b_buffer = b.has_value() ? b->buffer() : nullptr;
+    tt::tt_metal::Buffer* c_buffer = c.buffer();
+    for (const auto& cb : program.circular_buffers()) {
+        if (!cb->globally_allocated()) {
+            continue;
+        }
+        const auto& indices = cb->buffer_indices();
+        if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_0)) && a_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *a_buffer);
+        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_1)) && b_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *b_buffer);
+        } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_2)) && c_buffer != nullptr) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *c_buffer);
+        }
+    }
 }
 
 }  // namespace ttnn::operations::binary_ng

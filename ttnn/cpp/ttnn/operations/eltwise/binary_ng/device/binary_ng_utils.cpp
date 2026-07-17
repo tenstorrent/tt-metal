@@ -673,9 +673,6 @@ std::map<std::string, std::string> make_dataflow_defines(
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
 uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
-    // std::visit([&](auto v) {
-    //     std::cout << "pack_scalar_runtime_arg: " << v << std::endl;
-    // }, scalar);
     return std::visit(
         [&](auto v) -> uint32_t {
             // Always pass the more accurate fp32 when the quantization scale is passed as a scalar

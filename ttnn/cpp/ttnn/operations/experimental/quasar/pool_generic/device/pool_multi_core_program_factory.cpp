@@ -647,7 +647,23 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // -----------------------------------------------------------------------
     const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
     const uint32_t window_size_hw = kernel_h * kernel_w;
-    const uint32_t raw_face_r = std::min(window_size_hw, 16u);
+    // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
+    // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
+    // (validate_tensor_shape_tile_dependent_ops_ in common/tensor_shape.h, validate_buffer_desc in
+    // tt_llk_quasar/common/inc/ckernel_trisc_common.h). WH/BH accept the raw window size directly
+    // (e.g. 9 for a 3x3 window) since they don't run those validators; Quasar asserts. Round the
+    // packed face_r_dim up to the next power of 2 so the tile shape validates (9 -> 16, giving the
+    // valid 16x16 tile: x=16,y=16,z=1). The input CB page is already padded to a full tile
+    // (round_up(in_cb_sz, TILE_HW) in pool_utils.cpp) so the larger face_r_dim reads no OOB.
+    // NOTE: this is a bring-up workaround. For correct results the padded rows [window_size, pow2)
+    // must hold the pool identity (-inf max / 0 avg) via clear_value_cb; otherwise stale L1 leaks
+    // into the reduce. Remove once Quasar reduce/buffer-descriptor supports non-pow2 face_r_dim.
+    const uint32_t raw_face_r_unpadded = std::min(window_size_hw, 16u);
+    uint32_t raw_face_r_pow2 = 1;
+    while (raw_face_r_pow2 < raw_face_r_unpadded) {
+        raw_face_r_pow2 <<= 1;
+    }
+    const uint32_t raw_face_r = raw_face_r_pow2;
     const uint32_t num_faces_in_input_tile_for_cb =
         (params.max_rows_for_reduction < tt::constants::TILE_HEIGHT || window_size_hw <= tt::constants::FACE_HEIGHT)
             ? 2u
@@ -689,11 +705,14 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         borrowed_dfb(DFB_IN_SHARD, in_nbytes_c, input.shard_spec().value().shape[0], params.data_format, INPUT_TENSOR));
     // reader indices CB (borrowed L1 config tensor, or local scratch for DRAM path)
     const uint32_t in_reader_indices_cb_pagesize = tt::round_up(top_left_indices[0].size(), 4);
+    // RawUInt16 (not UInt16): the reader-indices DFB is a raw packed-uint16 index/config buffer, and Quasar
+    // does not support the typed UInt16 DFB format (is_supported_quasar) — RawUInt16 is the raw 16-bit format
+    // supported on Quasar (and WH/BH), semantically correct here.
     if (config_tensor_in_dram) {
-        dfbs.push_back(local_dfb(DFB_READER_INDICES, reader_indices_page_size, 1, tt::DataFormat::UInt16));
+        dfbs.push_back(local_dfb(DFB_READER_INDICES, reader_indices_page_size, 1, tt::DataFormat::RawUInt16));
     } else {
         dfbs.push_back(borrowed_dfb(
-            DFB_READER_INDICES, in_reader_indices_cb_pagesize, 1, tt::DataFormat::UInt16, READER_INDICES_TENSOR));
+            DFB_READER_INDICES, in_reader_indices_cb_pagesize, 1, tt::DataFormat::RawUInt16, READER_INDICES_TENSOR));
     }
     // input CB(s). The second input stream (in_cb_1) only exists for the pool2d split-reader
     // (mpwi has a single input stream — reader1 is the writer face, not a second producer).
@@ -1020,7 +1039,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .tensor_bindings = make_reader_tensor_bindings(false),
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(mesh_device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(mesh_device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     std::optional<KernelSpec> reader1;
@@ -1033,7 +1053,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .tensor_bindings = make_reader_tensor_bindings(true),
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-            .hw_config = ttnn::create_writer_datamovement_config(mesh_device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(
+                mesh_device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
         };
     }
 

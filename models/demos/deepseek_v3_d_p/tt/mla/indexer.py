@@ -709,9 +709,21 @@ class TtIndexer:
         # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
         # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
         if tpsp:
-            idx_local = idx  # the TP-sharded top-k; all_gather allocates the regathered [1,1,S/sp,k] replacement
-            idx = self._tp_all_gather(idx, dim=2)
+            # Regather the TP-seq-sharded top-k indices back to [1,1,S/sp,k]. topk_large_indices emits
+            # ROW_MAJOR uint32, and an all-gather on a ROW_MAJOR tensor is routed by use_composite_all_gather
+            # to composite_all_gather -> all_broadcast, whose multicast over a partial cluster-axis line of a
+            # 2D (SP×TP) mesh DEADLOCKS the fabric (erisc routers stall in run_receiver_channel_step; device
+            # unrecoverable, system_memory_manager.cpp TIMEOUT). Gather in TILE layout so it takes the NATIVE
+            # minimal all-gather instead — the tile-aligned gather dim keeps it off the composite path, and
+            # the native path handles this TP cluster-axis correctly (as _tp_rs_ag does, and as the canonical
+            # top-k-index gather in tt_sampling.py does). Round-trip RM->TILE->gather->RM.
+            idx_local = idx
+            idx_tiled = ttnn.to_layout(idx, ttnn.TILE_LAYOUT)
+            idx_gathered = self._tp_all_gather(idx_tiled, dim=2)  # native all-gather over TP; [1,1,S/sp,k] TILE
+            idx = ttnn.to_layout(idx_gathered, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(idx_local)
+            ttnn.deallocate(idx_tiled)
+            ttnn.deallocate(idx_gathered)
         return idx
 
 

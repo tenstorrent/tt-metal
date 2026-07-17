@@ -1140,10 +1140,18 @@ namespace reuse_mcast_optimized_helpers {
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);
@@ -2594,10 +2602,18 @@ create_program_mcast_in0_in1(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);
@@ -3558,6 +3574,34 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         std::swap(num_x_bs, num_y_bs);
     }
 
+    // [DEBUG mcast2d hang] The in0 sender counts num_dests along num_blocks_x (a ROW), but the observed
+    // deadlock has receivers acking a COLUMN. If in0_sender_num_cores_along_width (= in0_shard_grid.x for
+    // non-transpose) != num_blocks_x, or if in0_mcast_noc_x/y describe a column, that's the mismatch.
+    if (in0_block_sharded) {
+        std::string noc_x_str, noc_y_str;
+        for (auto v : in0_mcast_noc_x) {
+            noc_x_str += std::to_string(v) + ",";
+        }
+        for (auto v : in0_mcast_noc_y) {
+            noc_y_str += std::to_string(v) + ",";
+        }
+        log_warning(
+            tt::LogOp,
+            "[QSR-MCAST2D-DBG] transpose_mcast={} in0_sender_num_cores_along_width={} num_x_bs={} "
+            "num_y_bs={} num_blocks_x(=in0_mcast_num_dests)={} num_blocks_y={} num_cores_c={} num_cores_r={} "
+            "in0_mcast_noc_x=[{}] in0_mcast_noc_y=[{}]",
+            transpose_mcast,
+            in0_sender_num_cores_along_width,
+            num_x_bs,
+            num_y_bs,
+            num_blocks_x,
+            num_blocks_y,
+            num_cores_c,
+            num_cores_r,
+            noc_x_str,
+            noc_y_str);
+    }
+
     // ---- Defines ----
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_sharded_defines;
@@ -4351,10 +4395,18 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // [Quasar single-row/col guard] The mcast "+1" corner (the first receiver past the sender) does not
+        // exist when there is only one column (in0 row-mcast) or one row (in1 column-mcast) -- e.g. on the
+        // 2-core emulator (2x1 grid) start_core_y+1 = (0,1) has no core, so translating it throws
+        // "No core coordinate found at (0,1)". Clamp the +1 corner to the sender's own coord when that
+        // dimension has a single core; the degenerate mcast then covers 0 receivers so the clamped
+        // rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device->worker_core_from_logical_core(left_core);

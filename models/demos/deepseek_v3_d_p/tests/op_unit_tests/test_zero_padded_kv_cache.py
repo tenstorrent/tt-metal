@@ -40,6 +40,18 @@ _FORMATS = [
 ]
 _FORMAT_IDS = ["bfp8_tile", "bf16_rm", "fp8_rm"]
 
+# SP=8 meshes for the block-cyclic cases below (they set sp_axis=0, so sp = mesh_shape[0] = 8, and
+# the _CASES/_MULTI_CASES expected boundary chips 0..7 assume an 8-way SP split). The TP axis (dim 1)
+# only replicates the cache in this op, so it is not what these cases exercise:
+#   * linear-8  (8, 1): the CI-gated Blackhole LoudBox coverage (8xP150, all chips on the SP axis).
+#   * mesh-8x4  (8, 4): the original BH Galaxy coverage; auto-skips on smaller boxes (needs 32 chips).
+# requires_mesh_topology gives a clean collection-time skip on boxes whose chip count doesn't match.
+_MESHES = [
+    pytest.param((8, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear")),
+    pytest.param((8, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4")),
+]
+_MESH_IDS = ["linear-8", "8x4"]
+
 
 def _init_cache_filled_with_ones(
     mesh_device,
@@ -201,7 +213,7 @@ def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, dtype, layou
     assert mesh_device.num_program_cache_entries() == cache_entries_before + 1
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
 @pytest.mark.parametrize("dtype,layout", _FORMATS, ids=_FORMAT_IDS)
 @pytest.mark.parametrize("chunk_size_global,seq_len_cache,valid_global,expected_chip", _CASES, ids=_IDS)
 @pytest.mark.timeout(0)
@@ -263,7 +275,7 @@ _MULTI_CASES = [
 _MULTI_IDS = [f"L{nl}_U{nu}_slot{s}_layer{ly}_v{v}" for (nl, nu, s, ly, v, _ch) in _MULTI_CASES]
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", _MESHES, ids=_MESH_IDS, indirect=True)
 @pytest.mark.parametrize(
     "num_layers,num_users,slot_idx,layer_idx,valid_global,expected_chip", _MULTI_CASES, ids=_MULTI_IDS
 )

@@ -37,6 +37,9 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -56,6 +59,8 @@ constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
+
+    Noc noc;
 
     // ===== Compile-time args =====
     constexpr uint32_t cb_input_id = get_compile_time_arg_val(0);
@@ -179,7 +184,6 @@ void kernel_main() {
     const uint32_t offsets_bytes = offsets_pages * aligned_offsets_page_size;
     volatile tt_l1_ptr uint32_t* turn_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(turn_semaphore_id));
-    uint64_t owner_offsets_noc_addr = get_noc_addr(owner_noc_x, owner_noc_y, offsets_base_addr);
     uint64_t next_turn_sem_noc_addr = get_noc_addr(next_noc_x, next_noc_y, get_semaphore(turn_semaphore_id));
     if constexpr (IS_OWNER) {
         noc_semaphore_set(turn_sem_ptr, 1);
@@ -281,7 +285,12 @@ void kernel_main() {
         DPRINT_DISPATCH("[R s={} c={}] b={} GOT baton\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id, batch_idx);
         turn_expected++;
         if constexpr (!IS_OWNER) {
-            noc_async_read(owner_offsets_noc_addr, offsets_base_addr, offsets_bytes);
+            noc.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(offsets_base_addr),
+                offsets_bytes,
+                {.noc_x = owner_noc_x, .noc_y = owner_noc_y, .addr = offsets_base_addr},
+                {});
             noc_async_read_barrier();
         }
 
@@ -350,7 +359,12 @@ void kernel_main() {
         }
 
         if constexpr (!IS_OWNER) {
-            noc_async_write(offsets_base_addr, owner_offsets_noc_addr, offsets_bytes);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(offsets_base_addr),
+                UnicastEndpoint{},
+                offsets_bytes,
+                {},
+                {.noc_x = owner_noc_x, .noc_y = owner_noc_y, .addr = offsets_base_addr});
             noc_async_write_barrier();
         }
         if (batch_idx + 1 < effective_total_batches) {

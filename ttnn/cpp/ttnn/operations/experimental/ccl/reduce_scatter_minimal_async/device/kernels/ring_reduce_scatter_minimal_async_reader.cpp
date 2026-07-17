@@ -3,12 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -73,6 +77,12 @@ void kernel_main() {
     if constexpr (fuse_op) {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
+
+    Noc noc_obj;
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_interm(cb_interm_id);
+    CircularBuffer cb_interm2(cb_interm2_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t sem_target = 0;
     uint32_t sem2_target = 0;
@@ -203,8 +213,7 @@ void kernel_main() {
                     } else {
                         const bool reduce_interm =
                             (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
-                        const uint32_t cb_in =
-                            reduce_interm ? cb_input_id : cb_reader_output_id;  // to compute or writer
+                        CircularBuffer& cb_in = reduce_interm ? cb_input : cb_reader_output;  // to compute or writer
 
                         // Wait for intermediate_tensor data to be available
                         if (reduce_interm) {
@@ -222,15 +231,13 @@ void kernel_main() {
                             chunk_count = (chunk_count == chunks_per_sync - 1) ? 0 : (chunk_count + 1);
                         }
 
-                        cb_reserve_back(cb_in, tile_granularity);
-                        uint32_t l1_write_addr = get_write_ptr(cb_in);
-                        uint32_t interm_l1_write_addr, interm2_l1_write_addr;
+                        cb_in.reserve_back(tile_granularity);
+                        uint32_t l1_write_offset = 0;
+                        uint32_t interm_l1_write_offset = 0, interm2_l1_write_offset = 0;
                         if (reduce_interm) {
-                            cb_reserve_back(cb_interm_id, tile_granularity);
-                            interm_l1_write_addr = get_write_ptr(cb_interm_id);
+                            cb_interm.reserve_back(tile_granularity);
                             if (reduce_output) {
-                                cb_reserve_back(cb_interm2_id, tile_granularity);
-                                interm2_l1_write_addr = get_write_ptr(cb_interm2_id);
+                                cb_interm2.reserve_back(tile_granularity);
                             }
                         }
                         for (uint32_t j = 0; j < tiles_to_read; ++j) {
@@ -239,32 +246,44 @@ void kernel_main() {
                             auto output_tile_id = get_next_output_tile_id();
 
                             // input_tensor from reader -> compute or writer
-                            uint64_t noc_read_addr = input_tensor_accessor.get_noc_addr(input_tile_id);
-                            noc_async_read(noc_read_addr, l1_write_addr, page_size);
-                            l1_write_addr += page_size;
+                            noc_obj.async_read(
+                                input_tensor_accessor,
+                                cb_in,
+                                page_size,
+                                {.page_id = input_tile_id},
+                                {.offset_bytes = l1_write_offset});
+                            l1_write_offset += page_size;
 
                             if (reduce_interm) {
                                 // interm_tensor from reader -> compute
-                                uint64_t interm_noc_read_addr = interm_tensor_accessor.get_noc_addr(interm_tile_id);
-                                noc_async_read(interm_noc_read_addr, interm_l1_write_addr, page_size);
-                                interm_l1_write_addr += page_size;
+                                noc_obj.async_read(
+                                    interm_tensor_accessor,
+                                    cb_interm,
+                                    page_size,
+                                    {.page_id = interm_tile_id},
+                                    {.offset_bytes = interm_l1_write_offset});
+                                interm_l1_write_offset += page_size;
 
                                 if (reduce_output) {
                                     // output_tensor from reader -> compute
-                                    uint64_t output_noc_read_addr = output_tensor_accessor.get_noc_addr(output_tile_id);
-                                    noc_async_read(output_noc_read_addr, interm2_l1_write_addr, page_size);
-                                    interm2_l1_write_addr += page_size;
+                                    noc_obj.async_read(
+                                        output_tensor_accessor,
+                                        cb_interm2,
+                                        page_size,
+                                        {.page_id = output_tile_id},
+                                        {.offset_bytes = interm2_l1_write_offset});
+                                    interm2_l1_write_offset += page_size;
                                 }
                             }
                         }
                         tiles_read += tiles_to_read;
-                        noc_async_read_barrier();
-                        cb_push_back(cb_in, tile_granularity);
+                        noc_obj.async_read_barrier();
+                        cb_in.push_back(tile_granularity);
                         if (reduce_interm) {
-                            cb_push_back(cb_interm_id, tile_granularity);
+                            cb_interm.push_back(tile_granularity);
 
                             if (reduce_output) {
-                                cb_push_back(cb_interm2_id, tile_granularity);
+                                cb_interm2.push_back(tile_granularity);
                             }
                         }
                     }  // if skip or process

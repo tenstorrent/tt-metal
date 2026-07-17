@@ -21,8 +21,8 @@ simulator (8x4).
 Run on Wormhole:
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 
-Run on the Quasar simulator (only fp32 add/sub auto-skip — no SFPU float-add primitive on Quasar, see
-_run; everything else runs: the full bf16 FPU/SFPU matrix incl. lhs/rhs activations, plus fp32 mul/div):
+Run on the Quasar simulator (the full bf16 FPU/SFPU matrix incl. lhs/rhs activations runs, plus fp32
+add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run):
     TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
         TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
@@ -75,7 +75,7 @@ def _width_sharded_config(shard_shape, core_grid):
 
 # Op table: name -> (ttnn fn, torch golden). add/subtract take the FPU compute kernel; multiply and
 # divide route the SFPU compute kernel by default (is_binary_sfpu_op is true unless fast-approx mode),
-# as does any fp32 op. SFPU builds+runs on Wormhole and Quasar (only fp32 add/sub auto-skip on Quasar — see _run).
+# as does any fp32 op. SFPU builds+runs on Wormhole and Quasar (fp32 add/sub SFPU ported to Quasar in #49883).
 _OPS = {
     "add": (lambda: ttnn.experimental.quasar.add, torch.add),
     "subtract": (lambda: ttnn.experimental.quasar.subtract, torch.subtract),
@@ -209,15 +209,9 @@ def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=No
         # are #ifndef ARCH_QUASAR-guarded, the no-broadcast operand switch uses copy_tile_to_dst_init_short
         # (Quasar's copy_tile_to_dst_init_short_with_dt is a no-op that cannot switch operands), and the
         # activation pack retargets via pack_init (Quasar's pack_reconfig_data_format is gasket-only).
-        # bf16 multiply and divide both pass. fp32 routes SFPU: fp32 multiply/divide work on Quasar, but
-        # fp32 add/sub do not — the SFPU float add/sub primitives are not yet ported to Quasar
-        # (add_binary_tile is #ifndef ARCH_QUASAR; only mul/div have Quasar branches), so they fail to
-        # JIT-compile. See binary_ng/QUASAR_PARITY_GAPS.md.
-        if dtype_tt == ttnn.float32 and op_name in ("add", "subtract"):
-            pytest.skip(
-                "SFPU float add/sub not yet ported to Quasar (tenstorrent/tt-metal#49883; fp32 add/sub route "
-                "SFPU; fp32 mul/div work)"
-            )
+        # bf16 multiply and divide both pass. fp32 routes SFPU: fp32 multiply/divide/add/sub all work on
+        # Quasar — the SFPU float add/sub primitives were ported in tenstorrent/tt-metal#49883
+        # (add_binary_tile/sub_binary_tile now have ARCH_QUASAR branches). See binary_ng/QUASAR_PARITY_GAPS.md.
         # Interleaved lhs (pre) activation hangs on the Quasar sim: the post_lhs DFB self-loop (the compute
         # kernel both produces the pre-activated operand and consumes it) on the 1-deep, async NoC
         # interleaved ring deadlocks under native timing (and corrupts, PCC ~0.66, under perturbed timing).
@@ -415,9 +409,9 @@ def test_no_bcast_activation_supported(device, act, position, layout):
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("layout", ["interleaved", "height"])
 def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
-    # SFPU compute kernel (double-DST stride) via divide, on interleaved and sharded. Unlike fp32
-    # add/sub (no SFPU float-add primitive on Quasar), fp32 divide routes SFPU and IS supported, so
-    # both bf16 and fp32 are exercised here.
+    # SFPU compute kernel (double-DST stride) via divide, on interleaved and sharded. fp32 divide
+    # routes SFPU and is supported on Quasar (as are fp32 add/sub/mul since #49883), so both bf16 and
+    # fp32 are exercised here.
     if layout == "interleaved":
         mem_config = ttnn.DRAM_MEMORY_CONFIG
         shape = _INTERLEAVED_SHAPE

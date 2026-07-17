@@ -5,7 +5,8 @@
 // Wrapper for Metal's dprint_tensix.h. We have our own dprint_tensix_dest_reg because the
 // original can't run in LLK infra. It relies on dbg_halt on BH, which is a choreography across
 // the TRISCs that would simply hang when run on Math, as we do here. We can't read DEST through
-// the debug bus; we read 0xFFBD8000 instead, which requires some hardware state programming.
+// the debug bus; we read RISCV_DEST_START_ADDR instead, which requires some hardware state
+// programming.
 //
 // The Wormhole path, and Blackhole fp32/int32, are shared.
 //
@@ -23,6 +24,9 @@
 
 #include "api/debug/dprint_tensix.h"
 #include "cfg_defines.h"
+#ifdef ARCH_BLACKHOLE
+#include "ckernel_dest.h"
+#endif
 
 inline void dprint_tensix_dest_reg(int tile_id = 0)
 {
@@ -48,17 +52,10 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     DEVICE_PRINT("Tile ID = {}", tile_id);
 
 #ifdef ARCH_BLACKHOLE
-    // Program SEC1 once up front, then read every row from 0xFFBD8000.
-    // Element pointer type matches the format's element width.
-    // Informed by tt_llk_blackhole/common/inc/ckernel_debug.h:dbg_copy_dest_tile.
-    const uint32_t saved_dest_access = ckernel::cfg_read(RISC_DEST_ACCESS_CTRL_SEC1_fmt_ADDR32);
-    {
-        ckernel::set_dest_fmt<ckernel::MathThreadId>(ckernel::fmt_to_dest_type(data_format));
-        ckernel::set_dest_enable_swizzling<ckernel::MathThreadId>(true);
-        const bool is_signed = (data_format != DataFormat::UInt8) && (data_format != DataFormat::UInt16) && (data_format != DataFormat::UInt32);
-        ckernel::set_dest_int8_int16_signed<ckernel::MathThreadId>(is_signed);
-        ckernel::tensix_sync();
-    }
+    // Program Math's SEC1 for MMIO DEST reads. No restore: this register only
+    // affects the RISC MMIO window, and every MMIO consumer reprograms it.
+    ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
+    ckernel::tensix_sync();
 
     constexpr uint32_t ELT_PER_ROW = 16;
     const uint32_t tile_elt_base   = tile_id * NUM_ROWS_PER_TILE * ELT_PER_ROW;
@@ -79,7 +76,7 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
             case DataFormat::UInt16:
             {
                 uint32_t rd[8];
-                volatile uint16_t* addr = reinterpret_cast<volatile uint16_t*>(0xFFBD8000);
+                volatile uint16_t* addr = reinterpret_cast<volatile uint16_t*>(RISCV_DEST_START_ADDR);
                 for (int i = 0; i < 8; ++i)
                 {
                     const uint32_t lo = addr[row_elt_base + 2 * i];
@@ -93,7 +90,7 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
             case DataFormat::UInt8:
             {
                 uint32_t rd[4];
-                volatile uint8_t* addr = reinterpret_cast<volatile uint8_t*>(0xFFBD8000);
+                volatile uint8_t* addr = reinterpret_cast<volatile uint8_t*>(RISCV_DEST_START_ADDR);
                 for (int i = 0; i < 16; ++i)
                 {
                     reinterpret_cast<uint8_t*>(rd)[i] = addr[row_elt_base + i];
@@ -106,10 +103,6 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
                 break;
         }
     }
-
-    // Restore the caller's DEST access config.
-    ckernel::cfg_write(RISC_DEST_ACCESS_CTRL_SEC1_fmt_ADDR32, saved_dest_access);
-    ckernel::tensix_sync();
 #else
     // Wormhole (reuse Metal helpers)
     uint32_t row = tile_id * NUM_ROWS_PER_TILE;

@@ -406,3 +406,128 @@ def test_gelu_bw_ulp_summary(device):
     assert max_ulp <= 2, (
         f"Max ULP {max_ulp} at x={worst_x} exceeds threshold 2. " f"See table above for per-point details."
     )
+
+
+# =============================================================================
+# Gelu_bw Tanh approximation Exhaustive BF16 ULP Distribution Test
+# =============================================================================
+
+
+def test_gelu_bw_bf16_exhaustive(device):
+    """Exhaustive ULP distribution test for gelu_bw (approximate='tanh') across all BF16 values.
+
+    Generates all valid BF16 bit patterns as input, uses grad=1.0, and measures
+    ULP distance between device output and PyTorch float32 reference (tanh-approximate GELU derivative).
+    """
+    # Generate all bf16 bit patterns
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    vals = all_bitpatterns.view(torch.bfloat16)
+
+    # Filter to finite, non-zero, non-subnormal values
+    min_abs = torch.finfo(torch.bfloat16).tiny
+    max_abs = torch.finfo(torch.bfloat16).max
+    vals_f32_abs = vals.to(torch.float32).abs()
+    mask = torch.isfinite(vals) & (vals_f32_abs >= min_abs) & (vals_f32_abs <= max_abs) & (vals_f32_abs != 0)
+
+    value_set = vals[mask]
+    N = value_set.numel()
+    logger.debug(
+        f"Testing gelu_bw (approximate=tanh) with {N} BF16 values in [{value_set.min().item():.2e}, {value_set.max().item():.2e}]"
+    )
+
+    # Pad to multiple of 32 for tile layout
+    pad_size = (32 - (N % 32)) % 32
+    if pad_size > 0:
+        value_set_padded = torch.cat([value_set, torch.zeros(pad_size, dtype=torch.bfloat16)])
+    else:
+        value_set_padded = value_set
+
+    total_padded = value_set_padded.numel()
+    value_set_2d = value_set_padded.reshape(1, total_padded)
+
+    # Compute reference: GELU derivative via PyTorch autograd in float32
+    x_f32 = value_set_2d.to(torch.float32).requires_grad_(True)
+    y = torch.nn.functional.gelu(x_f32, approximate="tanh")
+    y.backward(torch.ones_like(y))
+    z_torch = x_f32.grad.detach()
+
+    # Run on device: gelu_bw with grad=1.0
+    grad_2d = torch.ones_like(value_set_2d)
+    tt_input = ttnn.from_torch(value_set_2d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_grad = ttnn.from_torch(grad_2d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    results = ttnn.gelu_bw(tt_grad, tt_input, approximate="tanh")
+    tt_out = ttnn.to_torch(results[0])
+
+    # Trim padding
+    z_torch = z_torch[:, :N]
+    tt_out = tt_out[:, :N]
+
+    # Filter out inf/nan results
+    valid_mask = torch.isfinite(z_torch)
+    assert torch.isfinite(
+        tt_out[valid_mask]
+    ).all(), "ttnn.gelu_bw(approximate='tanh') output is non-finite where the reference is finite"
+    z_torch_valid = z_torch[valid_mask]
+    tt_out_valid = tt_out[valid_mask]
+    N_valid = z_torch_valid.numel()
+
+    logger.debug(f"Valid (finite) outputs: {N_valid}/{N} ({N_valid/N*100:.2f}%)")
+
+    # ULP computation in BF16 space
+    z_bf16 = z_torch_valid.to(torch.bfloat16).contiguous()
+    tt_bf16 = tt_out_valid.to(torch.bfloat16).contiguous()
+
+    # Flush subnormals and inf/max-normal to zero (DAZ+FTZ model)
+    z_bits_u16 = z_bf16.view(torch.uint16).to(torch.int32)
+    tt_bits_u16 = tt_bf16.view(torch.uint16).to(torch.int32)
+    subnormal_z = ((z_bits_u16 & 0x7F80) == 0) & ((z_bits_u16 & 0x7F) != 0)
+    subnormal_tt = ((tt_bits_u16 & 0x7F80) == 0) & ((tt_bits_u16 & 0x7F) != 0)
+    max_or_inf_z = (z_bits_u16 & 0x7F80) == 0x7F80
+    max_or_inf_tt = (tt_bits_u16 & 0x7F80) == 0x7F80
+    flush_mask = subnormal_z | subnormal_tt | max_or_inf_z | max_or_inf_tt
+    z_bf16 = torch.where(flush_mask, torch.zeros_like(z_bf16), z_bf16)
+    tt_bf16 = torch.where(flush_mask, torch.zeros_like(tt_bf16), tt_bf16)
+
+    z_bits = z_bf16.view(torch.uint16).to(torch.int32)
+    tt_bits = tt_bf16.view(torch.uint16).to(torch.int32)
+
+    sign_z = (z_bits >> 15) & 1
+    sign_tt = (tt_bits >> 15) & 1
+    z_ord = torch.clamp((z_bits & 0x7FFF) - 0x7F, min=0) * torch.where(sign_z == 0, 1, -1)
+    tt_ord = torch.clamp((tt_bits & 0x7FFF) - 0x7F, min=0) * torch.where(sign_tt == 0, 1, -1)
+    ulp_dist = (z_ord - tt_ord).abs()
+
+    max_ulp = ulp_dist.max().item()
+
+    # ULP distribution
+    ulp_0_count = (ulp_dist == 0).sum().item()
+    ulp_1_count = (ulp_dist == 1).sum().item()
+    ulp_2_count = (ulp_dist == 2).sum().item()
+    ulp_3_to_10_count = ((ulp_dist >= 3) & (ulp_dist <= 10)).sum().item()
+    ulp_11_to_100_count = ((ulp_dist >= 11) & (ulp_dist <= 100)).sum().item()
+    ulp_above_100_count = (ulp_dist > 100).sum().item()
+
+    mismatch_threshold = 2
+    mismatch_mask = ulp_dist > mismatch_threshold
+    total_mismatches = mismatch_mask.sum().item()
+    mismatch_pct = (total_mismatches / N_valid) * 100 if N_valid > 0 else 0.0
+
+    logger.debug(
+        f"Max ULP: {max_ulp}, mismatches (ULP > {mismatch_threshold}): {total_mismatches}/{N_valid} ({mismatch_pct:.4f}%)"
+    )
+    logger.debug(f"\nULP Distribution:")
+    logger.debug(f"  ULP = 0: {ulp_0_count:,} ({ulp_0_count/N_valid*100:.4f}%)")
+    logger.debug(f"  ULP = 1: {ulp_1_count:,} ({ulp_1_count/N_valid*100:.4f}%)")
+    logger.debug(f"  ULP = 2: {ulp_2_count:,} ({ulp_2_count/N_valid*100:.4f}%)")
+    logger.debug(f"  ULP 3-10: {ulp_3_to_10_count:,} ({ulp_3_to_10_count/N_valid*100:.4f}%)")
+    logger.debug(f"  ULP 11-100: {ulp_11_to_100_count:,} ({ulp_11_to_100_count/N_valid*100:.4f}%)")
+    logger.debug(f"  ULP > 100: {ulp_above_100_count:,} ({ulp_above_100_count/N_valid*100:.4f}%)")
+
+    # Verify counts sum correctly
+    ulp_sum = ulp_0_count + ulp_1_count + ulp_2_count + ulp_3_to_10_count + ulp_11_to_100_count + ulp_above_100_count
+    assert ulp_sum == N_valid, f"ULP counts don't sum to total valid: {ulp_sum} != {N_valid}"
+    # Compare device output against the float32 reference. Upcast the bf16 device output to float32 (lossless)
+    assert torch.allclose(
+        z_torch_valid, tt_out_valid.to(torch.float32), rtol=2e-2, atol=2e-2
+    ), "gelu_bw(approximate='tanh') output does not match float32 reference within tolerance"

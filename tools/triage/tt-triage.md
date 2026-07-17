@@ -34,7 +34,7 @@ If a check is critical (such as a missing ELF file), the script should raise a `
 
 ### Data visualization
 
-`tt-triage` will try to visualize data returned by scripts, so it is important to describe the data accordingly. For example, see `dump_callstacks` — `tt-triage` would generate a table with all callstacks.
+`tt-triage` will try to visualize data returned by scripts, so it is important to describe the data accordingly. For example, see `dump_callstacks` - `tt-triage` would generate a table with all callstacks.
 
 #### dump_callstacks output modes
 

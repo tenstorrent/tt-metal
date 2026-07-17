@@ -15,8 +15,8 @@ on:
       sp-config:
         required: false
         type: string
-        default: "sp1"
-        description: "Single pod configuration (sp1, sp4, sp5)"
+        default: "sc4"
+        description: "Supercluster configuration (sc1, sc4, sc16, sp5)"
 
 permissions:
   id-token: write

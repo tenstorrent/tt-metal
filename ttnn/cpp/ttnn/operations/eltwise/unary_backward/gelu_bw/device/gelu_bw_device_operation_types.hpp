@@ -12,6 +12,7 @@ namespace ttnn::operations::unary_backward::gelu_bw {
 struct GeluBwParams {
     const tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::INVALID;
     const tt::tt_metal::MemoryConfig output_memory_config;
+    const bool approximate = false;
 };
 
 struct GeluBwInputs {

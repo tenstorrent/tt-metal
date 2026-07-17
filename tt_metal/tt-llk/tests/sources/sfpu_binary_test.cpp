@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     _llk_math_eltwise_unary_datacopy_uninit_<BROADCAST_TYPE, unpack_to_dest>();
 
-    test_utils::call_binary_sfpu_operation_init<APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>();
+    test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>();
 
     test_utils::call_binary_sfpu_operation<DstSync::SyncHalf, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, 32 /* iterations */, formats.math>(
         0 /* dst_index_in0 */, 1 /* dst_index_in1 */, 0 /* dst_index_out */);

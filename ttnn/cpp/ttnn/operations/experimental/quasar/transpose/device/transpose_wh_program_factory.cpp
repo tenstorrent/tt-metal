@@ -183,8 +183,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             // on the unpack-to-dest path; both feed the transpose.
             std::visit(
                 [&](auto& c) {
-                    c.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                    c.unpack_to_dest_mode.emplace(CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+                    c.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
+                    c.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
                 },
                 compute_hw);
         }
@@ -287,10 +287,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_cfg);
         if (src_is_float32) {
             std::visit(
-                [&](auto& c) {
-                    c.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-                },
-                compute_hw);
+                [&](auto& c) { c.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
         }
 
         KernelSpec compute_spec{

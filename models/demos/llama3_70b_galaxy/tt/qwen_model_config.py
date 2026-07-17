@@ -324,8 +324,10 @@ class TtQwenModelArgs(TtModelArgs):
         # On Blackhole the full non-greedy ttnn.sampling pipeline (distributed top-k +
         # scatter_add bincounts) is not supported, so route greedy sampling through the
         # simple all-gather + ttnn.argmax path. Topology follows the 2D-torus fabric (Ring).
+        # On Wormhole the full ttnn.sampling pipeline is supported and greedy sampling goes
+        # through it (with correct sub_core_grids), so force-argmax must stay disabled there.
         self.model_config["SAMPLING_AG_CONFIG"] = {
-            "allow_force_argmax": True,
+            "allow_force_argmax": self.is_blackhole,
             "num_links": self.model_config["GALAXY_NUM_LINKS"],
             "chunks_per_sync": 10,
             "topology": ttnn.Topology.Ring,

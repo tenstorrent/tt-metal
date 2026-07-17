@@ -126,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        test_utils::call_binary_sfpu_operation_init<APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS>();
+        test_utils::call_binary_sfpu_operation_init<APPROX_MODE, is_fp32_dest_acc_en, SFPU_BINARY_OPERATION, ITERATIONS>();
         PROFILER_SYNC();
     }
     {

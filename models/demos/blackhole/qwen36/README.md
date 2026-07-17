@@ -61,6 +61,13 @@ export MESH_DEVICE=P150x4
 Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 `MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`).
 
+Optional flags:
+
+```bash
+# Run SDPA in BF8 (faster; slightly lower precision).
+export QWEN_SDPA_BF8=1
+```
+
 
 ## End-to-end demo test (`demo/text_demo.py`)
 

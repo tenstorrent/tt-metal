@@ -32,6 +32,7 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     parametrize_mesh_only,
     parametrize_mesh_tp,
     replicate_to_device,
+    shard_to_device,
     tp_composer,
 )
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode, rot_mats_prefill
@@ -128,7 +129,8 @@ def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     attn = TPAttention(mesh_device, args, tw, tt_ccl)
 
     x = torch.randn(1, 1, S, args.dim, dtype=torch.bfloat16)
-    x_tt = replicate_to_device(mesh_device, x)
+    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
+    x_tt = shard_to_device(mesh_device, x, dim=-1)
     cos, sin = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta)
     out = attn.forward_prefill(x_tt, cos, sin)
     out_t = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].float()
@@ -183,6 +185,10 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
     def to_dev(t):
         return replicate_to_device(mesh_device, t)
 
+    def to_dev_pf(t):
+        # Prefill input is K-sharded (model's prefill norm skips its AG; fused in-proj gathers).
+        return shard_to_device(mesh_device, t, dim=-1)
+
     def rm_pt(rows):
         return ttnn.from_torch(
             torch.tensor(rows, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
@@ -215,7 +221,7 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
     # ---- concat reference (the oracle) ----
     a_ref = TPAttention(mesh_device, args, tw, tt_ccl)
     a_ref.reset_state()
-    pre_ref = ttnn.to_torch(a_ref.forward_prefill(to_dev(xp), cos_p, sin_p), mesh_composer=comp).float()
+    pre_ref = ttnn.to_torch(a_ref.forward_prefill(to_dev_pf(xp), cos_p, sin_p), mesh_composer=comp).float()
     dec_ref = ttnn.to_torch(a_ref.forward_decode(to_dev(xd), cur_tt, cos_d, sin_d), mesh_composer=comp).float()
 
     # ---- paged path ----
@@ -223,7 +229,7 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
     a_pag.set_paged_kv_cache(mk_cache(), mk_cache())
     pre_pag = ttnn.to_torch(
         a_pag.forward_prefill_paged(
-            to_dev(xp), cos_p, sin_p, rm_pt([[0]]), chunk_page_table=rm_pt([[0]]), chunk_start_idx=0
+            to_dev_pf(xp), cos_p, sin_p, rm_pt([[0]]), chunk_page_table=rm_pt([[0]]), chunk_start_idx=0
         ),
         mesh_composer=comp,
     ).float()

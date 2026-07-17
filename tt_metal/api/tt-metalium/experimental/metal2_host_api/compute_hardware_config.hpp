@@ -26,18 +26,16 @@ namespace tt::tt_metal::experimental {
 // The Tensix Engine pipeline consists of Unpack, Math, and Pack stages.
 // There are two math engines:
 //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
-//    writes to the Dest register file (16- or 32-bit, configurable).
+//    and writes to the Dest register file (16- or 32-bit, configurable).
 //  - SFPU runs SIMD transcendentals. It can only access Dest.
 //
 // The ComputeHardwareConfig configures this pipeline.
 //
 // Different generations of Tenstorrent accelerators have slightly different
 // Tensix compute hardware. The compute configuration is therefore generation-
-// specific (though many fields are common).
-//
-// ComputeHardwareConfig is a variant object that holds one generation's config.
-// You must specify the correct generation-specific config for the hardware
-// your compute kernel will run on.
+// specific (though many fields are common). ComputeHardwareConfig is a variant
+// object that holds one generation's config; you must specify the correct
+// config for the hardware your compute kernel will run on.
 //
 // NOTE: The Unpack, Math, and Pack stages are hardware pipeline stages internal
 //       to a single kernel thread. Not to be confused with KernelSpec::num_threads!
@@ -46,96 +44,151 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// Per-DFB unpack-to-dest mode table. See gen-specific configs for details.
-using ComputeUnpackToDestModes = Table<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
+// Type used for unpack_modes; see configuration structs below for details
+using ComputeUnpackModes = Table<DFBSpecName, tt::tt_metal::UnpackMode>;
 
+// Compute configuration for Gen1 architectures:
+//  - Wormhole  (TT-1.1.0)
+//  - Blackhole (TT-1.2.0)
 struct ComputeGen1Config {
-    // Number of multiply passes the FPU runs to use more mantissa bits
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    ////////////////////////////////////////////////
+    // General accuracy / performance tradeoffs
+    ////////////////////////////////////////////////
 
-    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
-    bool fp32_dest_acc_en = false;
+    // Number of multiply passes the FPU runs.
+    // The higher the fidelity, the greater the precision (more mantissa bits are used),
+    // but higher fidelity means more multiply passes, slowing the computation.
+    MathFidelity fpu_math_fidelity = MathFidelity::HiFi4;
 
-    // Dest register sync mode:
-    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
-    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
-    bool dst_full_sync_en = false;
+    // Accuracy / performance tradeoff for the SFPU transcendentals.
+    // Select either fast-and-approximate mode or slow-and-precise mode.
+    Precision sfpu_precision_mode = Precision::Precise;
 
-    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
-    bool math_approx_mode = false;
+    // Pack stage precision tweak for block-float formats.
+    // Affects how exponents are reconciled when converting Dest contents to BFP in
+    // the Pack stage. Select either precise (slower) or approximate (faster).
+    // NOTE: This setting has no effect on non-BFP formats.
+    Precision bfp_pack_precision_mode = Precision::Approximate;
 
-    // Pack-side precision tweak for the Bfp8 block-float format.
-    // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
-    bool bfp8_pack_precise = false;
+    /////////////////////////////////////
+    // Dest register file configuration
+    /////////////////////////////////////
 
-    // Per-DFB choice for unpacking Float32 data into this compute kernel.
+    // Configure the Dest register to hold 32-bit elements (instead of the default 16-bit).
+    // A 32-bit Dest register is required in order to hold full 32-bit precision formats.
+    // (But, this halves the number of tiles that can be stored in the Dest register file.)
+    // NOTE: When used for FPU accumulation, pair this with fpu_math_fidelity=HiFi3 or
+    //       HiFi4; otherwise the extra precision buys little.
+    //       When using the SFPU, pair this with UnpackMode=UnpackToDest to preserve 32-bit
+    //       precision input data.
+    bool enable_32_bit_dest = false;
+
+    // Dest register double-buffering mode.
+    // This setting trades off per-step tile capacity for pipeline throughput.
+    // It affects performance and tile budget only (no effect on precision).
     //
-    // For Float32 data, the unpacker can deliver the data two ways:
-    //   Default          — Reduce to ~19-bit Tf32 and unpack via SrcA/B.
-    //                      Keeps the FPU available (matmul / binary eltwise).
-    //   UnpackToDestFp32 — Keep full FP32. It only fits in the 32-bit Dest register,
-    //                      so it unpacks straight to Dest — and since the FPU reads
-    //                      only SrcA/B, this DFB becomes SFPU-only.
+    // Configuration options:
+    //  true -  Double buffered. The Dest register is split in two. Math and Pack stages run
+    //          in parallel, but a single compute step has only half the Dest register capacity.
+    //  false - Single buffered. Dest is a single buffer. Math must wait for Pack to drain
+    //          before reusing, but the full tile capacity is available for each compute step.
     //
-    // NOTE: Since SrcA/B are 19-bit and can't hold FP32, keeping full FP32 precision
-    //       forces the "Dest" path.
+    // Always enable double buffering unless a single compute step requires more capacity than
+    // the double-buffered (half-capacity) mode allows.
+    // NOTE: The enable_32_bit_dest flag (though orthogonal) also affects the tile capacity, and
+    // makes it more likely that single-buffering mode will be necessary.
+    bool double_buffer_dest = true;
+
+    // Unpack data into the Dest or into the SrcA / SrcB register file.
+    // This choice is specified per (consumed-from) DFB, rather than kernel-wide.
+    // Configuration options:
+    //  UnpackToSrc  — Unpack to SrcA/B
+    //  UnpackToDest — Unpack to Dest directly
     //
-    // A real choice exists (and an entry is REQUIRED) when all of the following hold:
-    //   1. The compute kernel is the DFB's consumer endpoint
-    //   2. The DFB's data format is Float32, and
-    //   3. fp32_dest_acc_en is true (else Dest is 16-bit and full FP32 is impossible).
+    // UnpackToSrc is the default.
+    //  - Both FPU and SFPU can consume the data (copied to Dest for the SFPU).
+    //  - Data precision is reduced to 19 bits.
+    //    (Precision is lost for FP32; 32-bit integers are truncated).
+    //  - This is the fastest option on Wormhole and Blackhole.
     //
-    // The two options differ in precision and which math engine can use the data, so
-    // you MUST provide an unpack_to_dest_mode entry for a DFB if the above conditions
-    // hold (no default is assumed). Failing to do so will trigger a compile-time error.
+    // UnpackToDest should be used (on Wormhole and Blackhole) only if:
+    //  - The data format has 32-bit precision, AND enable_32_bit_dest is set to true
+    //  - You want to preserve the full precision
+    //  - The data will be consumed by the SFPU (not the FPU)
     //
-    // If the above conditions do not hold, an unpack_to_dest_mode entry is optional.
-    // Default is always accepted; UnpackToDestFp32 is tolerated in "don't care" cases.
+    // If no mode is specified for a (consumed-from) DFB, UnpackToSrc is assumed.
+    // However, if enable_32_bit_dest is true and the DFB carries a 32-bit format, you must
+    // EXPLICITLY specify an UnpackMode for that DFB. (Enforced by validation checks.)
     //
-    ComputeUnpackToDestModes unpack_to_dest_mode;
+    ComputeUnpackModes unpack_modes;
 };
 
+// Compute configuration for Gen2 architectures:
+//  - Quasar (TT-2.0.0)
+//  - Quasar derivatives (TT-2.0.x)
 struct ComputeGen2Config {
-    // Number of multiply passes the FPU runs to use more mantissa bits
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    ////////////////////////////////////////////////
+    // General accuracy / performance tradeoffs
+    ////////////////////////////////////////////////
 
-    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
-    bool fp32_dest_acc_en = false;
+    // See ComputeGen1Config for details on fpu_math_fidelity
+    MathFidelity fpu_math_fidelity = MathFidelity::HiFi4;
 
-    // Dest register sync mode:
-    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
-    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
-    bool dst_full_sync_en = false;
+    // See ComputeGen1Config for details on sfpu_precision_mode
+    Precision sfpu_precision_mode = Precision::Precise;
 
-    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
-    bool math_approx_mode = false;
+    // Note: Gen2 architectures replace BFP data formats with MXFP formats;
+    //       the bfp_pack_precision_mode setting is not relevant for Gen2.
 
-    // When true, the unpacker packs two values into each source-register
-    // slot instead of one, so the math engine reads twice as many elements per
-    // pass. Only the matmul family of instructions work with this format — matmul (MVMUL/MVMULDI) and the GAPOOL
-    // instruction that column reduce ops are built on.
+    /////////////////////////////////////
+    // Dest register file configuration
+    /////////////////////////////////////
+
+    // See ComputeGen1Config for details on enable_32_bit_dest
+    bool enable_32_bit_dest = false;
+
+    // See ComputeGen1Config for details on double_buffer_dest
+    bool double_buffer_dest = true;
+
+    // See ComputeGen1Config for details on unpack_modes
     //
-    // So set this true only for kernels whose inputs are consumed solely by a matmul or a column reduce.
-    bool enable_2x_src_format = false;
+    // NOTE: On Gen2 architectures, there is NO performance penalty for unpacking directly to
+    //       Dest, so UnpackMode=UnpackToDest is the preferred mode for any SFPU-consumed data.
+    ComputeUnpackModes unpack_modes;
 
-    ///////////////////////////////////////////////////////////////////////////////////////////////
-    // TODO: Need to fix the problems that arise with unpack_to_dest_en and unpack_to_dest_mode.
-    //   - Confusing naming and misleading comments.
-    //   - Surprising misalignment between Gen1 and Gen2 behavior of unpack_to_dest_mode
-    //   - Reachable, unvalidated misconfiguration if these are set inconsistently
+    ///////////////////////////////////////////
+    // Temporary configs (these will change!)
+    ///////////////////////////////////////////
+
+    // When true, the unpacker packs two values into each source-register slot instead of one.
+    // The math engine reads twice as many elements per pass, effectively doubling throughput.
+    //
+    // This is currently ONLY supported for Mxfp4 data format. The setting is ignored for all
+    // other formats.
+    //
+    // WARNING: Only the matmul family of instructions work with this format:
+    //  - matmul (MVMUL/MVMULDI)
+    //  - the GAPOOL instruction that column reduce ops are built on
+    //
+    // Invoking other instructions on Mxfp4 data with the setting enabled will produce garbage
+    // math results! Enable this setting ONLY for kernels whose inputs are consumed solely by
+    // a matmul or a column reduce.
+    //
+    // This API is not final and subject to change!
+    // It should most likely become a per-DFB setting, similar to unpack_modes.
+    bool enable_2x_src_register = false;
 
     // Explicitly route this kernel's unpacked operands into dest
     // running the unpack→math→pack semaphore handshake, independent of operand data format.
+    //
+    // NOTE: This is a strictly TEMPORARY HACK!
+    //       Removal / fix is tracked in issue #49445.
+    // ISSUES: Its presence alters the semantics of unpack_modes.
+    //         This creates a surprising misalignment between Gen1 and Gen2 behavior.
+    //         It also creates a reachable, unvalidated misconfiguration if unpack_to_dest_en and
+    //         unpack_modes are set inconsistently.
     bool unpack_to_dest_en = false;
 
-    // NOTE: On Gen2 this field does NOT carry the semantics documented on ComputeGen1Config,
-    // and its final Gen2 behavior is still being settled.
-    // Key difference: on Quasar the SrcA/B-vs-Dest routing is driven by unpack_to_dest_en,
-    // applied regardless of data format — it is NOT inferred from this per-DFB mode the way
-    // it is on Gen1. Do NOT rely on a Gen1 reading of this field here.
-    //
-    // Tracked in issue #49445.
-    ComputeUnpackToDestModes unpack_to_dest_mode;
     ///////////////////////////////////////////////////////////////////////////////////////////////
 };
 

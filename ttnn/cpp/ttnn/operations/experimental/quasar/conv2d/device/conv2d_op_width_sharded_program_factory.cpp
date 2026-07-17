@@ -621,7 +621,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     // self-loops the borrowed ACT_SHARDED (input address source) and READER_INDICES.
     m2::DataMovementHardwareConfig act_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        act_hw = m2::DataMovementGen2Config{};
+        // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR/ACT DFB via per-window "stick"
+        // sub-tile NOC reads; that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
+        // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
+        act_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
         act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
     }

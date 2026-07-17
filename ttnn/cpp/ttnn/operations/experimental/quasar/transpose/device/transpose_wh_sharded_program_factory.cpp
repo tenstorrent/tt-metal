@@ -141,8 +141,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(input_tensor.device()->arch(), compute_cfg);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         std::visit(
-            [&](auto& c) { c.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32); },
-            compute_hw);
+            [&](auto& c) { c.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
     }
 
     KernelSpec compute_spec{

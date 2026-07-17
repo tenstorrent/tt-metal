@@ -23,6 +23,7 @@ on:
           - qwen2.5-vl-32b
           - qwq-32b
           - phi-3-mini
+          - janus-pro-7b
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
           # mamba-2.8b: disabled — PCC failures (see #42163)
           - gemma-4-e2b
