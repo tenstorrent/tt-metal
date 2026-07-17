@@ -116,12 +116,20 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
         return None
 
     grid = device.compute_with_storage_grid_size()
-    # 2D mcast tiles M across grid rows (y) and N across grid cols (x). Pick the
-    # largest grid dims that divide Mt/Nt evenly so no core is left idle or ragged.
+    # 2D mcast tiles M across grid rows (y) and N across grid cols (x). Tile M across
+    # the largest divisor of Mt (no ragged M rows), but spread N across ALL grid
+    # columns via ceil distribution rather than only the largest divisor of Nt.
+    # Measured on Blackhole (11x10) for the two dominant prefill expert matmuls:
+    # exact-divisor gx capped both at gx=8 (64/110 cores used, 42% idle); ceil over
+    # gx=11 runs 1.24-1.28x faster (gate_up 512x4096x6144 186->147us, down
+    # 512x3072x4096 97->78us) at PCC 1.0 (test_prefill_expert_mm_sweep.py). The last
+    # column is ragged (does < a full per_core_N block) but the extra parallelism wins.
     gy = _largest_divisor_leq(Mt, grid.y)
-    gx = _largest_divisor_leq(Nt, grid.x)
     per_core_M = Mt // gy
-    per_core_N = Nt // gx
+    # Exact-divisor N block: used ONLY for the L1 guard below, so the None-fallback
+    # decision stays identical to the measured-safe baseline (ceil only shrinks the
+    # per-core N block vs this, so it can never newly exceed L1).
+    per_core_N_exact = Nt // _largest_divisor_leq(Nt, grid.x)
 
     # L1 guard (per_core cap): the CBs (in0/in1/out + fp32 partials + mcast buffers)
     # scale with the per-core work per_core_M x per_core_N, and this config has no
@@ -141,11 +149,20 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
     # Linear scale of that crash puts the safe per_core_M ceiling near ~66.
     PER_CORE_TILE_CAP = 160
     PER_CORE_M_CAP = 64
-    if per_core_M * per_core_N > PER_CORE_TILE_CAP or per_core_M > PER_CORE_M_CAP:
+    if per_core_M * per_core_N_exact > PER_CORE_TILE_CAP or per_core_M > PER_CORE_M_CAP:
         return None
 
-    # K reduction chunk: a divisor of Kt, capped so the in0/in1 blocks stay small.
-    in0_block_w = _largest_divisor_leq(Kt, 4)
+    # Emit the ceil-distributed N block over the full grid width.
+    gx = grid.x
+    per_core_N = -(-Nt // gx)  # ceil
+
+    # K reduction chunk: a divisor of Kt. Wide-N shapes must keep it small so the
+    # in0/in1 blocks fit in L1 alongside the per_core_N output block. But skinny-N
+    # shapes (small per_core_N, e.g. the MoE router N=64 => per_core_N=1) leave L1
+    # free for a deeper K chunk, which keeps the reduction pipeline fed: the router
+    # 512x4096x64 runs 1.37x faster at ibw=8 vs 4 (test_prefill_expert_mm_sweep.py).
+    ibw_cap = 8 if per_core_N <= 2 else 4
+    in0_block_w = _largest_divisor_leq(Kt, ibw_cap)
 
     # out_subblock_h * out_subblock_w <= 4 (dest register tiles). Prefer wide subblocks.
     out_subblock_w = next((w for w in (4, 3, 2, 1) if per_core_N % w == 0), 1)
