@@ -4,10 +4,20 @@
 # TTNN implementation of HunyuanRMSNorm.
 # Thin wrapper around models/common/rmsnorm.py (shared with tt_transformers).
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import Mode
+
+from ..parallel_utils import rmsnorm_shard_config
+
+# Width-shard the small-M residual-stream norm (input/post-attn/ln_f) so its H-wide
+# reduction parallelizes across cores instead of serializing on 1 core (62us -> ~40us
+# incl. reshards at Sd=32, measured). Gated in rmsnorm_shard_config to the safe regime;
+# set HY_SHARD_NORM=0 to force the plain interleaved kernel (A/B / rollback).
+_SHARD_NORM = os.environ.get("HY_SHARD_NORM", "1") != "0"
 
 
 class HunyuanTtRMSNorm(LightweightModule):
@@ -38,6 +48,8 @@ class HunyuanTtRMSNorm(LightweightModule):
         weight_cache_path=None,
     ):
         super().__init__()
+        self.device = device
+        self.dim = dim
         key = weight_key.removesuffix(".weight")
         # Norm weights are 1-D (loaded ROW_MAJOR) and precision-sensitive; bf8/bf4
         # are TILE-only and inappropriate here. Keep norms in bf16 even when the
@@ -65,5 +77,26 @@ class HunyuanTtRMSNorm(LightweightModule):
         Returns:
             Normalised tensor, same shape as input.
         """
+        # Small-M residual-stream norm: run the H-wide reduction width-sharded across
+        # cores instead of serialized on 1 core. rmsnorm_shard_config returns None
+        # outside the measured-safe regime (large M, or the narrow QK-norm), so this
+        # transparently falls back to the interleaved kernel below.
+        cfg = rmsnorm_shard_config(self.device, x.shape[-2], x.shape[-1]) if _SHARD_NORM else None
+        if cfg is not None:
+            program_config, shard_mc = cfg
+            x_sharded = ttnn.interleaved_to_sharded(x, shard_mc)
+            y = ttnn.rms_norm(
+                x_sharded,
+                epsilon=self._norm.eps,
+                weight=self._norm.weight,
+                program_config=program_config,
+                memory_config=shard_mc,
+                compute_kernel_config=self._norm.compute_kernel_config_hifi2,
+            )
+            ttnn.deallocate(x_sharded)
+            out = ttnn.sharded_to_interleaved(y, out_memory_config or ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(y)
+            return out
+
         norm_config = {"output_mem_config": out_memory_config} if out_memory_config is not None else None
         return self._norm(x, mode=Mode.PREFILL, norm_config=norm_config)
