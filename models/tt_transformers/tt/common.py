@@ -718,8 +718,8 @@ def get_padded_prefill_len(seq_len: int) -> int:
     This is used to pad the sequence length to the nearest power of 2.
     """
     # TODO: https://github.com/tenstorrent/tt-metal/issues/34117
-    # if seq_len <= 128:
-    #    return 128
+    if seq_len <= 128:
+        return 128
     if seq_len <= 1024:
         return 1024
     else:
