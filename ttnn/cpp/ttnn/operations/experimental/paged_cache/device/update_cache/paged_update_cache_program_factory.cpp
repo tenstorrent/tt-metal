@@ -9,6 +9,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -31,9 +32,9 @@ bool enable_fp32_dest(const tt_metal::IDevice* device, const ttnn::DeviceCompute
 
 // Per-worker-core cache-write offsets derived from `update_idxs`. These values are excluded from the
 // program hash (PagedUpdateCacheDeviceOperation::compute_program_hash) yet baked into runtime args, so
-// they must be re-patched on every cache hit via get_dynamic_runtime_args. This helper is the single
-// source of truth for the formulas — both create_descriptor (cache miss) and get_dynamic_runtime_args
-// (cache hit) call it, so the two paths cannot drift. Returns empty when an index tensor is used: in
+// they are re-derived on every cache hit by re-running create_descriptor (override_runtime_arguments).
+// This helper is the single source of truth for the formulas, called only from create_descriptor, so
+// the miss and hit paths cannot drift. Returns empty when an index tensor is used: in
 // that mode the offsets are 0 here and the real positions are read on-device from the (Buffer-bound,
 // re-patched) index tensor.
 struct UpdateCachePerCoreOffsets {
@@ -369,8 +370,8 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
 
     const auto& cores = corerange_to_cores(all_cores, num_cores, row_major);
     // cache_start_id / tile_update_offset_B are derived from update_idxs (excluded from the program
-    // hash) — computed via the shared helper so get_dynamic_runtime_args re-patches identical values on
-    // cache hits. Empty in index-tensor mode (offsets read on-device from the re-patched index tensor).
+    // hash) — computed via the shared helper; override_runtime_arguments re-runs this on cache hits to
+    // re-apply identical values. Empty in index-tensor mode (offsets read on-device from the index tensor).
     const auto offsets = compute_update_cache_offsets(operation_attributes, tensor_args);
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
@@ -447,38 +448,21 @@ ProgramDescriptor PagedUpdateCacheMeshWorkloadFactory::create_descriptor(
     return PagedUpdateCacheProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> PagedUpdateCacheDeviceOperation::get_dynamic_runtime_args(
+void PagedUpdateCacheDeviceOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& /*tensor_return_value*/,
+    tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    // Coords excluded from a mesh dispatch get an empty ProgramDescriptor (see the mesh factory) — no
-    // kernels, nothing to patch.
-    if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
-        !operation_attributes.mesh_coords.value().contains(mesh_dispatch_coordinate.value())) {
-        return {};
-    }
-
-    // Index-tensor mode bakes no per-call offsets (positions are read on-device from the re-patched
-    // index tensor), so there is nothing dynamic to re-apply.
-    const auto offsets = compute_update_cache_offsets(operation_attributes, tensor_args);
-    if (offsets.empty()) {
-        return {};
-    }
-
-    // Kernel push order in create_descriptor: reader(0), writer(1), compute(2).
-    // Reader rt args:  [0]=dst, [1]=cache_start_id, ...
-    // Writer rt args:  [0]=dst, [1]=cache_start_id, [2]=tile_update_offset_B, ...
-    constexpr uint32_t kReaderKernelIdx = 0;
-    constexpr uint32_t kWriterKernelIdx = 1;
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(offsets.size() * 3);
-    for (const auto& off : offsets) {
-        dynamic_args.push_back({kReaderKernelIdx, off.core, /*arg_idx=*/1, off.cache_start_id});
-        dynamic_args.push_back({kWriterKernelIdx, off.core, /*arg_idx=*/1, off.cache_start_id});
-        dynamic_args.push_back({kWriterKernelIdx, off.core, /*arg_idx=*/2, off.tile_update_offset_B});
-    }
-    return dynamic_args;
+    // Re-derive the descriptor from the single source of truth (create_descriptor) for the current tensors
+    // and re-apply its per-core args + tensor-backed CB/buffer addresses. Mirrors select_program_factory
+    // (mesh factory emits an empty descriptor for excluded coords); supersedes get_dynamic/resolve_bindings.
+    auto desc =
+        operation_attributes.mesh_coords.has_value()
+            ? PagedUpdateCacheMeshWorkloadFactory::create_descriptor(
+                  operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate)
+            : PagedUpdateCacheProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 }  // namespace ttnn::experimental::prim
