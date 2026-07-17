@@ -144,11 +144,17 @@ def wide_mm_program_config(device, M: int, K: int, N: int):
     # is fine at large M) above it.
     #
     # Also cap per_core_M alone: skinny-N shapes (MoE gate N=64 => Nt=2, gx<=2) can
-    # pass the product cap with a huge M-block. At ISL=22800 (SP-padded Mt=714) that
-    # yields per_core_M=102 / product=102 and TT_THROWs with ~2.4 MB CBs > 1.5 MB L1.
-    # Linear scale of that crash puts the safe per_core_M ceiling near ~66.
+    # pass the product cap with a huge M-block, then TT_THROW on CB overflow. The
+    # crashing CBs are, per core (no out_block sub-tiling): in0 = per_core_M*in0_block_w
+    # double-buffered, in1 = per_core_N*in0_block_w double-buffered, out (bf16) +
+    # interm (fp32 dest-acc) = per_core_M*per_core_N each. For the skinny gate
+    # (per_core_N=1, in0_block_w=8) this is ~38.9 KB per per_core_M tile, so it crosses
+    # the 1.5 MB L1 at per_core_M ~= 39. Reproduced exactly by the i2i denoise gate
+    # (11008x4096x64: SP-padded Mt=344 -> per_core_M=43 -> ~1.72 MB, the observed
+    # 1724160 B > 1572864 B throw). Cap at 36 for margin; above it the gate falls to
+    # auto (out_block-iterating, crash-safe, marginal on this tiny N=64 matmul).
     PER_CORE_TILE_CAP = 160
-    PER_CORE_M_CAP = 64
+    PER_CORE_M_CAP = 36
     if per_core_M * per_core_N_exact > PER_CORE_TILE_CAP or per_core_M > PER_CORE_M_CAP:
         return None
 
