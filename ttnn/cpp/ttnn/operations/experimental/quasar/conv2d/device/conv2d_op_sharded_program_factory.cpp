@@ -744,16 +744,11 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // collapses DEST to one section, eliminating the per-tile half-sync bank rotation whose release appears to
     // stop freeing banks. This was never actually run on the conv (the earlier "half sync" try just re-set the
     // default). If it clears the 0x19, full sync is the workaround; if not, this is a clean LLK escalation.
-    // dst_full_sync: the FULL-sync force below was added for the OLD MATH-A2D-datacopy tilize path (collapse
-    // DEST to one section to dodge the half-sync bank-rotation leak). It is HARMFUL for the UnpackToDestEn path:
-    // there `_llk_unpack_dest_dvalid_section_done_` in SyncFull RESETS the dest bank to 0 every tile
-    // (llk_unpack_common.h:94), so every tile reuses DEST bank 0 with NO double-buffering — a tight UNPACK<->PACK
-    // ping-pong on bank 0 that races/laps once there are enough tiles (exposed by the K-fix's filter_h x tile
-    // count -> TRISC0 0x19). SyncHalf instead double-buffers across 2 banks (unpack tile t+1 into bank1 while
-    // pack drains tile t from bank0). So only force full-sync when NOT using unpack-to-dest.
-    if (split_program_tilize_only && std::getenv("TT_METAL_QSR_TILIZE_UNPACK_TO_DEST") == nullptr) {
-        dst_full_sync_en = true;
-    }
+    // The old FULL-sync force for the split datacopy tilize path is REMOVED. It was a workaround from before the
+    // per-tile FPU dest-dvalid clear (tilize.h datacopy loop) fixed the half-sync bank-rotation leak / 0x19.
+    // Empirically SyncFull datacopy HANGS early (dprint_tr13: block 6) while SyncHalf datacopy runs cleanly (the
+    // real stem ran TZBLK=89, no 0x19 — dprint_s1). So keep the SyncHalf (dst_full_sync default) for the split
+    // tilize-only datacopy path too, matching the fused conv.
     // SyncFull for the UTD tilize — TRIED, REVERTED (dprint_tr12): under the semaphore scheme SyncFull stalled
     // EARLIER than SyncHalf (both cores stuck at 6/2 blocks vs SyncHalf's core0=32). Single-bank serialization is
     // not the fix, and it rules out the SyncHalf bank-FLIP as the cause (SyncFull has no flip yet stalls sooner).
