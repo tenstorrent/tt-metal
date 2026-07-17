@@ -116,20 +116,6 @@ def _fwbundle_filename(version):
     return f"fw_pack-{version}.fwbundle"
 
 
-def _safe_join(base_dir, filename):
-    """Join filename into base_dir, guaranteeing the result stays inside base_dir.
-
-    Collapses filename to a bare basename and confirms the resolved absolute path
-    is contained within base_dir, so dynamic input cannot escape the directory.
-    """
-    base_abs = os.path.abspath(base_dir)
-    candidate = os.path.abspath(os.path.join(base_abs, os.path.basename(filename)))
-    if candidate != base_abs and not candidate.startswith(base_abs + os.sep):
-        print(f"\nERROR: refusing file path outside {base_abs}: {candidate}")
-        sys.exit(1)
-    return candidate
-
-
 def list_released_versions(repo_dir):
     """Return [(tag, version, release_json), ...] of flashable v19+ firmware releases.
 
@@ -180,7 +166,16 @@ def download_release_bundle(release, version, dest_dir):
     if not asset_url:
         return None
 
-    dest_path = _safe_join(dest_dir, asset_name)
+    # Sanitize the destination path inline, at the file-write sink: basename
+    # strips any directory components from the dynamic name, and the absolute-
+    # path containment check confirms the result stays inside dest_dir, so
+    # dynamic input cannot be used to write outside the intended directory.
+    base_directory = os.path.abspath(dest_dir)
+    dest_path = os.path.abspath(os.path.join(base_directory, os.path.basename(asset_name)))
+    if dest_path != base_directory and not dest_path.startswith(base_directory + os.sep):
+        print(f"\nERROR: refusing to write firmware bundle outside {base_directory}: {dest_path}")
+        sys.exit(1)
+
     print(f"\nDownloading {asset_name} ...")
     print(f"  from: {asset_url}")
     request = urllib.request.Request(asset_url, headers={"User-Agent": _USER_AGENT})
