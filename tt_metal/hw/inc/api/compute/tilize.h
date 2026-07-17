@@ -371,9 +371,17 @@ ALWI void tilize_block(
         PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
-        // DEBUG: print immediately BEFORE the tilize pack; last TZPK before the fault = the faulting tile.
-        PACK(DPRINT("TZPK t={} l1idx={}\n", (uint32_t)t, (uint32_t)(t + output_tile_index)));
         PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
+        // PER-TILE FPU dest-dvalid clear (the fix for ERROR_TRISC1 0x19 at t~4). The MOVA2D datacopy sets the
+        // FPU dest-dvalid but its terminal CLEARDVALID clears SrcA only, and llk_math_dest_section_done only
+        // SEMPOSTs MATH_PACK + advances the bank — NEITHER clears the FPU dest client. So the ~4-deep FPU
+        // dest-dvalid ring laps after ~4 tiles -> IB interrupt. The reduce/pool path avoids this by folding the
+        // clear inline per op; here we do it explicitly per tile. _llk_math_set_dvalid_ is the ONLY place that
+        // pulses the FPU-dest CLEARDVALID. Safe wrt PACK: the dvalid is a sync bit, the DEST data persists, and
+        // PACK reads via the MATH_PACK semaphore (posted by dest_section_done below), not the dvalid; the sem
+        // also bounds the next MOVA2D so it can't overwrite before PACK reads. (Prior one-shot scrub before the
+        // loop only delayed the lap to t=4 — the clear must be PER TILE.)
+        MATH((llk_math_set_dvalid<p_cleardvalid::FPU, DST_SYNC_MODE>()));
 #endif
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
