@@ -33,38 +33,43 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
     uint32_t Nt = bs[bs.rank() - 1] / tt::constants::TILE_WIDTH;
 
     CoreCoord grid = a.device()->compute_with_storage_grid_size();
-
     std::cout << "grid: " << grid.str() << std::endl;
+
+    uint32_t per_core_Mt = div_up(Mt, grid.y);
+    uint32_t per_core_Nt = div_up(Nt, grid.x);
+    std::cout << "per_core_Mt: " << per_core_Mt << std::endl;
+    std::cout << "per_core_Nt: " << per_core_Nt << std::endl;
 
     uint32_t y_cores = grid.y < Mt ? grid.y : Mt;
     uint32_t x_cores = grid.x < Nt ? grid.x : Nt;
     CoreCoord top_left = CoreCoord{0, 0};
     CoreCoord bot_right = CoreCoord{x_cores - 1, y_cores - 1};
-    CoreRangeSet used_cores{CoreRange{top_left, bot_right}};
 
+    CoreRangeSet used_cores{CoreRange{top_left, bot_right}};
     std::cout << "used_cores: " << top_left.str() << ", " << bot_right.str() << std::endl;
 
     ProgramDescriptor desc;
 
     // Circular buffers
-    constexpr uint32_t src0_cb_index = CBIndex::c_0;
-    constexpr uint32_t num_input_tiles = 2;
+    constexpr uint32_t in0_cb_index = CBIndex::c_0;
+    const uint32_t in0_cb_tiles = 2 * per_core_Mt * Kt;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * single_tile_size,
+        .total_size = in0_cb_tiles * single_tile_size,
         .core_ranges = used_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
+            .buffer_index = in0_cb_index,
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
     });
 
-    constexpr uint32_t src1_cb_index = CBIndex::c_1;
+    constexpr uint32_t in1_cb_index = CBIndex::c_1;
+    const uint32_t in1_cb_tiles = 2 * Kt * per_core_Nt;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * single_tile_size,
+        .total_size = in1_cb_tiles * single_tile_size,
         .core_ranges = used_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src1_cb_index,
+            .buffer_index = in1_cb_index,
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
@@ -113,12 +118,6 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
         .math_approx_mode = false,
     };
 
-    uint32_t per_core_Mt = div_up(Mt, grid.y);
-    uint32_t per_core_Nt = div_up(Nt, grid.x);
-
-    std::cout << "per_core_Mt: " << per_core_Mt << std::endl;
-    std::cout << "per_core_Nt: " << per_core_Nt << std::endl;
-
     for (uint32_t core_y = 0; core_y < y_cores; core_y++) {
         for (uint32_t core_x = 0; core_x < x_cores; core_x++) {
             uint32_t top = core_y * per_core_Mt;
@@ -132,9 +131,13 @@ ProgramDescriptor MyMatmulDeviceOperation::MultiCore::create_descriptor(
 
             CoreCoord core{core_x, core_y};
 
-            reader_desc.emplace_runtime_args(core, {src0_buffer, src1_buffer, Mt, Kt, Nt, top, left, bot, right});
+            uint32_t block_size_A = (bot - top) * Kt;
+            uint32_t block_size_B = Kt * (right - left);
+
+            reader_desc.emplace_runtime_args(
+                core, {src0_buffer, src1_buffer, Mt, Kt, Nt, top, left, bot, right, block_size_A, block_size_B});
             writer_desc.emplace_runtime_args(core, {dst_buffer, Mt, Nt, top, left, bot, right});
-            compute_desc.emplace_runtime_args(core, {Mt, Kt, Nt, top, left, bot, right});
+            compute_desc.emplace_runtime_args(core, {top, left, bot, right, block_size_A, block_size_B});
         }
     }
 

@@ -9,8 +9,8 @@ def pcc(a, b):
 
 
 def main():
-    M, K, N = 128, 96, 64  # each divisible by 32
-    torch.manual_seed(0)
+    M, K, N = 1024, 1024, 1024
+    torch.manual_seed(42)
 
     a = torch.randn(M, K, dtype=torch.bfloat16)
     b = torch.randn(K, N, dtype=torch.bfloat16)
