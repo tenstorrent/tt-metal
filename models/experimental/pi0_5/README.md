@@ -293,13 +293,13 @@ export PI05_SIM=$HOME/pi05_sim        # any writable dir
 curl -L -o $PI05_SIM/paligemma_tokenizer.model \
   https://storage.googleapis.com/big_vision/paligemma_tokenizer.model
 
-# 2. Checkpoint: upstream openpi pi05_libero (torch/safetensors). Downloads +
-#    fills config.json / norm_stats + verifies via the loader. Gated repo →
-#    `huggingface-cli login` first. See weights/README.md.
-huggingface-cli login
+# 2. Checkpoint: lerobot pi05_libero_finetuned (default, PUBLIC — no HF login).
+#    Downloads + verifies via the loader. This is the LIBERO-validated checkpoint
+#    (single-chip 38/40 = 95%). See weights/README.md.
+#    (For the gated upstream openpi variant: add `--variant upstream`, needs login.)
 python_env/bin/python models/experimental/pi0_5/weights/download_pi05_libero.py \
-  --out $PI05_SIM/pi05_libero_upstream
-export PI05_CHECKPOINT_DIR=$PI05_SIM/pi05_libero_upstream
+  --out $PI05_SIM/pi05_libero_finetuned
+export PI05_CHECKPOINT_DIR=$PI05_SIM/pi05_libero_finetuned
 
 # 3. LIBERO from source (the PyPI package is broken)
 git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git $PI05_SIM/libero_repo
@@ -335,22 +335,22 @@ Machine-specific env vars (not in `pi05_production.env`): `PI0_TOKENIZER_PATH`,
 `LIBERO_REPO_PATH`, `MUJOCO_GL=osmesa`, and `TT_METAL_CACHE` if `$HOME/.cache` is a
 dangling symlink.
 
-Key flags: `--backend {ttnn | ttnn_1x8 | pytorch}` · `--steps-sweep 5` (our path) ·
-`--action-horizon 10` / `--state-in-prompt false` (upstream defaults) ·
-`--replan-steps 5` · `--num-episodes` · `--suites` · `--task-range` · `--max-steps`
-(per-suite defaults: spatial=220, object=280, goal=300, libero_10=520).
+Key flags: `--backend {ttnn | pytorch}` · `--steps-sweep 5` (our path) ·
+`--action-horizon 50` / `--state-in-prompt true` (finetuned defaults; pass `10` / `false`
+for the upstream openpi checkpoint) · `--replan-steps 5` · `--num-episodes` · `--suites` ·
+`--task-range` · `--max-steps` (per-suite defaults: spatial=220, object=280, goal=300, libero_10=520).
 
-### LIBERO success rate (upstream pi05_libero, 100 episodes/suite × 4 suites, N=5)
+### LIBERO success rate (lerobot pi05_libero_finetuned, 1 episode/task × 40 tasks, N=5)
 
-Measured on the 1×8 mesh (trace+2CQ):
+Measured on a single Blackhole chip (`--backend ttnn`, trace replay):
 
 | suite | success |
 |---|---|
-| libero_spatial | 100/100 |
-| libero_object | 99/100 |
-| libero_goal | 95/100 |
-| libero_10 | 94/100 |
-| **GRAND TOTAL** | **388/400 (97.0%)** |
+| libero_spatial | 10/10 |
+| libero_object | 10/10 |
+| libero_goal | 9/10 |
+| libero_10 | 9/10 |
+| **GRAND TOTAL** | **38/40 (95.0%)** |
 
 
 ---
@@ -383,20 +383,23 @@ To run on hardware: implement `RobotInterface` for your cameras + arm and swap i
 
 ## Dtype mapping
 
-Weights and matmul activations are **`bfloat8_b`** across SigLIP, the VLM, and the
-action expert; activation **outputs are `bfloat16`** (the bf8-output flips were
-reverted after an 800-episode LIBERO sweep showed a 1–2 pp regression — weights stay
-bf8). The **KV cache stays `bfloat16`** (hot-read path). Compute kernels are HiFi2
-with `fp32_dest_acc_en=True` for SigLIP/SDPA and `False` for the Gemma matmuls +
-sharded LN. Live code:
-`tt/{ttnn_siglip,ttnn_paligemma,ttnn_gemma,ttnn_suffix,ttnn_pi0_5_model}.py`.
+Weights and matmul activations default to **`bfloat8_b`** across SigLIP, the VLM, and
+the action expert (the validated perf policy — halves DRAM bandwidth). The Gemma
+**o-proj and MLP** outputs are promoted to **`bfloat16`** (the bf8-output flips were
+reverted after an 800-episode LIBERO sweep showed a 1–2 pp regression); the Gemma
+**QKV-projection output** and all **SigLIP** layer outputs stay `bfloat8_b`. The
+**KV cache tracks the QKV activation dtype → `bfloat8_b` by default** (it becomes
+`bfloat16` only under `PI0_WEIGHTS_BF16=1`, the precision-parity mode, which also lifts
+weights + all activations to bf16). Compute kernels are HiFi2 with `fp32_dest_acc_en=True`
+for SigLIP/SDPA and `False` for the Gemma matmuls + sharded LN. Live code:
+`tt/{ttnn_common,ttnn_siglip,ttnn_paligemma,ttnn_gemma,ttnn_suffix,ttnn_pi0_5_model}.py`.
 
 | Stage | Weights / biases | Matmul output | Notes |
 |---|---|---|---|
 | Inputs | — | images/state/x_t `bf16`; lang tokens `uint32` | `adarms_cond` precomputed `bf16` |
 | SigLIP · 27 layers | `bf8_b` | attn + MLP `bf8_b` | patch-conv weight `bf16`; `fp32_dest_acc_en=True` |
-| VLM Gemma-2B · 18 | `bf8_b` | `bf16` | KV cache + biases `bf16`; `fp32_dest_acc_en=False` |
-| Expert Gemma-300M · 18 | `bf8_b` | `bf16` | adaRMS modulation `bf16`; sharded RMSNorm |
+| VLM Gemma-2B · 18 | `bf8_b` | o-proj/MLP `bf16`; QKV `bf8_b` | biases `bf16`; KV cache `bf8_b` (tracks QKV); `fp32_dest_acc_en=False` |
+| Expert Gemma-300M · 18 | `bf8_b` | o-proj/MLP `bf16`; QKV `bf8_b` | adaRMS modulation `bf16`; sharded RMSNorm |
 | Suffix · 4 linears | `bf8_b` | `bf16` | sincos(t) `fp32`→`bf16` |
 | Denoise loop | — | x_t `bf16` | intentionally `bf16` (opt-in fp32 via `PI0_DENOISE_FP32=1`) |
 

@@ -920,7 +920,15 @@ SUITE_MAX_STEPS = {
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", default="/storage/sdawle/pi05_weights/pi05_libero_upstream")
+    ap.add_argument(
+        "--checkpoint",
+        default=os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "weights", "pi05_libero_finetuned")
+        ),
+        help="Checkpoint dir. Default: the public lerobot pi05_libero_finetuned "
+        "(action_horizon=50, MEAN_STD, state-in-prompt). For the upstream openpi "
+        "pi05_libero, pass its dir with --action-horizon 10 --state-in-prompt false.",
+    )
     ap.add_argument("--suite", default="libero_spatial", help="Single suite (legacy; overridden by --suites).")
     ap.add_argument(
         "--suites",
@@ -984,21 +992,20 @@ def main():
     ap.add_argument(
         "--action-horizon",
         type=int,
-        default=10,
+        default=50,
         help="Action chunk size = number of actions the model predicts per call. "
-        "Default 10 (upstream openpi pi05_libero). Pass --action-horizon 50 when "
-        "running the lerobot pi05_libero_finetuned checkpoint, which was trained "
-        "with 50; otherwise position embeddings beyond 10 are untrained and the "
-        "policy outputs garbage for those tokens.",
+        "Default 50 (lerobot pi05_libero_finetuned). Pass --action-horizon 10 for the "
+        "upstream openpi pi05_libero, which was trained with 10; using the wrong value "
+        "pulls untrained position embeddings and the policy outputs garbage.",
     )
     ap.add_argument(
         "--state-in-prompt",
         choices=["true", "false"],
-        default="false",
+        default="true",
         help="Whether to embed robot state into the language prompt as 256 discrete "
-        "bins. Default 'false' (upstream openpi pi05_libero was trained with "
-        "discrete_state_input=False and never saw state in the prompt). Pass "
-        "'true' for the lerobot pi05_libero_finetuned convention.",
+        "bins. Default 'true' (lerobot pi05_libero_finetuned convention, MEAN_STD). "
+        "Pass 'false' for the upstream openpi pi05_libero, which was trained with "
+        "discrete_state_input=False and never saw state in the prompt.",
     )
     ap.add_argument(
         "--tasks",
