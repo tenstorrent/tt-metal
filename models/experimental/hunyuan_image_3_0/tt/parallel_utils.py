@@ -208,8 +208,11 @@ def decode_mm_program_config(device, M: int, K: int, N: int):
 # static CB region — the same CB clash as MoE, but the resident tensor here is the
 # LIVE residual stream, so ALL these ops must fall to DRAM together above the bound
 # (moving one leaves another in the CBs' path). Bound measured on hardware: the
-# residual RMSNorm clashed at Sd=1280 (global 2560) on the 32-layer sp=2 forward,
-# so gate below that at Sd=1024 (global 2048, matching MOE_L1_MAX_SEQ).
+# residual RMSNorm clashed at Sd=1280 (global 2560) on the 32-layer sp=2 forward.
+# Gate strictly below 1024: AR KV-prefill uses sp=1 with chunk_size=1024, so the
+# per-device seq IS 1024 — and at exactly that bound the interleaved rms_norm CBs
+# clash with the L1 residual (program.cpp validate_circular_buffer_region). Exclusive
+# upper bound keeps decode (Sd=32) and SP=2 prefill (Sd=512) in L1.
 RESID_L1_MAX_SEQ = 1024
 
 
@@ -217,4 +220,71 @@ def resid_mem_config(seq_len: int) -> ttnn.MemoryConfig:
     """L1 for a per-device (sp-sharded) residual-stream/attention activation up to
     the measured CB-clash bound, else DRAM. `seq_len` is the PER-DEVICE sequence
     Sd = x.shape[1] (NOT the global ISL)."""
-    return ttnn.L1_MEMORY_CONFIG if seq_len <= RESID_L1_MAX_SEQ else ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG if seq_len < RESID_L1_MAX_SEQ else ttnn.DRAM_MEMORY_CONFIG
+
+
+# --- Block-sharded RMSNorm config for the small-M (decode-ish) residual-stream norm.
+# The interleaved ttnn.rms_norm parallelizes over ROW-tiles (M/32), so at small M it
+# lands on few cores and serializes the H-wide reduction: the Hunyuan input/post-attn/
+# ln_f norms are 62us on a SINGLE core at Sd=32 (1 row-tile) in the recaption AR report.
+# We block-shard: the H=4096 (128-tile) hidden across gx=8 cores (parallelizes the
+# reduction) AND the M row-tiles across gy=grid.y cores (so each core holds few rows).
+# The 2-D split is what fixes the naive 1xgx shard's L1 OOM at Mt>=8: piling all M rows
+# onto 8 cores makes each shard [M, H/8] blow past the 1.46MB L1 bank as Sd grows, so
+# instead we keep block_h (=Mt/gy) at ~1 by using the gy grid dim for rows.
+#
+# Gate is MEASURED (tests/perf/test_rmsnorm_shard_sweep.py, Blackhole 2x2, HiFi2 +
+# fp32_dest_acc_en=True, incl. the I2S-in/S2I-out reshards the caller pays):
+#   * per-core tile budget block_h*block_w <= NORM_SHARD_MAX_TILES_PER_CORE keeps the
+#     norm's (many, fp32) circular buffers inside L1 ([1,16]=16 tiles fits; [8,16]=128
+#     OOMs even in isolation). Large-Mt norms (prefill/denoise) exceed it => interleaved,
+#     which already spreads row-tiles across cores there (flat ~63us to Mt=64) — no loss.
+#   * QK-norm (H=head_dim=128 => Ht=4) can't host gx>=8 => None (left interleaved, ~4us).
+# fp32_dest_acc_en=True (mandatory for norm precision) caps subblock_w<=4.
+NORM_SHARD_MAX_TILES_PER_CORE = 32  # block_h*block_w ceiling; MEASURED-safe (see sweep).
+# Decode-only: I2S+sharded CBs fight live L1 residuals once M grows into prefill
+# chunks (even when the per-core tile budget still fits, e.g. Sd=512 at SP=2).
+NORM_SHARD_MAX_M = 64
+
+
+def rmsnorm_shard_config(device, M: int, H: int):
+    """Return (program_config, shard_memory_config) to run a 2-D block-sharded rms_norm
+    for a small-M / wide-H norm, or None => keep the interleaved kernel. Safe to call for
+    any norm shape: returns None outside the measured-safe regime (large M, narrow QK)."""
+    if M > NORM_SHARD_MAX_M or M % TILE or H % TILE:
+        return None
+    Mt, Ht = M // TILE, H // TILE
+    grid = device.compute_with_storage_grid_size()
+    # Width: largest divisor of Ht in [8, grid.x] — need real width parallelism; <8 (e.g.
+    # the 4-tile QK-norm) isn't worth resharding and 8 is the validated width-core count.
+    gx = next((g for g in range(min(grid.x, Ht), 7, -1) if Ht % g == 0), None)
+    if gx is None:
+        return None
+    block_w = Ht // gx
+    # Rows: most grid.y cores that evenly divide Mt while keeping per-core tiles in budget.
+    gy = next(
+        (
+            g
+            for g in range(min(grid.y, Mt), 0, -1)
+            if Mt % g == 0 and (Mt // g) * block_w <= NORM_SHARD_MAX_TILES_PER_CORE
+        ),
+        None,
+    )
+    if gy is None:
+        return None  # even the fewest rows/core exceed the L1 budget => interleaved
+    block_h = Mt // gy
+    subblock_w = next((w for w in (4, 3, 2, 1) if block_w % w == 0), 1)  # fp32 caps <=4
+    shard_mc = ttnn.create_sharded_memory_config(
+        shape=(1, 1, M, H),
+        core_grid=ttnn.CoreGrid(y=gy, x=gx),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        subblock_w=subblock_w,
+        block_h=block_h,
+        block_w=block_w,
+        inplace=False,
+    )
+    return program_config, shard_mc
