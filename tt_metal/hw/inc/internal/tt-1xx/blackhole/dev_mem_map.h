@@ -229,7 +229,17 @@
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D COMPRESSED_ROUTING_PATH_SIZE_2D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_2D  // Union size
 #define MEM_ERISC_MAILBOX_SIZE 12768
-#define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
+// Active/idle ethernet kernel-config (ringbuffer) capacity. This bounds the finalized
+// size of any program dispatched to an ETH core (see program.cpp get_ringbuffer_size /
+// "Program size too large for kernel config buffer"). The historical 25*1024 was copied
+// from idle-eth as a placeholder and is too small for the deadlock-avoiding fabric routers
+// on Blackhole: FABRIC_1D_RING (~27968 B) and FABRIC_2D (~30464 B) both overflow 25600 B,
+// leaving only FABRIC_1D (no deadlock avoidance), which deadlocks the erisc cores under
+// 8-chip full-context traffic. Raised to 40 KiB to fit both deadlock-avoiding routers with
+// headroom. This grows into the ETH UNRESERVED region (KERNEL_CONFIG base = MEM_AERISC_MAP_END
+// = 62256; UNRESERVED extends to MEM_ERISC_MAX_SIZE = 455264), which has ~358 KiB of slack on
+// Blackhole's 512 KiB ETH L1, so UNRESERVED only shrinks from ~358 KiB to ~343 KiB.
+#define MEM_ERISC_KERNEL_CONFIG_SIZE (40 * 1024)
 #define MEM_ERISC_BASE 0
 
 // From the top of L1. Common.
