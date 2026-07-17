@@ -8,7 +8,6 @@ from typing import Optional
 import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 
-
 @dataclass
 class MlaKvCaches(KvCaches):
     """Concrete KvCaches for the MLA/DSA prefill runner: the primary MLA KVPE cache (``kvpe``) and an

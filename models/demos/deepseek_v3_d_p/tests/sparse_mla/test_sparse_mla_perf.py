@@ -153,6 +153,9 @@ _CONFIG_BUILDERS = {"deepseek_v32": deepseek_v32_hf_config, "glm_5_1": glm_hf_co
 # FABRIC_1D exhibited the multi-hop line-broadcast hang). FABRIC_2D + fabric_router_config leaves the
 # fabric-tensix datamover off, so the realtime profiler stays eligible (see PR #49840 CCL benchmarks).
 PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
+# Matches the production GLM adapters: enough room for all_gather's global semaphores without reducing
+# the static-CB headroom required by the dense MLA path.
+L1_SMALL_SIZE = 512
 
 # Realtime-profiler record drain ceiling. The receiver thread delivers records asynchronously; the
 # wrapper stops once no new record has landed for its settle window, bounded by this ceiling. A generous
@@ -575,6 +578,7 @@ def _by_op(frame: pd.DataFrame, dur_col: str) -> pd.DataFrame:
             "fabric_config": PERF_FABRIC,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": L1_SMALL_SIZE,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
         }
     ],
