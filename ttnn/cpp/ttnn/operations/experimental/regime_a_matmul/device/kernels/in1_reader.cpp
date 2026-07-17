@@ -107,10 +107,15 @@ void kernel_main() {
                 uint32_t sx = get_arg_val<uint32_t>(9 + s * 2), sy = get_arg_val<uint32_t>(10 + s * 2);
                 noc_semaphore_inc(get_noc_addr(sx, sy, in1valid_addr), 1);
             }
-            // DEFAULT (adopted): NO per-block flush -- the payload write + valid inc are same-NoC to the same
-            // peer (write issued first, so NoC ordering delivers the payload before the slave observes valid),
-            // and the kernel-exit noc_async_write_barrier drains any still-in-flight payload. -1.6..-5.9% on
-            // Sm>1 shapes, PCC-exact. DIAG_FWD_FLUSH_FIRST restores the old flush-before-signal for A/B.
+#ifndef DIAG_FWD_FLUSH_FIRST
+            // DEFAULT: signal EARLY, then flush PER-BLOCK. The early valid-inc releases the slave without
+            // waiting on the reader's flush (same-NoC write-before-inc keeps the destination from observing
+            // validity before the payload lands); the per-block flush that follows is REQUIRED for SOURCE
+            // lifetime -- it guarantees the async write has departed this CB slot before the slot is pushed,
+            // wrapped, and overwritten by a later block (an exit-only barrier would be too late). The flush is
+            // merely moved off the slave-release critical path, NOT removed. DIAG_FWD_FLUSH_FIRST = old order.
+            noc_async_writes_flushed();
+#endif
         }
         ++mbc;
     };
