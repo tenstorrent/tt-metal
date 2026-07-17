@@ -462,15 +462,15 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced_bf16(sfpi::vFloat val) {
     // Range reduction near the endpoints:
     // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
     sfpi::vFloat abs_v = sfpi::abs(val);
-    sfpi::vFloat asin_abs = PI_2;
+    sfpi::vFloat endpoint = abs_v - 0.625f;
+    sfpi::vFloat z = sfpu_sqrt_custom<APPROXIMATION_MODE>((1.0f - abs_v) * 0.5f);
 
-    v_if(abs_v <= 0.625f) { asin_abs = sfpu_asin_poly_bf16<APPROXIMATION_MODE>(abs_v); }
-    v_else {
-        sfpi::vFloat t = (1.0f - abs_v) * 0.5f;
-        sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>(t);
-        sfpi::vFloat asin_root = sfpu_asin_poly_bf16<APPROXIMATION_MODE>(root);
-        asin_abs -= 2.0f * asin_root;
-    }
+    v_if(endpoint < 0.0f) { z = abs_v; }
+    v_endif;
+
+    sfpi::vFloat asin_abs = sfpu_asin_poly_bf16<APPROXIMATION_MODE>(z);
+
+    v_if(endpoint >= 0.0f) { asin_abs = PI_2 - 2.0f * asin_abs; }
     v_endif;
 
     return sfpi::copysgn(asin_abs, val);
