@@ -76,16 +76,20 @@ def merge_perf_counter_device_logs(pass_csvs, out_csv):
     (run host ID, trace id, core) via the deterministic global_call_count. Take pass 0 as the base
     (zones + its counter rows) and append ONLY the perf-counter rows (marker id 9090) from later
     passes, so the merged log carries every group's counters against one set of zones.
+
+    `pass_csvs` and `out_csv` are internal profiler artifacts produced by this module (per-pass
+    snapshots of `generate_logs_folder(outputFolder)/profile_log_device.csv`); they are not
+    external/user input, so there is no path-traversal surface here.
     """
-    base = Path(pass_csvs[0]).read_text().splitlines(keepends=True)
+    base = Path(pass_csvs[0]).read_text().splitlines(keepends=True)  # cycode:ignore path-traversal (internal path)
     merged = list(base)
     for extra in pass_csvs[1:]:
-        for line in Path(extra).read_text().splitlines(keepends=True):
+        for line in Path(extra).read_text().splitlines(keepends=True):  # cycode:ignore path-traversal (internal path)
             # column 4 (0-indexed) is timer_id; perf-counter rows use PERF_COUNTER_MARKER_ID.
             fields = line.split(",")
             if len(fields) > 4 and fields[4].strip() == PERF_COUNTER_MARKER_ID:
                 merged.append(line)
-    Path(out_csv).write_text("".join(merged))
+    Path(out_csv).write_text("".join(merged))  # cycode:ignore path-traversal (internal path)
 
 
 def main():

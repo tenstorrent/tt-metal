@@ -31,7 +31,25 @@ def _import_perf_metrics_common():
     return perf_metrics_common
 
 
-_mc = _import_perf_metrics_common()
+# Best-effort: the shared module + perf_counters.hpp live in the tt-metal source tree and are found
+# by walking up from this file. When `tracy` is imported from an installed wheel (site-packages) there
+# is no source tree, so degrade gracefully — plain `import tracy`/`import ttnn` must not crash. The
+# perf-counter analysis functions below need `_mc` and are only ever run from the source tree (device
+# profiling); they raise a clear error via `_require_mc()` if invoked without it.
+try:
+    _mc = _import_perf_metrics_common()
+except Exception:  # ImportError (module absent) or FileNotFoundError (perf_counters.hpp absent)
+    _mc = None
+
+
+def _require_mc():
+    if _mc is None:
+        raise RuntimeError(
+            "perf_metrics_common (tt_metal/tools/profiler) is unavailable — perf-counter metric "
+            "analysis must be run from the tt-metal source tree, not an installed tracy wheel."
+        )
+    return _mc
+
 
 OpDict = Dict[str, Any]
 DeviceOpsDict = Dict[int, List[OpDict]]
@@ -109,7 +127,7 @@ def compute_metrics_per_op(perf_counter_df):
 
 # Counter type name table, parsed from the PerfCounterType enum in perf_counters.hpp so it can't
 # drift from the compiled ordinals (the profiler stores counter_type as that enum ordinal).
-COUNTER_TYPE_NAMES = _mc.perf_counter_type_names()
+COUNTER_TYPE_NAMES = _mc.perf_counter_type_names() if _mc else {}
 
 
 # Perf-counter CSV column allowlist, DERIVED from the shared METRIC_LABELS (single source of truth)
@@ -124,7 +142,7 @@ _LEGACY_AVG_GRID_COLUMNS = {
     "MATH Util": "Avg Math util on full grid (%)",
 }
 # Re-exported for other consumers (process_ops_logs) so the classification stays single-sourced.
-RATIO_LABELS = _mc.RATIO_LABELS
+RATIO_LABELS = _mc.RATIO_LABELS if _mc else set()
 
 
 def _metric_suffix(label):
@@ -133,6 +151,8 @@ def _metric_suffix(label):
 
 
 def _build_perf_counter_csv_headers():
+    if _mc is None:  # packaged/wheel context without the source tree — no perf-counter columns
+        return []
     headers = []
     for label in _mc.METRIC_LABELS.values():
         suffix = _metric_suffix(label)

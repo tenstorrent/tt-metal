@@ -272,9 +272,19 @@ def compute_metrics(v: CounterView) -> dict:
 
     # ── Math pipeline stall breakdown (fraction of math-available cycles stalled by each cause) ──
     # The counters count "not stalled" cycles, so each stall rate is the complement.
+    # NOTE: math_dest_wr_port_stall / math_scoreboard_stall take their numerator from the TDMA_PACK
+    # bank but normalize by math_available (TDMA_UNPACK). Gate on has(): a capture with the unpack
+    # group but NOT the pack group would otherwise give count()=0 -> safe_div(0, +)=0 -> one_minus=1.0,
+    # i.e. a bogus 100% stall instead of N/A (None). (data_hazard_stall is same-bank, no gate needed.)
     data_hazard_stall = one_minus(safe_div(v.count("TDMA_UNPACK", "DATA_HAZARD_STALLS_MOVD2A"), math_available))
-    math_dest_wr_port_stall = one_minus(safe_div(v.count("TDMA_PACK", "MATH_NOT_STALLED_DEST_WR_PORT"), math_available))
-    math_scoreboard_stall = one_minus(safe_div(v.count("TDMA_PACK", "AVAILABLE_MATH"), math_available))
+    math_dest_wr_port_stall = (
+        one_minus(safe_div(v.count("TDMA_PACK", "MATH_NOT_STALLED_DEST_WR_PORT"), math_available))
+        if v.has("MATH_NOT_STALLED_DEST_WR_PORT")
+        else None
+    )
+    math_scoreboard_stall = (
+        one_minus(safe_div(v.count("TDMA_PACK", "AVAILABLE_MATH"), math_available)) if v.has("AVAILABLE_MATH") else None
+    )
     math_pipeline_util = safe_div(v.count("TDMA_UNPACK", "MATH_INSTRN_STARTED"), math_available)
 
     # ══ Superset metrics (also consumed by the Tracy tool) ═════════════════════════════════════════
