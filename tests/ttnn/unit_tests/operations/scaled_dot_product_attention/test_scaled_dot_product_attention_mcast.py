@@ -43,9 +43,11 @@ def _fa_rand(*shape):
 #   (1,3,3072,128): B*H=3 rows, Dt=4 (target head-dim), n_q_chunks=12
 MCAST_SHAPES = [
     (1, 2, 3072, 64),
-    (1, 1, 4096, 64),
-    (1, 4, 4096, 64),
-    (1, 3, 3072, 128),
+    (1, 1, 4096, 64),  # golden long-context cell (routes through mcast)
+    (1, 1, 8192, 64),  # golden long-context cell, subchunk=3
+    (1, 4, 4096, 64),  # golden long-context cell
+    (1, 3, 3072, 128),  # target head-dim (Dt=4)
+    (1, 10, 9472, 128),  # THE perf-target shape (subchunk=4, Skv_chunk_t=4)
 ]
 
 
