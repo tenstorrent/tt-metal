@@ -11,6 +11,7 @@ local heads. Projections/conv are sharded; weights kept interleaved (auto matmul
 
 GDN output uses the *gated* RMSNorm (weight, NO +1) followed by a SiLU(z) gate — distinct from the +1 QK/layer norms.
 """
+
 import os
 
 import torch
@@ -215,6 +216,61 @@ class TPGatedDeltaNet:
         ttnn.copy(zcc, self.conv_carry)
         ttnn.deallocate(zcc)
 
+    def _gn_mats(self):
+        """Lazily build + cache the constant matrices for the token-major composed RMSNorm"""
+        if getattr(self, "_gn_G", None) is None:
+            H, V, HV = self.Nv, self.Dv, self.value_dim_tp
+            Gt = torch.zeros(HV, H, dtype=torch.float32)
+            Et = torch.zeros(H, HV, dtype=torch.float32)
+            for h in range(H):
+                Gt[h * V : (h + 1) * V, h] = 1.0 / V
+                Et[h, h * V : (h + 1) * V] = 1.0
+            mk = lambda t: ttnn.from_torch(
+                t,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._gn_G = mk(Gt)
+            self._gn_E = mk(Et)
+            # Pin to TILE_LAYOUT + DRAM (matching _gn_G/_gn_E and the o/scale operands it
+            # multiplies in _gated_rmsnorm_tm) so this cached constant can't land in L1 or
+            # force an implicit relayout at use.
+            self._gn_wrep = ttnn.concat(
+                [ttnn.reshape(self.tw["norm_w"], [1, 1, V])] * H,
+                dim=-1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._gn_wrep = ttnn.to_layout(self._gn_wrep, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self._gn_cfg = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        return self._gn_G, self._gn_E, self._gn_wrep, self._gn_cfg
+
+    def _gated_rmsnorm_tm(self, o, z, eps=1e-6):
+        """Per-head RMSNorm over Dv on token-major [1,T,H*V], avoids [.,H,V] tile-crossing reshape that is present with the fused rmsnorm."""
+        G, E, wrep, cfg = self._gn_mats()
+        DR = ttnn.DRAM_MEMORY_CONFIG
+        sq = ttnn.multiply(o, o)
+        ms = ttnn.matmul(sq, G, compute_kernel_config=cfg, memory_config=DR)  # [1,T,H] per-head mean-square
+        ttnn.deallocate(sq)
+        inv = ttnn.rsqrt(ttnn.add(ms, eps))
+        ttnn.deallocate(ms)
+        scale = ttnn.matmul(inv, E, compute_kernel_config=cfg, memory_config=DR)  # [1,T,H*V] broadcast
+        ttnn.deallocate(inv)
+        o_n = ttnn.multiply(ttnn.multiply(o, scale), wrep)
+        ttnn.deallocate(o)
+        ttnn.deallocate(scale)
+        gated = ttnn.multiply(o_n, ttnn.silu(z))
+        ttnn.deallocate(o_n)
+        ttnn.deallocate(z)
+        return gated
+
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
 
@@ -301,6 +357,7 @@ class TPGatedDeltaNet:
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
             valid_len=valid_len,
+            token_major=True,
         )
         B, D = 1, self.qkv_dim_tp
         # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
@@ -334,14 +391,8 @@ class TPGatedDeltaNet:
                 src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                 ttnn.copy(src, self.conv_states[j + 1])
         ttnn.deallocate(conv_new_state)
-        # o: [1, T, Nv, Dv] -> gated RMSNorm over Dv + SiLU(z) gate
-        out_n = ttnn.rms_norm(o, weight=tw["norm_w"], epsilon=1e-6)
-        ttnn.deallocate(o)
-        out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp))
-        ttnn.deallocate(out_n)
-        gated = ttnn.multiply(out_f, ttnn.silu(z))
-        ttnn.deallocate(out_f)
-        ttnn.deallocate(z)
+
+        gated = self._gated_rmsnorm_tm(o, z)
         partial = ttnn.linear(gated, tw["out"], compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))

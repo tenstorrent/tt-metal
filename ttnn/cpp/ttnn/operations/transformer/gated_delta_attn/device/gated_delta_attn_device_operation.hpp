@@ -45,6 +45,9 @@ std::vector<Tensor> gated_delta_attn_seq(
     const Tensor& L_inv,
     const std::optional<Tensor>& initial_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool token_major_output = false,
+    uint32_t num_v_heads = 0,
+    uint32_t seq_len = 0);
 
 }  // namespace ttnn::prim

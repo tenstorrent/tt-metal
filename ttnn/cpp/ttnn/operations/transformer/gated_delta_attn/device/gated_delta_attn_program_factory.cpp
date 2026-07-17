@@ -126,13 +126,6 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
 
     const std::vector<uint32_t> ct_args = {Ct, Kt, Vt};
 
-    // Reader/writer also carry per-tensor TensorAccessorArgs compile-time blocks,
-    // appended right after {Ct, Kt, Vt} in the SAME order the kernels consume them
-    // (reader: L_unit, v_beta_sc, k_bd_sc, intra_attn, q_decay, k_decay_t, dl_exp,
-    // L_inv, initial_state; writer: out, final_state). Each interleaved-DRAM tensor
-    // appends two args, so the device-side TensorAccessorArgs<3> chain stays aligned.
-    // initial_state is optional: a null buffer still appends two (zeroed) args so the
-    // s0 accessor's compile-time offset is unconditionally present.
     std::vector<uint32_t> reader_ct_args = ct_args;
     TensorAccessorArgs(in.L_unit.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(in.v_beta_sc.buffer()).append_to(reader_ct_args);
@@ -144,7 +137,10 @@ GatedDeltaAttnSeqProgramFactory::cached_program_t GatedDeltaAttnSeqProgramFactor
     TensorAccessorArgs(in.L_inv.buffer()).append_to(reader_ct_args);
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_ct_args = ct_args;
+    const uint32_t token_major = attrs.token_major_output ? 1u : 0u;
+    const uint32_t num_v_heads = attrs.num_v_heads;
+    const uint32_t T_tiles = attrs.token_major_output ? ((attrs.seq_len + TILE_HEIGHT - 1) / TILE_HEIGHT) : 0u;
+    std::vector<uint32_t> writer_ct_args = {Ct, Kt, Vt, token_major, num_v_heads, T_tiles};
     TensorAccessorArgs(outputs[0].buffer()).append_to(writer_ct_args);
     TensorAccessorArgs(outputs[1].buffer()).append_to(writer_ct_args);
 

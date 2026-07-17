@@ -45,6 +45,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> gated_delta_attn_seq(
     const ttnn::Tensor& L_inv,
     const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool token_major_output = false,
+    uint32_t num_v_heads = 0,
+    uint32_t seq_len = 0);
 
 }  // namespace ttnn::transformer

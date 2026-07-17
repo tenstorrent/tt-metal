@@ -71,6 +71,20 @@ void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     if (in.initial_state.has_value()) {
         check_shape(*in.initial_state, {BH, Dk, Dv}, "initial_state");
     }
+
+    if (attrs.token_major_output) {
+        TT_FATAL(attrs.num_v_heads > 0, "token_major_output requires num_v_heads > 0");
+        TT_FATAL(
+            BH % attrs.num_v_heads == 0,
+            "token_major_output: BH (batch*heads) {} must be divisible by num_v_heads {}",
+            BH,
+            attrs.num_v_heads);
+        TT_FATAL(
+            attrs.seq_len > 0 && attrs.seq_len <= NC * C,
+            "token_major_output: seq_len {} must be in (0, NC*C={}]",
+            attrs.seq_len,
+            NC * C);
+    }
 }
 
 void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_hit(
@@ -87,7 +101,13 @@ GatedDeltaAttnSeqDeviceOperation::spec_return_value_t GatedDeltaAttnSeqDeviceOpe
     const uint32_t Dv = attrs.val_dim;
     const auto& mc = attrs.output_mem_config;
 
-    TensorSpec out_spec(ttnn::Shape({BH, NC, C, Dv}), TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), mc));
+    // Output layout: head-major or token-major
+    TensorSpec out_spec =
+        attrs.token_major_output
+            ? TensorSpec(
+                  ttnn::Shape({BH / attrs.num_v_heads, attrs.seq_len, attrs.num_v_heads * Dv}),
+                  TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), mc))
+            : TensorSpec(ttnn::Shape({BH, NC, C, Dv}), TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), mc));
     TensorSpec state_spec(ttnn::Shape({BH, Dk, Dv}), TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), mc));
     return {out_spec, state_spec};
 }
@@ -111,6 +131,9 @@ ttsl::hash::hash_t GatedDeltaAttnSeqDeviceOperation::compute_program_hash(
         attrs.val_dim,
         attrs.output_mem_config,
         attrs.compute_kernel_config,
+        attrs.token_major_output,
+        attrs.num_v_heads,
+        attrs.seq_len,
         in.L_unit,
         in.v_beta_sc,
         in.k_bd_sc,
@@ -136,7 +159,10 @@ std::vector<Tensor> gated_delta_attn_seq(
     const Tensor& L_inv,
     const std::optional<Tensor>& initial_state,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    bool token_major_output,
+    uint32_t num_v_heads,
+    uint32_t seq_len) {
     using Op = GatedDeltaAttnSeqDeviceOperation;
     auto shape = L_unit.logical_shape();
     return ttnn::device_operation::launch<Op>(
@@ -148,6 +174,9 @@ std::vector<Tensor> gated_delta_attn_seq(
             .val_dim = static_cast<uint32_t>(v_beta_sc.logical_shape()[3]),
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config,
+            .token_major_output = token_major_output,
+            .num_v_heads = num_v_heads,
+            .seq_len = seq_len,
         },
         Op::tensor_args_t{
             .L_unit = L_unit,

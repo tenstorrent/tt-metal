@@ -33,10 +33,16 @@ void bind_gated_delta_attn_seq(nb::module_& mod) {
             initial_state (ttnn.Tensor, optional): [BH, Dk, Dv] initial state (zeros if absent).
             memory_config (ttnn.MemoryConfig, optional): output memory config.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            token_major_output (bool, optional): when True, the writer scatters heads directly into
+                a token-major output [B, seq_len, num_v_heads*Dv] (folds the head->token permute).
+                Requires num_v_heads and seq_len. Defaults to False (legacy [BH, NC, C, Dv]).
+            num_v_heads (int, optional): H (value heads per batch); B = BH / H. Used iff token_major_output.
+            seq_len (int, optional): T (logical sequence length, pre chunk-pad). Used iff token_major_output.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]:
-                output [BH, NC, C, Dv], final_state [BH, Dk, Dv]
+                output [BH, NC, C, Dv] (or [B, seq_len, num_v_heads*Dv] if token_major_output),
+                final_state [BH, Dk, Dv]
         )doc";
 
     ttnn::bind_function<"gated_delta_attn_seq", "ttnn.transformer.">(
@@ -54,7 +60,10 @@ void bind_gated_delta_attn_seq(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("initial_state") = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("token_major_output") = false,
+        nb::arg("num_v_heads") = 0,
+        nb::arg("seq_len") = 0);
 }
 
 }  // namespace ttnn::operations::transformer
