@@ -81,6 +81,9 @@ NpHaloMeshWorkloadFactory::cached_program_t NpHaloMeshWorkloadFactory::create_at
 
     Program program{};
 
+    // Parts: PART 1 = geometry + column-0 core layout + H-fabric kernels; PART 2 = W-fabric kernels
+    // (Phase 2, waits the H->W barrier); PART 3 = padded-output interior-copy scatter (fold mode only).
+
     // Padded-output fused mode: mux worker/mux core ranges (defined in the mux branches below, in cols>=1)
     // that the concurrent interior-copy scatter must avoid. Empty in non-mux paths (subtract is a no-op).
     CoreRangeSet occ_hw_workers, occ_hmux, occ_w_workers, occ_wmux;
