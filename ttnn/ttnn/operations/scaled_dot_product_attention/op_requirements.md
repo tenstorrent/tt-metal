@@ -777,7 +777,7 @@ layout and producer/consumer counts, golden stays 1685/0 at the parked default):
   now **measurement-exhausted** (R5 knob-turns + R5a K-batching). The next lever is the SFPU-side
   structural ceiling — filed as **R5b**.
 
-### [ ] Refinement 5b — FA-3 FPU∥SFPU overlap: run the matmuls concurrent with the SFPU softmax (raw-LLK, last resort)
+### [x] Refinement 5b — FA-3 FPU∥SFPU overlap: run the matmuls concurrent with the SFPU softmax (raw-LLK, last resort)
 
 **Type**: perf
 
@@ -808,3 +808,61 @@ is the shipped optimum.
 **Done when**: measured device-ns improves on the flagged shape beyond R5a's 5.44 ms via true
 FPU∥SFPU overlap, soft `pcc_threshold=0.997` holds, golden green, no guard-set regression — OR the
 raw-LLK overlap is shown infeasible/gate-fatal (as in R3c) and the queue closes at its ceiling.
+
+**Landed (R5b)**: took the Done-when's second branch — **the queue closes at its measured
+structural ceiling** — after (a) independently re-confirming the overlap's hard win ceiling on
+device, (b) **correcting the queue's "unimplemented future work" premise** (the primitives *do*
+exist), and (c) judging the lever **out of scope for a gate-safe production refinement**. No
+SUPPORTED change (perf); op **byte-identical to R5a** (doc-only close — no kernel/descriptor edit).
+
+- **Overlap ceiling re-measured (independent, Blackhole p150b, 110 cores; device FW ns, warm median
+  of 5, same-session A/B via the retained `SDPA_ABLATE_PV` instrument, steady AICLK).** Reproduces
+  R5a exactly: baseline **5.450 ms**; stub PV matmul **5.144 ms**; stub PV+rescale+accum **5.059
+  ms**; **stub BOTH matmuls+accum 5.043 ms**. So the two matmuls + O-accumulate together are
+  **0.407 ms = 7.46% of wall time** (std 8–16 µs ⇒ ~25–48× the noise floor — decisive). **Even
+  *perfect* FPU∥SFPU overlap (hiding all matmul FMA behind the SFPU softmax) has a hard floor of
+  ~5.04 ms**, i.e. a maximum possible win of **7.46%** (util 0.14 → ~0.15). The aspirational
+  `expected_math_util=0.35` (2.16 ms) is **flatly unreachable by any overlap lever** on the
+  FlashAttention-2 algorithm for this shape — the irreducible SFPU softmax + pipeline floor is
+  5.04 ms; only a different algorithm (flash-decode cross-core `S_kv` split — no golden cell) could
+  go lower.
+- **Record correction (material — the prior premise was wrong).** R3c/R5/R5a called the overlap
+  "helper-infeasible … needs FA-3 warp-specialization which is *unimplemented* future work"
+  (citing `FlashAttention.md` §5, accurate for that older Wormhole report). **Verified firsthand
+  that the enabling primitives now EXIST in this repo** (experimental, `tt_metal/hw/inc/api/compute/
+  experimental/` + `eltwise_unary/exp.h`): `exp_packthread_tile` / `exp_packthread_tile_init`
+  (exp.h:85-117 — pack-thread SFPU exp, docstring "to enable FPU/SFPU overlap with math-thread
+  matmul operations"), `deepseek_compute_kernel_init` (FPU_SFPU/SFPU_FPU handshake semaphores),
+  `matmul_custom.h` (no-MOP matmul — **Wormhole-scoped**, "intentionally scoped to the SDPA
+  full-tile, throttle-0 path"; the flagged shape runs on **Blackhole**), `sdpa_sub_custom.h`, and
+  the `overlap_first_half` reduce. Hardware allows SFPU issue from **both** TRISC1 and TRISC2
+  (`ckernel_structs.h:38`). So the overlap is **feasible in principle**, not "unimplemented."
+  **However** these are all experimental ("subject to change") and `exp_packthread_tile` has **zero
+  production call sites** (only LLK unit tests + DeepSeek MoE-gate kernels use the set) — no
+  production SDPA precedent.
+- **Why closed at the ceiling (gate-safe out-of-scope judgment).** The default helper model *is*
+  serial-on-MATH (design CB rationale: `cb_scores/exp/pv` are depth-1 because "consecutive helpers
+  each own all 3 TRISCs and cannot pipeline"). Capturing even part of the 7.46% requires a **full
+  raw-LLK loop rewrite that abandons the helper library** (pack-thread exp + FPU_SFPU handshake +
+  no-MOP matmul + a software-pipelined KV loop that deepens `cb_scores`/`cb_exp` to overlap
+  QKᵀ[j+1] with softmax[j]) on experimental/Wormhole-scoped primitives with no production SDPA
+  precedent — the same restructure that **failed the completion gate TWICE** in R3c's two overlap
+  attempts. Weighed honestly: **≤7.46% capped upside** (can't approach the aspiration regardless)
+  vs. **catastrophic regression risk to the 1685-cell green golden suite** + all unit/precision/
+  guard suites, plus experimental-primitive fragility. Negative expected value; the verifier's
+  Done-when explicitly authorizes "judged out of scope → the queue is at its measured structural
+  ceiling and R5a's parked state is the shipped optimum." Not shipped; op green.
+- **Precise breadcrumb (if ever revisited with a dedicated raw-LLK budget).** The exact
+  building blocks are: `deepseek_compute_kernel_init` at boot; replace phase-6 exp with
+  `exp_packthread_tile<Approx::Fast>` on the PACK thread; a Blackhole no-MOP matmul (port/verify
+  `matmul_custom` off its Wormhole scope) so QKᵀ[j+1] runs on MATH concurrently; deepen
+  `cb_scores`/`cb_exp` for the pipeline; reconcile with R3e's fused dual-pack (both target the
+  flagged fp32_dest_acc_en=False regime). Gate compile-time to that regime (R3c pattern) so the
+  max-precision path stays byte-identical; build a deterministic debug test first; validate the
+  full golden suite under `--dev` for intermittent hangs (cross-thread semaphore handshake — run
+  the LLK `semaphore-handshake-audit`/`race-audit-all` class). Capped at ~7.46% by the ablation
+  above.
+- **Verification**: independent `SDPA_ABLATE_PV` 4-variant ablation (ceiling above, flagged shape
+  green at the parked default); golden suite **1685 passed / 584 xfailed / 0 failed** (identical to
+  R4/R5/R5a — byte-identical runtime); R3 guard set **8/8** (mask none/custom × small/medium ×
+  DRAM/L1). No SUPPORTED change.

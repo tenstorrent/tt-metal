@@ -723,3 +723,57 @@
   `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_r5a_ab.py`
   (same-session 4-variant PV/QKᵀ ablation harness for the flagged shape via the `SDPA_ABLATE_PV`
   toggle — the /perf-measure classify-the-bottleneck instrument documenting the R5a finding).
+
+## Refinement 5b — FA-3 FPU∥SFPU overlap: run the matmuls concurrent with the SFPU softmax (raw-LLK, last resort)
+- Date: 2026-07-17
+- What was done: Took the Done-when's second branch — **closed the queue at its measured structural
+  ceiling** — after genuine engagement (independent device re-measurement + firsthand primitive
+  audit), NOT a first-failure pattern-match. **No code change**: the shipped op is byte-identical to
+  R5a (only `op_requirements.md` + this changelog edited). Three findings drove the close:
+  1. **Overlap win ceiling re-measured (independent).** Ran the retained `SDPA_ABLATE_PV` 4-variant
+     same-session ablation (`/perf-measure` classify-the-bound, the mandated first step for a perf
+     lever) on the flagged `1×10×9472×128` shape (Blackhole p150b, 110 cores; device FW ns, warm
+     median of 5, steady AICLK). Reproduces R5a exactly: baseline **5.450 ms**; stub PV matmul
+     **5.144 ms**; stub PV+rescale+accum **5.059 ms**; **stub BOTH matmuls+accum 5.043 ms** (std
+     8–16 µs). ⇒ matmuls + O-accumulate = **0.407 ms = 7.46% of wall**; **even *perfect* FPU∥SFPU
+     overlap floors at ~5.04 ms (max win 7.46%, util 0.14→~0.15)**. The aspirational util 0.35
+     (2.16 ms) is **unreachable by any overlap lever** on FlashAttention-2 for this shape — the
+     irreducible SFPU-softmax + pipeline floor is 5.04 ms.
+  2. **Record correction (material).** R3c/R5/R5a asserted the overlap is "helper-infeasible …
+     needs FA-3 warp-specialization, *unimplemented* future work." An Explore sweep + firsthand
+     header reads show that is **inaccurate for the current repo**: the enabling experimental
+     primitives EXIST — `exp_packthread_tile`/`exp_packthread_tile_init` (`hw/inc/api/compute/
+     eltwise_unary/exp.h:85-117`, pack-thread SFPU exp explicitly "to enable FPU/SFPU overlap with
+     math-thread matmul operations"), `deepseek_compute_kernel_init` (FPU_SFPU/SFPU_FPU handshake),
+     `matmul_custom.h` no-MOP matmul (**Wormhole-scoped**; flagged shape is Blackhole),
+     `sdpa_sub_custom.h`, and the `overlap_first_half` reduce; HW allows SFPU issue from both TRISC1
+     and TRISC2 (`ckernel_structs.h:38`). But all are experimental ("subject to change") and
+     `exp_packthread_tile` has **zero production call sites** (only LLK tests + DeepSeek kernels) —
+     no production SDPA precedent. FlashAttention.md §5 does frame cross-unit pipelining as future
+     work (accurate for that older Wormhole report). So the overlap is **feasible in principle, not
+     unimplemented** — the prior premise is corrected.
+  3. **Gate-safe out-of-scope judgment.** The default helper model *is* serial-on-MATH (design CB
+     rationale: `cb_scores/exp/pv` depth-1 because "consecutive helpers each own all 3 TRISCs and
+     cannot pipeline"). Capturing any of the 7.46% requires a **full raw-LLK loop rewrite that
+     abandons the helper library** (pack-thread exp + FPU_SFPU handshake + a Blackhole no-MOP
+     matmul + a software-pipelined KV loop deepening `cb_scores`/`cb_exp`) on experimental/
+     Wormhole-scoped primitives — the same restructure that **failed the completion gate TWICE**
+     (R3c). Honest weighing: **≤7.46% capped upside** (can't approach the aspiration regardless) vs.
+     **catastrophic regression risk to the 1685-cell green golden suite** + experimental-primitive
+     fragility ⇒ negative EV. The verifier's Done-when explicitly authorizes this close ("judged out
+     of scope → the queue is at its measured structural ceiling; R5a's parked state is the shipped
+     optimum"). A precise breadcrumb (exact primitives + gating + hang-audit steps) is recorded in
+     `op_requirements.md` R5b for a future attempt with a dedicated raw-LLK budget.
+- Accuracy achieved: unchanged — byte-identical to R5a. Flagged-shape soft PCC≥0.997 held (ablation
+  baseline ran green); golden `TOLERANCES` met across the suite.
+- Golden test progress: **1685 passed / 584 xfailed / 0 failed** (identical to R4/R5/R5a; no
+  SUPPORTED change — perf refinement, no code change). R3 guard set **8/8** (mask none/custom ×
+  small/medium × DRAM/L1). Flagged-shape ablation green at the parked default.
+- Issues encountered: none — no code change, so no new hang/corruption/regression is possible by
+  construction. The one substantive finding was that the prior "unimplemented" premise was wrong
+  (primitives exist, experimental) — corrected in the record; it does not change the economics
+  (7.46% ceiling, gate-fatal mechanism), so the out-of-scope close stands.
+- Tests added: none — used the retained `SDPA_ABLATE_PV` ablation harness
+  (`test_scaled_dot_product_attention_r5a_ab.py`) for the independent ceiling re-measurement and the
+  R3 guard set (`test_scaled_dot_product_attention_perf.py::test_sdpa_guard_set`) for the
+  regression net.
