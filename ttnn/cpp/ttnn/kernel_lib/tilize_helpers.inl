@@ -206,7 +206,16 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
 
         out_dfb.push_back(block_width_tiles);
-        in_dfb.pop_front(input_pages);
+#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
+        // TEN-4746: on Quasar the UNP_DEST unpacker traps on a trailing pop_front that has no following TDMA op to
+        // flush it. The final block's pop_front is the last unpacker op (nothing follows in a tilize-only program),
+        // so it hangs at issue (confirmed: dprint_tr3 — all 32 blocks tilized+pushed, only the last PF cb=in
+        // dangled). That pop is unnecessary — the input is never reused after the last tilize — so skip it on the
+        // final block. (Fused conv is unaffected: its matmul follows and flushes the pop; over-retaining one act
+        // block for the rest of a fresh program is harmless.)
+        if (block + 1 < num_blocks)
+#endif
+            in_dfb.pop_front(input_pages);
 
         if (asymmetric_dfb_pages) {
             pages_left -= input_pages;
