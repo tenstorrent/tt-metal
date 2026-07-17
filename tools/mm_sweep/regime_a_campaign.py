@@ -978,6 +978,118 @@ def reablate(deadline=None):
     return out
 
 
+# Definitive post-change perf status: config=None production auto-picker + same-config kernel A/B.
+PERFSTATUS_CACHE = f"{HERE}/regime_a_perfstatus_cache.json"
+S8 = f"{HERE}/regime_a_perfstatus.json"
+OLDIN1_MASK = (1 << 22) | (1 << 25)  # DIAG_FWD_FLUSH_FIRST | DIAG_NO_COALESCE (old in1 behaviour)
+
+
+def perfstatus(relaunches=4, deadline=None):
+    """Definitive wide sweep on the FINAL production path. Per shape:
+      (1) config=None -> Picker v3 selects; run_cfg gives the production median (mask 0 = signal-first +
+          coalesced-read kernel), fresh cache, resident-input/8-iter methodology.
+      (2) SAME picker-selected cfg, kernel A/B via the diag entry: mask 0 (new) vs OLDIN1_MASK (old in1),
+          INTERLEAVED relaunches -> isolates the in1 kernel improvement (picker choice held fixed).
+    Also diffs the production median vs the ORIGINAL pre-picker-v3 baseline (S1) for the total gain."""
+    if not os.path.exists(PERFSTATUS_CACHE):
+        json.dump({}, open(PERFSTATUS_CACHE, "w"))
+    cache = rb.load_cache(PERFSTATUS_CACHE)
+    orig = {(r["M"], r["K"], r["N"]): r for r in json.load(open(S1))} if os.path.exists(S1) else {}
+    out = []
+    cor = corpus()
+    for i, (shape, cats) in enumerate(cor.items()):
+        M, K, N = shape
+        if deadline and time.time() > deadline:
+            print(f"[perfstatus] deadline hit at {i}/{len(cor)}", flush=True)
+            break
+        cfg = tuple(rb.auto_config(M, K, N))
+        pr = rb.run_cfg(M, K, N, None, cache)  # config=None production path
+        auto_us = pr["us_med"] if rb._ok(pr) else None
+        auto_pcc = pr.get("pcc") if rb._ok(pr) else None
+        ideal = rb.plan_metrics(M, K, N, cfg)["ideal_us_512"]
+        # kernel A/B on the SAME picker cfg, interleaved relaunches (new, old, new, old, ...)
+        runs = {"new": [], "old": []}
+        pcc_ab = {"new": [], "old": []}
+        for _r in range(relaunches):
+            for name, mask in (("new", 0), ("old", OLDIN1_MASK)):
+                x = ds.run_one(M, K, N, cfg, mask)
+                if x.get("ok") and x.get("wall_us"):
+                    runs[name].append(x["wall_us"])
+                    if x.get("max_rel_err") is not None:
+                        pcc_ab[name].append(x["max_rel_err"])
+        new_med = statistics.median(runs["new"]) if runs["new"] else None
+        old_med = statistics.median(runs["old"]) if runs["old"] else None
+        kdelta = ((old_med / new_med - 1) * 100) if (new_med and old_med) else None  # +% = new faster
+        o = orig.get(shape, {})
+        tot_delta = ((auto_us / o["us_med"] - 1) * 100) if (auto_us and o.get("us_med")) else None
+        rec = {
+            "M": M,
+            "K": K,
+            "N": N,
+            "Mt": cdiv(M, 32),
+            "cats": cats,
+            "cfg": list(cfg),
+            "Sm": cfg[2],
+            "auto_us": auto_us,
+            "auto_pcc": auto_pcc,
+            "ideal_us": ideal,
+            "pct512": (ideal / auto_us * 100 if auto_us else None),
+            "ab_new_us": new_med,
+            "ab_old_us": old_med,
+            "kernel_delta_pct": kdelta,
+            "ab_new_walls": sorted(runs["new"]),
+            "ab_old_walls": sorted(runs["old"]),
+            "ab_new_maxrelerr": max(pcc_ab["new"], default=None),
+            "orig_us": o.get("us_med"),
+            "orig_cfg": o.get("auto_cfg"),
+            "total_delta_vs_orig_pct": tot_delta,
+        }
+        out.append(rec)
+        json.dump(out, open(S8, "w"), indent=2)
+        print(
+            f"[perfstatus {i+1}/{len(cor)}] {M}x{K}x{N} Sm{cfg[2]} cfg={list(cfg)} "
+            f"auto={auto_us and round(auto_us,1)}us {rec['pct512'] and round(rec['pct512'],0)}%512 "
+            f"| kernel new={new_med and round(new_med,1)} old={old_med and round(old_med,1)} "
+            f"newvsold={kdelta and round(kdelta,1)}% | vs_orig={tot_delta and round(tot_delta,1)}% "
+            f"pcc={auto_pcc and round(auto_pcc,4)}",
+            flush=True,
+        )
+    ok = [r for r in out if r.get("auto_us")]
+    kd = [r["kernel_delta_pct"] for r in out if r.get("kernel_delta_pct") is not None]
+    sm = [r for r in out if r["Sm"] > 1 and r.get("kernel_delta_pct") is not None]
+    tot_new = sum(r["ab_new_us"] for r in out if r.get("ab_new_us") and r.get("ab_old_us"))
+    tot_old = sum(r["ab_old_us"] for r in out if r.get("ab_new_us") and r.get("ab_old_us"))
+    tn = sum(r["auto_us"] for r in ok if r.get("orig_us"))
+    to = sum(r["orig_us"] for r in ok if r.get("orig_us"))
+    print("\n=== PERF STATUS SUMMARY ===", flush=True)
+    print(
+        f"shapes ok: {len(ok)}/{len(out)}; PCC<0.999: {sum(1 for r in ok if (r.get('auto_pcc') or 1) < 0.999)}",
+        flush=True,
+    )
+    if ok:
+        print(f"final auto-picker: median %512 = {statistics.median([r['pct512'] for r in ok]):.0f}%", flush=True)
+    if kd:
+        print(
+            f"kernel A/B (new vs old in1), all {len(kd)} shapes: median {statistics.median(kd):+.1f}% "
+            f"corpus-sum {(tot_old/tot_new-1)*100:+.1f}%",
+            flush=True,
+        )
+    if sm:
+        print(
+            f"  Sm>1 subset ({len(sm)} shapes): median {statistics.median([r['kernel_delta_pct'] for r in sm]):+.1f}% "
+            f"best {max(r['kernel_delta_pct'] for r in sm):+.1f}%",
+            flush=True,
+        )
+    if to:
+        print(
+            f"total vs ORIGINAL pre-picker-v3 baseline: corpus-sum {(tn/to-1)*100:+.1f}% "
+            f"(picker + kernel combined)",
+            flush=True,
+        )
+    print(f"PERFSTATUS DONE -> {S8}", flush=True)
+    return out
+
+
 def state_start():
     st = {"start": time.time()}
     if os.path.exists(STATE):
@@ -1013,6 +1125,8 @@ if __name__ == "__main__":
         rerun()
     elif mode == "reablate":
         reablate()
+    elif mode == "perfstatus":
+        perfstatus()
     elif mode == "validate":
         validate()
     elif mode == "finalize":  # pre-training: validate specific candidates + expand the largest gaps

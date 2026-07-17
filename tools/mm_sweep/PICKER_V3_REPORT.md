@@ -106,3 +106,23 @@ per-block-flush cost brings that down to the ~1–2% above. Old behaviour retain
 **removed** from the enum/factory/gtest/diag-suite after the experiment (commit `f392b62ee71`). The bounded
 Sm>1 search for 256×2048×1024 on the final kernel confirmed the current `[1,4,2,2,4]` is best (0.0%;
 runner-up `[1,4,3,2,4]` +0.3%, tied) — no picker change. All three pinned M-split follow-ups are now closed.
+
+## Definitive post-change wide sweep (full Mt≤8 corpus, config=None + kernel A/B)
+
+`regime_a_campaign.py perfstatus`, fresh cache, resident-input/8-iter methodology, 4 interleaved relaunches.
+Two measurements per shape: (1) **config=None** — Picker v3 selects, mask 0 = final signal-first + coalesced
+kernel (production path); (2) **kernel A/B** on the same picker-selected config — mask 0 (new) vs
+`DIAG_FWD_FLUSH_FIRST | DIAG_NO_COALESCE` (old in1).
+
+- **All 60 shapes OK, 0 PCC<0.999.** Final auto-picker **median 86% %512**.
+- **Kernel improvement (new vs old in1, picker config held fixed): 0 regressions on any shape.** Sm=1 shapes
+  are a no-op (fwd is Sm>1-only; median ~0 across the full 60). The gain is concentrated on the **11 Sm>1
+  shapes: median +1.3%, best +6.1%** — 256×2048×512 +6.1%, 256×15360×768 +3.7%, 128×2048×512 +3.5%,
+  256×2048×1024 +3.5%, …, down to +0.1% on the big wide-N Sm2 shapes (where forwarding is a negligible
+  fraction). Corpus-sum +0.2% (dominated by the Sm=1 majority + large wide-N shapes).
+- **Total vs the original pre-picker-v3 baseline (picker + kernel combined): corpus-sum −3.6%**, concentrated
+  in the low-AI Mt≥4 shapes (−8…−24% each; the big wide-N shapes were already near-optimal). Raw:
+  `regime_a_perfstatus.json`.
+
+Net: the picker v3 changes deliver the large per-shape wins (up to −24% on low-AI Mt≥4), and the in1 kernel
+change adds a further +1–6% on the Sm>1 shapes, all regression-free and PCC-exact.
