@@ -33,10 +33,10 @@ Every test source under `tests/sources/*_perf.cpp` is compiled twice from the sa
 
 | Build | `LLK_PROFILER` | `PERF_COUNTERS_COMPILED` | Active half(s) of `START_PERF_MEASURE` | What it measures |
 |-------|----------------|--------------------------|--------------------------------------|------------------|
-| NC (no counters) | defined | undefined | `ZONE_SCOPED` only | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`) |
+| NC (no counters) | defined | undefined | `ZONE_SCOPED` (timing) + `MEASURE_PERF_COUNTERS` (barrier only) | Per-zone wall-clock cycles (`RISCV_DEBUG_REG_WALL_CLOCK_L`) |
 | WC (with counters) | defined | defined | `MEASURE_PERF_COUNTERS` **and** `ZONE_SCOPED` | Per-zone HW counter snapshot **and** wall-clock cycles |
 
-`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. In the NC build only `ZONE_SCOPED` is live (the counter half compiles to nothing). In the WC build **both** are live: the counter scope arms/freezes the HW counters *and* provides the cross-thread rendezvous, so `ZONE_SCOPED` suppresses its own barrier (no double rendezvous) but still records the per-zone wall-clock timestamps. A single WC run therefore yields both counter and wall-clock data per zone under the same name; the host driver keys everything by `(test_variant, zone)` and can merge NC and WC results (or use the WC wall-clock directly).
+`START_PERF_MEASURE(name)` expands to `MEASURE_PERF_COUNTERS(name)` + `ZONE_SCOPED(name)`. In the NC build, `MEASURE_PERF_COUNTERS` performs a no-op cross-thread rendezvous and `ZONE_SCOPED` records the per-zone wall-clock timestamps. In the WC build **both** are live: the counter scope performs the rendezvous *and* arms/freezes the HW counters, while `ZONE_SCOPED` records the per-zone wall-clock timestamps without adding another rendezvous. A single WC run therefore yields both counter and wall-clock data per zone under the same name; the host driver keys everything by `(test_variant, zone)` and can merge NC and WC results (or use the WC wall-clock directly).
 
 Source-side, this is the pattern:
 

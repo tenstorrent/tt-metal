@@ -286,9 +286,12 @@ inline void configure_and_arm_from_brisc()
 
 namespace detail
 {
-// `.bss.perf_counters` is NOBITS, zero-initialized by do_crt0() on every cold start (grouped for objdump).
-__attribute__((section(".bss.perf_counters"))) static std::uint32_t zone_hashes[PERF_COUNTERS_MAX_ZONES];
-__attribute__((section(".bss.perf_counters"))) static std::uint32_t next_zone_id;
+// `.perf_counters_bss` is NOBITS, zero-initialized by do_crt0() on every cold start (which clears
+// the whole [__ldm_bss_start, __ldm_bss_end) range by address). Its dedicated section name keeps it
+// out of the generic `.bss.*` catch-all so the linker can deterministically place it last — see
+// ld/sections.ld. (Grouped in one section so the two symbols stay together for objdump.)
+__attribute__((section(".perf_counters_bss"))) static std::uint32_t zone_hashes[PERF_COUNTERS_MAX_ZONES];
+__attribute__((section(".perf_counters_bss"))) static std::uint32_t next_zone_id;
 
 #ifndef _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
 #define _LLK_PERF_ZONE_ALLOCATOR_DEFINED_
@@ -396,7 +399,14 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
             ckernel::reg_write(
                 RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(PERF_CFG_L1_MUX_MASK << PERF_CNT_MUX_CTRL_SHIFT)) | (l1_mux << PERF_CNT_MUX_CTRL_SHIFT));
         }
-        ckernel::reg_write(br.mode_reg, counter_id << PERF_CFG_COUNTER_SHIFT);
+        const std::uint32_t expected_mode = counter_id << PERF_CFG_COUNTER_SHIFT;
+        ckernel::reg_write(br.mode_reg, expected_mode);
+        // Readback poll: MMIO fence so the counter-select store lands before the OUT_H read.
+        // reg_write is only a volatile store, so without this the read can race the in-flight
+        // select and sample the previous counter (matches tools/profiler/perf_counters.hpp).
+        while (ckernel::reg_read(br.mode_reg) != expected_mode)
+        {
+        }
         counter_counts[out_idx] = ckernel::reg_read(br.out_l + 4u);
         ++out_idx;
     }
@@ -483,7 +493,7 @@ inline void configure_and_arm_from_brisc()
 
 #endif // PERF_COUNTERS_COMPILED
 
-// One measured scope = a perf-counter window + a profiler timing zone (one half is active per build), keyed by `zone_name`.
+// One measured scope = a perf-counter window + a profiler timing zone; NC activates timing only, WC activates both, keyed by `zone_name`.
 #define START_PERF_MEASURE(zone_name) \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED(zone_name)

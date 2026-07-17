@@ -128,20 +128,18 @@ SECTIONS
     *(.scommon)
     . = ALIGN(4);
     *(.dynbss)
-    /* `.bss.perf_counters` (zone_hashes[], next_zone_id in counters.h) is
-       NOBITS like any other `.bss.*` and is absorbed by this catch-all, so it
-       lives inside [__ldm_bss_start, __ldm_bss_end) and is zero-initialized
-       by do_crt0(). Its position within `.bss.*` is input-file-order
-       dependent; in practice the perf-test object files link last so the
-       perf-counter symbols end up at the end and don't shift the gp-relative
-       offsets of other globals between NC and WC. */
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
     . = ALIGN(4);
+    /* Perf-counter zone allocator (zone_hashes[], next_zone_id in counters.h) goes LAST in
+       .bss. It exists only in the WC build (PERF_COUNTERS_COMPILED), so keeping it after every
+       other global means its presence never shifts the gp-relative offsets of shared globals
+       between the NC and WC builds. Its dedicated `.perf_counters_bss` section name keeps it out
+       of the `.bss.*` catch-all above, so this placement is deterministic (not input-file-order
+       dependent). It stays inside [__ldm_bss_start, __ldm_bss_end), so do_crt0() zero-inits it. */
+    *(.perf_counters_bss)
+    . = ALIGN(4);
     __ldm_bss_end = .;
-    /* Perf counter zone allocator (zone_hashes[], next_zone_id) goes LAST so
-       it doesn't shift gp-relative offsets of other globals between NC and WC. */
-    *(.bss.perf_counters .bss.perf_counters.*)
   } > REGION_DATA
 
   .runtime_args (NOLOAD):
