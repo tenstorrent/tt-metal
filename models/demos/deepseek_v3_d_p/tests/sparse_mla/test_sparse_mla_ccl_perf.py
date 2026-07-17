@@ -23,7 +23,6 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import CHUNK_TOKENS, GALAXY_SP, SCENARIOS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import create_global_semaphores
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
@@ -305,18 +304,8 @@ def resolve_runtime_system(mesh_device, path: CollectivePath) -> RuntimeSystem:
 
 
 # --------------------------------------------------------------------------------------------------
-# Profiling + semaphores
+# Profiling
 # --------------------------------------------------------------------------------------------------
-def _global_semaphores(mesh_device):
-    compute_grid = mesh_device.compute_with_storage_grid_size()
-    cores = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
-    )
-    gather_semaphores = create_global_semaphores(mesh_device, cores, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
-    return gather_semaphores, barrier_semaphore
-
-
 def _profile_programs(mesh_device, run_fn):
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for sparse MLA CCL perf checks")
@@ -340,17 +329,27 @@ def _tensor_description(tensor):
     return f"{list(local_tensor.shape)} ({local_tensor.dtype}, {local_tensor.layout}, {local_tensor.memory_config()})"
 
 
+def _all_gather(tt_input, path):
+    """Production all-gather; fabric topology and tuning come from the mesh device configuration."""
+    return ttnn.all_gather(
+        tt_input,
+        dim=path.gather_dim,
+        cluster_axis=path.collective_axis,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
 # --------------------------------------------------------------------------------------------------
 # Collective execution
 # --------------------------------------------------------------------------------------------------
-def run_collective(mesh_device, path: CollectivePath, workload: Workload, system: RuntimeSystem) -> Measurement:
+def run_collective(mesh_device, path: CollectivePath, workload: Workload) -> Measurement:
     """Build the input, profile the collective, and (for reshards) prove it moved data losslessly."""
     if path.partition_dim is None:
-        return _run_all_gather(mesh_device, path, workload, system)
-    return _run_reshard(mesh_device, path, workload, system)
+        return _run_all_gather(mesh_device, path, workload)
+    return _run_reshard(mesh_device, path, workload)
 
 
-def _run_all_gather(mesh_device, path, workload, system) -> Measurement:
+def _run_all_gather(mesh_device, path, workload) -> Measurement:
     mesh_shape = tuple(mesh_device.shape)
     global_shape = path.logical_shape(workload, mesh_shape)
     mesh_mapper = ttnn.MeshMapperConfig(list(path.input_placements), mesh_device.shape)
@@ -362,19 +361,9 @@ def _run_all_gather(mesh_device, path, workload, system) -> Measurement:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper,
     )
-    gather_semaphores, barrier_semaphore = _global_semaphores(mesh_device)
     tt_output, records, program_durations_ns = _profile_programs(
         mesh_device,
-        lambda: ttnn.experimental.all_gather_async(
-            tt_input,
-            dim=path.gather_dim,
-            multi_device_global_semaphore=gather_semaphores,
-            barrier_semaphore=barrier_semaphore,
-            num_links=system.num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=system.topology,
-            cluster_axis=path.collective_axis,
-        ),
+        lambda: _all_gather(tt_input, path),
     )
     assert list(tt_output.shape) == global_shape
     assert tt_output.tensor_topology().placements() == list(path.output_placements)
@@ -386,23 +375,14 @@ def _run_all_gather(mesh_device, path, workload, system) -> Measurement:
     return measurement
 
 
-def _reshard(tt_input, path, system, gather_semaphores, barrier_semaphore):
+def _reshard(tt_input, path):
     """Mainline MLA's all-gather followed by mesh_partition, as one logical reshard.
 
     Both ops dispatch device programs, so the measurement covers gather + partition. The roofline models
     only the all-gather: mesh_partition is a local slice (no fabric traffic) and light by comparison, so it
     is measured but intentionally excluded from the theoretical model.
     """
-    gathered = ttnn.experimental.all_gather_async(
-        tt_input,
-        dim=path.gather_dim,
-        multi_device_global_semaphore=gather_semaphores,
-        barrier_semaphore=barrier_semaphore,
-        num_links=system.num_links,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        topology=system.topology,
-        cluster_axis=path.collective_axis,
-    )
+    gathered = _all_gather(tt_input, path)
     output = ttnn.mesh_partition(
         gathered,
         dim=path.partition_dim,
@@ -413,7 +393,7 @@ def _reshard(tt_input, path, system, gather_semaphores, barrier_semaphore):
     return output
 
 
-def _build_reshard_input(mesh_device, path, torch_input, gather_semaphores, barrier_semaphore, system):
+def _build_reshard_input(mesh_device, path, torch_input):
     input_dims = [placement.dim for placement in path.input_placements]
     # Distinct shard dims can be constructed directly by the host mesh mapper.
     if len(set(input_dims)) == len(input_dims):
@@ -445,15 +425,11 @@ def _build_reshard_input(mesh_device, path, torch_input, gather_semaphores, barr
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=source_mapper,
     )
-    gathered = ttnn.experimental.all_gather_async(
+    gathered = ttnn.all_gather(
         source,
         dim=path.output_placements[cax].dim,
-        multi_device_global_semaphore=gather_semaphores,
-        barrier_semaphore=barrier_semaphore,
-        num_links=system.num_links,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        topology=system.topology,
         cluster_axis=cax,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_input = ttnn.mesh_partition(
         gathered,
@@ -479,18 +455,17 @@ def _assert_reshard_lossless(tt_output, torch_input, path, sp, tp):
     assert equal, message
 
 
-def _run_reshard(mesh_device, path, workload, system) -> Measurement:
+def _run_reshard(mesh_device, path, workload) -> Measurement:
     sp, tp = mesh_device.shape
     mesh_shape = tuple(mesh_device.shape)
     torch_input = torch.rand(path.logical_shape(workload, mesh_shape), dtype=torch.bfloat16)
-    gather_semaphores, barrier_semaphore = _global_semaphores(mesh_device)
-    tt_input = _build_reshard_input(mesh_device, path, torch_input, gather_semaphores, barrier_semaphore, system)
+    tt_input = _build_reshard_input(mesh_device, path, torch_input)
     # Input shape is shared with the traffic roofline; output shape remains an explicit reshard assertion.
     assert list(ttnn.get_device_tensors(tt_input)[0].shape) == path.local_input_shape(workload, mesh_shape)
 
     tt_output, records, program_durations_ns = _profile_programs(
         mesh_device,
-        lambda: _reshard(tt_input, path, system, gather_semaphores, barrier_semaphore),
+        lambda: _reshard(tt_input, path),
     )
     assert list(ttnn.get_device_tensors(tt_output)[0].shape) == path.expected_output_shape(workload, mesh_shape)
     if path.verify_reshard:
@@ -595,7 +570,7 @@ def _run(mesh_device, path, scenario):
     assert mesh_device.arch() == ttnn.Arch.BLACKHOLE, "bandwidth assumptions apply to Blackhole only"
     workload = _workload(scenario)
     system = resolve_runtime_system(mesh_device, path)
-    measurement = run_collective(mesh_device, path, workload, system)
+    measurement = run_collective(mesh_device, path, workload)
     traffic = all_gather_roofline(path, workload, mesh_device, system)
     report(path, scenario, mesh_device, measurement, traffic)
 
