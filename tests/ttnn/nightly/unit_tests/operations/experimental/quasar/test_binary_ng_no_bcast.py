@@ -204,25 +204,6 @@ def _act(act_type):
 
 
 def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, post_act=None, pcc=None):
-    if _on_quasar():
-        # The SFPU compute kernel builds and runs on Quasar: the int-SFPU op headers it does not need
-        # are #ifndef ARCH_QUASAR-guarded, the no-broadcast operand switch uses copy_tile_to_dst_init_short
-        # (Quasar's copy_tile_to_dst_init_short_with_dt is a no-op that cannot switch operands), and the
-        # activation pack retargets via pack_init (Quasar's pack_reconfig_data_format is gasket-only).
-        # bf16 multiply and divide both pass. fp32 routes SFPU: fp32 multiply/divide/add/sub all work on
-        # Quasar — the SFPU float add/sub primitives were ported in tenstorrent/tt-metal#49883
-        # (add_binary_tile/sub_binary_tile now have ARCH_QUASAR branches). See binary_ng/QUASAR_PARITY_GAPS.md.
-        # Interleaved lhs (pre) activation hangs on the Quasar sim: the post_lhs DFB self-loop (the compute
-        # kernel both produces the pre-activated operand and consumes it) on the 1-deep, async NoC
-        # interleaved ring deadlocks under native timing (and corrupts, PCC ~0.66, under perturbed timing).
-        # A post_lhs ring-depth bump did NOT fix it, so it is a substrate/DFB timing bug, not op ring depth.
-        # Sharded lhs-activation and interleaved post-activation both pass. Tracked in tenstorrent/tt-metal#49937.
-        if lhs_act is not None and not mem_config.is_sharded():
-            pytest.skip(
-                "Quasar sim: interleaved lhs-activation (post_lhs DFB self-loop) hangs/corrupts — "
-                "substrate/DFB timing bug (tenstorrent/tt-metal#49937); sharded lhs-act + interleaved "
-                "post-act pass"
-            )
     torch.manual_seed(0)
     ttnn_fn = _OPS[op_name][0]()
     torch_fn = _OPS[op_name][1]
@@ -387,15 +368,6 @@ def test_no_bcast_activation_supported(device, act, position, layout):
     # (pre) activation (act(a)*b — the post_lhs DFB self-loop path that needs Quasar's pack_init retarget).
     # bf16; interleaved and height-sharded. These activations are accurate in bf16, so _run uses the file's
     # default _PCC[bf16] (0.997) — not the looser 0.99 the divide/silu tests need.
-    #
-    # gelu is the exception on Quasar: tanh/square/sigmoid compile + pass (sim-certified), but the Quasar
-    # gelu LLK bridge (hw/ckernels/quasar/.../llk_sfpu/ckernel_sfpu_gelu.h) fails to JIT-compile —
-    # gelu_init() calls _sfpu_load_config32_ *unqualified*, but it lives in namespace ckernel::math
-    # (cmath_common.h); the sibling topk bridge calls it qualified, so only gelu is affected. It still
-    # runs on Wormhole. TODO: un-skip when the LLK bridge is fixed (tenstorrent/tt-metal#49314). See
-    # binary_ng/QUASAR_PARITY_GAPS.md §5 and QUASAR_LLK_GAPS.md (Table 2, gelu row) for the one-line fix.
-    if _on_quasar() and act == ttnn.UnaryOpType.GELU:
-        pytest.skip("Quasar gelu LLK bridge fails to compile (_sfpu_load_config32_ unqualified in ckernel_sfpu_gelu.h)")
     if layout == "interleaved":
         mem_config = ttnn.DRAM_MEMORY_CONFIG
         shape = _INTERLEAVED_SHAPE

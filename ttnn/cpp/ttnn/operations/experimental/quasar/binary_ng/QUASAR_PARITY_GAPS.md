@@ -43,7 +43,7 @@ already do that the op has simply not exercised.**
 
 bf16 · TILE · no-broadcast · tensor-tensor · matching lhs/rhs dtype · all-interleaved (DRAM/L1) **or**
 all-L1-height/block-sharded with identical specs · add/sub (FPU) + multiply/divide (SFPU) ·
-**lhs/rhs + post activations — `relu`/`silu`/`tanh`/`square`/`sigmoid` sim-certified; `gelu` is `broken` (§5)** ·
+**lhs/rhs + post activations — `relu`/`silu`/`tanh`/`square`/`sigmoid`/`gelu` all sim-certified** ·
 **fp32 multiply and divide** (see §3).
 
 ## 1. Structural — gate rejects → no Quasar path via this op  [STRUCTURAL]
@@ -103,15 +103,9 @@ The matrix says Quasar LLK supports these (`✓`); `matches_metal_v2_slice` admi
 Quasar test.** These should pass today — the work is *a test case*, not a port (class C). This is the
 direct "what Quasar LLK can do that the op didn't exercise" list.
 
-**Fusable activations** — as of 2026-07-07 the op also tests `tanh`/`square`/`sigmoid` fusion
-(`test_no_bcast_activation_supported`, post + lhs, bf16), all now **sim-certified `✓`** on Quasar. That
-sweep confirmed the matrix's "supported" claim for those three — but caught that it did **NOT** hold for
-`gelu`:
-- **`gelu` / `bias_gelu` — `broken`, not headroom.** The Quasar gelu LLK bridge fails to JIT-compile
-  (`gelu_init` calls `_sfpu_load_config32_` unqualified; it lives in `ckernel::math`, `cmath_common.h:101`).
-  This is an LLK bug — a one-line qualifier fix — not a coverage gap (QUASAR_LLK_GAPS.md Table 2), tracked
-  in tenstorrent/tt-metal#49314. The op test **skips `gelu` on Quasar** (it still runs on WH). Cautionary
-  case: static 3-layer presence ≠ compiles.
+**Fusable activations** — the op tests `tanh`/`square`/`sigmoid`/`gelu` fusion
+(`test_no_bcast_activation_supported`, post + lhs, bf16), all **sim-certified `✓`** on Quasar (`gelu`:
+interleaved/height × post/lhs). `bias_gelu` (`ADD` + post `GELU`) works too.
 - Still `✓` but not yet exercised: `exp` · `sqrt` · `rsqrt` · `reciprocal` · the six compare-to-zero
   (`eqz/nez/gtz/ltz/gez/lez`).
 
@@ -119,7 +113,7 @@ sweep confirmed the matrix's "supported" claim for those three — but caught th
 - `maximum` / `minimum` (float + int32) · `add_int` / `mul_int` (int32) · `where` is capable but
   gate-blocked → §1, class B.
 - Derived (FPU + supported activation): `squared_difference`, `hypot`, `logical_and`/`or`/`xor` — their
-  activation pieces are `✓` (matrix Table 1). (`bias_gelu` is `broken` — it needs `gelu`, see above.)
+  activation pieces are `✓` (matrix Table 1).
 
 **Config coverage** (within the validated slice): rhs pre-activation (only lhs is tested) ·
 block-sharded **+** activation · divide **+** activation · larger / nD interleaved shapes (group-2 / nD
@@ -146,13 +140,11 @@ Subtile broadcast is the next milestone (§1). Its LLK + compute-API foundation 
 
 ## Priorities
 
-1. **`gelu` bridge fix** (§5) — LLK one-liner: qualify `ckernel::math::_sfpu_load_config32_` in
-   `ckernel_sfpu_gelu.h::gelu_init`. Unblocks `gelu` + `bias_gelu` (both `broken`). Highest value/effort.
-2. **Remaining class-(C) coverage** (§5) — `tanh`/`square`/`sigmoid` now done; add tests for
-   `maximum`/`minimum`/int-add-mul/derived ops (all matrix-`✓`). No LLK work.
-3. **Subtile broadcast** (§1, §6) — the next major porting milestone; foundation is ready, so op-side
+1. **Remaining class-(C) coverage** (§5) — add tests for `maximum`/`minimum`/int-add-mul/derived ops
+   (all matrix-`✓`). No LLK work.
+2. **Subtile broadcast** (§1, §6) — the next major porting milestone; foundation is ready, so op-side
    wiring (gate + factory/kernel).
-4. **Gate hygiene** (§2) — optionally reject Quasar-unsupported formats/ops with a clear message.
+3. **Gate hygiene** (§2) — optionally reject Quasar-unsupported formats/ops with a clear message.
 
 ## Systemic lesson
 

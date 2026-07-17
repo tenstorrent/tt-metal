@@ -28,8 +28,8 @@ yet `✓`. Over time the WH and Quasar columns converge.
 | `—` | Not applicable (op/dtype not defined on that target). |
 
 > **Static 3-layer presence is necessary but NOT sufficient — only a compile/sim run confirms `✓`.**
-> `gelu` has all three layers present yet does not compile (see Table 2); it was mis-classified `✓` from
-> static inspection until a sim run caught it. Prefer `✓*` (sim-certified) claims.
+> An op can have all three layers present yet still fail to compile, so a static `✓` can be wrong until a
+> sim run confirms it. Prefer `✓*` (sim-certified) claims over static-inspection `✓`.
 
 WH column is `✓` throughout by construction (it is the baseline); a non-`✓` WH cell would flag an op WH
 itself lacks.
@@ -115,7 +115,7 @@ Dtype is called out in the Quasar cell where it differs (bf16 is the model-relev
 | Op | Decomposition | WH | Quasar (bf16) | Blocking piece |
 |---|---|:--:|---|---|
 | `squared_difference` | `SUB` + post `SQUARE` | ✓ | `✓` | `SQUARE` ✓ |
-| `bias_gelu` | `ADD` + post `GELU` | ✓ | `broken` | blocked by the `gelu` bridge bug (Table 2) |
+| `bias_gelu` | `ADD` + post `GELU` | ✓ | `✓` | `ADD` + post `GELU`, both supported |
 | `hypot` | `SQUARE`·`SQUARE`·`ADD`·post `SQRT` | ✓ | `✓` | all ✓ |
 | `logical_and` / `or` / `xor` | `NEZ`·`NEZ`·(`MUL`/`ADD`)·post `NEZ` | ✓ | `✓` | `NEZ` ✓ |
 | `logaddexp` | `EXP`·`EXP`·`ADD`·post `LOG` | ✓ | `kernel` | `LOG` (Tier-2) |
@@ -125,8 +125,8 @@ Dtype is called out in the Quasar cell where it differs (bf16 is the model-relev
 ## Table 2 — Fusable activations (WH baseline)
 
 Rows grouped by family (fixed). Currently `✓` on Quasar: **relu\*, silu\*, sigmoid\*, tanh\*, square\*,
-exp, sqrt, rsqrt, reciprocal, eqz/nez/gtz/ltz/gez/lez** (\* sim-certified). **`gelu` is NOT** — its
-bridge exists but fails to compile (`broken`, see below). Everything else is `bridge` or `kernel`.
+gelu\*, exp, sqrt, rsqrt, reciprocal, eqz/nez/gtz/ltz/gez/lez** (\* sim-certified).
+Everything else is `bridge` or `kernel`.
 
 ### relu family
 | Activation | WH | Quasar | Evidence / to-close |
@@ -140,7 +140,7 @@ bridge exists but fails to compile (`broken`, see below). Everything else is `br
 ### gelu / sigmoid / silu / tanh / square
 | Activation | WH | Quasar | Evidence / to-close |
 |---|:--:|---|---|
-| `gelu` | ✓ | `broken` | bridge EXISTS + `#else` branch (`gelu.h:42-55`) + `SfpuType::gelu`, but **fails to JIT-compile**: `gelu_init()` (`ckernel_sfpu_gelu.h`, ns `ckernel::sfpu`) calls `_sfpu_load_config32_` **unqualified**, but it lives in `ckernel::math` (`cmath_common.h:101`) → undeclared at the template definition. **Fix:** qualify `ckernel::math::_sfpu_load_config32_` (as `calculate_gelu` already qualifies `ckernel::math::_incr_counters_`). Sim-confirmed 2026-07-07; tracked in tenstorrent/tt-metal#49314. |
+| `gelu` | ✓ | `✓*` | bridge + `#else` branch (`gelu.h:42-55`) + `SfpuType::gelu`; compiles and sim-certified (interleaved/height × post/lhs). |
 | `gelu_tanh` | ✓ | `kernel` | inside `gelu.h` `#ifndef` (57-140); no `gelu_tanh` ckernel/`SfpuType` |
 | `sigmoid` | ✓ | `✓*` | `compute_kernel_api.h:133` `#ifdef ARCH_QUASAR` branch; sim-certified |
 | `silu` | ✓ | `✓*` | `:162` branch; Llama SwiGLU-certified |
@@ -234,17 +234,14 @@ are ternary-select / dtype-cast infra, not activations.)
 
 ## Priorities (by model impact)
 
-1. **`gelu` bridge fix** — best effort/value ratio: a **one-line** LLK fix (qualify
-   `ckernel::math::_sfpu_load_config32_` in `ckernel_sfpu_gelu.h::gelu_init`). The bridge/ckernel/`SfpuType`
-   already exist; it just doesn't compile. Unblocks `gelu` **and** `bias_gelu` (both `broken` today).
-2. **int `lt`/`le`/`ge`** (binary) — `bridge`, trivial (ckernel already handles lt/gt/le/ge).
-3. **`abs`, `leaky_relu`, `relu_max`, `relu_min`** (activations) — `bridge`, cheap (un-gate; ckernels + slots exist).
-4. **`gelu_tanh`** — transformer MLPs using tanh-GELU (`kernel`; plain `gelu` needs the #1 bridge fix first).
-5. **`log` / `exp2` / `log2`** — softmax-adjacent; unblock `logaddexp`/`logaddexp2`/`ldexp` (`kernel`).
-6. Everything else as op/model demand arises.
+1. **int `lt`/`le`/`ge`** (binary) — `bridge`, trivial (ckernel already handles lt/gt/le/ge).
+2. **`abs`, `leaky_relu`, `relu_max`, `relu_min`** (activations) — `bridge`, cheap (un-gate; ckernels + slots exist).
+3. **`gelu_tanh`** — transformer MLPs using tanh-GELU (`kernel`; plain `gelu` is supported).
+4. **`log` / `exp2` / `log2`** — softmax-adjacent; unblock `logaddexp`/`logaddexp2`/`ldexp` (`kernel`).
+5. Everything else as op/model demand arises.
 
-**Already done — no LLK work:** `relu` (ResNet50), `silu` (Llama SwiGLU), `sigmoid`, `tanh`, `square` — all
-sim-certified — plus the arithmetic/`where`/compare-to-zero core. (`gelu` is NOT done — it is `broken`, see #1.)
+**Already done — no LLK work:** `relu` (ResNet50), `silu` (Llama SwiGLU), `sigmoid`, `tanh`, `square`, `gelu`
+— all sim-certified — plus the arithmetic/`where`/compare-to-zero core.
 
 ## Closing a gap — the pattern
 
