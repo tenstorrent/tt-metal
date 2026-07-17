@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","result":"35 passed (dev + production timing)","note":"baseline: interleaved dram/l1, bf16/fp32, bf16->bf8b cast, single+multicore, rank 2/3/4","ts":"2026-07-17T15:54:14+00:00"}
