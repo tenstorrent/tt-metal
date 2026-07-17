@@ -228,18 +228,42 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
         // NeighborExchange only permits 1-hop unicast
         use_unicast = true;
-    } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
-        // Ring: multicast for small tensors and unicast for large tensors
+    } else if (!::tt::tt_fabric::is_2d_fabric_config(args.fabric_config)) {
+        // Unicast is only supported for Fabric 1D configs
         const auto& input_tensor = tensor_args.input_tensor;
-        const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
-        const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
         switch (input_tensor.device()->arch()) {
-            case tt::ARCH::WORMHOLE_B0:
-                use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
+            case tt::ARCH::WORMHOLE_B0: {
+                const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
+                const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
+                if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
+                    use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
+                }
                 break;
-            case tt::ARCH::BLACKHOLE:
-                use_unicast = !large_page && num_pages >= 128u;  // large pages never lose -> multicast
+            }
+            case tt::ARCH::BLACKHOLE: {
+                // Multicast only wins the small-volume + large-page corner; unicast is
+                // bandwidth-optimal and wins outright once ~4MB cross a link (at any page size).
+                // Between, the multicast-favorable per-link-byte ceiling scales with the actual page
+                // size squared, up to that 4MB floor. The boundary errs toward unicast: its downside
+                // (up to ~40% at scale) dwarfs multicast's ~5-17% upside.
+                const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
+                const uint64_t out_page = compute_output_specs(args, tensor_args).compute_page_size_bytes();
+                const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
+
+                // per-link bytes on the gathered axis (same axis/links the unicast factory uses)
+                const uint32_t axis = args.cluster_axis.value_or(args.axis_num_devices[1] > 1 ? 1 : 0);  // max 2 axes
+                const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
+                const uint64_t per_link_bytes =
+                    input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
+
+                // Page^2 ceiling, anchored so a 2KB page permits multicast up to 1MB/link, capped at
+                // unicast's 4MB bandwidth floor. (2KB/1MB are the anchor; txn is the real page size.)
+                constexpr uint64_t anchor_page = 2048, anchor_ceiling = 1'000'000, unicast_bw_floor = 4'000'000;
+                const uint64_t mcast_ceiling =
+                    std::min(unicast_bw_floor, (txn * txn * anchor_ceiling) / (anchor_page * anchor_page));
+                use_unicast = per_link_bytes >= mcast_ceiling;
                 break;
+            }
             default: break;  // uncalibrated arch
         }
     }

@@ -195,6 +195,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         operation_attributes.subdevice_id,
         /*core_grid_offset=*/CoreCoord{0, 0},
         operation_attributes.sub_core_grid);
+    // TODO below shouldn't be a TT_FATAL. choose_worker_cores() auto shrinks core usage with a warning, so we
+    // should gracefully handle that here.
     TT_FATAL(
         all_cores.size() == static_cast<size_t>(num_links) * num_cores_per_link,
         "all_gather needs {} worker cores ({} links x {} cores/link) but only {} are available; provide a larger "
