@@ -40,6 +40,8 @@ on a 1x1 LoudBox mesh.
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 
 from ....layers.linear import Linear
@@ -127,17 +129,21 @@ class Cosmos3OmniTransformer(Module):
         if (enable_proj_in or enable_proj_out) and patch_latent_dim is None:
             msg = "patch_latent_dim is required when enable_proj_in or enable_proj_out is True"
             raise ValueError(msg)
-        # proj_in: float32 weights + HiFi4 are necessary but not sufficient for correctness.
-        # The host reference (PyTorch CPU bf16 matmul) accumulates K=192 products sequentially
-        # in float32; the device uses tree-reduction, which differs due to fp non-associativity.
-        # Measured: RMSE≈0.0017 after proj_in → amplifies ~61× over 64 layers → ~9% gen_out
-        # error → visible noise in the generated video. This flag is EXPERIMENTAL and produces
-        # noisy output until the summation-order mismatch is resolved.
+        # proj_in on device is EXPERIMENTAL. float32 weights + HiFi4 (the default) are necessary
+        # but not sufficient for correctness: the host reference accumulates K=192 products
+        # sequentially in float32 while the device tree-reduces, and fp non-associativity leaves
+        # RMSE≈0.0017 after proj_in → ~61× amplification over 64 layers → ~9% gen_out error →
+        # visible noise. TT_COSMOS3_PROJ_IN_HIFI4=0 drops back to the trunk's normal bf16/HiFi2
+        # precision — faster, noisier — for perf measurement of the on-device path.
+        proj_in_hifi4 = os.environ.get("TT_COSMOS3_PROJ_IN_HIFI4", "1") == "1"
+        self._proj_in_hifi4 = proj_in_hifi4
+        proj_in_dtype = ttnn.float32 if proj_in_hifi4 else dtype
         self.proj_in = (
-            Linear(patch_latent_dim, hidden_size, bias=True, mesh_device=mesh_device, dtype=ttnn.float32)
+            Linear(patch_latent_dim, hidden_size, bias=True, mesh_device=mesh_device, dtype=proj_in_dtype)
             if enable_proj_in
             else None
         )
+        # Only HiFi4 needs an explicit override; bf16 uses the Linear's own dtype-matched config.
         self._proj_in_compute_kernel_config = (
             ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
@@ -146,7 +152,7 @@ class Cosmos3OmniTransformer(Module):
                 fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             )
-            if enable_proj_in
+            if (enable_proj_in and proj_in_hifi4)
             else None
         )
         self.proj_out = (
@@ -214,19 +220,22 @@ class Cosmos3OmniTransformer(Module):
         # multiply by 0, noisy rows by 1. Uses matmul (K=1) instead of ttnn.multiply because
         # ttnn.multiply's 2D broadcast ([1,1,1,H] × [1,1,N,1]) corrupts tile boundaries.
         if self.proj_in is not None:
-            # float32 input + HiFi4 minimize quantization error, but the device still uses
-            # tree-reduction while the CPU reference reduces sequentially over K=192; the
-            # resulting RMSE≈0.0017 amplifies to ~9% after 64 layers (see __init__ comment).
-            gen_seq_fp32 = ttnn.typecast(gen_seq, ttnn.float32)
-            # default_block_size=4: float32 tiles are 2× larger than bf16, halving the block
-            # size keeps circular buffers within BH's 1.5 MB L1 limit.
-            gen_seq = self.proj_in(
-                gen_seq_fp32,
-                compute_kernel_config=self._proj_in_compute_kernel_config,
-                default_block_size=(4, 4, 8),
-            )
-            ttnn.deallocate(gen_seq_fp32)
-            gen_seq = ttnn.typecast(gen_seq, und_seq.dtype)
+            if self._proj_in_hifi4:
+                # float32 input + HiFi4 minimize quantization error, but the device still uses
+                # tree-reduction while the CPU reference reduces sequentially over K=192; the
+                # resulting RMSE≈0.0017 amplifies to ~9% after 64 layers (see __init__ comment).
+                gen_seq_fp32 = ttnn.typecast(gen_seq, ttnn.float32)
+                # default_block_size=4: float32 tiles are 2× larger than bf16, halving the block
+                # size keeps circular buffers within BH's 1.5 MB L1 limit.
+                gen_seq = self.proj_in(
+                    gen_seq_fp32,
+                    compute_kernel_config=self._proj_in_compute_kernel_config,
+                    default_block_size=(4, 4, 8),
+                )
+                ttnn.deallocate(gen_seq_fp32)
+                gen_seq = ttnn.typecast(gen_seq, und_seq.dtype)
+            else:
+                gen_seq = ttnn.typecast(self.proj_in(gen_seq), und_seq.dtype)
             if time_embed is not None and noisy_mask_gen is not None:
                 gen_seq = ttnn.add(gen_seq, ttnn.matmul(noisy_mask_gen, time_embed))
 
