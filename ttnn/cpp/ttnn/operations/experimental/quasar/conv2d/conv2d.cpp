@@ -477,15 +477,21 @@ Result conv2d_L1(
         tt::constants::TILE_HEIGHT;
     // Quasar PIVOT (2026-07-15): the no-spill path packs the WHOLE reduction into ONE K-block, so the
     // in-kernel tilize_block runs over the full-K width (e.g. stem in0_block_w=16 tiles). That long tilize
-    // trips the Quasar per-tile datacopy<->pack DEST-reuse race -> ERROR_TRISC1 0x19 (see
-    // ~/llk_conv_tilize_issue.md). The proven config (sjovic/quasar-resnet 057e1792f0a) is the opposite:
-    // keep the K-SPILL (in0_block_w = one filter row = 4 tiles -> short tilize, no race) and drain the
-    // matmul-partials with out_subblock=1x1 (forced in the sharded factory). So DISABLE the no-spill lever
-    // on Quasar and rely on spill + 1x1. WH/BH keep no-spill: their HW dest-dvalid interlock handles the
-    // long tilize, and the standalone conv correctness test passes there.
+    // trips the Quasar per-tile datacopy<->pack DEST-reuse race -> ERROR_TRISC1 0x19. Historically DISABLED on
+    // Quasar in favor of K-SPILL + out_subblock 1x1.
+    //
+    // UPDATE (2026-07-17, split path): the datacopy tilize's 0x19 is now FIXED (per-tile FPU dest-dvalid clear,
+    // tilize.h). In the SPLIT program (TT_METAL_QSR_CONV_SPLIT_PROGRAM) the tilize also runs in its OWN Metal
+    // program (no interleaved matmul), so the full-K datacopy tilize is safe. And the split path REQUIRES
+    // no-spill: with K-spill on Quasar, act_block_w stays a window-row but the reader gathers the full K per
+    // row -> it writes act_block_h*full_K tiles into an act CB sized act_block_h*act_block_w -> 4x ACT-CB
+    // OVERRUN (dprint_spe3: end-wptr=64 tiles vs nent=16) -> hang. So force no-spill on Quasar TOO when the
+    // split is requested, matching the WH/BH config (act_block_w == full_K, reader gather == CB size).
     const bool arch_is_quasar = device->arch() == tt::ARCH::QUASAR;
-    const bool force_conv_no_spill = !arch_is_quasar && height_sharded_conv && !mm_conv && !conv_is_1d_depthwise &&
-                                     (kernel_size[0] > 1) && (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
+    const bool split_env_requested = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr);
+    const bool force_conv_no_spill = (!arch_is_quasar || split_env_requested) && height_sharded_conv && !mm_conv &&
+                                     !conv_is_1d_depthwise && (kernel_size[0] > 1) &&
+                                     (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
     if (force_conv_no_spill) {
         opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
         conv_config.full_inner_dim = true;
