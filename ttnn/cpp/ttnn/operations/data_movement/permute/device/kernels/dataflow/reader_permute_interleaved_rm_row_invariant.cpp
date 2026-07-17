@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -20,14 +20,14 @@ void kernel_main() {
     const uint32_t end_row = get_arg_val<uint32_t>(2);
 
     const auto s0 = TensorAccessor(src_args, src_addr);
-    CircularBuffer cb(tt::CBIndex::c_0);
+    DataflowBuffer dfb(tt::CBIndex::c_0);
     Noc noc;
 
     for (uint32_t row = start_row; row < end_row; ++row) {
-        cb.reserve_back(1);
-        uint32_t l1_write_addr = cb.get_write_ptr();
-        tt::data_movement::common::noc_async_read_sharded(l1_write_addr, s0, row, 0, page_size);
+        dfb.reserve_back(1);
+        uint32_t l1_write_addr = dfb.get_write_ptr();
+        tt::data_movement::common::noc_async_read_sharded(noc, l1_write_addr, s0, row, 0, page_size);
         noc.async_read_barrier();
-        cb.push_back(1);
+        dfb.push_back(1);
     }
 }

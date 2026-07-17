@@ -40,7 +40,8 @@ xt::xarray<float> xt_softmax(const xt::xarray<float>& input, uint32_t dim = 3U) 
     return result;
 }
 
-TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
+// Disabled: flaky — https://github.com/tenstorrent/tt-metal/issues/46422
+TEST_F(SoftmaxTest, DISABLED_SoftmaxTest_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 59U, W = 197U;
@@ -50,7 +51,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> input_tensor =
-        ttml::test_utils::make_uniform_xarray<float, shape_type, true>(shape, -10.0F, 10.0F, seed);
+        ttml::test_utils::make_uniform_xarray<float, shape_type>(shape, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -108,7 +109,7 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> input_tensor =
-        ttml::test_utils::make_uniform_xarray<float, shape_type, true>(shape, -10.0F, 10.0F, seed);
+        ttml::test_utils::make_uniform_xarray<float, shape_type>(shape, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 

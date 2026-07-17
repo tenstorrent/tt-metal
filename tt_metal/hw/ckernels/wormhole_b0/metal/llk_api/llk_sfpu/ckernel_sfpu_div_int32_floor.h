@@ -24,15 +24,14 @@ sfpi_inline void calculate_div_int32_body(
     // want to use MOD0_FMT_INT32=4, which gives us the original two's
     // complement integers.
 
-    // Equivalent to: sfpi::vUInt b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-    sfpi::vUInt b_u = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+    sfpi::vInt b_s = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // When converting to float, integers are treated as sign-magnitude.
     // Convert inputs to positive values to avoid conversion problems; the
     // original inputs are two's complement integers.  Note that
     // sfpi::abs(-2**31) will return -2**31, which will give -0.0 when
     // converted to float via sfpi::convert
-    sfpi::vMag b = sfpi::abs(b_u);
+    sfpi::vMag b = sfpi::abs(b_s);
 
     // Convert to floats, but check for the edge case mentioned above.
     sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
@@ -48,27 +47,27 @@ sfpi_inline void calculate_div_int32_body(
 
     // Combines the sign and exponent of -1.0 with the mantissa of `b_f`.
     // Scale the input value to the range [1.0, 2.0), and make it negative.
-    sfpi::vFloat neg_b_f = sfpi::setman(sfpi::vConstNeg1, b_f);
+    sfpi::vFloat neg_b_f = sfpi::copyman(-1.0f, b_f);
     // Linear approximation.
     sfpi::vFloat inv_b_f = sfpi::vConstFloatPrgm2 + sfpi::vConstFloatPrgm1 * neg_b_f;
     sfpi::vFloat scale = sfpi::setman(b_f, 0);
 
     // Newton-Raphson
-    sfpi::vFloat t = inv_b_f * neg_b_f + sfpi::vConst1;
-    scale = sfpi::reinterpret<sfpi::vFloat>((254 << 23) - sfpi::reinterpret<sfpi::vInt>(scale));
+    sfpi::vFloat t = inv_b_f * neg_b_f + 1.0f;
+    scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
     // Halley's Method
-    sfpi::vFloat e = inv_b_f * neg_b_f + sfpi::vConst1;
+    sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
 
-    sfpi::vUInt a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+    sfpi::vInt a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
 
     // Continue Halley's Method
     e = e * e + e;
 
     // Final step of Halley's Method
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(a), sfpi::RoundMode::Nearest);
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(a_s), sfpi::RoundMode::Nearest);
 
     // Apply scale
     inv_b_f = inv_b_f * scale;
@@ -93,20 +92,20 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat q2 = sfpi::convert<sfpi::vFloat>(q_m >> 11, sfpi::RoundMode::Nearest);
     sfpi::vFloat b1 = sfpi::convert<sfpi::vFloat>((b >> 11) & MASK_11, sfpi::RoundMode::Nearest);
     sfpi::vFloat b0 = sfpi::convert<sfpi::vFloat>(b & MASK_11, sfpi::RoundMode::Nearest);
-    auto q = sfpi::vUInt(q_m) << 11;
+    sfpi::vUInt q = q_m << 11;
 
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
     sfpi::vFloat hi = q2 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat lo = q1 * b0 + MANTISSA_ALIGNMENT_OFFSET;
     hi = q1 * b1 + hi;
 
-    sfpi::vInt qb = sfpi::exman(lo) << 11;
-    qb += sfpi::exman(hi) << 22;
+    sfpi::vInt qb = sfpi::vInt(sfpi::exman(lo)) << 11;
+    qb += sfpi::vInt(sfpi::exman(hi)) << 22;
 
     // Compute remainder.
-    a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    a = sfpi::abs(a);
-    sfpi::vInt r = a - qb;
+    a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    a_s = sfpi::abs(a_s);
+    sfpi::vInt r = a_s - qb;
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
 
     // Compute correction value in float32.
@@ -122,19 +121,15 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vFloat mid = correction_f * b1 + MANTISSA_ALIGNMENT_OFFSET;
     sfpi::vFloat top = correction_f * b2 + MANTISSA_ALIGNMENT_OFFSET;
 
-    sfpi::vInt tmp = sfpi::exman(low);
-    tmp += sfpi::exman(mid) << 11;
-    tmp += sfpi::exman(top) << 22;
-
-    v_if(r < 0) {
-        q -= correction;
-        r += tmp;
-    }
-    v_else {
-        q += correction;
-        r -= tmp;
+    sfpi::vInt tmp{sfpi::exman(low) + (sfpi::exman(mid) << 11) + (sfpi::exman(top) << 22)};
+    sfpi::vUInt cor = correction;
+    v_if(r >= 0) {
+        tmp = -tmp;
+        cor = -cor;
     }
     v_endif;
+    q -= cor;
+    r += tmp;
 
     // Since the correction might have been rounded, we may need to correct one
     // additional bit.  The (r - 1) < 0 check is required to handle r=INT_MIN.
@@ -148,17 +143,14 @@ sfpi_inline void calculate_div_int32_body(
     }
     v_endif;
 
-    sfpi::vInt result = q;
+    auto result = sfpi::vInt(q);
 
-    // If a ^ b >= 0, then the result will be positive, otherwise negative.
+    // If a_s ^ b_s >= 0, then the result will be positive, otherwise negative.
     // Reload signed values here due to register pressure.
-    // a = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    // b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-    sfpi::vUInt a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-    sfpi::vUInt b_s = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-    sfpi::vInt sign = a_s ^ b_s;
+    a_s = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+    b_s = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
     // Finally, if we expect a negative result, negate the value (two's complement).
-    v_if(sign < 0) {
+    v_if((a_s ^ b_s) < 0) {
         result = -result;
 
         // Optionally, if we want "floor" rounding, check for a remainder

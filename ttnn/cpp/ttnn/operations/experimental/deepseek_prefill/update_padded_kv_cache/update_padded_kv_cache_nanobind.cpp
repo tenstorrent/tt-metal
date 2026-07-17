@@ -37,11 +37,13 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             users/chunks reuse one cached program (per layer).
 
             Args:
-                cache (ttnn.Tensor): 4D KV cache tensor on device, TILE layout. Sharded across
-                    `cluster_axis` with `sp_factor` slots per chip. Outermost dim equals
-                    ``num_slots * num_layers``.
-                input (ttnn.Tensor): 4D input slab on device, TILE layout, same dtype and head
-                    dim as cache. Per-chip seq length = chunk_local.
+                cache (ttnn.Tensor): 4D KV cache tensor on device, TILE or ROW_MAJOR layout. Sharded
+                    across `cluster_axis` with `sp_factor` slots per chip. Outermost dim equals
+                    ``num_slots * num_layers``. Layout/dtype must match ``input``: block-float
+                    (bfloat8_b/bfloat4_b) requires TILE; FP8_E4M3 requires ROW_MAJOR (Blackhole).
+                    Seq dims stay 32-aligned in both layouts.
+                input (ttnn.Tensor): 4D input slab on device, same layout, dtype and head dim as
+                    cache. Per-chip seq length = chunk_local.
                 slot_idx (int): user slot in the batched prefill cache.
                 layer_idx (int): Transformer layer index for this call. Structural (hashed): one
                     cached program per layer is reused across users and chunks.

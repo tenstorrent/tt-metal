@@ -15,6 +15,11 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
+#ifdef WELFORD_POST_MUL
+// SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#endif
+
 void kernel_main() {
     // Runtime arg: number of independent column-reductions this core must perform.
     // Each column-reduction processes Ht tiles vertically and produces one output tile.
@@ -27,8 +32,11 @@ void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(1);
     // Number of elements per tile in the H dimension (typically 32).
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
-    // Whether input scaling is required.
-    constexpr bool do_scale = get_compile_time_arg_val(3) != 0;
+#ifdef WELFORD_POST_MUL
+    // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
+    // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
+    constexpr uint32_t post_mul_scaler_bits = get_compile_time_arg_val(3);
+#endif
     // Whether to apply Bessel's correction (divide by N-1 instead of N).
     constexpr bool correction = get_compile_time_arg_val(4) != 0;
     // Whether to compute standard deviation (sqrt of variance) instead of variance.
@@ -37,21 +45,13 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // Circular buffer that the reader kernel fills with input tiles.
-    // For FP32 input + do_scale=false: c_0 is flagged UnpackToDestFp32 by the program factory
-    // so copy_tile preserves the FP32 mantissa into DEST for the welford SFPU consumer.
-    // For do_scale=true: c_0 stays Default so the FPU mul_tiles_bcast_scalar SrcA read works.
-    // (H-reduce does not need the FP32-input compile-time flag the W kernel uses for its
-    // cb_scaled hw_configure pairing; this kernel's do_scale path hands the FPU mul's output
-    // straight to welford via DEST with no CB hop in between, and no UnpackToDest-mode
-    // CB is read in the inner loop.)
+    // For FP32 input c_0 is flagged UnpackToDestFp32 by the program factory so copy_tile
+    // preserves the FP32 mantissa into DEST for the welford SFPU consumer. BF16 input: Default.
     constexpr auto cb_in = tt::CBIndex::c_0;
-    // Scalar tile produced by the reader via generate_reduce_scaler.
-    constexpr auto cb_scalar = tt::CBIndex::c_2;
     // Circular buffer where the final variance/std output tile is written.
     constexpr auto cb_out = tt::CBIndex::c_16;
 
     CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_scalar_obj(cb_scalar);
     CircularBuffer cb_out_obj(cb_out);
 
     // Destination register indices inside the Tensix DST register file.
@@ -71,11 +71,6 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out);
     pack_reconfig_data_format(cb_out);
 
-    if constexpr (do_scale) {
-        // Scalar tile stays resident across all columns
-        cb_scalar_obj.wait_front(onetile);
-    }
-
     for (uint32_t ncwt = 0; ncwt < NCWt; ncwt++) {
         // Welford accumulation along the H dimension for one column of tiles.
 
@@ -94,32 +89,10 @@ void kernel_main() {
         // across tile_regs_release/acquire cycles -- only DST contents are
         // affected by the handshake, not the SFPU accumulators.
         //
-        // DST/tile_regs flow:
-        // - tile_regs_acquire() gives the MATH thread ownership of the DST tile registers.
-        // - tile_regs_commit() -- MATH signals it is done writing DST.
-        // - tile_regs_wait() lets the PACK thread safely see those DST tiles.
-        // - tile_regs_release() releases the PACK side of DST ownership.
-        // - do_scale path mixes two incompatible operation types each iteration:
-        //   1. mul_tiles_bcast_scalar  -- an FPU operation
-        //   2. welford_update          -- an SFPU operation
-        //   In this path, we do a full acquire/commit/wait/release on non-final iterations
-        //   even though nothing is packed. That handshake is used to leave the scalar-mul
-        //   configuration in a clean, fully closed state before the next iteration reconfigures
-        //   the compute engines for another scaled input.
-        // - In the !do_scale path, only SFPU-compatible operations are used
-        //   (copy_tile + welford_update), so no configuration conflict exists
-        //   and the entire loop can run in a single DST window (one acquire
-        //   before the loop, one commit after the last tile).
-        //   Only the final iteration needs to expose result tiles to PACK.
-        //
-        // Init/reinit flow:
-        // - welford_init() is the full Welford setup. It programs the Welford SFPU path and
-        //   clears any previous running mean/M2 state, so it must be done once before the loop,
-        //   not inside the loop.
-        // - mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar) reconfigures for FPU scalar multiply.
-        // - welford_reinit(cb_in) restores UNPACK+MATH to the datacopy-style state Welford needs
-        //   after the mul (see llk_math_welfords_sfpu_reinit); it does not clear LREG4/5.
-        // - In the !do_scale path we use copy_tile_to_dst_init_short once, then copy_tile per tile.
+        // Only SFPU-compatible operations are used (copy_tile + welford_update), so no
+        // configuration conflict exists and the entire loop can run in a single DST window
+        // (one acquire before the loop, one commit after the last tile). Only the final
+        // iteration needs to expose result tiles to PACK.
         //
         // Per iteration:
         // - For all non-last H tiles, welford_update(input_dst, start_N, ...) consumes the full
@@ -131,47 +104,21 @@ void kernel_main() {
         // - If is_std, sqrt_tile() turns variance into standard deviation in place.
         // - start_N advances by one tile height each iteration so Welford sees the correct
         //   element count / divisor progression across the whole H reduction.
-        if constexpr (!do_scale) {
-            copy_tile_to_dst_init_short(cb_in);
-            tile_regs_acquire();
-        }
+        copy_tile_to_dst_init_short(cb_in);
+        tile_regs_acquire();
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
         // persists across DST cycles because LREGs are separate from
         // the DST register file managed by tile_regs_acquire/release.
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             cb_in_obj.wait_front(onetile);
-
-            if constexpr (do_scale) {
-                tile_regs_acquire();
-                // FPU mul reads cb_in (Default mode -- no UnpackToDest conflict on SrcA).
-                mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
-                mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
-
-                // welford_reinit programs the welford SFPU's UNPACK_A/MATH init. Welford reads
-                // input_dst (DEST) directly, so the operand passed here is just for the init's
-                // bookkeeping -- cb_in is fine regardless of FP32/BF16.
-                welford_reinit(cb_in);
-            } else {
-                // copy_tile reads cb_in. For FP32 input, c_0 carries UnpackToDestFp32 so the
-                // FP32 mantissa is preserved into DEST for the welford SFPU consumer.
-                copy_tile(cb_in, 0, input_dst);
-            }
+            // copy_tile reads cb_in. For FP32 input, c_0 carries UnpackToDestFp32 so the
+            // FP32 mantissa is preserved into DEST for the welford SFPU consumer.
+            copy_tile(cb_in, 0, input_dst);
             cb_in_obj.pop_front(onetile);
 
             if (ht < (Ht - 1)) {
                 welford_update<0>(input_dst, start_N, {});
-                if constexpr (do_scale) {
-                    // Even on non-final iterations we must complete the full DST handshake here.
-                    // We are not producing a packed output tile yet; this commit/wait/release is
-                    // only to fully close out the current DST and compute-engine state after
-                    // mul_tiles_bcast_scalar, before the next iteration reconfigures UNPACK+MATH
-                    // for another scaled input. Without this handshake, the next iteration can
-                    // inherit stale DST or UNPACK+MATH configuration.
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    tile_regs_release();
-                }
             } else {
                 // Last tile: process only valid rows, then finalize
                 welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
@@ -184,6 +131,13 @@ void kernel_main() {
                     sqrt_tile_init();
                     sqrt_tile(var_dst);
                 }
+#ifdef WELFORD_POST_MUL
+                // Apply the user scalar to the reduced output: var(s*x)=s^2 var(x),
+                // std(s*x)=|s| std(x). mul_unary_tile is an SFPU op on DEST at full fp32
+                // precision .
+                binop_with_scalar_tile_init();
+                mul_unary_tile(var_dst, post_mul_scaler_bits);
+#endif
                 tile_regs_commit();
             }
             start_N += tile_height;

@@ -207,26 +207,24 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
 
     auto reader_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
         test_config.cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         test_config.cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
         test_config.cores,
         tt_metal::ComputeConfig{
-            .math_approx_mode = test_config.approx_mode,
-            .compile_args = compute_kernel_args,
-            .defines = sfpu_defines});
+            .math_approx_mode = test_config.approx_mode, .compile_args = compute_kernel_args, .defines = sfpu_defines});
 
     const vector<uint32_t> reader_rt_args = {
         input_dev_buffer->address(),

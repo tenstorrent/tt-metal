@@ -57,7 +57,7 @@ void kernel_main() {
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    const auto s = TensorAccessor(ta::src_tensor);
+    const auto s = TensorAccessor(tensor::src_tensor);
 
     // this reader will read a NHW tensor in NWH order
     for (uint32_t n = 0; n < N; n++) {

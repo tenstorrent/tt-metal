@@ -23,7 +23,15 @@ import psutil
 import torch
 from loguru import logger
 from transformers import DynamicCache
-from transformers.modeling_utils import no_init_weights
+
+from models.common.utility_functions import hf_cache_layer_kv
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 
@@ -61,17 +69,30 @@ ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
 ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
 ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
 LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
+LONGBOOK_QA_ENG_5120 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_5120_nopad"
+LONGBOOK_QA_ENG_56320 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_56320_nopad"
 
-# Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path.
+# Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path, where
+# isl_total is the trace's NATIVE (generated) sequence length.
 # Traces are only used when use_pretrained=True and n_routed_experts=256, since they
 # were generated from the full pretrained model.
+# A test may request an isl that is not a native trace length: find_trace_dir() falls
+# back to the smallest native trace with the same (input_source, padding_side) whose
+# length is >= the requested isl, and the caller slices it (see slice_debug_trace).
 TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
     ("json_prompts", 1024, "right"): ILLIAD_1024_TRACE,
     ("json_prompts", 25600, "right"): ILLIAD_25024_TRACE,
     ("abc_1k", 1024, "right"): ABC_1K_PAD_RIGHT_1024,
     ("abc_1k", 1024, "left"): ABC_1K_PAD_LEFT_1024,
+    ("longbook_qa_eng", 5120, "right"): LONGBOOK_QA_ENG_5120,
     ("longbook_qa_eng", 25600, "right"): LONGBOOK_QA_ENG_25600,
+    ("longbook_qa_eng", 56320, "right"): LONGBOOK_QA_ENG_56320,
 }
+
+
+def _trace_dir_ready(path: Path) -> bool:
+    """A trace dir is usable only if it exists and carries a metadata.json."""
+    return path.exists() and (path / "metadata.json").exists()
 
 
 def find_trace_dir(
@@ -80,21 +101,41 @@ def find_trace_dir(
     padding_side: str,
     use_pretrained: bool,
     n_routed_experts: int,
-) -> Path | None:
-    """Return the trace directory for an exact test configuration, or None.
+) -> tuple[Path, int] | None:
+    """Return ``(trace_dir, trace_isl)`` for a test configuration, or ``None``.
+
+    ``trace_isl`` is the trace's NATIVE sequence length. When it is larger than the
+    requested ``isl_total`` the caller must slice the trace down to ``isl_total``
+    (see :func:`slice_debug_trace`) — valid for causal, nopad prefill traces.
 
     A trace is eligible only when:
     - the model uses pretrained weights with 256 experts (traces were generated from
       the full pretrained DeepSeek-R1 model)
-    - (input_source, isl_total, padding_side) match a known trace exactly
     - the directory exists and contains a metadata.json
+
+    Resolution order:
+    1. Exact ``(input_source, isl_total, padding_side)`` match (no slicing).
+    2. Otherwise the smallest ready trace with the same ``(input_source, padding_side)``
+       whose native isl is ``>= isl_total`` (caller slices the first ``isl_total`` tokens).
     """
     if not use_pretrained or n_routed_experts != 256:
         return None
 
-    path = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
-    if path is not None and path.exists() and (path / "metadata.json").exists():
-        return path
+    # 1. Exact native-length match — preferred, no slicing needed.
+    exact = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
+    if exact is not None and _trace_dir_ready(exact):
+        return exact, isl_total
+
+    # 2. Fall back to the smallest ready trace that is at least as long as requested,
+    #    with matching input_source + padding_side.
+    candidates = sorted(
+        (trace_isl, path)
+        for (src, trace_isl, pad), path in TRACE_LOOKUP.items()
+        if src == input_source and pad == padding_side and trace_isl >= isl_total and _trace_dir_ready(path)
+    )
+    if candidates:
+        trace_isl, path = candidates[0]
+        return path, trace_isl
     return None
 
 
@@ -163,9 +204,19 @@ INFINITEBENCH_SUBSETS = {
     "longbook_qa_eng": "longbook_qa_eng.jsonl",
 }
 
-INFINITEBENCH_CACHE_DIR = Path(
-    os.environ.get("TT_DS_PREFILL_INFINITEBENCH_CACHE", "/tmp/deepseek_v3_transformer_inputs")
-)
+
+def _default_infinitebench_cache_dir() -> str:
+    # Prefer a test-specific override, then HF_HOME/infinitebench, then a temp dir.
+    explicit = os.environ.get("TT_DS_PREFILL_INFINITEBENCH_CACHE")
+    if explicit:
+        return explicit
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return os.path.join(hf_home, "infinitebench")
+    return "/tmp/deepseek_v3_transformer_inputs"
+
+
+INFINITEBENCH_CACHE_DIR = Path(_default_infinitebench_cache_dir())
 
 
 # --- HF model helpers ---
@@ -445,12 +496,12 @@ def load_and_compute_layer_by_layer(
     """
     from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
     from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-    from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
     from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+    from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
 
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL
@@ -472,6 +523,8 @@ def load_and_compute_layer_by_layer(
 
     # Create LazyStateDict
     lazy_sd = LazyStateDict(Path(model_path))
+
+    prefix = detect_language_model_prefix(lazy_sd)
 
     # Initialize outputs
     ref_snapshots = [] if compute_reference else None
@@ -498,7 +551,7 @@ def load_and_compute_layer_by_layer(
 
     # --- Process Embeddings ---
     logger.info("Processing embeddings...")
-    embed_sd = sub_state_dict(lazy_sd, "model.embed_tokens.")
+    embed_sd = sub_state_dict(lazy_sd, f"{prefix}model.embed_tokens.")
     embed_dequant = dequantize_state_dict(embed_sd, config)
 
     if compute_reference:
@@ -539,7 +592,7 @@ def load_and_compute_layer_by_layer(
     for i in range(num_layers):
         logger.info(f"Processing layer {i}/{num_layers}...")
 
-        layer_sd = sub_state_dict(lazy_sd, f"model.layers.{i}.")
+        layer_sd = sub_state_dict(lazy_sd, f"{prefix}model.layers.{i}.")
         layer_dequant = dequantize_state_dict(layer_sd, config)
 
         if compute_reference:
@@ -580,6 +633,22 @@ def load_and_compute_layer_by_layer(
                 },
                 "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
             }
+
+            # DSA-sparse variants (GLM-5.1, DeepSeek-V3.2) carry lightning-indexer weights; include them
+            # so ttMLA.build_ttnn_cache writes a complete sparse cache — it resolves has_indexer from the
+            # config and errors if the indexer host weights are missing. Auto-engages only when present
+            # (dense DeepSeek-R1 / Kimi checkpoints have no self_attn.indexer.*). The checkpoint's
+            # k_norm.bias maps to the indexer's k_norm_bias.weight slot (see TtIndexer.WEIGHT_NAMES).
+            if "self_attn.indexer.wq_b.weight" in layer_dequant:
+                layer_dict["mla_weights"].update(
+                    {
+                        "indexer.wq_b.weight": layer_dequant["self_attn.indexer.wq_b.weight"],
+                        "indexer.wk.weight": layer_dequant["self_attn.indexer.wk.weight"],
+                        "indexer.k_norm.weight": layer_dequant["self_attn.indexer.k_norm.weight"],
+                        "indexer.k_norm_bias.weight": layer_dequant["self_attn.indexer.k_norm.bias"],
+                        "indexer.weights_proj.weight": layer_dequant["self_attn.indexer.weights_proj.weight"],
+                    }
+                )
 
             if is_dense:
                 layer_dict["ffn_weights"] = {
@@ -638,11 +707,11 @@ def load_and_compute_layer_by_layer(
 
     # Extract KVPE if computed reference
     if compute_reference:
-        ref_kvpe_list = [ref_cache.key_cache[i] for i in range(num_layers)]
+        ref_kvpe_list = [hf_cache_layer_kv(ref_cache, i)[0] for i in range(num_layers)]
 
     # --- Process Norm ---
     logger.info("Processing norm...")
-    norm_sd = sub_state_dict(lazy_sd, "model.norm.")
+    norm_sd = sub_state_dict(lazy_sd, f"{prefix}model.norm.")
     norm_dequant = dequantize_state_dict(norm_sd, config)
 
     if compute_reference:
@@ -671,7 +740,7 @@ def load_and_compute_layer_by_layer(
 
     # --- Process LM Head ---
     logger.info("Processing lm_head...")
-    lm_head_sd = sub_state_dict(lazy_sd, "lm_head.")
+    lm_head_sd = sub_state_dict(lazy_sd, f"{prefix}lm_head.")
     lm_head_dequant = dequantize_state_dict(lm_head_sd, config)
 
     if compute_reference:
@@ -920,7 +989,26 @@ class DebugTraceData:
     metadata: dict  # raw metadata.json contents
 
 
-def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTraceData:
+def _read_trace_rows(tensor_dir: Path, key: str, end: int | None):
+    """Read `key` from a chunked_group_a_v1 tensor dir (rows_<s>_<e>.safetensors shards), concatenating
+    up to `end` rows (or all). Used to slice a long trace (e.g. the 55k GLM golden) down to a test's isl."""
+    import glob as _glob
+
+    from safetensors import safe_open
+
+    parts, got = [], 0
+    for shard in sorted(_glob.glob(str(tensor_dir / "rows_*.safetensors"))):
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        parts.append(t)
+        got += t.shape[0]
+        if end is not None and got >= end:
+            break
+    out = torch.cat(parts, 0) if len(parts) > 1 else parts[0]
+    return out[:end] if end is not None else out
+
+
+def load_debug_trace(trace_dir: Path, num_layers: int | None = None, isl: int | None = None) -> DebugTraceData:
     """
     Load reference tensors from a bit_sculpt debug trace directory.
 
@@ -947,6 +1035,12 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
         num_layers = metadata["n_layers"]
 
     token_ids = torch.tensor([metadata["token_ids"]], dtype=torch.int64)
+    if isl is not None:
+        token_ids = token_ids[:, :isl]  # chop a long trace (e.g. the 55k GLM golden) to this test's isl
+    # chunked_group_a_v1 layout (row-sharded decoder_io/ + kv_cache/layer_i/) — used by the GLM 55k golden;
+    # read + slice to isl instead of requiring a dedicated isl-sized standard-layout trace.
+    chunked_dir = trace_dir / "decoder_io"
+    is_chunked_layout = chunked_dir.is_dir()
     logger.info(f"Loaded {token_ids.shape[1]} tokens from {trace_dir.name}")
 
     ref_snapshots = {}
@@ -954,25 +1048,39 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
     hs_flat = trace_dir / "hidden_states.safetensors"
     per_layer_format = hs_dir.is_dir()
 
-    if per_layer_format:
+    if is_chunked_layout:
+        for i in range(num_layers):
+            key = f"decoder_output_layer_{i}"
+            t = _read_trace_rows(chunked_dir / key, key, isl)
+            ref_snapshots[f"layer_{i}"] = t.unsqueeze(0)
+        logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from decoder_io/ (chunked_group_a_v1, isl={isl})")
+    elif per_layer_format:
         for i in range(num_layers):
             layer_path = hs_dir / f"layer_{i}.safetensors"
             with safe_open(layer_path, framework="pt") as f:
                 key = f"decoder_output_layer_{i}"
-                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+                t = f.get_tensor(key)
+                ref_snapshots[f"layer_{i}"] = (t[:isl] if isl is not None else t).unsqueeze(0)
         logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states/ (per-layer files)")
     else:
         with safe_open(hs_flat, framework="pt") as f:
             for i in range(num_layers):
                 key = f"decoder_output_layer_{i}"
-                ref_snapshots[f"layer_{i}"] = f.get_tensor(key).unsqueeze(0)
+                t = f.get_tensor(key)
+                ref_snapshots[f"layer_{i}"] = (t[:isl] if isl is not None else t).unsqueeze(0)
         logger.info(f"Loaded {len(ref_snapshots)} layer snapshots from hidden_states.safetensors")
 
     ref_kvpe_list = []
     kv_dir = trace_dir / "kv_cache"
     kv_flat = trace_dir / "kv_cache.safetensors"
 
-    if per_layer_format and kv_dir.is_dir():
+    if is_chunked_layout:
+        for i in range(num_layers):
+            key = f"kv_post_transform_layer_{i}"
+            kv = _read_trace_rows(kv_dir / f"layer_{i}", key, isl)
+            ref_kvpe_list.append(kv.unsqueeze(0).unsqueeze(0))
+        logger.info(f"Loaded {len(ref_kvpe_list)} KVPE layers from kv_cache/ (chunked_group_a_v1, isl={isl})")
+    elif per_layer_format and kv_dir.is_dir():
         # Detect key prefix from the first layer file
         with safe_open(kv_dir / "layer_0.safetensors", framework="pt") as f:
             available_keys = set(f.keys())
@@ -1020,3 +1128,97 @@ def load_debug_trace(trace_dir: Path, num_layers: int | None = None) -> DebugTra
         logits=logits,
         metadata=metadata,
     )
+
+
+def slice_debug_trace(trace: DebugTraceData, isl_total: int) -> DebugTraceData:
+    """Slice a debug trace down to its first ``isl_total`` sequence positions.
+
+    This is exact for causal (autoregressive) prefill traces generated WITHOUT padding
+    (the ``*_nopad`` traces): a transformer's per-layer decoder output and KV-cache entry
+    at position ``i`` depend only on positions ``0..i`` (causal attention + absolute-position
+    RoPE), so they are identical whether the full sequence or only its first ``isl_total``
+    tokens are prefilled.
+
+    The stored ``logits`` / ``next_token_id`` are the FULL sequence's final-position
+    products and are meaningless for the shorter prefill, so ``logits`` is dropped
+    (set to ``None``); callers must skip the logits / first-token checks for a sliced
+    trace (``metadata`` is left untouched, so ``next_token_id`` must not be trusted).
+
+    Args:
+        trace: Trace to slice (typically longer than the requested isl).
+        isl_total: Target sequence length; must be <= the trace's native length.
+
+    Returns:
+        A new :class:`DebugTraceData` truncated along the sequence dimension.
+    """
+    trace_len = trace.token_ids.shape[1]
+    if isl_total > trace_len:
+        raise ValueError(f"Cannot slice trace of length {trace_len} up to isl_total={isl_total}")
+    return DebugTraceData(
+        token_ids=trace.token_ids[:, :isl_total],
+        ref_snapshots={label: snap[:, :isl_total, :] for label, snap in trace.ref_snapshots.items()},
+        ref_kvpe_list=[kv[:, :, :isl_total, :] for kv in trace.ref_kvpe_list],
+        logits=None,  # full-sequence final-position logits are invalid after slicing
+        metadata=trace.metadata,
+    )
+
+
+# Golden bit_sculpt prefill trace (DeepSeek-R1-0528, 256 experts, hidden_dim 7168).
+# Layer 3 is the first MoE layer (metadata moe_layer_offset == 3).
+GOLDEN_LONGBOOK_TRACE = Path("/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad")
+
+
+def load_trace_gate_input(
+    trace_dir: Path,
+    layer_idx: int,
+    max_seq_len: int,
+    dim: int,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor | None:
+    """Load the MoE/gate block input from a bit_sculpt golden trace.
+
+    The trace stores ``post_attn_norm_layer_{i}`` per layer — the post-attention
+    RMSNorm output, which is exactly the tensor fed into the gate + experts at
+    layer ``i`` (unlike ``decoder_output_layer_{i}``, the unnormalized residual
+    stream). Returns ``[max_seq_len, dim]`` (tiled if the trace is shorter than
+    ``max_seq_len``), or ``None`` if the trace/key is unavailable or ``dim``
+    exceeds the trace hidden dim.
+
+    A sliced read is used so only the requested ``[max_seq_len, dim]`` block is
+    materialized rather than the full (seq, hidden_dim) tensor.
+    """
+    from safetensors import safe_open
+
+    layer_path = Path(trace_dir) / "hidden_states" / f"layer_{layer_idx}.safetensors"
+    if not layer_path.exists():
+        logger.warning(f"Trace file not found: {layer_path}. Falling back to synthetic input.")
+        return None
+
+    key = f"post_attn_norm_layer_{layer_idx}"
+    try:
+        with safe_open(layer_path, framework="pt") as f:
+            if key not in f.keys():
+                logger.warning(f"{key} not in {layer_path}. Falling back to synthetic input.")
+                return None
+            sl = f.get_slice(key)
+            seq_total, hidden_dim = sl.get_shape()
+            if dim > hidden_dim:
+                logger.warning(
+                    f"Requested dim {dim} > trace hidden_dim {hidden_dim} ({key}). Falling back to synthetic input."
+                )
+                return None
+            n = min(max_seq_len, seq_total)
+            hidden = sl[:n, :dim].to(dtype)
+    except Exception as e:  # safetensors / IO errors — fall back to synthetic
+        logger.warning(f"Could not load {key} from {layer_path}: {e}. Falling back to synthetic input.")
+        return None
+
+    if hidden.shape[0] < max_seq_len:
+        repeats = (max_seq_len + hidden.shape[0] - 1) // hidden.shape[0]
+        hidden = hidden.repeat(repeats, 1)[:max_seq_len]
+
+    logger.info(
+        f"Loaded gate input from {Path(trace_dir).name} {key} "
+        f"(trace {seq_total}x{hidden_dim}, sliced to {tuple(hidden.shape)})"
+    )
+    return hidden

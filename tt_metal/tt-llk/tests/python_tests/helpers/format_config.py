@@ -87,6 +87,14 @@ class DataFormat(Enum):
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
+    def cpp_enum_value(self) -> str:
+        return f"DataFormat::{self.name}"
+
+    @property
+    def cpp_underlying_value(self) -> str:
+        return f"ckernel::to_underlying(DataFormat::{self.name})"
+
+    @property
     def size(self) -> Fraction:
         """Returns the byte size of the data format."""
         return self.value.byte_size
@@ -105,6 +113,10 @@ class DataFormat(Enum):
             DataFormat.Int8,
             DataFormat.UInt8,
         }
+
+    def needs_int8_math_config(self) -> bool:
+        """Checks if the format requires int8 math mode in the ALU."""
+        return self in {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
 
     def is_32_bit(self) -> bool:
         """Checks if the data format is a 32-bit type."""
@@ -421,6 +433,7 @@ class FormatConfig:
     pack_S_src: DataFormat
     pack_S_dst: DataFormat
     math: DataFormat
+    sfpu_math: DataFormat
 
     def __init__(
         self,
@@ -429,6 +442,9 @@ class FormatConfig:
         pack_src: DataFormat,
         pack_dst: DataFormat,
         math: DataFormat,
+        sfpu_math: Optional[
+            DataFormat
+        ] = None,  # SFPU-side math format; defaults to `math`. Differs only when the SFPU operates in a format with no native register/dest representation (e.g. UInt16 on Quasar, routed through an Int16 data path).
         same_src_format: bool = True,  # If True, A and B share unpack formats; omit unpack_B_src / unpack_B_dst (they are set from A).
         # Optional unpack_S_* and pack_S_* default to the A and main pack paths when omitted (mirrors common "S same as A" usage).
         unpack_B_src: Optional[DataFormat] = None,
@@ -444,6 +460,7 @@ class FormatConfig:
         self.pack_src = pack_src
         self.pack_dst = pack_dst
         self.math = math
+        self.sfpu_math = sfpu_math if sfpu_math is not None else math
         if same_src_format:
             self.unpack_B_src = unpack_A_src
             self.unpack_B_dst = unpack_A_dst
@@ -477,6 +494,7 @@ class FormatConfig:
             ("unpack_S_src", self.unpack_S_src),
             ("unpack_S_dst", self.unpack_S_dst),
             ("math", self.math),
+            ("sfpu_math", self.sfpu_math),
             ("pack_src", self.pack_src),
             ("pack_dst", self.pack_dst),
             ("pack_S_src", self.pack_S_src),
@@ -513,6 +531,7 @@ struct FormatConfig
     std::uint32_t unpack_B_dst = 0;
     std::uint32_t unpack_S_dst = 0;
     std::uint32_t math = 0;
+    std::uint32_t sfpu_math = 0;
     std::uint32_t pack_src = 0;
     std::uint32_t pack_dst = 0;
     std::uint32_t pack_S_src = 0;
@@ -532,6 +551,7 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "    const std::uint32_t unpack_B_dst;",
     "    const std::uint32_t unpack_S_dst;",
     "    const std::uint32_t math;",
+    "    const std::uint32_t sfpu_math;",
     "    const std::uint32_t pack_src;",
     "    const std::uint32_t pack_dst;",
     "    const std::uint32_t pack_S_src;",
@@ -545,6 +565,7 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "        std::uint32_t unpack_B_dst_,",
     "        std::uint32_t unpack_S_dst_,",
     "        std::uint32_t math_,",
+    "        std::uint32_t sfpu_math_,",
     "        std::uint32_t pack_src_,",
     "        std::uint32_t pack_dst_,",
     "        std::uint32_t pack_S_src_,",
@@ -556,6 +577,7 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "        unpack_B_dst(unpack_B_dst_),",
     "        unpack_S_dst(unpack_S_dst_),",
     "        math(math_),",
+    "        sfpu_math(sfpu_math_),",
     "        pack_src(pack_src_),",
     "        pack_dst(pack_dst_),",
     "        pack_S_src(pack_S_src_),",

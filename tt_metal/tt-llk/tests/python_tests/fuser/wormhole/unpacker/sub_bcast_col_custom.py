@@ -6,8 +6,8 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
@@ -18,6 +18,7 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 
 class SubBcastColCustomUnpacker(Unpacker):
     loop: FusedLoop = LoopBlockRow()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
@@ -31,7 +32,7 @@ class SubBcastColCustomUnpacker(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         tile_count_x = compute_unit.src_b.tile_count_x
         tile_count_y = compute_unit.src_b.tile_count_y
@@ -39,8 +40,17 @@ class SubBcastColCustomUnpacker(Unpacker):
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
 
+        src_b_tile_dims = (
+            compute_unit.src_b.tile_shape.total_row_dim(),
+            compute_unit.src_b.tile_shape.total_col_dim(),
+        )
+        src_b_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
         tilized_b = tilize_block(
-            tensor_b, compute_unit.src_b.dimensions, compute_unit.src_b.data_format
+            tensor_b,
+            compute_unit.src_b.dimensions,
+            compute_unit.src_b.data_format,
+            num_faces=src_b_num_faces,
+            tile_dimensions=src_b_tile_dims,
         )
         broadcast_golden = get_golden_generator(BroadcastGolden)
 
@@ -63,6 +73,8 @@ class SubBcastColCustomUnpacker(Unpacker):
             tilized_b,
             compute_unit.src_b.data_format,
             compute_unit.src_b.dimensions,
+            tile_dimensions=src_b_tile_dims,
+            num_faces=src_b_num_faces,
         )
 
         return tensor_a.flatten(), tensor_b.flatten()
@@ -71,7 +83,7 @@ class SubBcastColCustomUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -84,7 +96,7 @@ class SubBcastColCustomUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -97,16 +109,18 @@ class SubBcastColCustomUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return "_llk_unpack_AB_sub_bcast_col_init_custom_();\n"
+        tile_shape = compute_unit.src_a.tile_shape
+        tensor_shape_instantiation = f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
+        return f"_llk_unpack_AB_sub_bcast_col_init_custom_({tensor_shape_instantiation});\n"
 
     def unpack(
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -123,7 +137,7 @@ class SubBcastColCustomUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         return "_llk_unpack_AB_sub_bcast_col_uninit_custom_();\n"

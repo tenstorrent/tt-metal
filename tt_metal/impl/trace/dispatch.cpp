@@ -6,6 +6,8 @@
 
 #include <tt_stl/assert.hpp>
 #include "device.hpp"
+#include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "llrt/hal.hpp"
@@ -77,7 +79,7 @@ void load_host_dispatch_state(
 }
 
 void issue_trace_commands(
-    IDevice* device,
+    distributed::MeshDevice* mesh_device,
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
@@ -99,10 +101,10 @@ void issue_trace_commands(
 
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
         const auto& noc_data_start_idx =
-            device->noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
+            mesh_device->impl().noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
 
         const auto& num_noc_unicast_txns =
-            desc.num_traced_programs_needing_go_signal_unicast ? device->num_virtual_eth_cores(id) : 0;
+            desc.num_traced_programs_needing_go_signal_unicast ? mesh_device->impl().num_virtual_eth_cores(id) : 0;
         auto index = *id;
 
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
@@ -114,7 +116,7 @@ void issue_trace_commands(
                 dispatch_core.y,
                 MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(index)),
             MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
-            desc.num_traced_programs_needing_go_signal_multicast && device->has_noc_mcast_txns(id)
+            desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
                 ? index
                 : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
@@ -129,10 +131,10 @@ void issue_trace_commands(
         auto index = *id;
         uint32_t expected_num_workers = expected_num_workers_completed[index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
-            expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
+            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
         }
         if (desc.num_traced_programs_needing_go_signal_unicast) {
-            expected_num_workers += device->num_virtual_eth_cores(id);
+            expected_num_workers += mesh_device->impl().num_virtual_eth_cores(id);
         }
 
         if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
@@ -226,8 +228,8 @@ std::size_t compute_interleaved_trace_buf_page_size(uint32_t buf_size, const uin
     // to maximize read bandwidth.
     // Min size is bounded by NOC transfer efficiency
     // Max size is bounded by Prefetcher CmdDatQ size
-    constexpr uint32_t kExecBufPageMin = 1024;
-    constexpr uint32_t kExecBufPageMax = 8192;
+    constexpr uint32_t kExecBufPageMin = kMinTraceBufPageSize;
+    constexpr uint32_t kExecBufPageMax = kMaxTraceBufPageSize;
     // If the trace buffer uses at least 2 pages per bank (for a specific page size), require using that page size or
     // larger to improve prefetcher read performance. This limits wasted space to at most 33% or the page size * the
     // number of banks, whichever is smaller.

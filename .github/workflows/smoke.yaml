@@ -13,13 +13,19 @@ on:
       package-artifact-name:
         required: true
         type: string
-      runner:
-        required: true
+      enabled-skus:
+        required: false
         type: string
+        default: ALL_SKUS_IN_TESTS
+        description: "Comma-separated SKUs to run, or ALL_SKUS_IN_TESTS to run every SKU in the tests yaml."
       per-test-timeout:
         required: false
         type: string
-        default: "4.0" # TODO: Drop back to 3.5 when https://github.com/tenstorrent/github-ci-infra/issues/876 is resolved.
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
       product:
         required: true
         type: string # tt-metalium or tt-nn
@@ -35,14 +41,74 @@ on:
         description: 'Enable kernel ccache for JIT compilation at runtime'
         default: false
         type: boolean
+      test-category:
+        required: false
+        type: string
+        default: merge_gate
+        description: "Time-budget workflow key passed to verify_time_budget.py (merge_gate or pr_gate)."
 
 jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: >-
+        ${{ inputs.product == 'tt-metalium'
+            && (inputs.test-category == 'pr_gate'
+                && './tests/pipeline_reorg/runtime_validation_pr_gate_tests.yaml'
+                || './tests/pipeline_reorg/runtime_validation_merge_gate_tests.yaml')
+            || (inputs.test-category == 'pr_gate'
+                && './tests/pipeline_reorg/ttnn_validation_pr_gate_tests.yaml'
+                || './tests/pipeline_reorg/ttnn_validation_merge_gate_tests.yaml') }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Verify test timeouts against budget
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
+          python3 .github/scripts/utils/verify_time_budget.py \
+            "${{ env.TESTS_YAML_PATH }}" \
+            ./.github/time_budget.yaml \
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
+
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            "${{ env.TESTS_YAML_PATH }}" \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+
   smoke:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
     environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'mainline' || '' }}
     timeout-minutes: 30
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ (inputs.docker-image && (contains(inputs.runner, 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
+      image: ${{ (inputs.docker-image && (contains(join(matrix.test-group.runs_on, ','), 'dedicated-merge-gate') && inputs.docker-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image))) || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -50,9 +116,9 @@ jobs:
         LLVM_PROFILE_FILE: "/work/coverage/%p-%m.profraw"
       volumes:
         - /work
-        - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
+        - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
-      options: --device /dev/tenstorrent ${{ contains(fromJSON('["N300-llmbox", "N300-llmbox-viommu", "N300-llmbox-viommu-prio", "in-service-dedicated-merge-gate"]'), inputs.runner) && '--memory 256g' || '' }}
+      options: --device /dev/tenstorrent ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash
@@ -74,6 +140,7 @@ jobs:
           path: /work/pkgs/
 
       - name: Check available memory in container for WH LB 2
+        if: ${{ contains(matrix.test-group.sku, 'llmbox') }}
         run: |
           # You never know with GH!!!
           set -e
@@ -101,7 +168,7 @@ jobs:
         timeout-minutes: 10
         run: |
           # Ideally only ${{ inputs.product }}-validation, but APT doesn't resolve dependencies from files on disk without being told about them.
-          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-validation_*.deb ./pkgs/${{ inputs.product }}_*.deb ./pkgs/${{ inputs.product }}-validation_*.deb
 
       - name: Prepare coverage directory
         run: |
@@ -166,15 +233,14 @@ jobs:
 
       - name: Run a test
         id: test
-        timeout-minutes: 15
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-reports/
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
           TT_METAL_WATCHER_TEST_MODE: 1
           TT_LOGGER_LEVEL: warn
-        run: |
-          /usr/bin/${{ inputs.product }}-validation-smoke
+        run: ${{ matrix.test-group.cmd }}
 
       - name: Merge LLVM coverage
         if: ${{ inputs.upload-coverage }}
@@ -225,7 +291,7 @@ jobs:
         with:
           files: /work/coverage/coverage.info
           flags: ${{ inputs.product }}
-          name: smoke-${{ inputs.product }}
+          name: smoke-${{ inputs.product }}-${{ matrix.test-group.sku }}
           fail_ci_if_error: true
           verbose: true
 
@@ -247,7 +313,7 @@ jobs:
         continue-on-error: true
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
-          name: ${{ inputs.product }} ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
+          name: ${{ inputs.product }} ${{ matrix.test-group.sku }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
           path: /work/test-reports/*.xml
           reporter: jest-junit
           working-directory: /work
@@ -275,8 +341,3 @@ jobs:
             "$GITHUB_WORKSPACE/.github/scripts/ccache_log_filter.sh" /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
-
-      - name: Check for slow tests
-        uses: tenstorrent/tt-metal/.github/actions/detect-slow-tests@main
-        with:
-          threshold: ${{ inputs.per-test-timeout }}

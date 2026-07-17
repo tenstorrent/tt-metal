@@ -300,6 +300,9 @@ class PansegformerHead(nn.Module):
             "args_tuple": args_tuple,
             "reference": reference,
         }
+        # Retained so the e2e seg-head PCC gate (test_ttnn_uniad) can read the
+        # continuous forward outputs on the real BEV embedding.
+        self._last_forward_outs = {"outputs_classes": outputs_classes, "outputs_coords": outputs_coords}
 
         return outs
 

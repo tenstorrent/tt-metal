@@ -46,42 +46,40 @@ jobs:
           # Tomasz Cheda (U091SNDA4TS) - Structured output tests
           # Radoica Draskic (U08BH66EXAL) - DP tests
           # Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A) - GPT-OSS
+          # Aniruddha Tupe (U08HL8X1ECD) - Qwen3.6 models
 
           # Note: This matrix must be kept in sync with the original static matrix
           #
-          # The two Gemma4-31B vLLM entries below are temporarily disabled —
-          # the full unquantized KV cache for the global-attention layers
-          # runs out of DRAM on both 1x4 (BH-Quietbox-2) and 1x8 (WH-T3K).
-          # Re-enable once KV cache quantization lands — TODO: file follow-up issue.
+          # The WH-T3K Gemma4-26B-A4B entry below is temporarily disabled —
+          # DRAM OOM during KV cache allocation (layer 25/30) causes EngineCore
+          # init failure on WH-T3K. Full unquantized KV cache no longer fits.
+          # Re-enable once hybrid KV cache is enabled (which will size the
+          # sliding-window layers' KV cache to the window instead of the full
+          # sequence length, freeing the DRAM needed to fit the full model).
+          # Tracked in https://github.com/tenstorrent/tt-metal/issues/49257
           #
-          # Disabled entries preserved verbatim for the re-enable:
+          # Disabled entry preserved verbatim for the re-enable:
           #
           #   {
-          #     "name": "[WH-T3K] Gemma4-31B",
-          #     "model": "google/gemma-4-31B-it",
-          #     "server-timeout": 45,
-          #     "benchmark-timeout": 5,
+          #     "name": "[WH-T3K] Gemma4-26B-A4B",
+          #     "model": "google/gemma-4-26B-A4B-it",
+          #     "coherence-test": true,
+          #     "server-timeout": 30,
+          #     "benchmark-timeout": 10,
           #     "runner-label": "config-t3000",
           #     "arch": "arch-wormhole_b0",
           #     "mesh-device": "T3K",
-          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-          #     "additional-server-args": "--async-scheduling",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
+          #     "additional-server-args": "--max_num_seqs 1 --async-scheduling",
           #     "multimodal": false,
           #     "owner_id": "U08TJ70UFRT"
           #   },
-          #   {
-          #     "name": "[BH-QB-2] Gemma4-31B",
-          #     "model": "google/gemma-4-31B-it",
-          #     "server-timeout": 20,
-          #     "benchmark-timeout": 5,
-          #     "runner-label": "BH-Quietbox-2",
-          #     "arch": "arch-blackhole",
-          #     "mesh-device": "P150x4",
-          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-          #     "additional-server-args": "--async-scheduling",
-          #     "multimodal": false,
-          #     "owner_id": "U08TJ70UFRT"
-          #   },
+          #
+          # KNOWN ERROR — [WH-T3K] Gemma4-31B (kept enabled below to track):
+          # device hang (fast-dispatch timeout) during decode on WH-T3K only;
+          # the same serving config passes on [BH-QB-2] Gemma4-31B. Not a
+          # serving/KV-config issue — a tt-metal dispatch-layer hang.
+          # Tracked in https://github.com/tenstorrent/tt-metal/issues/49494
           #
           # Disabled due to Metal timeout in reduce-scatter async tests
           # https://github.com/tenstorrent/vllm/issues/416
@@ -136,40 +134,84 @@ jobs:
             {
               "name": "[WH-N150] Gemma4-E2B",
               "model": "google/gemma-4-E2B-it",
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
+              "server-timeout": 30,
+              "benchmark-timeout": 12,
+              "coherence-test": true,
               "runner-label": "N150",
               "arch": "arch-wormhole_b0",
               "mesh-device": "N150",
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
             {
-              "name": "[WH-T3K] Gemma4-26B-A4B",
-              "model": "google/gemma-4-26B-A4B-it",
-              "server-timeout": 30,
+              "name": "[BH-QB-2] Gemma4-12B",
+              "model": "google/gemma-4-12B-it",
+              "coherence-test": true,
+              "server-timeout": 20,
               "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-              "additional-server-args": "--async-scheduling",
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
+              "additional-server-args": "--max_model_len 131072 --max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
             {
               "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
+              "coherence-test": true,
               "server-timeout": 30,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 300000000}",
+              "additional-server-args": "--max_model_len 131072 --max_num_seqs 1 --async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[WH-T3K] Gemma4-31B",
+              "model": "google/gemma-4-31B-it",
+              "server-timeout": 45,
+              "benchmark-timeout": 5,
+              "runner-label": "config-t3000",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "T3K",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Gemma4-31B",
+              "model": "google/gemma-4-31B-it",
+              "server-timeout": 20,
               "benchmark-timeout": 5,
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_model_len 32768 --max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Qwen3.6-27B",
+              "model": "Qwen/Qwen3.6-27B",
+              "coherence-test": true,
+              "server-timeout": 30,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456}",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "default-chat-template-kwargs": "{\"enable_thinking\": false}",
+              "multimodal": true,
+              "owner_id": "U08HL8X1ECD"
             },
             {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
@@ -338,6 +380,7 @@ jobs:
             {
               "name": "[WH-T3K] Qwen3-VL-32B-Instruct",
               "model": "Qwen/Qwen3-VL-32B-Instruct",
+              "coherence-test": false,
               "server-timeout": 10,
               "benchmark-timeout": 10,
               "runner-label": "config-t3000",
@@ -351,13 +394,13 @@ jobs:
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
-              "name": "[WH-T3K] NoOp test model (vLLM overhead)",
+              "name": "[WH-GLX] NoOp test model (vLLM overhead)",
               "model": "models/vllm_test_utils/no_op_test",
               "server-timeout": 2,
               "benchmark-timeout": 2,
-              "runner-label": "config-t3000",
+              "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
-              "mesh-device": "(1, 2)",
+              "mesh-device": "(1, 1)",
               "tt-config": "{\"register_test_models\": true, \"input_queue_batching_delay\": 0}",
               "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0",
@@ -392,6 +435,17 @@ jobs:
       - in-service
       # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
       - ${{ ((matrix.test-group.runner-label == 'BH-Quietbox-2' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
+    # Per-phase log paths kept job-level so they resolve in both the ${{ env }}
+    # expression context (run-with-log log-file inputs) and the container step
+    # shells ($FILE_*). container.env is shell-only, not visible to expressions.
+    env:
+      FILE_SERVER_PID: "./server.pid"
+      FILE_INSTALL_LOG: "./output/vllm_install.log"
+      FILE_SERVER_LOG: "./output/vllm_server.log"
+      FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
+      FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
+      FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
+      FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -410,6 +464,7 @@ jobs:
         FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
         FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
+        FILE_COHERENCE_TEST_LOG: "./output/vllm_coherence_test.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -456,8 +511,10 @@ jobs:
           mkdir -p output
 
       - name: 📀 Install vLLM
-        run: |
-          {
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_INSTALL_LOG }}
+          run: |
             VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
             if [ -d vllm/plugins/vllm-tt-plugin ]; then
               uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
@@ -467,8 +524,6 @@ jobs:
             case "${{ matrix.test-group.model }}" in
               google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
             esac
-          } 2>&1 | tee "${FILE_INSTALL_LOG}"
-          exit "${PIPESTATUS[0]}"
 
       - name: 🚀 Run server
         timeout-minutes: 1
@@ -485,6 +540,13 @@ jobs:
             ADDITIONAL_SERVER_ARGS=(${{ matrix.test-group.additional-server-args }})
           else
             ADDITIONAL_SERVER_ARGS=()
+          fi
+
+          DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
+          if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
+            DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
+          else
+            DEFAULT_CHAT_TEMPLATE_KWARGS=()
           fi
 
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
@@ -507,10 +569,36 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
+          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
+          # single-stream max_num_seqs=1):
+          #   * The prefill trace bucket sweep (128..4096) is the dominant trace
+          #     consumer — the 4096 bucket alone is ~0.5 GB on 26B-A4B — yet a
+          #     100-token prompt only ever replays the 128 bucket. Limit it so the
+          #     trace region stays small and startup is fast.
+          #   * Decode warmup captures one resident trace per sampling-param
+          #     permutation; the full penalties×logprobs sweep is unused by the
+          #     default-sampling benchmark. Warm only plain/greedy/None.
+          # Both shrink the required trace_region_size (validated to fit <200 MB
+          # on 26B-A4B P150x4, vs >1 GB unbounded).
+          case "$HF_MODEL" in
+            google/gemma-4-*)
+              export TT_LEAN_DECODE_WARMUP=1
+              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              # 31B: with hybrid KV groups disabled every layer allocates a
+              # full-length KV buffer, and the default all-user pool OOMs DRAM
+              # on QB2/T3K. Cap the pool (the real DRAM lever, distinct from
+              # --max_model_len). See tt-metal #49257 / #49083.
+              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ]; then
+                export GEMMA4_MAX_TOKENS_ALL_USERS=32768
+              fi
+              ;;
+          esac
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
@@ -593,27 +681,30 @@ jobs:
 
       - name: 📐 Run benchmark
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_BENCHMARK_LOG }}
+          run: |
+            if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
+              ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
+            else
+              ADDITIONAL_BENCHMARK_ARGS=()
+            fi
+
+            vllm bench serve \
+              --backend vllm \
+              --model ${{ matrix.test-group.model }} \
+              --dataset-name random \
+              --random-input-len 100 \
+              --random-output-len 100 \
+              --num-prompts 32 \
+              --ignore-eos \
+              --percentile-metrics ttft,tpot,itl,e2el \
+              --save-result \
+              --result-filename output/vllm_result.json \
+              "${ADDITIONAL_BENCHMARK_ARGS[@]}"
+      - name: Verify benchmark
         run: |
-          if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
-            ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
-          else
-            ADDITIONAL_BENCHMARK_ARGS=()
-          fi
-
-          vllm bench serve \
-            --backend vllm \
-            --model ${{ matrix.test-group.model }} \
-            --dataset-name random \
-            --random-input-len 100 \
-            --random-output-len 100 \
-            --num-prompts 32 \
-            --ignore-eos \
-            --percentile-metrics ttft,tpot,itl,e2el \
-            --save-result \
-            --result-filename output/vllm_result.json \
-            "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
-            2>&1 | tee ${FILE_BENCHMARK_LOG}
-
           # `vllm bench serve` exits 0 even when individual requests fail (a crashed
           # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
           # require EVERY request to complete successfully.
@@ -631,101 +722,139 @@ jobs:
             exit 1
           fi
           echo "✅ All $expected requests completed successfully"
-      - name: 📐 Run structured output benchmark
-        if: ${{ matrix.test-group.structured-output }}
+
+      - name: 🧠 Run coherence guard (verbatim echo)
+        if: ${{ matrix.test-group.coherence-test }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         run: |
-          if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
-            ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
-          else
-            ADDITIONAL_BENCHMARK_ARGS=()
-          fi
+          # Coherence guard: the other CI steps only check structural/throughput
+          # properties (request completion, structured-output schema). A backend
+          # regression that corrupts the forward pass (e.g. a broken on-device
+          # decode trace) still returns deterministic, well-formed-but-garbage
+          # tokens, so those checks pass while the model emits gibberish. Requiring
+          # a verbatim echo of a simple sentence catches that class of bug directly.
+          SENTENCE="The quick brown fox jumps over the lazy dog."
+          curl http://localhost:8000/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "X-User-ID: vllm_test" \
+            -d "{
+              \"model\": \"${{ matrix.test-group.model }}\",
+              \"messages\": [
+                {
+                  \"role\": \"user\",
+                  \"content\": \"Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: $SENTENCE\"
+                }
+              ],
+              \"max_tokens\": 32,
+              \"temperature\": 0.0,
+              \"stream\": false,
+              \"ignore_eos\": false
+          }" \
+          2>&1 | tee ${FILE_COHERENCE_TEST_LOG}
 
-          if [ -n "${{ matrix.test-group.additional-structured-output-args }}" ]; then
-            ADDITIONAL_STRUCTURED_OUTPUT_ARGS=(${{ matrix.test-group.additional-structured-output-args }})
-          else
-            ADDITIONAL_STRUCTURED_OUTPUT_ARGS=()
-          fi
-
-          python3 vllm/benchmarks/benchmark_serving_structured_output.py \
-            --backend vllm \
-            --model ${{ matrix.test-group.model }} \
-            --num-prompts 32 \
-            --percentile-metrics ttft,tpot,itl,e2el \
-            --dataset json-unique \
-            --output-len 1024 \
-            --save-results \
-            --result-filename output/vllm_result_structured.json \
-            "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
-            "${ADDITIONAL_STRUCTURED_OUTPUT_ARGS[@]}" \
-            2>&1 | tee ${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}
-
-          # The benchmark returns zero even if responses are not correct.
-          success_message="correct_rate(%) 100.0"
-          if grep -q "$success_message" "${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}"; then
-            echo "✅ Structured output benchmark completed successfully"
-          else
-            echo "❌ Structured output benchmark failed"
+          # A model that cannot reproduce a simple sentence verbatim is not
+          # generating coherent text.
+          if ! grep -qF "$SENTENCE" "${FILE_COHERENCE_TEST_LOG}"; then
+            echo "❌ Coherence guard failed: model did not echo the sentence verbatim (likely gibberish from a corrupted forward pass)."
             echo "Check out the server log in a step below."
             exit 1
           fi
+          echo "✅ Coherence guard passed: verbatim echo found"
+
+      - name: 📐 Run structured output benchmark
+        if: ${{ matrix.test-group.structured-output }}
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
+          run: |
+            if [ -n "${{ matrix.test-group.additional-benchmark-args }}" ]; then
+              ADDITIONAL_BENCHMARK_ARGS=(${{ matrix.test-group.additional-benchmark-args }})
+            else
+              ADDITIONAL_BENCHMARK_ARGS=()
+            fi
+
+            if [ -n "${{ matrix.test-group.additional-structured-output-args }}" ]; then
+              ADDITIONAL_STRUCTURED_OUTPUT_ARGS=(${{ matrix.test-group.additional-structured-output-args }})
+            else
+              ADDITIONAL_STRUCTURED_OUTPUT_ARGS=()
+            fi
+
+            python3 vllm/benchmarks/benchmark_serving_structured_output.py \
+              --backend vllm \
+              --model ${{ matrix.test-group.model }} \
+              --num-prompts 32 \
+              --percentile-metrics ttft,tpot,itl,e2el \
+              --dataset json-unique \
+              --output-len 1024 \
+              --save-results \
+              --result-filename output/vllm_result_structured.json \
+              "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
+              "${ADDITIONAL_STRUCTURED_OUTPUT_ARGS[@]}"
+
+            # The benchmark exits 0 even when responses are wrong; gate on the
+            # saved correct_rate(%), which must be a perfect 100.0. Reading the
+            # result file (not the log) keeps this race-free under the wrapper.
+            python3 -c "import json, sys; sys.exit(0 if float(json.load(open('output/vllm_result_structured.json'))['correct_rate(%)']) == 100.0 else 1)" \
+              || { echo '❌ Structured output failed (correct_rate(%) != 100.0)'; exit 1; }
+            echo '✅ Structured output passed'
 
       - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
-        run: |
-          curl http://localhost:8000/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -H "X-User-ID: vllm_test" \
-            -d '{
-              "model": "${{ matrix.test-group.model }}",
-              "messages": [
-                {
-                  "role": "user",
-                  "content": [
-                    {
-                      "type": "text",
-                      "text": "Describe this image in 50 words."
-                    },
-                    {
-                      "type": "image_url",
-                      "image_url": {
-                        "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_MULTIMODAL_TEST_LOG }}
+          run: |
+            resp=$(curl -sS http://localhost:8000/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "X-User-ID: vllm_test" \
+              -d '{
+                "model": "${{ matrix.test-group.model }}",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Describe this image in 50 words."
+                      },
+                      {
+                        "type": "image_url",
+                        "image_url": {
+                          "url": "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/cats.jpeg"
+                        }
                       }
-                    }
-                  ]
-                }
-              ],
-              "max_tokens": 512,
-              "temperature": 0.0,
-              "top_p": 0.9,
-              "top_k": 10,
-              "repetition_penalty": 1.0,
-              "stream": false,
-              "ignore_eos": false
-          }' \
-          2>&1 | tee ${FILE_MULTIMODAL_TEST_LOG}
-
-          # If the test fails, the response will not contain the expected word
-          keyword="cat"
-          if ! grep -q -i "$keyword" "${FILE_MULTIMODAL_TEST_LOG}"; then
-            echo "❌ The keyword \"$keyword\" not found in the response"
-            echo "Check out the server log in a step below."
-            exit 1
-          fi
+                    ]
+                  }
+                ],
+                "max_tokens": 512,
+                "temperature": 0.0,
+                "top_p": 0.9,
+                "top_k": 10,
+                "repetition_penalty": 1.0,
+                "stream": false,
+                "ignore_eos": false
+            }')
+            echo "$resp"
+            # cats.jpeg: a correct description mentions a cat, so its absence
+            # means the model or image pipeline misbehaved. Grep the captured
+            # response (not the log) to stay race-free under the wrapper.
+            grep -qi cat <<<"$resp" || { echo '❌ keyword "cat" not found in multimodal response'; exit 1; }
+            echo '✅ Multimodal response describes a cat'
       - name: 🧪 Run sampling tests
         if: ${{ matrix.test-group.sampling-tests }}
         timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
-        run: |
-          {
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: ${{ env.FILE_SAMPLING_TESTS_LOG }}
+          run: |
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
             if [ -n "$FILTER" ]; then
               pytest vllm/plugins/vllm-tt-plugin/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             else
               pytest vllm/plugins/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             fi
-          } 2>&1 | tee "${FILE_SAMPLING_TESTS_LOG}"
-          exit "${PIPESTATUS[0]}"
 
       - name: 🧹 Cleanup server process
         if: always()

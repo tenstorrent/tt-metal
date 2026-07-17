@@ -3,9 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "ckernel.h"
 #include "llk_outputs.h"
 #include "llk_pack_common.h"
+#include "llk_sync.h"
+#include "llk_defs.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
@@ -112,7 +115,14 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
+        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+            _llk_sync_advance_dest_section_<ckernel::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
+        }
+    } else {
+        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    }
 }
 
 /**

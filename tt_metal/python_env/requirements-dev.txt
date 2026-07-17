@@ -30,8 +30,16 @@ mypy==1.9.0
 protobuf==5.29.6
 
 # For TT-Transformers Qwen3 support
-transformers == 4.53.0
+transformers == 5.10.2
 huggingface-hub >= 0.30.0
+
+# For Qwen-VL / multimodal demo preprocessing: qwen-vl-utils (process_vision_info for image prompts)
+# and av/pyav (the transformers load_video backend used for video prompts, e.g. qwen36 vision_demo)
+qwen-vl-utils
+av
+
+# For Tracy WASM profiler web GUI server
+websockets==16.0
 
 # testing
 pytest==9.0.3
@@ -39,6 +47,7 @@ pytest-cov==7.0.0
 pytest-timeout==2.4.0
 pytest-split==0.11.0
 pytest-benchmark==5.2.3
+pytest-repeat==0.9.4
 jsbeautifier==1.14.7
 
 datasets>=2.20,<3
@@ -58,7 +67,7 @@ numba>=0.58.1
 librosa==0.10.0
 timm>=1.0.0
 opencv-python-headless==4.8.1.78
-diffusers==0.35.1
+diffusers==0.38.0
 accelerate==1.7.0
 peft==0.18.1
 ftfy==6.1.1
@@ -86,7 +95,7 @@ open_clip_torch==2.26.1 # Required for SDXL accuracy evaluation
 pyyaml>=5.4
 matplotlib
 Pillow==12.2.0
-jupyterlab==4.5.7
+jupyterlab==4.5.9
 ipywidgets==8.1.1
 bokeh==3.8.2
 click==8.1.7
@@ -97,9 +106,6 @@ seaborn==0.13.2
 medpy==0.5.2 # Required for vanilla unet
 kagglehub==0.2.9
 efficientnet-pytorch==0.7.1
-mmcv==2.2.0 # Required for UniAD model
-casadi==3.7.1 # Required for UniAD model
-mmcv-full==1.7.2 #Required for UniAD model
 
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu

@@ -91,8 +91,6 @@ void kernel_main() {
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
 
-    constexpr uint32_t one_tile = 1;
-
 #ifdef FUSE_BIAS
     // in3 mcast args
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -101,7 +99,16 @@ void kernel_main() {
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
 
     constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
-    constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
+    // Use the CB page size (padded to the DRAM alignment by the factory) for DRAM reads
+    // and L1 write strides, NOT the raw tile size. On Blackhole, the DRAM read alignment
+    // is 64B, so a sub-64B tile (e.g. 32B for a (1,16) bf16 bias tile) cannot be read
+    // directly from DRAM, and 32B-strided L1 writes land at non-64B-aligned addresses
+    // that disagree with the 64B-aligned DRAM source. The factory pads the CB page to
+    // 64B; the unpacker still reads the actual 32B tile from the padded page via tile
+    // dims. For tiles already >= dram_alignment (e.g. 32x32 bf16 = 2048B), the page size
+    // equals the tile size, so this is a no-op. Mirrors how in0/in1 readers walk at the
+    // aligned stride.
+    const uint32_t bias_single_tile_size_bytes = get_local_cb_interface(cb_id_in3).fifo_page_size;
     constexpr const uint32_t in3_tile_hw = get_tile_hw(cb_id_in3);
 
 #ifndef BIAS_SHARDED
@@ -167,7 +174,18 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
+    // interleaved in1 CB pages are sized to match (see the program factory). On the plain interleaved
+    // path the NOC reads the unpadded tile of data into each padded slot and tiles are laid out /
+    // multicast at the padded stride. No-op when already aligned. The sharded / DRAM-sharded paths
+    // keep their natural (unpadded) stride.
+    constexpr uint32_t in1_aligned_tile_size_bytes =
+        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
+    constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
+#else
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
+#endif
 
     constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
@@ -181,12 +199,6 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     CircularBuffer cb_in3(cb_id_in3);
 #endif
-#if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
-#ifdef INTERMEDIATE_CB_READ
-    constexpr uint32_t in1_intermediate_cb_index = get_named_compile_time_arg_val("cb_in1_intermediate");
-    CircularBuffer cb_helper(in1_intermediate_cb_index);
-#endif
-#endif
 
 //  READER
 #ifdef IN1_SHARDED
@@ -195,11 +207,14 @@ void kernel_main() {
 #else
     uint32_t l1_write_addr_in1;
 
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+    [[maybe_unused]] const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 #endif  // IN1_SHARDED
 
     //  WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
+    // `s` is only consumed inside the `#ifndef OUT_SHARDED` write path below; mark it used so
+    // sharded builds don't warn (-Wunused-but-set-variable).
+    (void)s;
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
@@ -371,9 +386,6 @@ void kernel_main() {
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         cb_in1.reserve_back(in1_block_num_tiles);
-#ifdef INTERMEDIATE_CB_READ
-                        cb_helper.reserve_back(one_tile);
-#endif  // INTERMEDIATE_CB_READ
                         uint32_t in1_write_offset = 0;
                         uint64_t in1_start_address =
                             cb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
@@ -384,28 +396,14 @@ void kernel_main() {
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in1_block_w; ++w) {
                                 if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
-#ifndef INTERMEDIATE_CB_READ
                                     noc.async_read(
                                         s1,
                                         cb_in1,
                                         in1_single_tile_size_bytes,
                                         {.page_id = in1_tensor_tile_id},
                                         {.offset_bytes = in1_write_offset});
-#else
-                                    noc.async_read(
-                                        s1,
-                                        cb_helper,
-                                        in1_single_tile_size_bytes,
-                                        {.page_id = in1_tensor_tile_id},
-                                        {.offset_bytes = 0});
-                                    noc.async_read_barrier();
-                                    memcpy(
-                                        /*dst=*/reinterpret_cast<void*>(cb_in1.get_write_ptr() + in1_write_offset),
-                                        /*src=*/reinterpret_cast<const void*>(cb_helper.get_write_ptr()),
-                                        /*size=*/in1_single_tile_size_bytes);
-#endif  // INTERMEDIATE_CB_READ
                                 }
-                                in1_write_offset += in1_single_tile_size_bytes;
+                                in1_write_offset += in1_aligned_tile_size_bytes;
                                 in1_tensor_tile_id += in1_tensor_stride_w;
                             }
                             in1_tensor_row_start_tile_id += in1_tensor_stride_h;
@@ -462,12 +460,6 @@ void kernel_main() {
 
 #ifndef IN1_SHARDED
                         cb_in1.push_back(in1_block_num_tiles);
-#ifdef INTERMEDIATE_CB_READ
-                        // Clean up helper CB
-                        cb_helper.push_back(one_tile);
-                        cb_helper.wait_front(one_tile);
-                        cb_helper.pop_front(one_tile);
-#endif  // INTERMEDIATE_CB_READ
 #endif  // IN1_SHARDED
                     }
 #ifdef FUSE_BIAS

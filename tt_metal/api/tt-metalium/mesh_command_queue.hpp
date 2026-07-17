@@ -112,11 +112,23 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         bool blocking) = 0;
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     [[deprecated("Use enqueue_write_shards with distributed::ShardDataTransfer instead.")]]
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         bool blocking);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
     // MeshBuffer Read APIs
     virtual void enqueue_read_mesh_buffer(
@@ -131,11 +143,23 @@ public:
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     [[deprecated("Use enqueue_read_shards with distributed::ShardDataTransfer instead.")]]
     void enqueue_read_shards(
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
     virtual MeshEvent enqueue_record_event(
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
@@ -145,19 +169,9 @@ public:
         const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
     virtual void enqueue_wait_for_event(const MeshEvent& sync_event) = 0;
     virtual void finish(ttsl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
-    virtual void reset_worker_state(
-        bool reset_launch_msg_state,
-        uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data,
-        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) = 0;
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;
-
-    // Internal function.
-    virtual void wait_for_completion(bool) {}
-    // May only be called after wait_for_completion has been called on both command queues on the device.
-    virtual void finish_and_reset_in_use() {}
 };
 
 // Specifies host data to be written to or read from a MeshBuffer shard.
@@ -171,10 +185,22 @@ private:
 
 public:
     explicit ShardDataTransfer(const MeshCoordinate& shard_coord) : shard_coord_(shard_coord) {}
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     explicit ShardDataTransfer(const MeshCommandQueue::ShardDataTransfer& shard_data_transfer) :
         shard_coord_(shard_data_transfer.shard_coord),
         host_data_(shard_data_transfer.host_data),
         region_(shard_data_transfer.region) {}
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
     MeshCoordinate shard_coord() const { return shard_coord_; }
     void* host_data() const { return host_data_; }

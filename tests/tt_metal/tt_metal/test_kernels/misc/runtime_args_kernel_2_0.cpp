@@ -14,6 +14,7 @@
 #include "api/core_local_mem.h"
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
+#include "dev_mem_map.h"
 // TODO FIXME: this build system is ridiculously stupid
 #ifdef COMPILE_FOR_TRISC
 #include "api/compute/tile_move_copy.h"
@@ -22,7 +23,14 @@
 #endif
 
 void kernel_main() {
+    // RESULTS_ADDR is the cached L1 address shared with the host (which reads/writes over the NOC and
+    // must use the cached address). DM cores must reach that same physical memory through the uncached
+    // alias, so add MEM_L1_UNCACHED_BASE here.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    CoreLocalMem<uint32_t> results(RESULTS_ADDR + MEM_L1_UNCACHED_BASE);
+#else
     CoreLocalMem<uint32_t> results(RESULTS_ADDR);
+#endif
     constexpr uint32_t kCommonRTASeparation = 1024;
     uint64_t hartid = 0;
 #ifdef COMPILE_FOR_DM

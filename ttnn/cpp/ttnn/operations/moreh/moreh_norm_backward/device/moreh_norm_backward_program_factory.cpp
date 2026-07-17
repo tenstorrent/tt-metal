@@ -21,7 +21,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -34,7 +34,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) 
 }
 
 ttnn::Shape get_output_grad_shape(
-    const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
+    const Tensor& output_grad, const Tensor& input_grad, const ttsl::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
         return output_grad.logical_shape();
     }
@@ -75,15 +75,15 @@ ProgramDescriptor MorehNormBackwardOperation::create_descriptor(
     const auto& input_grad_shape = input_grad.logical_shape();
     const auto input_grad_rank = input_grad_shape.rank();
 
-    ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
+    ttsl::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     get_tensor_dim(input_grad_dim, input_grad_shape);
     auto output_grad_shape =
         get_output_grad_shape(output_grad, input_grad, operation_attributes.dims, operation_attributes.keepdim);
 
-    ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
+    ttsl::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     get_tensor_dim(output_grad_dim, output_grad_shape);
 
-    ttnn::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
+    ttsl::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
         auto idx = input_grad_rank - 1 - i;
         need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
@@ -249,18 +249,20 @@ ProgramDescriptor MorehNormBackwardOperation::create_descriptor(
         }
 
         // reader
-        KernelDescriptor::CoreRuntimeArgs reader_rt_args{
-            input.buffer()->address(),
-            output.buffer()->address(),
-            output_grad.buffer()->address(),
-            *reinterpret_cast<uint32_t*>(&decimal),
-            num_tiles_per_core,
-            tile_offset};
-        reader_rt_args.insert(reader_rt_args.end(), output_grad_dim.begin(), output_grad_dim.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_grad_dim.begin(), input_grad_dim.end());
-        reader_rt_args.insert(reader_rt_args.end(), need_bcast_dim.begin(), need_bcast_dim.end());
+        // Pass tensor base addresses as Buffer* (not raw ->address()) so the program-cache fast
+        // hit path patches them when these tensors are reallocated across calls.
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(input.buffer());
+        reader_rt_args.push_back(output.buffer());
+        reader_rt_args.push_back(output_grad.buffer());
+        reader_rt_args.push_back(*reinterpret_cast<uint32_t*>(&decimal));
+        reader_rt_args.push_back(num_tiles_per_core);
+        reader_rt_args.push_back(tile_offset);
+        reader_rt_args.append(std::vector<uint32_t>(output_grad_dim.begin(), output_grad_dim.end()));
+        reader_rt_args.append(std::vector<uint32_t>(input_grad_dim.begin(), input_grad_dim.end()));
+        reader_rt_args.append(std::vector<uint32_t>(need_bcast_dim.begin(), need_bcast_dim.end()));
 
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+        reader_desc.emplace_runtime_args(core, reader_rt_args);
 
         // writer
         writer_desc.emplace_runtime_args(core, {input_grad.buffer(), num_tiles_per_core, tile_offset});

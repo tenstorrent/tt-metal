@@ -15,7 +15,7 @@
 //   args::chunk_offset
 // Bindings:
 //   dfb::out               - producer endpoint of this instance's DFB
-//   ta::src_tensor         - shared DRAM in_tensor accessor
+//   tensor::src_tensor     - shared DRAM in_tensor accessor
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -30,7 +30,7 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::out);
     Noc noc;
     const uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(ta::src_tensor);
+    const auto tensor_accessor = TensorAccessor(tensor::src_tensor);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
         const uint32_t page_id = chunk_offset + tile_id;

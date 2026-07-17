@@ -9,6 +9,7 @@
 #define MAX_TREE_REDUCTION_ROUNDS 6
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
@@ -145,9 +146,9 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         } else {
             // Read cur_pos from CB using mailbox-based synchronization (issue #27979).
-            cb_wait_front(cb_cur_pos, 1);
+            CircularBuffer(cb_cur_pos).wait_front(1);
             cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
-            cb_pop_front(cb_cur_pos, 1);
+            CircularBuffer(cb_cur_pos).pop_front(1);
         }
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
@@ -209,6 +210,10 @@ void kernel_main() {
     // We tilize input Q if it is in ROW MAJOR layout
     if constexpr (tilize_q) {
         compute_kernel_hw_startup(cb_q_rm, cb_q_in);
+        // Keep InitAndUninit: the helper picks fast- vs regular-tilize at compile time and its
+        // teardown must match (fast_tilize_uninit vs tilize_uninit). tilize_q with a FULL-tile Q
+        // (use_half_tile==false, e.g. >16 heads) can take the fast-tilize path, so we must not
+        // hand-roll the uninit here.
         compute_kernel_lib::tilize<
             q_chunk_tiles,
             cb_q_rm,
@@ -216,16 +221,27 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
-        mm_init_short(cb_q_in, cb_k_in);
+        matmul_init(cb_q_in, cb_k_in);
+        // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
+        // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
+        // REVERSED (SrcA <- in1 = cb_k_in, num_faces=4), and the per-k_chunk reconfig below is
+        // IGNORE (format-only). Reprogram SrcA/SrcB tile geometry ONCE here for the matmul
+        // operands (is_tile_dim_reconfig_en=true) so K is unpacked with the correct num_faces.
+        // One-time, not per-chunk: nothing after this re-establishes Q's geometry on SrcA (K and V
+        // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
+        // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op
+        // re-assert of num_faces=4.)
+        reconfig_data_format</*to_from_int8=*/false, /*is_tile_dim_reconfig_en=*/true>(cb_k_in, cb_q_in);
     } else {
-        mm_init(cb_q_in, cb_k_in, cb_qk_im);
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
+        matmul_init(cb_q_in, cb_k_in);
     }
-    cb_wait_front(cb_q_in, q_chunk_tiles);
+    CircularBuffer(cb_q_in).wait_front(q_chunk_tiles);
 
     // Wait for block padding mask (generated once by writer, reused every chunk without popping)
     if constexpr (has_block_padding) {
         uint32_t block_pad_mask_tiles = Sq_chunk_t * Sk_chunk_t_dynamic;
-        cb_wait_front(cb_block_pad_mask, block_pad_mask_tiles);
+        CircularBuffer(cb_block_pad_mask).wait_front(block_pad_mask_tiles);
     }
 
     // Define dynamic matmul configs
@@ -420,7 +436,7 @@ void kernel_main() {
                  */
                 sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
                     cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
-                cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                CircularBuffer(cb_qk_im).wait_front(qk_chunk_tiles_dynamic);
 
                 // Reconfig register DF
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
@@ -453,7 +469,7 @@ void kernel_main() {
 
                 // Reconfig register DF
                 reconfig_data_format_srca(cb_out_im);
-                cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
+                CircularBuffer(cb_qk_im).pop_front(qk_chunk_tiles_dynamic);
 
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
@@ -466,7 +482,7 @@ void kernel_main() {
 
                     /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
                     sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                    cb_pop_front(cb_prev_max, Sq_chunk_t);
+                    CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
 
                     /* PREV_SUM *= EXP_MAX_DIFF */
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
@@ -565,8 +581,8 @@ void kernel_main() {
                     // Update prev buffers for next round
                     // PREV_MAX <- CUR_MAX
                     // PREV_SUM <- CUR_SUM
-                    cb_pop_front(cb_prev_max, Sq_chunk_t);
-                    cb_pop_front(cb_m_in, Sq_chunk_t);
+                    CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
+                    CircularBuffer(cb_m_in).pop_front(Sq_chunk_t);
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
@@ -600,7 +616,7 @@ void kernel_main() {
 
                 // exp(sink - m_new)
                 sub_exp_block<scale_fp32>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
-                cb_pop_front(cb_cur_max, Sq_chunk_t);
+                CircularBuffer(cb_cur_max).pop_front(Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
                 add_block_inplace<true>(cb_prev_sum, cb_exp_max_diff_2, Sq_chunk_t);
@@ -622,7 +638,7 @@ void kernel_main() {
             pack_reconfig_data_format(cb_out_final);
 
             // Pop the max buffer that still has data
-            cb_pop_front(cb_prev_max, Sq_chunk_t);
+            CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
@@ -656,5 +672,5 @@ void kernel_main() {
     }
 
     // Free up cb_q_in after Q chunks
-    cb_pop_front(cb_q_in, q_chunk_tiles);
+    CircularBuffer(cb_q_in).pop_front(q_chunk_tiles);
 }

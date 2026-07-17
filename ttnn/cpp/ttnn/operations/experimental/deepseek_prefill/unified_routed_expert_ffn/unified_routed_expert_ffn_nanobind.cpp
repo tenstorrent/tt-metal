@@ -14,6 +14,12 @@
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail {
 
 void bind_unified_routed_expert_ffn(nb::module_& mod) {
+    // Activation variant for the fused routed-expert FFN. Registered before the
+    // function bindings so it can serve as a default kwarg value.
+    nb::enum_<RoutedExpertActivation>(mod, "RoutedExpertActivation")
+        .value("Silu", RoutedExpertActivation::Silu)
+        .value("SwiGluOai", RoutedExpertActivation::SwiGluOai);
+
     ttnn::bind_function<"unified_routed_expert_ffn", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
@@ -54,7 +60,23 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             output (ttnn.Tensor, optional): pre-allocated output buffer.
-                Must match x.dtype() and x.shape().
+                Must match x.dtype() and x.shape() unless expert_region_offsets
+                is set (direct-write mode), in which case it is the larger
+                shared destination buffer.
+            expert_region_offsets (ttnn.Tensor, optional): UINT32
+                per-global-expert region start offsets. When set, the writer
+                places this expert's output directly into ``output`` at
+                start[global_id]/TILE tile-rows (direct-write mode), fusing the
+                ttnn::insert step. Requires ``output`` to be set. Defaults to
+                None (standalone per-expert output, rows start at 0).
+            input_m_tiles (int, optional): this expert's M in tiles. Defaults to
+                x's allocated M. Supply it when x is a shared buffer wider than
+                one expert's region so the op sizes its work to this expert.
+            read_x_at_offset (bool, optional): when True, x is a shared buffer
+                and the reader offsets x reads by expert_region_offsets[global_id]
+                (fusing ttnn::extract). Requires expert_region_offsets. Default False.
+            activation (ttnn.RoutedExpertActivation, optional):
+                Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -69,16 +91,23 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("local_expert_id"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output") = nb::none());
+        nb::arg("output") = nb::none(),
+        nb::arg("expert_region_offsets") = nb::none(),
+        nb::arg("input_m_tiles") = nb::none(),
+        nb::arg("read_x_at_offset") = false,
+        nb::arg("activation") = RoutedExpertActivation::Silu);
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
         MoE-level composite: takes the full dispatched buffer + ALL local
         experts' weights and loops over local experts in C++, launching one
-        ``unified_routed_expert_ffn`` device program per expert wrapped by
-        ``ttnn::extract`` (input slice) and ``ttnn::insert`` (output
-        placement). This is NOT a single fused device op across experts —
+        ``unified_routed_expert_ffn`` device program per expert preceded by
+        ``ttnn::extract`` (input slice). The FFN runs in direct-write mode:
+        its writer places each expert's output straight into the shared
+        output buffer at the expert's region offset, so NO separate
+        ``ttnn::insert`` op (and no per-expert temp-buffer DRAM round-trip)
+        is needed. This is NOT a single fused device op across experts —
         per-expert FFN entries still appear in tt-perf-report.
 
         The unified FFN reads device-resident counts/idx and bounds its
@@ -97,6 +126,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
 
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
+            activation (ttnn.RoutedExpertActivation, optional):
+                Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
 
         Returns:
             ttnn.Tensor: expert outputs, same shape as dispatched_buffer.
@@ -111,7 +142,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_projs").noconvert(),
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("activation") = RoutedExpertActivation::Silu);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

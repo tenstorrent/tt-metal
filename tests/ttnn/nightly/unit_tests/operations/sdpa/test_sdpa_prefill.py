@@ -2029,3 +2029,90 @@ def test_sdpa_with_attention_sink_gpt_oss_prefill_sampled_accuracy(device, dtype
     logger.debug(f"sampled rmse: {rmse}")
     assert rmse < 0.02, f"RMSE {rmse} exceeds threshold 0.02"
     assert out_pass, f"PCC check failed: {out_pcc}"
+
+
+def run_sdpa_noncausal_partial_k_near_uniform(device, sk, d, q_chunk_size=None, k_chunk_size=None):
+    """Issue #47065 (streaming compute, non-causal prefill, Sk % 32 != 0, no mask).
+
+    The streaming path must mask the last (partial) K tile's padding columns even when the chunk
+    has no fully-padded tile (Sk_chunk_t divides valid_Skt, e.g. valid_Skt prime). Otherwise those
+    zero-K padding columns produce score 0 and, under near-uniform attention, get softmax weight
+    exp(-row_max*scale), inflating the denominator while zero-V-padding adds nothing to the
+    numerator. The result is a per-row scale f_q = D_q / (D_q + P_q) on the output. fa_rand hides
+    this (peaked attention means f_q is close to 1), and a uniformly near-uniform input hides it
+    from PCC too because constant f_q is just a global scale, which PCC ignores. The real ViT
+    regime has attention sharpness that *varies across query rows*, so f_q varies and PCC drops.
+    Reproduce that with a per-row sharpness sweep. Pre-fix PCC drops well below 0.999; legacy
+    (fp32_dest_acc_en=True) is fine.
+    """
+    torch.manual_seed(0)
+    b, nh = 1, 4
+    sq = sk
+    scale = 1.0 / math.sqrt(d)
+
+    # Bimodal per-row attention sharpness: half the query rows are near-uniform, so the zero-K
+    # padding columns get near-equal weight and max padding dilution f_q = Sk/padded_Sk. The other
+    # half are sharply peaked (f_q close to 1, no dilution). PCC is scale-invariant, so a
+    # *constant* f_q is invisible to it; the cross-row variance from this split is what makes PCC
+    # collapse.
+    row_sharpness = torch.where(torch.arange(sq) < sq // 2, 0.01, 6.0).reshape(1, 1, sq, 1).float()
+    Q = (torch.randn(b, nh, sq, d) * row_sharpness).bfloat16().float()
+    K = (torch.randn(b, nh, sk, d) * 0.7).bfloat16().float()
+    # Large V outliers so the leaked padding weight on near-uniform rows visibly corrupts the output.
+    V = torch.randn(b, nh, sk, d)
+    V[:, :, ::5, :] *= 50.0
+    V = V.bfloat16().float()
+
+    # Default compute config -> streaming path (fp32_dest_acc_en=False).
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    program_config = None
+    if q_chunk_size is not None:
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=True,
+        )
+
+    tt_Q = ttnn.from_torch(Q, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_K = ttnn.from_torch(K, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_V = ttnn.from_torch(V, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_back = ttnn.transformer.scaled_dot_product_attention(
+        tt_Q,
+        tt_K,
+        tt_V,
+        is_causal=False,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_back = ttnn.to_torch(tt_back)[:, :, :sq, :].float()
+
+    gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, scale=scale)
+
+    out_pass, out_pcc = comp_pcc(gt, tt_back, 0.999)
+    logger.info(f"[sk={sk} d={d}] streaming non-causal partial-K PCC: {out_pcc}")
+    assert out_pass, f"sk={sk} d={d}: streaming SDPA PCC {out_pcc} < 0.999"
+
+
+@pytest.mark.parametrize("d", [64, 128], ids=["d64", "d128"])
+@pytest.mark.parametrize("sk", [33, 65], ids=["sk33", "sk65"])
+def test_sdpa_noncausal_partial_k_near_uniform(device, sk, d):
+    # Default chunking -> Sk_chunk_t == 1, no fully-padded tile: the geometry that regressed in #47065.
+    run_sdpa_noncausal_partial_k_near_uniform(device, sk, d)
+
+
+@pytest.mark.parametrize("d", [64], ids=["d64"])
+@pytest.mark.parametrize("sk", [250], ids=["sk250"])
+def test_sdpa_noncausal_partial_k_reduce_trigger(device, sk, d):
+    # q/k chunk 256 -> Sk_chunk_t == 8 with qkt_subblock_w == 4, which enables the streaming
+    # reduce_trigger (split row-max reduce). sk=250 (valid_Skt=8) divides the chunk evenly, so there
+    # is no fully-padded tile and active_Sk is NOT shrunk, exercising reduce_trigger together with
+    # the partial-tile mask stamp. Coverage for that interaction (the row-max reduce only sets the
+    # softmax stability offset, so the partial mask need not gate the trigger); must stay correct.
+    run_sdpa_noncausal_partial_k_near_uniform(device, sk, d, q_chunk_size=256, k_chunk_size=256)

@@ -133,12 +133,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/ && \
+    mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/ && \
     mkdir -p ${TT_METAL_INFRA_DIR}/tools/triage/
 
 # Copy requirements files maintaining relative path structure for -r includes
 COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/
+COPY /models/tt_dit/utils/vbench-requirements.txt ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/
 COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/
 
 # Install test packages into the existing venv inherited from ci-build-venv-builder.
@@ -155,6 +157,7 @@ RUN export MAKEFLAGS="-j$(nproc)" && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
     uv pip check && \
+    uv pip install --no-deps -r ${TT_METAL_INFRA_DIR}/tt-metal/models/tt_dit/utils/vbench-requirements.txt && \
     uv clean --force
 
 # Export as scratch image with only the venv

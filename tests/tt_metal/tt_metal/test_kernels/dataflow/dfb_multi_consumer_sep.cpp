@@ -5,7 +5,7 @@
 // Single-DFB consumer kernel with a separate DRAM output buffer per DFB (Gap 7).
 //
 // Like dfb_multi_consumer.cpp but each instance writes to its own independent DRAM
-// output buffer (per-instance ta::dst_tensor binding pointing at a per-DFB
+// output buffer (per-instance tensor::dst_tensor binding pointing at a per-DFB
 // OUT_TENSOR_i parameter). Used for TensixDMTest4xDFB_1Sx1S where the host
 // verifies each out_buffer separately.
 //
@@ -14,7 +14,7 @@
 //   args::implicit_sync
 // Bindings:
 //   dfb::in                - consumer endpoint of this instance's DFB
-//   ta::dst_tensor         - this instance's per-DFB DRAM out_tensor accessor
+//   tensor::dst_tensor     - this instance's per-DFB DRAM out_tensor accessor
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -28,7 +28,7 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::in);
     Noc noc;
     const uint32_t entry_size = dfb.get_entry_size();
-    const auto tensor_accessor = TensorAccessor(ta::dst_tensor);
+    const auto tensor_accessor = TensorAccessor(tensor::dst_tensor);
 
     // 1Sx1S sole consumer: pages are sequential starting from 0.
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {

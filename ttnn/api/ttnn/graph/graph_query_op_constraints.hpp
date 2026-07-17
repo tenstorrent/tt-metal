@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <any>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -15,6 +16,7 @@
 #include <tt_stl/reflection.hpp>
 #include <tuple>
 #include <variant>
+#include "ttnn/graph/capture_program_config.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -142,9 +144,17 @@ struct ConstraintQueryResponse {
 
 // Result of the pure, state-threading query. `new_state` is the allocator state
 // after the op's outputs are allocated on top of the caller-supplied initial state.
+// `output_allocations` records each output buffer's placement (one per output). The caller keeps
+// the records of still-live tensors and rebuilds the state via MockAllocatorState::with_allocations;
+// "evicting" a tensor is just dropping its record. Empty on the stateless path (outputs not allocated).
 struct QueryOutput {
     ConstraintQueryResponse response;
     tt::tt_metal::experimental::MockAllocatorState new_state;
+    std::vector<tt::tt_metal::experimental::AllocationRecord> output_allocations;
+    // The program config ttnn auto-selected for the queried op, owned here and holding the op's
+    // concrete config type (e.g. MatmulProgramConfig) for the caller to any_cast. nullopt when no
+    // registered extractor matched. See capture_program_config.hpp.
+    std::optional<std::any> captured_config;
 };
 
 namespace detail {
@@ -262,7 +272,7 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
  * @param device A pointer to a mock MeshDevice used for planning.
  * @param initial_state The caller-owned allocator state to evaluate the op against.
  * @param args The arguments that will be passed to the operation.
- * @return QueryOutput { response, new_state }.
+ * @return QueryOutput { response, new_state, output_allocations, captured_config }.
  */
 template <typename Op, typename... Args>
 QueryOutput query_op_constraints_with_initial_state(
@@ -286,6 +296,15 @@ QueryOutput query_op_constraints_with_initial_state(
     // device teardown (tenstorrent/tt-metal#45646).
     tt::tt_metal::experimental::override_mock_allocator_state(*device, initial_state);
 
+    // Install the passive config-capture listener below the phase captures. Popped via RAII; the
+    // local shared_ptr keeps it alive until this function returns, so take_result() below is valid
+    // regardless of pop order.
+    auto capture_listener = std::make_shared<ProgramConfigCaptureProcessor>(program_config_extractors());
+    tt::tt_metal::GraphTracker::instance().push_processor(capture_listener);
+    struct PopGuard {
+        ~PopGuard() { tt::tt_metal::GraphTracker::instance().pop_processor(); }
+    } pop_guard;
+
     // Phase 1: materialize inputs as weightless handles (address=0, allocator untouched).
     auto transformed_args = [&] {
         auto phase1 = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
@@ -297,13 +316,27 @@ QueryOutput query_op_constraints_with_initial_state(
     try {
         auto outputs = detail::extract_output_tensors(detail::invoke_op(op, transformed_args));
         auto op_trace = phase2.end_graph_capture();
-        // Snapshot while the output buffers are alive (after they are allocated, before they drop).
+        // Snapshot + record output placements while the output buffers are alive (after they are
+        // allocated, before they drop). Each record locates an output in new_state for later eviction.
         auto new_state = tt::tt_metal::experimental::extract_mock_allocator_state(*device);
-        return QueryOutput{detail::build_success_response(op_trace, outputs), std::move(new_state)};
+        std::vector<tt::tt_metal::experimental::AllocationRecord> output_allocations;
+        output_allocations.reserve(outputs.size());
+        for (const auto& output : outputs) {
+            const auto& buffer = output.buffer();
+            output_allocations.push_back({buffer->buffer_type(), buffer->address(), buffer->aligned_size_per_bank()});
+        }
+        return QueryOutput{
+            detail::build_success_response(op_trace, outputs),
+            std::move(new_state),
+            std::move(output_allocations),
+            capture_listener->take_result()};
     } catch (const std::exception& e) {
         log_debug(tt::LogOp, "Error during stateful graph capture: {}", e.what());
         return QueryOutput{
-            detail::error_response(e.what()), tt::tt_metal::experimental::extract_mock_allocator_state(*device)};
+            detail::error_response(e.what()),
+            tt::tt_metal::experimental::extract_mock_allocator_state(*device),
+            {},
+            capture_listener->take_result()};
     }
 }
 

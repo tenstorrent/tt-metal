@@ -8,6 +8,7 @@
 #include <ostream>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
@@ -37,13 +38,15 @@ using namespace tt::tt_fabric;
 
 namespace {
 
-// Helper function to build adjacency graph from row-major mesh connection
-// Always uses LINE connectivity (no wrap-around) with configurable connections per edge
+// Helper function to build adjacency graph from row-major mesh connection.
+// LINE neighbors are always included. When `ring_dims[d]` is true, also wrap both ends of dimension d.
+// Missing `ring_dims` entries are treated as LINE (no wrap). RING wrap is skipped when dim < 3.
 AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
     const std::vector<uint32_t>& instance_ids,
     const std::vector<int32_t>& dims,
     const std::string& grouping_name,
-    uint32_t connections_per_edge) {
+    uint32_t connections_per_edge,
+    const std::vector<bool>& ring_dims = {}) {
     std::map<uint32_t, std::vector<uint32_t>> adj_map;
 
     if (instance_ids.empty() || dims.empty()) {
@@ -51,12 +54,19 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
     }
 
     // Calculate total size
-    int32_t total_size = 1;
+    int64_t total_size = 1;
     for (int32_t dim : dims) {
+        if (dim <= 0) {
+            break;
+        }
         total_size *= dim;
+        if (total_size > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+            total_size = -1;  // signal overflow; comparison below will throw
+            break;
+        }
     }
 
-    if (static_cast<size_t>(total_size) != instance_ids.size()) {
+    if (total_size < 0 || static_cast<size_t>(total_size) != instance_ids.size()) {
         std::string dims_str = "[";
         for (size_t i = 0; i < dims.size(); ++i) {
             if (i > 0) {
@@ -106,26 +116,125 @@ AdjacencyGraph<uint32_t> build_row_major_mesh_graph(
         uint32_t node_id = instance_ids[node_idx];
         std::vector<int32_t> coords = get_coords(node_idx);
 
-        // For each dimension, connect to neighbor
         for (int32_t dim_idx = 0; dim_idx < static_cast<int32_t>(dims.size()); ++dim_idx) {
-            // Connect to neighbor in positive direction
-            if (coords[dim_idx] < dims[dim_idx] - 1) {
-                std::vector<int32_t> neighbor_coords = coords;
-                neighbor_coords[dim_idx]++;
-                uint32_t neighbor_idx = get_index(neighbor_coords);
-                uint32_t neighbor_id = instance_ids[neighbor_idx];
+            const int32_t dim_size = dims[dim_idx];
+            const int32_t coord_val = coords[dim_idx];
+            const bool is_ring =
+                dim_idx < static_cast<int32_t>(ring_dims.size()) && ring_dims[static_cast<size_t>(dim_idx)];
 
-                // Add connections_per_edge edges (bidirectional)
+            auto add_neighbor_coord = [&](int32_t neighbor_coord_val) {
+                std::vector<int32_t> neighbor_coords = coords;
+                neighbor_coords[dim_idx] = neighbor_coord_val;
+                uint32_t neighbor_id = instance_ids[get_index(neighbor_coords)];
                 for (uint32_t conn = 0; conn < connections_per_edge; ++conn) {
                     adj_map[node_id].push_back(neighbor_id);
                     adj_map[neighbor_id].push_back(node_id);
                 }
+            };
+
+            // +direction LINE neighbor (one-sided, matches PGD flatten and main — do not also walk -direction
+            // or each undirected edge is inserted twice and STRICT matching sees 2 channels per edge).
+            if (coord_val < dim_size - 1) {
+                add_neighbor_coord(coord_val + 1);
+            }
+
+            // RING wrap: connect coord 0 to dim-1 (skip dim < 3; bidirectional push covers both ends).
+            if (is_ring && dim_size >= 3 && coord_val == 0) {
+                add_neighbor_coord(dim_size - 1);
             }
         }
     }
 
     return AdjacencyGraph<uint32_t>(adj_map);
 }
+
+struct MgdDeviceTopology {
+    std::vector<int32_t> dims;
+    std::vector<bool> ring_dims;
+};
+
+std::optional<MgdDeviceTopology> get_mgd_instance_device_topology(
+    const MeshGraphDescriptor& mesh_graph_descriptor, const std::string& instance_name) {
+    const auto& instance_ids = mesh_graph_descriptor.instances_by_name(instance_name);
+    if (instance_ids.empty()) {
+        return std::nullopt;
+    }
+    const auto& instance = mesh_graph_descriptor.get_instance(instance_ids[0]);
+
+    const proto::TorusTopology* device_topology = nullptr;
+    if (instance.kind == NodeKind::Mesh) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        if (mesh_desc != nullptr) {
+            device_topology = &mesh_desc->device_topology();
+        }
+    } else if (instance.kind == NodeKind::Switch) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        if (switch_desc != nullptr) {
+            device_topology = &switch_desc->device_topology();
+        }
+    }
+    if (device_topology == nullptr || device_topology->dims().empty()) {
+        return std::nullopt;
+    }
+
+    MgdDeviceTopology topo;
+    topo.dims.assign(device_topology->dims().begin(), device_topology->dims().end());
+    topo.ring_dims.reserve(device_topology->dim_types_size());
+    for (int i = 0; i < device_topology->dim_types_size(); ++i) {
+        topo.ring_dims.push_back(device_topology->dim_types(i) == proto::TorusTopology::RING);
+    }
+    return topo;
+}
+
+GroupingInfo finalize_mesh_grouping_with_device_topology(
+    const GroupingInfo& grouping,
+    const MgdDeviceTopology& device_topo,
+    const std::map<uint32_t, uint32_t>* mgd_to_pgd_nodes = nullptr) {
+    const bool has_ring =
+        std::any_of(device_topo.ring_dims.begin(), device_topo.ring_dims.end(), [](bool is_ring) { return is_ring; });
+    if (!has_ring) {
+        return grouping;
+    }
+
+    int64_t num_nodes = 1;
+    for (int32_t dim : device_topo.dims) {
+        num_nodes *= dim;
+    }
+
+    std::vector<uint32_t> node_ids;
+    node_ids.reserve(static_cast<size_t>(num_nodes));
+    if (mgd_to_pgd_nodes == nullptr) {
+        for (uint32_t i = 0; i < static_cast<uint32_t>(num_nodes); ++i) {
+            node_ids.push_back(i);
+        }
+    } else {
+        for (uint32_t mgd_id = 0; mgd_id < static_cast<uint32_t>(num_nodes); ++mgd_id) {
+            auto it = mgd_to_pgd_nodes->find(mgd_id);
+            TT_FATAL(
+                it != mgd_to_pgd_nodes->end(),
+                "Grouping '{}' is missing topology mapping for MGD node {}",
+                grouping.name,
+                mgd_id);
+            node_ids.push_back(it->second);
+        }
+    }
+
+    GroupingInfo result = grouping;
+    result.adjacency_graph =
+        build_row_major_mesh_graph(node_ids, device_topo.dims, grouping.name, 1, device_topo.ring_dims);
+    // The finalized grouping represents exactly the device-topology nodes. When the source PGD grouping is
+    // larger than the MGD mesh (node_diff > 0, e.g. a 4x8 PGD candidate matched to a 4x4 mesh), it carries a
+    // larger asic_count; reset it to the node count so the grouping stays self-consistent (is_flattened()
+    // stays true and downstream PSD placement does not try to re-flatten an already-flattened mesh).
+    result.asic_count = static_cast<uint32_t>(num_nodes);
+    return result;
+}
+
+struct MeshTopologyMatch {
+    std::string name;
+    size_t idx = 0;
+    MappingResult<uint32_t, uint32_t> mapping;
+};
 
 // Helper function to build adjacency graph from MGD mesh instance's device topology
 // Builds a row-major mesh graph based on the mesh's device_topology dims
@@ -160,11 +269,16 @@ AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
         asic_ids.push_back(i);
     }
 
-    // Build row-major mesh graph representing ASIC-level topology
-    // Always uses LINE connectivity (no wrap-around) and 1 connection per edge
-    auto result = build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
-
-    return result;
+    // Build the graph with the MGD's declared per-dimension topology (RING vs LINE). Using the real wrap
+    // edges is what restricts the match to the correct PGD topology variant: a RING/RING MGD is a torus, so
+    // only the TORUSXY variant contains all its wrap edges and matches, while MESH/TORUSX/TORUSY (missing
+    // some wraps) correctly fail to match. (A LINE-only graph here would embed in every variant.)
+    std::vector<bool> ring_dims;
+    ring_dims.reserve(device_topology.dim_types_size());
+    for (int i = 0; i < device_topology.dim_types_size(); ++i) {
+        ring_dims.push_back(device_topology.dim_types(i) == proto::TorusTopology::RING);
+    }
+    return build_row_major_mesh_graph(asic_ids, device_dims, "", 1, ring_dims);
 }
 
 // Helper function to build adjacency graph from MGD switch instance
@@ -200,11 +314,8 @@ AdjacencyGraph<uint32_t> build_mgd_switch_instance_adjacency(
         asic_ids.push_back(i);
     }
 
-    // Build row-major mesh graph representing ASIC-level topology
-    // Always uses LINE connectivity (no wrap-around) and 1 connection per edge
-    auto result = build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
-
-    return result;
+    // LINE-only graph for topology matching (RING edges are added when groupings are committed).
+    return build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
 }
 
 // Helper function to build adjacency graph from MGD graph instance
@@ -285,7 +396,7 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         required_asics_map[mesh_instance.type][mesh_instance.name] = required_chips;
     }
 
-    // Step 1a: Calculate required ASICs for all switch instances (bottom level)
+    // Step 1b: Calculate required ASICs for all switch instances (bottom level)
     // Switches are treated as MESH type for grouping purposes
     for (GlobalNodeId switch_id : mesh_graph_descriptor.all_switches()) {
         const auto& switch_instance = mesh_graph_descriptor.get_instance(switch_id);
@@ -294,7 +405,7 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         required_asics_map["MESH"][switch_instance.name] = required_chips;
     }
 
-    // Step 1b: Calculate required ASICs for graph instances bottom-up (children before parents)
+    // Step 1c: Calculate required ASICs for graph instances bottom-up (children before parents)
     // Process graphs in topological order by iterating until all are processed
     std::unordered_set<GlobalNodeId> processed_graphs;
     bool progress_made = true;
@@ -489,7 +600,6 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
 
     return mgd_grouping_infos;
 }
-
 }  // namespace tt::tt_fabric
 
 namespace {
@@ -633,6 +743,14 @@ void process_higher_layer_and_recurse(
             auto instance_it = mgd_it->second.find(graph_name);
             if (instance_it != mgd_it->second.end()) {
                 result[mgd_type][graph_name].push_back(instance_it->second);
+                log_info(
+                    tt::LogFabric,
+                    "Physical groupings: Mesh graph descriptor {} '{}': 0 topology match(es), fallback to Mesh graph "
+                    "descriptor: {} ({})",
+                    mgd_type,
+                    graph_name,
+                    instance_it->second.name,
+                    instance_it->second.type);
             }
         }
     }
@@ -665,22 +783,120 @@ void process_higher_layer_and_recurse(
 
 }  // namespace
 
+namespace {
+
+std::set<uint32_t> get_mesh_ids_for_mgd_instance_name(
+    const MeshGraphDescriptor& mesh_graph_descriptor, const std::string& instance_name) {
+    std::set<uint32_t> mesh_ids;
+    const auto& instance_ids = mesh_graph_descriptor.instances_by_name(instance_name);
+    for (const GlobalNodeId global_id : instance_ids) {
+        const auto& instance = mesh_graph_descriptor.get_instance(global_id);
+        if (instance.kind == NodeKind::Mesh || instance.kind == NodeKind::Switch) {
+            mesh_ids.insert(instance.local_id);
+        }
+    }
+    return mesh_ids;
+}
+
+std::set<uint32_t> find_pgd_nodes_at_asic_position(
+    const GroupingInfo& pgd_grouping, const tt::tt_metal::ASICPosition& position) {
+    std::set<uint32_t> pgd_nodes;
+    for (const uint32_t node_id : pgd_grouping.adjacency_graph.get_nodes()) {
+        if (node_id >= pgd_grouping.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = pgd_grouping.items[node_id];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        if (item.tray_id == position.first && item.asic_location == position.second) {
+            pgd_nodes.insert(node_id);
+        }
+    }
+    return pgd_nodes;
+}
+
+// Compose logical chip_id -> PGD slot (TrayID + ASICLocation) from an MGD<->PGD topology match and the PGD
+// grouping's per-node item labels. Called at PGD<->MGD commit time in get_valid_groupings_for_mgd.
+std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_position_from_pgd_match(
+    const GroupingInfo& grouping, const std::map<uint32_t, uint32_t>& mgd_node_to_grouping_node) {
+    std::map<LogicalChipId, tt::tt_metal::ASICPosition> node_to_position;
+    for (const auto& [mgd_node, grouping_node] : mgd_node_to_grouping_node) {
+        if (grouping_node >= grouping.items.size()) {
+            continue;
+        }
+        const GroupingItemInfo& item = grouping.items[grouping_node];
+        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
+            continue;
+        }
+        node_to_position.emplace(mgd_node, tt::tt_metal::ASICPosition{item.tray_id, item.asic_location});
+    }
+    return node_to_position;
+}
+
+std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>> filter_pinnings_for_mesh_ids(
+    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings,
+    const std::set<uint32_t>& applicable_mesh_ids) {
+    if (!pinnings.has_value()) {
+        return std::nullopt;
+    }
+    std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>> filtered;
+    filtered.reserve(pinnings->size());
+    for (const auto& pinning : *pinnings) {
+        if (applicable_mesh_ids.contains(pinning.second.mesh_id.get())) {
+            filtered.push_back(pinning);
+        }
+    }
+    if (filtered.empty()) {
+        return std::nullopt;
+    }
+    return filtered;
+}
+
+// Returns the number of required constraints added (one per MGD node that resolved to >=1 PGD node). May be
+// 0 even when `pinnings` is non-empty (e.g. no pinned ASIC position maps to a PGD node in this grouping); the
+// caller skips that PGD variant when pinnings were required.
+std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
+    MappingConstraints<uint32_t, uint32_t>& constraints,
+    const GroupingInfo& pgd_grouping,
+    const std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>& pinnings) {
+    std::map<uint32_t, std::set<uint32_t>> mgd_node_to_pgd_nodes;
+    for (const auto& [position, fabric_node] : pinnings) {
+        const auto pgd_nodes = find_pgd_nodes_at_asic_position(pgd_grouping, position);
+        if (pgd_nodes.empty()) {
+            continue;
+        }
+        mgd_node_to_pgd_nodes[fabric_node.chip_id].insert(pgd_nodes.begin(), pgd_nodes.end());
+    }
+    std::size_t constraints_added = 0;
+    for (const auto& [mgd_node, pgd_nodes] : mgd_node_to_pgd_nodes) {
+        if (!pgd_nodes.empty()) {
+            constraints.add_required_constraint(mgd_node, pgd_nodes);
+            ++constraints_added;
+        }
+    }
+    return constraints_added;
+}
+
+}  // namespace
+
 namespace tt::tt_fabric {
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
-    return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor);
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings) const {
+    return get_valid_groupings_for_mgd(mesh_graph_descriptor, &physical_system_descriptor, pinnings);
 }
 
 ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     const MeshGraphDescriptor& mesh_graph_descriptor,
-    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor) const {
+    const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
+    const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings) const {
     ValidGroupingsMap result;
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
-    log_info(tt::LogFabric, "Building MGD to GroupingInfo map");
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos =
         PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
@@ -688,7 +904,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     // Map from grouping name to vector of flattened GroupingInfo (supports multiple definitions with same name)
     std::unordered_map<std::string, std::vector<GroupingInfo>> mesh_flat_groupings;
     // Find MESH type groupings across all names
-    log_info(tt::LogFabric, "Finding MESH type groupings across all names");
     bool found_mesh = false;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto mesh_it = type_map.find("MESH");
@@ -708,18 +923,45 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // ===== PHASE 2: Match MESH mgd groupings to MESH groupings =====
     // For each MGD mesh instance, find all valid PGD mesh groupings that can contain it
-    log_info(tt::LogFabric, "Matching MESH mgd groupings to MESH groupings");
     for (const auto& [mgd_instance_key, mgd_mesh_grouping] : mgd_grouping_infos["MESH"]) {
         const std::string& instance_name = mgd_instance_key;  // Use unique instance key (includes mesh_id)
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
         const std::string& instance_type = mgd_grouping_info.type;  // Should be "MESH"
 
+        const std::set<uint32_t> applicable_mesh_ids =
+            get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name);
+        const auto applicable_pinnings = filter_pinnings_for_mesh_ids(pinnings, applicable_mesh_ids);
+
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
 
+        // Cheap necessary-condition prefilter for the (expensive) topology solve. solve_topology_mapping
+        // looks for an injective edge-preserving map of the MGD graph (target) into a PGD variant (global),
+        // so every MGD edge must land on a distinct PGD edge -> |E(PGD)| >= |E(MGD)| is required. A RING/RING
+        // MGD is a full torus (degree 4 everywhere, ~2*N edges) while the MESH/TORUSX/TORUSY variants of the
+        // same grid drop wrap edges, so they have strictly fewer edges and can never contain it. Counting
+        // edges is O(V); the SAT solve it skips is many orders of magnitude slower (seconds per 128-node
+        // candidate), so this eliminates the provably-impossible variants up front instead of solving them.
+        auto count_undirected_edges = [](const AdjacencyGraph<uint32_t>& g) -> size_t {
+            size_t directed = 0;
+            for (uint32_t node : g.get_nodes()) {
+                directed += g.get_neighbors(node).size();
+            }
+            return directed / 2;  // each undirected edge is stored from both endpoints
+        };
+        const size_t required_edges = count_undirected_edges(mgd_grouping_info.adjacency_graph);
+
+        const auto device_topo = get_mgd_instance_device_topology(mesh_graph_descriptor, instance_name);
+
+        auto normalized_dims = [](std::vector<int32_t> dims) {
+            std::sort(dims.begin(), dims.end());
+            return dims;
+        };
+        const std::vector<int32_t> required_grid_dims =
+            device_topo.has_value() ? normalized_dims(device_topo->dims) : std::vector<int32_t>{};
+
         // Group valid candidates by node difference (map is ordered by key ascending)
         // Store (name, index) pairs to handle multiple groupings with same name
-        log_info(tt::LogFabric, "Grouping valid candidates by node difference");
         std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff;
         for (const auto& [name, grouping_infos] : mesh_flat_groupings) {
             for (size_t idx = 0; idx < grouping_infos.size(); ++idx) {
@@ -730,12 +972,11 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
             }
         }
-        log_info(tt::LogFabric, "Found {} valid candidates by node difference", candidates_by_diff.size());
 
         // Process difference levels from closest to farthest; commit only when embedding on PSD succeeds
-        log_info(tt::LogFabric, "Processing difference levels from closest to farthest");
-        std::vector<std::pair<std::string, size_t>> best_matches_topology;
-        std::vector<std::pair<std::string, size_t>> best_matches_psd_placed;
+        std::vector<MeshTopologyMatch> best_matches_topology;
+        std::vector<MeshTopologyMatch> best_matches_psd_placed;
+        size_t last_topology_match_count = 0;
 
         bool committed_pgd_matches = false;
         for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
@@ -744,9 +985,54 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
             for (const auto& [name, idx] : name_idx_pairs) {
                 const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
-                // NOTE: If we ever want to support mixed type topologies, we need to add constraints to match the types
+
+                // Necessary-condition prefilter: a variant with fewer edges than the MGD cannot contain it
+                // (every MGD edge needs a distinct variant edge). Skip without paying for the SAT solve.
+                const size_t variant_edges = count_undirected_edges(grouping_info.adjacency_graph);
+                if (variant_edges < required_edges) {
+                    log_debug(
+                        tt::LogFabric,
+                        "Skipping {} for {}: {} edges < {} MGD edges (cannot contain the topology)",
+                        name,
+                        mgd_grouping_info.name,
+                        variant_edges,
+                        required_edges);
+                    continue;
+                }
+
+                const bool mgd_is_1xN_strip =
+                    device_topo.has_value() && device_topo->dims.size() >= 2 &&
+                    std::any_of(device_topo->dims.begin(), device_topo->dims.end(), [](int32_t d) { return d == 1; });
+
+                // Same ASIC count but different grid factorization (e.g. MGD 1×32 vs PGD 4×8): still allow the
+                // topology solve unless the MGD declares a full 2D grid (both dims > 1).
+                if (node_diff == 0 && !required_grid_dims.empty() &&
+                    grouping_info.flattened_node_grid_dims.size() >= 2 &&
+                    normalized_dims(grouping_info.flattened_node_grid_dims) != required_grid_dims &&
+                    !mgd_is_1xN_strip) {
+                    log_debug(
+                        tt::LogFabric,
+                        "Skipping {} for {}: flattened node grid dims [{},{}] do not match MGD device topology",
+                        name,
+                        mgd_grouping_info.name,
+                        grouping_info.flattened_node_grid_dims[0],
+                        grouping_info.flattened_node_grid_dims[1]);
+                    continue;
+                }
+
                 MappingConstraints<uint32_t, uint32_t> constraints;
-                constraints.add_required_constraint(0, 0);
+                if (applicable_pinnings.has_value()) {
+                    const std::size_t pinning_constraints_added = add_mgd_to_pgd_asic_position_pinning_constraints(
+                        constraints, grouping_info, *applicable_pinnings);
+                    // Ok if no pinning constraints were added, means this grouping might not be best fit
+                    if (pinning_constraints_added == 0) {
+                        continue;
+                    }
+                } else {
+                    // No pinning for this MGD instance: keep the (0,0) anchor so the solve stays constrained
+                    // instead of running unconstrained.
+                    constraints.add_required_constraint(0, 0);
+                }
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
                     mgd_grouping_info.adjacency_graph,
                     grouping_info.adjacency_graph,
@@ -754,9 +1040,9 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     ConnectionValidationMode::STRICT,
                     true);
                 if (mapping_result.success) {
-                    best_matches_topology.emplace_back(name, idx);
+                    best_matches_topology.push_back({name, idx, std::move(mapping_result)});
                 } else {
-                    log_info(
+                    log_debug(
                         tt::LogFabric,
                         "Failed to solve topology mapping for {} and {}, with error: {}",
                         mgd_grouping_info.name,
@@ -765,39 +1051,76 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
             }
 
-            log_debug(
-                tt::LogFabric,
-                "Node-diff {}: {}/{} PGD groupings topology-matched MGD '{}'",
-                node_diff,
-                best_matches_topology.size(),
-                name_idx_pairs.size(),
-                mgd_grouping_info.name);
             if (best_matches_topology.empty()) {
                 continue;
             }
+            last_topology_match_count = best_matches_topology.size();
+
+            // The grouping committed for this MGD mesh is the matched PGD topology variant itself. Each variant
+            // already encodes its own topology (the MESH grid, or RING wrap edges for TORUSX/TORUSY/TORUSXY) and
+            // was pre-filtered by can_map_to_psd during flattening, so we PSD-validate and commit the variant's
+            // own adjacency directly rather than rebuilding it from the MGD device topology. Keeping the PGD
+            // (tray_id, asic_location) slot labels is intentional so find_all_in_psd places on the same graph.
+            auto make_committed_grouping = [&](const MeshTopologyMatch& match) -> GroupingInfo {
+                GroupingInfo committed = mesh_flat_groupings.at(match.name)[match.idx];
+                // The topology solve used the MGD mesh adjacency as target and this PGD variant as global, so
+                // target_to_global is MGD-node -> PGD grouping-node. Compose logical chip_id -> PGD slot pinning
+                // now so downstream consumes it directly without re-deriving the intermediate node pairing.
+                committed.mesh_node_to_asic_position =
+                    compose_mesh_node_to_asic_position_from_pgd_match(committed, match.mapping.target_to_global);
+                return committed;
+            };
+
+            // Prefer the simplest topology that fits: order variants MESH -> TORUSX -> TORUSY -> TORUSXY so the
+            // smallest topology that matches is used. The downstream set-packing solver de-duplicates variants
+            // that cover the same physical ASIC set (find_all_in_psd / solve_for_many_groupings_to_psd), so
+            // committing variants MESH-first means each physical region keeps its MESH form rather than a torus
+            // form, while distinct physical regions (e.g. two tray-pairs for a 2x8) are each committed.
+            auto variant_priority = [&](const MeshTopologyMatch& m) -> int {
+                const std::string& type = mesh_flat_groupings.at(m.name)[m.idx].type;
+                if (type == "MESH") {
+                    return 0;
+                }
+                if (type == "TORUSX") {
+                    return 1;
+                }
+                if (type == "TORUSY") {
+                    return 2;
+                }
+                if (type == "TORUSXY") {
+                    return 3;
+                }
+                return 4;
+            };
+            std::stable_sort(
+                best_matches_topology.begin(),
+                best_matches_topology.end(),
+                [&](const MeshTopologyMatch& a, const MeshTopologyMatch& b) {
+                    return variant_priority(a) < variant_priority(b);
+                });
 
             if (physical_system_descriptor != nullptr) {
-                for (const auto& [name, idx] : best_matches_topology) {
-                    const GroupingInfo& flattened_candidate = mesh_flat_groupings.at(name)[idx];
+                for (const auto& match : best_matches_topology) {
+                    const GroupingInfo committed_candidate = make_committed_grouping(match);
                     std::vector<std::string> psd_errors;
                     const auto mapped_asics =
-                        find_any_in_psd(flattened_candidate, *physical_system_descriptor, psd_errors);
+                        find_any_in_psd(committed_candidate, *physical_system_descriptor, psd_errors);
                     if (!mapped_asics.empty()) {
-                        best_matches_psd_placed.emplace_back(name, idx);
+                        best_matches_psd_placed.push_back(match);
                     } else if (!psd_errors.empty()) {
-                        log_info(
+                        log_debug(
                             tt::LogFabric,
                             "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD under current "
                             "constraints: {}",
-                            flattened_candidate.name,
+                            committed_candidate.name,
                             mgd_grouping_info.name,
                             psd_errors.front());
                     } else {
-                        log_info(
+                        log_debug(
                             tt::LogFabric,
                             "PGD '{}' matched MGD '{}' topologically but could not be placed on PSD (no ASIC embedding "
                             "found)",
-                            flattened_candidate.name,
+                            committed_candidate.name,
                             mgd_grouping_info.name);
                     }
                 }
@@ -806,35 +1129,48 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
             }
 
             if (!best_matches_psd_placed.empty()) {
-                for (const auto& [match_name, match_idx] : best_matches_psd_placed) {
-                    auto lookup_it = mesh_flat_groupings.find(match_name);
-                    if (lookup_it != mesh_flat_groupings.end() && match_idx < lookup_it->second.size()) {
-                        const GroupingInfo& flattened_grouping = lookup_it->second[match_idx];
-                        result[instance_type][instance_name].push_back(flattened_grouping);
+                for (const auto& match : best_matches_psd_placed) {
+                    auto lookup_it = mesh_flat_groupings.find(match.name);
+                    if (lookup_it != mesh_flat_groupings.end() && match.idx < lookup_it->second.size()) {
+                        result[instance_type][instance_name].push_back(make_committed_grouping(match));
                     }
                 }
                 committed_pgd_matches = true;
+                std::string committed_summary;
+                for (size_t i = 0; i < best_matches_psd_placed.size(); ++i) {
+                    const auto& match = best_matches_psd_placed[i];
+                    const auto& grouping = mesh_flat_groupings.at(match.name)[match.idx];
+                    if (i > 0) {
+                        committed_summary += ", ";
+                    }
+                    committed_summary += fmt::format("{} ({})", grouping.name, grouping.type);
+                }
                 log_info(
                     tt::LogFabric,
-                    "Committed {} PGD grouping(s) for {} that topology-match and embed in PSD",
-                    best_matches_psd_placed.size(),
-                    mgd_grouping_info.name);
+                    "Physical groupings: Mesh graph descriptor '{}': {} topology match(es), committed: {}",
+                    mgd_grouping_info.name,
+                    best_matches_topology.size(),
+                    committed_summary);
                 break;
             }
-
-            log_info(
-                tt::LogFabric,
-                "Node-diff {}: {} PGD grouping(s) matched {} topologically but none embed on PSD; trying farther "
-                "difference levels",
-                node_diff,
-                best_matches_topology.size(),
-                mgd_grouping_info.name);
         }
 
         if (!committed_pgd_matches) {
             // No PGD grouping both matched MGD and placed on PSD — use the MGD grouping info itself
-            log_info(tt::LogFabric, "Using MGD mesh grouping for {} (no PSD-viable PGD match)", mgd_grouping_info.name);
-            result[instance_type][instance_name].push_back(mgd_grouping_info);
+            log_info(
+                tt::LogFabric,
+                "Physical groupings: Mesh graph descriptor '{}': {} topology match(es), fallback to Mesh graph "
+                "descriptor: {} ({})",
+                mgd_grouping_info.name,
+                last_topology_match_count,
+                mgd_grouping_info.name,
+                mgd_grouping_info.type);
+            if (device_topo.has_value()) {
+                result[instance_type][instance_name].push_back(
+                    finalize_mesh_grouping_with_device_topology(mgd_grouping_info, *device_topo));
+            } else {
+                result[instance_type][instance_name].push_back(mgd_grouping_info);
+            }
         }
     }
 
@@ -845,7 +1181,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     std::unordered_map<std::string, std::string> known_mappings;
     known_mappings["MESH"] = "MESH";
 
-    log_info(tt::LogFabric, "Matching higher-layer graph mgd groupings to higher-layer groupings");
     for (const auto& [mgd_type, mgd_instances] : mgd_grouping_infos) {
         if (mgd_type == "MESH") {
             continue;
@@ -870,7 +1205,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // Ensure all types and instances from MGD have entries in result
     // Use MGD grouping info if no matches were found
-    log_info(tt::LogFabric, "Ensuring all types and instances from MGD have entries in result");
     for (const auto& [mgd_type, mgd_instances] : mgd_grouping_infos) {
         for (const auto& [instance_name, mgd_grouping_info] : mgd_instances) {
             // If not already present, use the MGD grouping info
@@ -880,8 +1214,28 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         }
     }
 
-    log_info(tt::LogFabric, "Returning valid groupings map");
     return result;
+}
+
+std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_mgd_mesh_groupings_for_placement(
+    const MeshGraphDescriptor& mesh_graph_descriptor) {
+    const auto mgd_grouping_infos = build_mgd_to_grouping_info_map(mesh_graph_descriptor);
+    const auto mesh_it = mgd_grouping_infos.find("MESH");
+    if (mesh_it == mgd_grouping_infos.end()) {
+        return {};
+    }
+
+    std::vector<GroupingInfo> meshes;
+    meshes.reserve(mesh_it->second.size());
+    for (const auto& [instance_name, mgd_grouping] : mesh_it->second) {
+        const auto device_topo = get_mgd_instance_device_topology(mesh_graph_descriptor, instance_name);
+        if (device_topo.has_value()) {
+            meshes.push_back(finalize_mesh_grouping_with_device_topology(mgd_grouping, *device_topo));
+        } else {
+            meshes.push_back(mgd_grouping);
+        }
+    }
+    return meshes;
 }
 
 }  // namespace tt::tt_fabric
@@ -938,16 +1292,12 @@ void configure_pgd_psd_host_alignment_constraints(
 
     const auto [single_group_fits, preferred_globals] =
         ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(all_targets, global_groups);
-    if (single_group_fits) {
-        std::vector<std::set<uint32_t>> target_groups;
-        target_groups.push_back(all_targets);
-        if (constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
-            return;
-        }
-        log_warning(
-            tt::LogFabric,
-            "PGD host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
-    }
+    // Same-host is a PREFERENCE, not a hard requirement. We prefer keeping the whole mesh on one host when it
+    // fits, but must allow cross-host placement when that is the only valid embedding of the requested topology
+    // -- e.g. a 4x4 RING/RING torus that physically spans two galaxies through inter-host links. A required
+    // same-rank constraint here wrongly forbids such legitimate cross-host meshes (it pins all nodes to one
+    // host purely because the node count fits), so a torus that only closes across hosts can never be placed.
+    // Using a preferred constraint keeps single-host meshes on one host while letting cross-host meshes embed.
     if (!preferred_globals.empty()) {
         if (!single_group_fits) {
             log_debug(
@@ -979,12 +1329,15 @@ std::string build_pgd_mapping_failure_message(
         unmapped_count);
 }
 
-// Helper function to solve the topology mapping with pinning constraints from GroupingInfo
-MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
+// Build the MappingConstraints used by PGD→PSD embedding (trait + host alignment).
+// Returns std::nullopt if a required trait constraint cannot be satisfied (e.g. slot count mismatch);
+// `error_out` is set when that happens.
+std::optional<MappingConstraints<uint32_t, AsicID>> build_pgd_to_psd_constraints(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    MappingConstraints<uint32_t, AsicID> initial_constraints = {}) {
+    MappingConstraints<uint32_t, AsicID> initial_constraints,
+    std::string* error_out = nullptr) {
     MappingConstraints<uint32_t, AsicID> constraints = std::move(initial_constraints);
 
     // Set quiet mode to suppress verbose constraint validation messages during PGD solving
@@ -1037,18 +1390,18 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     // Add trait constraints for tray_id and asic_location
     if (!relax_pgd_slot_traits && !target_tray_traits.empty() && !global_tray_traits.empty()) {
         if (!constraints.add_required_trait_constraint<TrayID>(target_tray_traits, global_tray_traits)) {
-            MappingResult<uint32_t, AsicID> failure;
-            failure.success = false;
-            failure.error_message = "Failed to add required trait constraint for tray_id";
-            return failure;
+            if (error_out) {
+                *error_out = "Failed to add required trait constraint for tray_id";
+            }
+            return std::nullopt;
         }
     }
     if (!relax_pgd_slot_traits && !target_location_traits.empty() && !global_location_traits.empty()) {
         if (!constraints.add_required_trait_constraint<ASICLocation>(target_location_traits, global_location_traits)) {
-            MappingResult<uint32_t, AsicID> failure;
-            failure.success = false;
-            failure.error_message = "Failed to add required trait constraint for asic_location";
-            return failure;
+            if (error_out) {
+                *error_out = "Failed to add required trait constraint for asic_location";
+            }
+            return std::nullopt;
         }
     }
 
@@ -1056,8 +1409,165 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     configure_pgd_psd_host_alignment_constraints(
         grouping_info, physical_graph, physical_system_descriptor, constraints);
 
+    return constraints;
+}
+
+// Helper function to solve the topology mapping with pinning constraints from GroupingInfo
+MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    MappingConstraints<uint32_t, AsicID> initial_constraints = {}) {
+    std::string err;
+    auto constraints_opt = build_pgd_to_psd_constraints(
+        grouping_info, physical_graph, physical_system_descriptor, std::move(initial_constraints), &err);
+    if (!constraints_opt) {
+        MappingResult<uint32_t, AsicID> failure;
+        failure.success = false;
+        failure.error_message = std::move(err);
+        return failure;
+    }
     return solve_topology_mapping(
-        grouping_info.adjacency_graph, physical_graph, constraints, ConnectionValidationMode::RELAXED, true);
+        grouping_info.adjacency_graph, physical_graph, *constraints_opt, ConnectionValidationMode::STRICT, true);
+}
+
+// Enumerate up to `max_solutions` distinct image-set placements of `grouping_info` on `physical_graph`.
+// Wraps solve_topology_mapping_n with unique_shapes=true so the solver skips permutations that hit the same ASIC set.
+// Returns the (possibly empty) list of successful MappingResults.
+std::vector<MappingResult<uint32_t, AsicID>> enumerate_distinct_placements_for_grouping(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    size_t max_solutions) {
+    auto constraints_opt =
+        build_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, {}, nullptr);
+    if (!constraints_opt) {
+        return {};
+    }
+    return solve_topology_mapping_n<uint32_t, AsicID>(
+        grouping_info.adjacency_graph,
+        physical_graph,
+        *constraints_opt,
+        max_solutions,
+        ConnectionValidationMode::STRICT,
+        /*quiet_mode=*/true,
+        TopologyMappingSolverEngine::Auto,
+        /*unique_shapes=*/true);
+}
+
+// A single candidate placement considered by the set-packing solver.
+struct PackingCandidate {
+    size_t grouping_idx;             // index into the input groupings vector
+    std::vector<size_t> asic_slots;  // dense ASIC indices (0..universe_size-1) used by this placement
+    MappingResult<uint32_t, AsicID> result;
+    size_t pool_order = 0;  // insertion order into the candidate pool (matches solver enumeration order)
+    size_t host_count = 1;  // distinct hosts spanned by this placement
+};
+
+struct PackingResult {
+    std::vector<PackingCandidate> selected;
+    uint64_t total_weight = 0;
+    bool proven_optimal = false;
+};
+
+// Maximum Weight Set Packing via branch-and-bound.
+// Universe is [0, universe_size); each candidate's weight is asic_slots.size().
+// At each DFS node the upper bound is current_weight + min(free_slots, suffix_weight_sum) — loose but cheap.
+// When the wall-clock budget elapses, the best feasible solution found so far is returned with proven_optimal=false.
+PackingResult solve_set_packing(
+    std::vector<PackingCandidate> candidates, size_t universe_size, std::chrono::milliseconds budget) {
+    PackingResult best;
+    if (candidates.empty() || universe_size == 0) {
+        best.proven_optimal = true;
+        return best;
+    }
+
+    // Prefer heavier placements, then single-host, then earlier solver enumeration (preferred constraints).
+    std::sort(candidates.begin(), candidates.end(), [](const PackingCandidate& a, const PackingCandidate& b) {
+        if (a.asic_slots.size() != b.asic_slots.size()) {
+            return a.asic_slots.size() > b.asic_slots.size();
+        }
+        if (a.host_count != b.host_count) {
+            return a.host_count < b.host_count;
+        }
+        return a.pool_order < b.pool_order;
+    });
+
+    const size_t n = candidates.size();
+    std::vector<uint64_t> suffix_weight(n + 1, 0);
+    for (size_t i = n; i-- > 0;) {
+        suffix_weight[i] = suffix_weight[i + 1] + candidates[i].asic_slots.size();
+    }
+
+    std::vector<bool> used(universe_size, false);
+    size_t free_slots = universe_size;
+    std::vector<size_t> current_path;  // positional indices into `candidates`
+    std::vector<size_t> best_path;     // best feasible found so far
+    uint64_t current_weight = 0;
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    bool timed_out = false;
+
+    std::function<void(size_t)> dfs = [&](size_t i) {
+        if (timed_out) {
+            return;
+        }
+        // Any extension adds at most min(free_slots, sum-of-remaining-weights).
+        const uint64_t bound = current_weight + std::min<uint64_t>(free_slots, suffix_weight[i]);
+        if (bound <= best.total_weight) {
+            return;
+        }
+        if (i == n) {
+            if (current_weight > best.total_weight) {
+                best.total_weight = current_weight;
+                best_path = current_path;
+            }
+            return;
+        }
+        // Cheap deadline check: sample steady_clock periodically.
+        if ((i & 0x3FFu) == 0 && std::chrono::steady_clock::now() > deadline) {
+            timed_out = true;
+            return;
+        }
+
+        const auto& c = candidates[i];
+        bool conflict = false;
+        for (size_t a : c.asic_slots) {
+            if (used[a]) {
+                conflict = true;
+                break;
+            }
+        }
+        if (!conflict) {
+            for (size_t a : c.asic_slots) {
+                used[a] = true;
+            }
+            free_slots -= c.asic_slots.size();
+            current_path.push_back(i);
+            current_weight += c.asic_slots.size();
+
+            dfs(i + 1);
+
+            current_weight -= c.asic_slots.size();
+            current_path.pop_back();
+            free_slots += c.asic_slots.size();
+            for (size_t a : c.asic_slots) {
+                used[a] = false;
+            }
+            if (timed_out) {
+                return;
+            }
+        }
+        dfs(i + 1);
+    };
+
+    dfs(0);
+    best.proven_optimal = !timed_out;
+
+    best.selected.reserve(best_path.size());
+    for (size_t pos : best_path) {
+        best.selected.push_back(std::move(candidates[pos]));
+    }
+    return best;
 }
 
 bool is_flattened(const GroupingInfo& grouping) {
@@ -1070,8 +1580,14 @@ namespace tt::tt_fabric {
 
 // Maximum placements to find before stopping (safeguard against infinite loops).
 constexpr size_t kMaxPlacementsPerRun = 10000;
-// TODO: Optimize constraints for maximum usage
-// https://github.com/tenstorrent/tt-metal/issues/40639
+// Maximum distinct image-set placements enumerated per grouping during heterogeneous packing.
+// Set high enough that practical heterogeneous packings (trait-constrained meshes on ~1000 ASICs) are exhausted,
+// while still capping worst-case enumeration cost. A warning is logged if the cap is hit.
+constexpr size_t kMaxPlacementsPerGrouping = 1024;
+// Wall-clock budget for the set-packing branch-and-bound pass. On expiry the best feasible packing found so far
+// is returned (may be empty or sub-optimal if the solver has not yet found any solution).
+constexpr std::chrono::milliseconds kSetPackingBudget{5000};
+
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -1115,75 +1631,125 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
 
 // Heterogeneous version: pack multiple different grouping types onto the physical graph.
 // Each grouping can have a different topology. ASICs are shared globally - no overlap between any mappings.
-// Returns map from each GroupingInfo to its vector of mapping results.
-// Uses the same constraint pattern as homogeneous: add forbidden constraints after each success.
-// TODO: Look into changing this algoirthm to use simulated annealing
-// https://github.com/tenstorrent/tt-metal/issues/40639
+// Algorithm (enumerate-then-pack):
+//   Phase A — for each grouping, enumerate up to kMaxPlacementsPerGrouping distinct image-set placements
+//             via solve_topology_mapping_n(unique_shapes=true). Identical ASIC sets across groupings are de-duped.
+//   Phase B — Maximum Weight Set Packing via branch-and-bound to pick the disjoint subset that maximizes total
+//             ASIC coverage. Wall-clock-budgeted; returns best feasible solution found on expiry.
+// Returns map from each GroupingInfo* (by address into the input vector) to its vector of selected MappingResults.
 std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>>
 solve_for_many_groupings_to_psd_heterogeneous(
     const std::vector<GroupingInfo>& groupings,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    std::vector<std::vector<MappingResult<uint32_t, AsicID>>> results(groupings.size());
-    MappingConstraints<uint32_t, AsicID> current_constraints;
-
-    std::set<uint32_t> all_target_nodes_union;
-    for (const auto& grouping : groupings) {
-        for (uint32_t n : grouping.adjacency_graph.get_nodes()) {
-            all_target_nodes_union.insert(n);
-        }
+    // Dense ASIC id → index assignment so the set-packing universe is [0, U).
+    std::unordered_map<AsicID, size_t> asic_to_slot;
+    asic_to_slot.reserve(physical_graph.get_nodes().size());
+    for (const AsicID& asic : physical_graph.get_nodes()) {
+        asic_to_slot.emplace(asic, asic_to_slot.size());
     }
+    const size_t universe_size = asic_to_slot.size();
 
-    while (true) {
-        size_t total_results = 0;
-        for (const auto& r : results) {
-            total_results += r.size();
+    // Phase A: enumerate candidates per grouping, de-duplicating identical ASIC sets across groupings.
+    std::vector<PackingCandidate> candidates;
+    std::unordered_set<std::string> seen_sets;  // key = sorted slot indices serialized as bytes
+    size_t pool_order = 0;
+    for (size_t gi = 0; gi < groupings.size(); ++gi) {
+        const auto& grouping = groupings[gi];
+        if (grouping.adjacency_graph.get_nodes().empty()) {
+            continue;
         }
-        if (total_results >= kMaxPlacementsPerRun) {
+        auto placements = enumerate_distinct_placements_for_grouping(
+            grouping, physical_graph, physical_system_descriptor, kMaxPlacementsPerGrouping);
+        log_debug(
+            tt::LogFabric,
+            "Heterogeneous solver: grouping '{}' ({} nodes) enumerated {} distinct image-set placements",
+            grouping.name,
+            grouping.adjacency_graph.get_nodes().size(),
+            placements.size());
+        if (placements.size() == kMaxPlacementsPerGrouping) {
             log_warning(
                 tt::LogFabric,
-                "Heterogeneous solver: hit max placements limit ({}) - stopping to prevent infinite loop",
-                kMaxPlacementsPerRun);
-            break;
+                "Heterogeneous solver: per-grouping enumeration cap hit for grouping '{}' (k={}). "
+                "Set-packing remains optimal over the enumerated pool.",
+                grouping.name,
+                kMaxPlacementsPerGrouping);
         }
-        bool found_any = false;
-        bool overconstrained = false;
-        for (size_t i = 0; const auto& grouping : groupings) {
-            const AdjacencyGraph<uint32_t>& flat_mesh = grouping.adjacency_graph;
-
-            if (flat_mesh.get_nodes().empty()) {
-                ++i;
+        for (auto& placement : placements) {
+            if (!placement.success) {
                 continue;
             }
-
-            MappingResult<uint32_t, AsicID> result = solve_for_one_grouping_to_psd(
-                grouping, physical_graph, physical_system_descriptor, current_constraints);
-
-            if (!result.success) {
-                ++i;
+            std::vector<size_t> slots;
+            slots.reserve(placement.target_to_global.size());
+            for (const auto& [_, asic_id] : placement.target_to_global) {
+                auto it = asic_to_slot.find(asic_id);
+                if (it == asic_to_slot.end()) {
+                    // ASIC not in physical_graph — should not happen, but skip defensively.
+                    slots.clear();
+                    break;
+                }
+                slots.push_back(it->second);
+            }
+            if (slots.empty()) {
                 continue;
             }
+            std::sort(slots.begin(), slots.end());
+            slots.erase(std::unique(slots.begin(), slots.end()), slots.end());
 
-            std::set<AsicID> used_asic_ids;
-            for (const auto& [_, asic_id] : result.target_to_global) {
-                used_asic_ids.insert(asic_id);
+            std::string key(reinterpret_cast<const char*>(slots.data()), slots.size() * sizeof(size_t));
+            if (!seen_sets.insert(std::move(key)).second) {
+                continue;
             }
-
-            results[i].push_back(result);
-            found_any = true;
-
-            TT_FATAL(
-                current_constraints.add_forbidden_constraint(all_target_nodes_union, used_asic_ids),
-                "Internal Error: Heterogeneous solver: failed to add forbidden constraints to all groupings");
-        }
-        if (!found_any || overconstrained) {
-            break;
+            std::set<std::string> hosts;
+            for (const auto& [_, asic_id] : placement.target_to_global) {
+                hosts.insert(physical_system_descriptor.get_host_name_for_asic(asic_id));
+            }
+            PackingCandidate candidate{gi, std::move(slots), std::move(placement)};
+            candidate.pool_order = pool_order++;
+            candidate.host_count = hosts.size();
+            candidates.push_back(std::move(candidate));
         }
     }
 
+    // Pre-seed the result map so every grouping has an entry, even if no placement is selected.
     std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>> map_result;
-    for (size_t i = 0; i < groupings.size(); ++i) {
-        map_result.emplace(&groupings[i], std::move(results[i]));
+    for (const auto& grouping : groupings) {
+        map_result.emplace(&grouping, std::vector<MappingResult<uint32_t, AsicID>>{});
+    }
+    if (candidates.empty()) {
+        return map_result;
+    }
+
+    // Phase B: pick the disjoint subset with maximum total weight.
+    log_debug(
+        tt::LogFabric,
+        "Heterogeneous solver: pool has {} unique candidates over {} ASICs; running set-packing",
+        candidates.size(),
+        universe_size);
+    PackingResult packed = solve_set_packing(std::move(candidates), universe_size, kSetPackingBudget);
+    log_debug(
+        tt::LogFabric,
+        "Heterogeneous solver: set-packing chose {} placements, total weight {} (proven_optimal={})",
+        packed.selected.size(),
+        packed.total_weight,
+        packed.proven_optimal);
+    if (!packed.proven_optimal) {
+        log_warning(
+            tt::LogFabric,
+            "Heterogeneous solver: set-packing wall-clock budget ({}ms) expired; returning best feasible "
+            "({} placements, {} ASICs covered).",
+            kSetPackingBudget.count(),
+            packed.selected.size(),
+            packed.total_weight);
+    }
+    if (packed.selected.size() > kMaxPlacementsPerRun) {
+        log_warning(
+            tt::LogFabric, "Heterogeneous solver: hit max placements limit ({}) - truncating", kMaxPlacementsPerRun);
+        packed.selected.resize(kMaxPlacementsPerRun);
+    }
+
+    for (auto& sel : packed.selected) {
+        map_result[&groupings[sel.grouping_idx]].push_back(std::move(sel.result));
     }
     return map_result;
 }
@@ -1301,36 +1867,20 @@ std::unordered_set<tt::tt_metal::AsicID> PhysicalGroupingDescriptor::find_any_in
     return asic_ids;
 }
 
-std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
-    std::vector<std::string> errors;
-    return find_all_in_psd(groupings, physical_system_descriptor, errors);
-}
-
-std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
-    const std::vector<GroupingInfo>& groupings,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const AdjacencyGraph<AsicID>& physical_graph) const {
-    std::vector<std::string> errors;
-    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors);
-}
-
-std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
-    const std::vector<GroupingInfo>& groupings,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    std::vector<std::string>& errors_out) const {
     PhysicalAdjacencyMap physical_adj_map = build_flat_adjacency_map_from_psd(physical_system_descriptor);
     AdjacencyGraph<AsicID> physical_graph(physical_adj_map);
-    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph, errors_out);
+    return find_all_in_psd(groupings, physical_system_descriptor, physical_graph);
 }
 
 // NOTE this only works on flattenable meshes right now
-std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor::find_all_in_psd(
+std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
     const std::vector<GroupingInfo>& groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const AdjacencyGraph<AsicID>& physical_graph,
-    std::vector<std::string>& errors_out) const {
+    std::vector<std::string>* errors_out) const {
     // Flatten each grouping and collect all non-empty flat meshes
     std::vector<GroupingInfo> flat_meshes;
     for (const auto& grouping : groupings) {
@@ -1343,7 +1893,7 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
         }
     }
 
-    std::vector<std::unordered_set<tt::tt_metal::AsicID>> all_asic_id_sets;
+    std::vector<PsdPlacement> placements;
     if (!flat_meshes.empty()) {
         auto heterogeneous_results =
             solve_for_many_groupings_to_psd_heterogeneous(flat_meshes, physical_graph, physical_system_descriptor);
@@ -1355,26 +1905,30 @@ std::vector<std::unordered_set<tt::tt_metal::AsicID>> PhysicalGroupingDescriptor
             }
             for (const auto& result : it->second) {
                 if (result.success) {
-                    std::unordered_set<tt::tt_metal::AsicID> asic_set;
-                    for (const auto& [target_node, asic_id] : result.target_to_global) {
-                        asic_set.insert(asic_id);
+                    PsdPlacement placement;
+                    // Downstream only needs the pinning map, so copy just that (not the whole GroupingInfo,
+                    // which would deep-copy items + adjacency_graph per placement).
+                    placement.mesh_node_to_asic_position = grouping.mesh_node_to_asic_position;
+                    // result.target_to_global is this grouping's node id -> AsicID; collect just the ASICs
+                    // for the placement footprint (order unused, so iterate it directly).
+                    for (const auto& [grouping_node, asic_id] : result.target_to_global) {
+                        placement.asics.insert(asic_id);
                     }
-                    all_asic_id_sets.push_back(std::move(asic_set));
+                    placements.push_back(std::move(placement));
                 }
             }
         }
     }
 
-    // If no mappings found, populate errors
-    if (all_asic_id_sets.empty()) {
+    if (errors_out != nullptr && placements.empty()) {
         if (flat_meshes.empty()) {
-            errors_out.push_back("No valid groupings found for PSD");
+            errors_out->push_back("No valid groupings found for PSD");
         } else {
             const GroupingInfo& mesh_to_use = flat_meshes.back();
             auto result = solve_for_one_grouping_to_psd(mesh_to_use, physical_graph, physical_system_descriptor);
-            errors_out.push_back(build_pgd_mapping_failure_message(mesh_to_use.name, mesh_to_use, result));
+            errors_out->push_back(build_pgd_mapping_failure_message(mesh_to_use.name, mesh_to_use, result));
         }
     }
 
-    return all_asic_id_sets;
+    return placements;
 }

@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "impl/context/context_types.hpp"
 #include "impl/jit_server/jit_compile_rpc_client.hpp"
 #include "impl/jit_server/types.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -41,7 +42,8 @@ struct KernelCompileDescriptor {
 // program.cpp prepares descriptors; this class owns all mechanics.
 class RemoteCompileCoordinator {
 public:
-    RemoteCompileCoordinator(std::vector<std::string> endpoints, ChipId device_build_id, uint64_t build_key);
+    RemoteCompileCoordinator(
+        std::vector<std::string> endpoints, ContextId context_id, ChipId device_build_id, uint64_t build_key);
     ~RemoteCompileCoordinator();
 
     RemoteCompileCoordinator(const RemoteCompileCoordinator&) = delete;
@@ -65,6 +67,7 @@ private:
 
     // -- Configuration (immutable after construction) --
     std::vector<std::string> endpoints_;
+    ContextId context_id_;
     ChipId device_build_id_;
     uint64_t build_key_;
 

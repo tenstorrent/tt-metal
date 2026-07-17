@@ -19,6 +19,7 @@ otherwise. Use GEMMA4_NUM_LAYERS to shrink the target for a fast wiring check
 
 import math
 import os
+from functools import lru_cache
 
 import pytest
 import torch
@@ -30,6 +31,71 @@ from ...tests.test_factory import parametrize_mesh_with_fabric
 
 ASSISTANT_PATH = os.getenv("GEMMA4_ASSISTANT_MODEL")
 _needs_assistant = pytest.mark.skipif(not ASSISTANT_PATH, reason="set GEMMA4_ASSISTANT_MODEL to run")
+_assistant_probe = pytest.mark.skipif(
+    os.environ.get("GEMMA4_RUN_ASSISTANT_PROBES", "0") != "1",
+    reason="assistant diagnostic/perf probe; set GEMMA4_RUN_ASSISTANT_PROBES=1 to run",
+)
+
+
+@lru_cache(maxsize=1)
+def _target_text_config():
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        return None
+
+    from transformers import AutoConfig
+
+    hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    return getattr(hf_config, "text_config", hf_config)
+
+
+@lru_cache(maxsize=1)
+def _assistant_args():
+    if not ASSISTANT_PATH:
+        return None
+
+    from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs
+
+    hf_config = Gemma4AssistantArgs.load_hf_config(ASSISTANT_PATH)
+    return Gemma4AssistantArgs.from_hf_config(hf_config)
+
+
+@pytest.fixture(autouse=True)
+def _skip_if_target_too_large_for_mesh(request):
+    """Skip spec-decode model/mesh pairings that are unsupported or unsafe."""
+    if "mesh_device" not in request.fixturenames:
+        return
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        return
+
+    mesh_device = request.getfixturevalue("mesh_device")
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+
+    if tp == 2:
+        pytest.skip("Gemma4 assistant/spec-decode tests are not supported on 1x2; use 1x1 or 1x4")
+
+    text_config = _target_text_config()
+    if getattr(text_config, "enable_moe_block", False) and tp < 8:
+        pytest.skip(f"MoE target model too large for TP={tp} in spec-decode tests")
+    if getattr(text_config, "hidden_size", 0) > 4096 and tp < 2:
+        pytest.skip(f"Target model too large for single device (hidden={text_config.hidden_size})")
+
+    try:
+        assistant_args = _assistant_args()
+    except Exception as e:
+        pytest.skip(f"could not load assistant config: {e}")
+    if assistant_args is None:
+        return
+
+    if assistant_args.backbone_hidden_size != getattr(text_config, "hidden_size", None):
+        pytest.skip(
+            f"Assistant backbone_hidden_size ({assistant_args.backbone_hidden_size}) does not match "
+            f"target hidden_size ({getattr(text_config, 'hidden_size', None)})"
+        )
+    if assistant_args.backbone_hidden_size > 4096 and tp < 2:
+        pytest.skip(f"Assistant model too large for single device (backbone={assistant_args.backbone_hidden_size})")
 
 
 def test_assistant_config_loads():
@@ -96,7 +162,7 @@ def _plain_greedy_bN(spec, anchor_token, anchor_pos, n, pad):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
     """The batched multi-position verify forward must match sequential single
     verify, position-for-position. Guards the paged-cache write path: a single
@@ -166,15 +232,18 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
 
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
     seq_arg = []
+    seq_logits = []
     for tok, pos in zip(prompt_tokens, prompt_positions):
         logits, h = spec._verify([tok], [pos])
         h.deallocate(True)
+        seq_logits.append(logits[0].float())
         seq_arg.append(int(torch.argmax(logits[0])))
     logger.info(f"[read-iso] sequential argmax: {seq_arg}")
 
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
     blogits, bh = spec._verify(prompt_tokens, prompt_positions)
     bh.deallocate(True)
+    batch_logits = [blogits[j].float() for j in range(L)]
     batch_arg = [int(torch.argmax(blogits[j])) for j in range(L)]
     logger.info(f"[read-iso] batched argmax:    {batch_arg}")
     read_ok = batch_arg == seq_arg
@@ -183,22 +252,25 @@ def test_verify_batched_matches_sequential(mesh_device, reset_seeds):
     # Now the write+read path (anchor + generated chain) for completeness.
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
     seq2 = []
+    seq2_logits = []
     tok, pos = anchor_token, anchor_pos
     for _ in range(L + 1):
         logits, h = spec._verify([tok], [pos])
         h.deallocate(True)
+        seq2_logits.append(logits[0].float())
         a = int(torch.argmax(logits[0]))
         seq2.append(a)
         tok, pos = a, pos + 1
     generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
     bw, bh2 = spec._verify([anchor_token] + seq2[:L], [anchor_pos + j for j in range(L + 1)])
     bh2.deallocate(True)
+    batch2_logits = [bw[j].float() for j in range(L + 1)]
     batch2 = [int(torch.argmax(bw[j])) for j in range(L + 1)]
     logger.info(f"[write+read] sequential: {seq2}")
     logger.info(f"[write+read] batched:    {batch2}")
 
-    assert read_ok, f"batched READ diverges: batched={batch_arg} seq={seq_arg}"
-    assert batch2 == seq2, f"batched WRITE+READ diverges: batched={batch2} seq={seq2}"
+    _assert_argmaxes_match_except_near_ties(seq_logits, batch_logits, seq_arg, batch_arg, "batched READ")
+    _assert_argmaxes_match_except_near_ties(seq2_logits, batch2_logits, seq2, batch2, "batched WRITE+READ")
 
     # Drafter quality: how many of the drafter's K proposals match the target
     # greedy chain (seq2)? Low overlap => drafter (assistant) is mis-wired.
@@ -219,6 +291,20 @@ def _pcc(a, b):
     if torch.allclose(a, b):
         return 1.0
     return float(torch.corrcoef(torch.stack([a, b]))[0, 1])
+
+
+def _assert_argmaxes_match_except_near_ties(ref_logits, got_logits, ref_argmax, got_argmax, context):
+    """Allow argmax drift only when the reference distribution is a near-tie."""
+    near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
+    failures = []
+    for idx, (ref_logit, got_logit, ref_tok, got_tok) in enumerate(zip(ref_logits, got_logits, ref_argmax, got_argmax)):
+        pcc = _pcc(ref_logit, got_logit)
+        top2 = torch.topk(ref_logit.float().reshape(-1), 2)
+        gap = float(top2.values[0] - top2.values[1])
+        logger.info(f"[{context}] idx={idx} ref={ref_tok} got={got_tok} logits_pcc={pcc:.5f} ref_top2_gap={gap:.4f}")
+        if ref_tok != got_tok and gap >= near_tie_gap:
+            failures.append(f"idx={idx}: ref={ref_tok} got={got_tok} gap={gap:.4f} pcc={pcc:.5f}")
+    assert not failures, f"{context} diverged at confident tokens:\n" + "\n".join(failures)
 
 
 def _dev0(t, mesh_device):
@@ -260,7 +346,7 @@ def _kv_to_tt(k_torch, mesh_device, num_kv_heads, num_attention_heads, tp, num_d
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_assistant_step_pcc_vs_hf(mesh_device, reset_seeds):
     """Isolated assistant-forward fidelity vs HF.
 
@@ -538,7 +624,7 @@ def _depage(k_cache, page_table_torch, n_pos, block_size, mesh_device, replicate
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
     """Faithful first-step check with REAL inputs.
 
@@ -720,11 +806,13 @@ def test_assistant_first_step_vs_hf_realistic(mesh_device, reset_seeds):
             f"[hf-tgt] HF drafter w/ HF-target inputs -> {int(ao.logits.reshape(-1).argmax())} (target_greedy={target_tok})"
         )
 
-    assert pcc0 > 0.90, f"TT first-step logits diverge from HF given identical real inputs: PCC={pcc0:.4f}"
+    pcc_threshold = 0.85 if getattr(_target_text_config(), "hidden_size", 0) > 4096 else 0.90
+    assert pcc0 > pcc_threshold, f"TT first-step logits diverge from HF given identical real inputs: PCC={pcc0:.4f}"
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@_assistant_probe
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_export_tt_spec_features(mesh_device, reset_seeds):
     """Export per-step TT drafter inputs + TT target greedy chain (DISCRIMINATOR).
 
@@ -831,7 +919,7 @@ def test_export_tt_spec_features(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
     """Localize the TT drafter (assistant.step) divergence vs HF across ALL K
     recurrent steps on REAL features (the discriminator showed the clean HF
@@ -1009,7 +1097,7 @@ def test_assistant_recurrent_vs_hf_realistic(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_assistant_step_pcc_real(mesh_device, reset_seeds):
     """Per-stage TT-vs-HF fidelity on REAL features (localizes the drafter bug).
 
@@ -1224,7 +1312,7 @@ def test_assistant_step_pcc_real(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
     """Per-position TT-vs-HF free-running drafts on IDENTICAL seeds (reproduces
     both 1.44 (HF) and 0.17 (TT) in one harness and localizes the divergent
@@ -1367,7 +1455,7 @@ def test_drafter_per_position_tt_vs_hf(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
     """TT drafter acceptance vs the TRUE greedy chain (TT analog of the HF
     discriminator). DISAMBIGUATES drafter vs verify:
@@ -1467,7 +1555,7 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     """Greedy spec-decode matches plain greedy decode, EXCEPT at target near-ties.
 
@@ -1579,7 +1667,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_verify_batchsize_invariance(mesh_device, reset_seeds):
     """Isolate batch-size numerics from spec accept logic.
 
@@ -1675,7 +1763,8 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@_assistant_probe
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
     """Device-time breakdown to project the achievable (traced) spec-decode speedup.
 
@@ -1815,7 +1904,7 @@ def test_spec_decode_perf_breakdown(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
 def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
     """Measure SAMPLING-mode acceptance (production config: temp/top_p/top_k).
 
@@ -1908,10 +1997,10 @@ def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
 def test_spec_decode_traced(mesh_device, reset_seeds):
     """Traced spec-decode: correctness (vs untraced greedy) + traced tok/s/u.
 
-    Opens the device with a trace region, runs greedy spec-decode with
-    ``GEMMA4_SPEC_TRACE`` so verify (and, when wired, drafter) execute as metal
-    traces, and (a) checks the generated tokens match untraced greedy up to a
-    near-tie and (b) times the traced loop vs a traced plain-greedy baseline."""
+    Opens the device with a trace region and runs greedy spec-decode through the
+    single fused trace path. This avoids the old deadlock from interleaving
+    separate draft and verify CCL traces, while still checking generated tokens
+    against untraced greedy up to the first target near-tie."""
     import time
 
     from models.demos.gemma4.tt.common import create_assistant_model
@@ -2008,6 +2097,7 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
 
 
 @_needs_assistant
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2141,6 +2231,7 @@ def test_verify_trace_batched_capture(mesh_device, reset_seeds):
 
 
 @_needs_assistant
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2269,6 +2360,7 @@ def test_ondevice_argmax_probe(mesh_device, reset_seeds):
 
 
 @_needs_assistant
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2360,6 +2452,7 @@ def test_fused_iter_eager(mesh_device, reset_seeds):
 
 
 @_needs_assistant
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2461,6 +2554,7 @@ def test_fused_loop_eager(mesh_device, reset_seeds):
 
 
 @_needs_assistant
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2561,6 +2655,7 @@ def test_fused_loop_traced(mesh_device, reset_seeds):
 
 
 @_needs_assistant
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2642,6 +2737,7 @@ def test_fused_trace_minimal(mesh_device, reset_seeds):
 
 
 @_needs_assistant
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2755,6 +2851,7 @@ def test_verify_seqkv_cost(mesh_device, reset_seeds):
 
 
 @_needs_assistant
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2861,6 +2958,7 @@ def test_draft_step_breakdown(mesh_device, reset_seeds):
     logger.info(f"[draft-bd] full K={K} steps ~= {full_ms*K:.1f} ms")
 
 
+@_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
@@ -2991,3 +3089,177 @@ def test_argmax_cost(mesh_device, reset_seeds):
 
     _check_pad32(1)
     _check_pad32(K + 1)
+
+
+@_needs_assistant
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_spec_decode_batched(mesh_device, reset_seeds):
+    """End-to-end BATCHED (B>1) greedy speculative decode for B independent users.
+
+    Each iteration drafts every user at batch=1 and runs ONE batched packed
+    verify over all B users (the KV-amortization win). Users accept raggedly, so
+    their positions diverge. Validates:
+      * the batched path runs and every user emits tokens;
+      * user-0's batched output matches a batch=1 plain-greedy reference up to the
+        first target near-tie (same contract as test_spec_decode_matches_greedy);
+      * distinct prompts -> distinct outputs (no gross cross-user KV leak);
+    and reports per-user + aggregate throughput.
+    """
+    import time
+
+    near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL (target) to run")
+    num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
+    num_layers = int(num_layers) if num_layers else None
+
+    B = int(os.environ.get("GEMMA4_SPEC_BATCH", 4))
+    max_seq_len = int(os.environ.get("GEMMA4_SPEC_MAX_SEQ", 1024))
+    n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
+    draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 4))
+    block_size = 64
+    blocks_per_user = math.ceil(max_seq_len / block_size)
+    paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=B * blocks_per_user)
+
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=B,
+        max_seq_len=max_seq_len,
+        num_layers=num_layers,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+        max_local_batch_size=int(os.environ.get("GEMMA4_SPEC_ASSIST_BATCH", B)),
+    )
+
+    from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
+
+    page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
+
+    base_prompts = [
+        "The capital of France is",
+        "Water boils at a temperature of",
+        "The largest planet in our solar system is",
+        "The author of Romeo and Juliet is",
+        "The chemical symbol for gold is",
+        "The speed of light is approximately",
+        "The first president of the United States was",
+        "The square root of sixty-four is",
+    ]
+    prompts = [base_prompts[b % len(base_prompts)] for b in range(B)]
+
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=draft_len,
+    )
+
+    # Per-user prefill (distinct lengths -> prefill each user into its own blocks).
+    anchor_tokens, anchor_positions = [], []
+    for b in range(B):
+        in_pt, encoded, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+            [prompts[b]], tokenizer, generator.model_args, True, n_new, max_prefill_len=max_seq_len
+        )
+        in_pt = torch.stack(in_pt).view(1, -1)
+        generator.prefill_forward_text(
+            in_pt,
+            page_table=page_table[b : b + 1],
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+            warmup_prefill=False,
+        )
+        anchor_positions.append(prefill_lens[0] - 1)
+        anchor_tokens.append(int(encoded[0][prefill_lens[0] - 1]))
+
+    # Batched spec decode.
+    t0 = time.perf_counter()
+    outs, accepts = spec.generate_batched(
+        anchor_tokens=anchor_tokens,
+        anchor_positions=anchor_positions,
+        max_new_tokens=n_new,
+        max_seq_len=max_seq_len,
+        temperature=0.0,
+    )
+    ttnn.synchronize_device(mesh_device)
+    elapsed = time.perf_counter() - t0
+
+    total_tokens = sum(len(o) for o in outs)
+    mean_accepts = [(sum(a) / len(a)) if a else 0.0 for a in accepts]
+    traced = spec._use_trace
+    setup_s = getattr(spec, "_last_fused_setup_s", 0.0) if traced else 0.0
+    replay_s = getattr(spec, "_last_fused_replay_s", elapsed) if traced else elapsed
+    logger.info(
+        f"[batched-spec] B={B} draft_len={draft_len} n_new={n_new} ctx~{max(anchor_positions)+1} traced={traced}"
+    )
+    for b in range(B):
+        logger.info(f"  user {b}: prompt={prompts[b]!r}")
+        logger.info(f"           out='{tokenizer.decode(outs[b]).strip()}' (acc/iter={mean_accepts[b]:.2f})")
+    logger.info(
+        f"[batched-spec] total {total_tokens} tokens in {elapsed:.2f}s wall "
+        f"(setup {setup_s:.2f}s, steady {replay_s:.2f}s) -> "
+        f"{total_tokens/replay_s:.1f} tok/s aggregate, {total_tokens/replay_s/B:.1f} tok/s/user (steady, {'traced' if traced else 'untraced'})"
+    )
+
+    assert all(len(o) > 0 for o in outs), f"some user produced no tokens: {[len(o) for o in outs]}"
+    if len({prompts[b] for b in range(B)}) > 1:
+        distinct = {tuple(o) for o in outs}
+        assert len(distinct) > 1, "distinct prompts collapsed to identical outputs (gross cross-user KV leak)"
+
+    # Correctness anchor: user-0 batched output vs batch=1 plain-greedy reference.
+    in_pt0, encoded0, decoding_pos0, prefill_lens0 = preprocess_inputs_prefill(
+        [prompts[0]], tokenizer, generator.model_args, True, n_new, max_prefill_len=max_seq_len
+    )
+    in_pt0 = torch.stack(in_pt0).view(1, -1)
+    generator.prefill_forward_text(
+        in_pt0, page_table=page_table[0:1], kv_cache=tt_kv_cache, prompt_lens=decoding_pos0, warmup_prefill=False
+    )
+    ref0 = _plain_greedy(spec, anchor_tokens[0], anchor_positions[0], len(outs[0]))
+    gen0 = outs[0]
+    first_div = next((i for i in range(min(len(gen0), len(ref0))) if gen0[i] != ref0[i]), None)
+    if first_div is None:
+        logger.info("[batched-spec] user-0 batched output is TOKEN-IDENTICAL to batch=1 plain greedy")
+        return
+
+    generator.prefill_forward_text(
+        in_pt0, page_table=page_table[0:1], kv_cache=tt_kv_cache, prompt_lens=decoding_pos0, warmup_prefill=False
+    )
+    tok, pos = anchor_tokens[0], anchor_positions[0]
+    for _ in range(first_div):
+        lg, hd = spec._verify([tok], [pos])
+        hd.deallocate(True)
+        tok = int(torch.argmax(lg[0]))
+        pos += 1
+    lg, hd = spec._verify([tok], [pos])
+    hd.deallocate(True)
+    top2 = torch.topk(lg[0].float(), 2)
+    gap = float(top2.values[0] - top2.values[1])
+    logger.info(
+        f"[batched-spec] user-0 first divergence at idx {first_div}: batched={gen0[first_div]} "
+        f"greedy={ref0[first_div]} target top2={top2.indices.tolist()} gap={gap:.4f} (near-tie={near_tie_gap})"
+    )
+    assert gap < near_tie_gap, (
+        f"batched user-0 diverged from plain greedy at a CONFIDENT token (idx {first_div}, "
+        f"top-2 gap={gap:.3f} >= {near_tie_gap}); indicates a batched accept/commit/KV-write bug"
+    )

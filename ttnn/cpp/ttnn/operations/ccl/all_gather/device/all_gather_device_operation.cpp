@@ -33,7 +33,9 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.num_links);
     TT_FATAL(
         operation_attributes.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
-        "Worker cores used by links are parallelized over rows");
+        "Worker cores used by {} links are parallelized over {} rows",
+        operation_attributes.num_links,
+        input_tensor.device()->compute_with_storage_grid_size().y);
 
     // Page alignment check
     auto page_size = input_tensor.buffer()->page_size();
@@ -138,31 +140,6 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
         input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
 }
 
-ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.subdevice_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
-    }
-    return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.num_links,
-        operation_attributes.cluster_axis,
-        operation_attributes.memory_config,
-        operation_attributes.topology,
-        operation_attributes.chunks_per_sync,
-        operation_attributes.num_workers_per_link,
-        operation_attributes.num_buffers_per_channel,
-        operation_attributes.use_l1_small_for_semaphores,
-        subdevice_core_range_set,
-        tensor_args);
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherDeviceOperation::tensor_return_value_t>
 AllGatherDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -173,8 +150,9 @@ AllGatherDeviceOperation::create_op_performance_model(
     // hardware ceiling: the minimum time given the physical topology and
     // memory bandwidth, independent of any particular algorithm.
     //
-    // Performance is bounded by:
-    //   ideal_cycles = max(DRAM_bw_cycles, fabric_bw_cycles) + pipeline_latency
+    // Performance is the slowest single resource, not the sum: a pipelined
+    // collective overlaps fill/drain with streaming, so the terms compete (max):
+    //   ideal_cycles = max(DRAM_bw, fabric_bw, DRAM_fill/drain, fabric_fill)
     //
     // --- Fabric term (bottleneck link analysis) ---
     //
@@ -205,10 +183,10 @@ AllGatherDeviceOperation::create_op_performance_model(
 
     // Architecture and clock detection
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
-    float clock_rate_ghz = 1.0f;
+    int clock_rate_mhz = 1000;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
-        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
+        clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
     }
 
     // Data size: bytes each device contributes
@@ -216,32 +194,33 @@ AllGatherDeviceOperation::create_op_performance_model(
 
     const uint32_t N = ::ttnn::ccl::get_topological_dimension(input_tensor, args.cluster_axis);
     const uint32_t num_links = args.num_links;
-    double fabric_time_ns = 0.0f;
+    uint64_t bottleneck_bytes = 0;  // bottleneck bytes through the most-loaded link
+    uint32_t num_hops = 0;          // collective diameter (hops)
     if (N <= 1) {
         // Single device: no fabric communication
-        fabric_time_ns = 0.0f;
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
         // Ring topology: bisection cuts 2 links, so each direction carries
         // at most half the total data. Bottleneck per direction = ceil((N-1)*S/2).
-        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * input_size_bytes, 2);
-        fabric_time_ns =
-            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, tt::div_up(N - 1, 2u));
+        bottleneck_bytes = tt::div_up((N - 1) * input_size_bytes, 2);
+        num_hops = tt::div_up(N - 1, 2u);
     } else {
         // Line/Linear/Mesh topology: edge device has one link and must
         // receive all (N-1) slices through it.
-        const uint64_t bottleneck_bytes = (N - 1) * input_size_bytes;
-        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, N - 1);
+        bottleneck_bytes = (N - 1) * input_size_bytes;
+        num_hops = N - 1;
     }
 
-    // Convert fabric time (ns) to device clock cycles.
-    // clock_rate_ghz cycles/ns * ns = cycles
-    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+    // Fabric gives two floors: bandwidth (bottleneck-link bytes / BW) and fill latency
+    // (first chunk crossing the diameter). Fill overlaps streaming rather than preceding
+    // it, so it joins the max() below instead of adding on.
+    const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
+        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
 
     // --- Local DRAM bandwidth ceiling (first-principles) ---
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
     // Roofline assumes all device compute cores drive DRAM concurrently
-    // (hardware max parallelism). BW competes with fabric (max); latencies
-    // are additive (pipeline fill/drain).
+    // (hardware max parallelism). DRAM bandwidth and its read/write fill-drain
+    // latency are two more floors; all of these overlap, so all feed the final max().
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const uint32_t read_page_size = input_tensor.buffer()->page_size();
@@ -265,7 +244,12 @@ AllGatherDeviceOperation::create_op_performance_model(
 
     const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
     const int pipeline_latency_cycles = static_cast<int>(read_latency_cycles + write_latency_cycles);
-    const int ideal_dev_clock_cycles = std::max(local_bw_cycles, fabric_cycles) + pipeline_latency_cycles;
+    // Optimistic floor = the slowest single resource, not the sum. A pipelined collective overlaps
+    // fill/drain with streaming (nearer chunks arrive while the farthest is still in flight): the
+    // throughput ceiling and the fill/drain floor each take a max, then those two compete (not +).
+    const int throughput_cycles = std::max(local_bw_cycles, fabric_bw_cycles);
+    const int fill_cycles = std::max(pipeline_latency_cycles, fabric_fill_cycles);
+    const int ideal_dev_clock_cycles = std::max(throughput_cycles, fill_cycles);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);

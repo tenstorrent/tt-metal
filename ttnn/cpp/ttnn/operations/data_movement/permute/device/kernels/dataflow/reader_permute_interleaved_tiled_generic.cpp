@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -88,7 +88,8 @@ void kernel_main() {
     uint32_t start_block = get_arg_val<uint32_t>(1);
     uint32_t end_block = get_arg_val<uint32_t>(2);
 
-    uint32_t input_shape[RANK], dims[RANK];
+    uint32_t input_shape[RANK];
+    [[maybe_unused]] uint32_t dims[RANK];
     for (uint32_t i = 0; i < RANK; i++) {
         input_shape[i] = get_arg_val<uint32_t>(i + 3);
         dims[i] = get_arg_val<uint32_t>(i + RANK + 3);
@@ -183,9 +184,9 @@ void kernel_main() {
         }
 
         // Reserve a slot in the circular buffer, get L1 pointer
-        CircularBuffer cb(tt::CBIndex::c_0);
-        cb.reserve_back(1);
-        uint32_t src_buffer_l1_addr = cb.get_write_ptr();
+        DataflowBuffer dfb(tt::CBIndex::c_0);
+        dfb.reserve_back(1);
+        uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 
         // --------------------------------------------------------------------
         // 5.1) Async read for [x_start..x_end)
@@ -216,7 +217,7 @@ void kernel_main() {
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
                             tt::data_movement::common::tt_memmove<true, false, false, SUBTILE_LINE_BYTES>(
-                                l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
+                                noc, l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
                         } else {
                             CoreLocalMem<uint32_t> dst(l1_col_base + cb_w_offset);
                             noc.async_read(
@@ -278,7 +279,7 @@ void kernel_main() {
 
         // Wait for reads to complete, push the tile
         noc.async_read_barrier();
-        cb.push_back(1);
+        dfb.push_back(1);
     }
 
     // ------------------------------------------------------------------------
@@ -286,10 +287,10 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     if constexpr (needs_y_padding) {
         // We store one chunk of padding in c_3
-        CircularBuffer cb3(tt::CBIndex::c_3);
-        cb3.reserve_back(1);
-        uint32_t l1_write_addr = cb3.get_write_ptr();
+        DataflowBuffer dfb3(tt::CBIndex::c_3);
+        dfb3.reserve_back(1);
+        uint32_t l1_write_addr = dfb3.get_write_ptr();
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
-        cb3.push_back(1);
+        dfb3.push_back(1);
     }
 }

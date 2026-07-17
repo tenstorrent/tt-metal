@@ -26,12 +26,20 @@
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
+#include "tt_metal/test_utils/mx_utils.hpp"
 
 namespace tt::tt_metal {
 
 using std::vector;
 
 namespace unit_tests::llk::mxfp6_typecast {
+
+using tt::test_utils::bf16_to_floats;
+using tt::test_utils::check_pcc;
+using tt::test_utils::is_close;
+using tt::test_utils::is_close_vectors;
+using tt::test_utils::mx_to_floats;
+using tt::test_utils::pack_as_mx_tiles;
 
 // Run a datacopy kernel with different input/output formats. Mirrors the
 // MXFP4 typecast harness — for Quasar, data is moved via DataflowBuffers
@@ -94,9 +102,7 @@ static vector<uint32_t> run_mxfp6_typecast(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -110,9 +116,7 @@ static vector<uint32_t> run_mxfp6_typecast(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -134,8 +138,8 @@ static vector<uint32_t> run_mxfp6_typecast(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
+            experimental::ComputeGen2Config{
+                .enable_32_bit_dest = fp32_dest_acc_en,
             },
     };
 
@@ -162,21 +166,21 @@ static vector<uint32_t> run_mxfp6_typecast(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_buffer->address()},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", src_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_buffer->address()},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", src_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_buffer->address()},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", dst_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_buffer->address()},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", dst_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -214,9 +218,8 @@ static vector<uint32_t> create_random_vector_of_mxfp6(
         v = dist(rng) + offset;
     }
 
-    auto span = tt::stl::make_const_span(fp32_vec);
-    vector<uint32_t> packed = (fmt == tt::DataFormat::MxFp6R) ? pack_as_mxfp6r_tiles(span, /*row_major_input=*/true)
-                                                              : pack_as_mxfp6p_tiles(span, /*row_major_input=*/true);
+    auto span = ttsl::make_const_span(fp32_vec);
+    vector<uint32_t> packed = pack_as_mx_tiles(fmt, span, /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
         "MXFP6 packed size {} bytes does not match expected {} bytes",
@@ -224,29 +227,6 @@ static vector<uint32_t> create_random_vector_of_mxfp6(
         num_tiles * single_tile_size);
     return packed;
 }
-
-// --- Format-to-float unpackers ---
-
-static vector<float> mxfp6_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
-    auto span = tt::stl::make_const_span(packed);
-    if (fmt == tt::DataFormat::MxFp6R) {
-        return unpack_mxfp6r_tiles_into_float_vec(span, /*row_major_output=*/false);
-    }
-    if (fmt == tt::DataFormat::MxFp6P) {
-        return unpack_mxfp6p_tiles_into_float_vec(span, /*row_major_output=*/false);
-    }
-    TT_THROW("Unsupported MXFP6 DataFormat: {}", static_cast<int>(fmt));
-}
-
-// bf16_to_floats lives in tt_metal/test_utils/float8_utils.hpp;
-// expose it in this namespace so mxfp6_tc::bf16_to_floats call sites resolve.
-using tt::test_utils::bf16_to_floats;
-
-// --- Validation ---
-// is_close_vectors + is_close + check_pcc all live in tt_metal/test_utils/comparison.hpp.
-using tt::test_utils::check_pcc;
-using tt::test_utils::is_close;
-using tt::test_utils::is_close_vectors;
 
 // --- Random typecast test driver ---
 //
@@ -270,7 +250,7 @@ static vector<uint32_t> generate_random_src(tt::DataFormat fmt, uint32_t num_til
 static vector<float> unpack_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
     switch (fmt) {
         case tt::DataFormat::MxFp6R:
-        case tt::DataFormat::MxFp6P: return mxfp6_to_floats(fmt, packed);
+        case tt::DataFormat::MxFp6P: return mx_to_floats(fmt, packed);
         case tt::DataFormat::Float16_b: return bf16_to_floats(packed);
         default: TT_THROW("Unsupported DataFormat for mxfp6 unpack: {}", static_cast<int>(fmt));
     }
@@ -315,7 +295,7 @@ struct TileLayout {
 static TileLayout get_mxfp6_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mxfp6r_tiles(tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp6R, ttsl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;  // 1024 bytes / 4 bytes per word = 256 words
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};
@@ -845,7 +825,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6RSpecialCases) {
 
     // Block 3: +1.0 sanity — verify each element round-trips exactly via the
     // float unpack (1.0 is exactly representable in MXFP6R with scale=2^0).
-    auto floats = mxfp6_tc::mxfp6_to_floats(tt::DataFormat::MxFp6R, result);
+    auto floats = mxfp6_tc::mx_to_floats(tt::DataFormat::MxFp6R, result);
     for (uint32_t i = 96; i < 128; ++i) {
         EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
     }
@@ -902,7 +882,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp6PSpecialCases) {
             << "block 2 (BF16 -Inf in) elem " << i << " cls=" << static_cast<int>(cls);
     }
 
-    auto floats = mxfp6_tc::mxfp6_to_floats(tt::DataFormat::MxFp6P, result);
+    auto floats = mxfp6_tc::mx_to_floats(tt::DataFormat::MxFp6P, result);
     for (uint32_t i = 96; i < 128; ++i) {
         EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
     }

@@ -10,11 +10,26 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
     ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
+}
+
+# Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
+# mapped to the values the matmul fused-activation path expects. Each value is
+# either a bare ttnn.UnaryOpType (no parameter) or a (UnaryOpType, param0)
+# tuple; nanobind's implicit caster handles both forms.
+#
+# "gelu":      exact GELU (piecewise CDF / FP32 erf), matches F.gelu().
+# "gelu_fast": 6-segment piecewise-linear LUT, ~1% absolute error vs exact GELU.
+# "gelu_tanh": FP32 tanh approximation, matches F.gelu(approximate="tanh").
+_FUSED_GELU_VARIANTS = {
+    "gelu": (ttnn.UnaryOpType.GELU, False),
+    "gelu_fast": (ttnn.UnaryOpType.GELU, True),
+    "gelu_tanh": ttnn.UnaryOpType.GELU_TANH,
 }
 
 
@@ -23,25 +38,30 @@ class Linear(Module):
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, dtype=ttnn.bfloat16, mesh_device=None):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        bias=True,
+        activation_fn=None,
+        dtype=ttnn.bfloat16,
+        mesh_device=None,
+    ):
         super().__init__()
 
         self.in_features = in_features
         self.out_features = out_features
-        if activation_fn == "swiglu":
-            # Double out features for fused swiglu activation
-            self.out_features = self.out_features * 2
         self.activation_fn = activation_fn
         self.fused_activation_fn = None
-        if self.activation_fn == "gelu":
+        self.fuse_swiglu = False
+        if self.activation_fn == "swiglu":
+            # Double out features for the packed [gate|up] swiglu weight.
+            self.out_features = self.out_features * 2
+            self.fuse_swiglu = True
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        elif self.activation_fn == "gelu_tanh":
-            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
-            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
-            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
+        elif self.activation_fn in _FUSED_GELU_VARIANTS:
+            self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
         self.mesh_device = mesh_device
 
         """
@@ -61,9 +81,15 @@ class Linear(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
-            state["weight"] = state["weight"].transpose(0, 1)
+            weight = state["weight"].transpose(0, 1)
+            if self.fuse_swiglu:
+                weight = prepare_for_fused_swiglu(weight, ndev=1)
+            state["weight"] = weight
         if "bias" in state:
-            state["bias"] = state["bias"].reshape(1, -1)
+            bias = state["bias"].reshape(1, -1)
+            if self.fuse_swiglu:
+                bias = prepare_for_fused_swiglu(bias, ndev=1)
+            state["bias"] = bias
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
@@ -77,6 +103,7 @@ class Linear(Module):
             fused_activation=self.fused_activation_fn,
             compute_kernel_config=compute_kernel_config or self.compute_config,
             dtype=dtype,
+            fuse_swiglu=self.fuse_swiglu,
         )
 
         return _apply_activation_fn(output, self.activation_fn)
@@ -85,27 +112,15 @@ class Linear(Module):
 def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
     # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
+    # Use a single scratch buffer that's reused for every intermediate so peak
+    # DRAM is x + scratch (2x input) instead of the naive 6x.
     sqrt_2 = math.sqrt(2.0)
-    x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
-    erf_x = ttnn.erf(x_div_sqrt2)
-    one_plus_erf = ttnn.add(erf_x, 1.0)
-    x_times_bracket = ttnn.multiply(x, one_plus_erf)
-    return ttnn.multiply(x_times_bracket, 0.5)
-
-
-def gelu_tanh_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
-    # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-    #
-    # This unfused decomposition is higher precision than the fused tanh-LUT GELU
-    # (ttnn.UnaryOpType.GELU, True) and recovers PCC on the Wan text embedder, which
-    # regressed when the fused LUT path was introduced. The cube is computed as
-    # x * x * x (instead of ttnn.pow(x, 3)) to keep the decomposition explicit and
-    # avoid relying on ttnn.pow implementation details.
-    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
-    x_cubed = ttnn.multiply(ttnn.multiply(x, x), x)
-    inner = ttnn.add(x, ttnn.multiply(x_cubed, 0.044715))
-    one_plus_tanh = ttnn.add(ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi)), 1.0)
-    return ttnn.multiply(ttnn.multiply(x, one_plus_tanh), 0.5)
+    tmp = ttnn.multiply(x, 1.0 / sqrt_2)
+    ttnn.erf(tmp, output_tensor=tmp)
+    ttnn.add(tmp, 1.0, output_tensor=tmp)
+    ttnn.multiply(x, tmp, output_tensor=tmp)
+    ttnn.multiply(tmp, 0.5, output_tensor=tmp)
+    return tmp
 
 
 class ColParallelLinear(Module):
@@ -131,20 +146,18 @@ class ColParallelLinear(Module):
         self.in_features = in_features
         self.out_features = out_features
         self.activation_fn = activation_fn
-        if activation_fn == "swiglu":
-            # Double out features for fused swiglu activation
-            self.out_features = self.out_features * 2
         self.fused_activation_fn = None
-        if self.activation_fn == "gelu":
+        self.fuse_swiglu = False
+        if self.activation_fn == "swiglu":
+            # Double out features for the packed [gate|up] swiglu weight.
+            self.out_features = self.out_features * 2
+            self.fuse_swiglu = True
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        elif self.activation_fn == "gelu_tanh":
-            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
-            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
-            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
+        elif self.activation_fn in _FUSED_GELU_VARIANTS:
+            self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
         self.mesh_device = mesh_device
+
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
@@ -191,12 +204,16 @@ class ColParallelLinear(Module):
 
         if weight is not None:
             weight = weight.transpose(0, 1)
-            if self.activation_fn == "swiglu":
+            if self.fuse_swiglu:
+                weight = prepare_for_fused_swiglu(weight, ndev=self._mesh_axis_size)
+            elif self.activation_fn == "swiglu":
                 weight = permute_for_swiglu(weight)
             state["weight"] = weight
         if bias is not None:
             bias = bias.reshape(1, -1)
-            if self.activation_fn == "swiglu":
+            if self.fuse_swiglu:
+                bias = prepare_for_fused_swiglu(bias, ndev=self._mesh_axis_size)
+            elif self.activation_fn == "swiglu":
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
@@ -248,6 +265,7 @@ class ColParallelLinear(Module):
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
                 dtype=dtype,
+                fuse_swiglu=self.fuse_swiglu,
             )
 
             if self.chunks is not None and (self.chunks > 1):
@@ -270,18 +288,21 @@ class ColParallelLinear(Module):
                     compute_kernel_config=compute_kernel_config or self.compute_config,
                     config=matmul_config,
                     dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
-
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=self.bias.data if self.bias is not None else None,
-                config=matmul_config,
-                fused_activation=self.fused_activation_fn,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                dtype=dtype,
-            )
+            else:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+                output = ttnn.experimental.minimal_matmul(
+                    input_tensor=x,
+                    weight_tensor=weight,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
+                )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -464,8 +485,6 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return ttnn.silu(t)
     if activation_fn == "decomposed_gelu":
         return gelu_decomposed(t)
-    if activation_fn == "gelu_tanh_decomposed":
-        return gelu_tanh_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":
@@ -493,3 +512,38 @@ def prepare_chunked_linear_output(
     if bias is not None:
         bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
         state[bias_key] = bias
+
+
+# =====================================================================
+# LoRA-aware Linear variants
+# =====================================================================
+# Each variant subclasses its base Linear + the shared LoRAMixin. The
+# mixin offers two execution paths chosen at construction with
+# ``lora_mode`` ('fuse' or 'runtime'); see models/tt_dit/layers/lora.py
+# for the trade-offs.
+from .lora import LoRAMixin  # noqa: E402
+
+
+class LoRALinear(LoRAMixin, Linear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._init_lora_state(mode=lora_mode)
+
+
+class LoRAColParallelLinear(LoRAMixin, ColParallelLinear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._init_lora_state(mode=lora_mode)
+
+
+class LoRARowParallelLinear(LoRAMixin, RowParallelLinear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Runtime mode lacks the all-reduce the base path performs via
+        # reduce_scatter, so the delta and base sit at different mesh layouts.
+        if lora_mode == "runtime" and self._mesh_axis_size > 1:
+            raise ValueError(
+                "LoRARowParallelLinear with lora_mode='runtime' is unsupported "
+                f"at TP>1 (mesh_axis_size={self._mesh_axis_size}); use lora_mode='fuse'"
+            )
+        self._init_lora_state(mode=lora_mode)

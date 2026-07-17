@@ -18,6 +18,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
@@ -42,14 +44,28 @@ void kernel_main() {
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(18);
 
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
-    mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+
+    CircularBuffer cb_reduce_scalar(reduce_scalar_cb);
+    CircularBuffer cb_epsilon(epsilon_cb);
+    CircularBuffer cb_transformation_mat(transformation_mat_cb);
+    CircularBuffer cb_reduce_result(reduce_result_cb);
+    CircularBuffer cb_input(input_cb);
+    CircularBuffer cb_weight(weight_cb);
+    CircularBuffer cb_intermediate(intermediate_cb);
+    CircularBuffer cb_rotated_input(rotated_input_cb);
+    CircularBuffer cb_rope_cos(rope_cos_cb);
+    CircularBuffer cb_rope_sin(rope_sin_cb);
+    CircularBuffer cb_output(output_cb);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    matmul_init(intermediate_cb, transformation_mat_cb);
 
     binary_op_init_common(input_cb, input_cb, input_cb);
 
-    cb_wait_front(reduce_scalar_cb, 1);  // comes from the reader
-    cb_wait_front(epsilon_cb, 1);        // comes from the reader
+    cb_reduce_scalar.wait_front(1);  // comes from the reader
+    cb_epsilon.wait_front(1);        // comes from the reader
     if constexpr (fuse_rope) {
-        cb_wait_front(transformation_mat_cb, 1);
+        cb_transformation_mat.wait_front(1);
     }
 
     /**
@@ -60,6 +76,8 @@ void kernel_main() {
      */
     constexpr uint32_t mul_rms_result_cb = (fuse_rope || has_weight) ? intermediate_cb : output_cb;
     constexpr uint32_t mul_weight_result_cb = fuse_rope ? intermediate_cb : output_cb;
+    CircularBuffer cb_mul_rms_result(mul_rms_result_cb);
+    CircularBuffer cb_mul_weight_result(mul_weight_result_cb);
 
     for (uint32_t tile_row = 0; tile_row < num_tile_rows_to_process; tile_row++) {
         // ROPE tracking variables
@@ -77,7 +95,7 @@ void kernel_main() {
         /*
          * 1/sqrt(mean_squared + eps)
          */
-        cb_wait_front(reduce_result_cb, 1);
+        cb_reduce_result.wait_front(1);
         reconfig_data_format(reduce_result_cb, epsilon_cb);
         pack_reconfig_data_format(reduce_result_cb);
 
@@ -87,12 +105,12 @@ void kernel_main() {
         rsqrt_tile_init<use_legacy_rsqrt>();
         rsqrt_tile<use_legacy_rsqrt>(0);
         tile_regs_commit();
-        cb_pop_front(reduce_result_cb, 1);
-        cb_reserve_back(reduce_result_cb, 1);
+        cb_reduce_result.pop_front(1);
+        cb_reduce_result.reserve_back(1);
         tile_regs_wait();
         pack_tile(0, reduce_result_cb);
         tile_regs_release();
-        cb_push_back(reduce_result_cb, 1);
+        cb_reduce_result.push_back(1);
 
         /*
          * norm x
@@ -101,10 +119,10 @@ void kernel_main() {
         reconfig_data_format(input_cb, reduce_result_cb);
         pack_reconfig_data_format(mul_rms_result_cb);
         mul_bcast_cols_init_short(input_cb, reduce_result_cb);
-        cb_wait_front(reduce_result_cb, 1);
+        cb_reduce_result.wait_front(1);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            cb_wait_front(input_cb, block_size);
-            cb_reserve_back(mul_rms_result_cb, block_size);
+            cb_input.wait_front(block_size);
+            cb_mul_rms_result.reserve_back(block_size);
 
             tile_regs_acquire();
             tile_regs_wait();
@@ -115,8 +133,8 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_release();
 
-            cb_push_back(mul_rms_result_cb, block_size);
-            cb_pop_front(input_cb, block_size);
+            cb_mul_rms_result.push_back(block_size);
+            cb_input.pop_front(block_size);
 
             /**
              * Weight (gamma) fusion
@@ -127,8 +145,8 @@ void kernel_main() {
                 pack_reconfig_data_format(mul_weight_result_cb);
                 mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
                 // cumulative wait
-                cb_wait_front(weight_cb, col_tile + block_size);
-                cb_wait_front(mul_rms_result_cb, block_size);
+                cb_weight.wait_front(col_tile + block_size);
+                cb_mul_rms_result.wait_front(block_size);
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     mul_tiles_bcast_rows(mul_rms_result_cb, weight_cb, i, col_tile + i, i);
@@ -141,15 +159,15 @@ void kernel_main() {
                  * and so this is an in-place operation.
                  * If rope is not fused, mul_weight_result_cb == output_cb
                  */
-                cb_pop_front(mul_rms_result_cb, block_size);
-                cb_reserve_back(mul_weight_result_cb, block_size);
+                cb_mul_rms_result.pop_front(block_size);
+                cb_mul_weight_result.reserve_back(block_size);
 
                 tile_regs_wait();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     pack_tile(i, mul_weight_result_cb);
                 }
                 tile_regs_release();
-                cb_push_back(mul_weight_result_cb, block_size);
+                cb_mul_weight_result.push_back(block_size);
 
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_cb, reduce_result_cb);
@@ -166,9 +184,9 @@ void kernel_main() {
                  */
                 reconfig_data_format(transformation_mat_cb, intermediate_cb);
                 pack_reconfig_data_format(rotated_input_cb);
-                mm_init_short(intermediate_cb, transformation_mat_cb);
-                cb_wait_front(intermediate_cb, block_size);
-                cb_reserve_back(rotated_input_cb, block_size);
+                matmul_init(intermediate_cb, transformation_mat_cb);
+                cb_intermediate.wait_front(block_size);
+                cb_rotated_input.reserve_back(block_size);
                 tile_regs_acquire();
                 tile_regs_wait();
 
@@ -179,7 +197,7 @@ void kernel_main() {
 
                 tile_regs_commit();
                 tile_regs_release();
-                cb_push_back(rotated_input_cb, block_size);
+                cb_rotated_input.push_back(block_size);
 
                 /**
                  * Write x * cos in-place to mul_rms_result_cb (intermediate_cb)
@@ -187,7 +205,7 @@ void kernel_main() {
                 reconfig_data_format(intermediate_cb, rope_cos_cb);
                 pack_reconfig_data_format(intermediate_cb);
                 mul_tiles_init(intermediate_cb, rope_cos_cb);
-                cb_wait_front(rope_cos_cb, head_dim_tiles);
+                cb_rope_cos.wait_front(head_dim_tiles);
 
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
@@ -200,14 +218,14 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 // Write in-place to intermediate_cb
-                cb_pop_front(intermediate_cb, block_size);
-                cb_reserve_back(intermediate_cb, block_size);
+                cb_intermediate.pop_front(block_size);
+                cb_intermediate.reserve_back(block_size);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     pack_tile(i, intermediate_cb);
                 }
                 tile_regs_release();
-                cb_push_back(intermediate_cb, block_size);
+                cb_intermediate.push_back(block_size);
 
                 /**
                  * Write x_rotated * sin in-place to rotated_input_cb
@@ -215,8 +233,8 @@ void kernel_main() {
                 reconfig_data_format(rotated_input_cb, rope_sin_cb);
                 pack_reconfig_data_format(rotated_input_cb);
                 mul_tiles_init(rotated_input_cb, rope_sin_cb);
-                cb_wait_front(rope_sin_cb, head_dim_tiles);
-                cb_wait_front(rotated_input_cb, block_size);
+                cb_rope_sin.wait_front(head_dim_tiles);
+                cb_rotated_input.wait_front(block_size);
 
                 tile_regs_acquire();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
@@ -229,14 +247,14 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 // Write in-place to rotated_input_cb
-                cb_pop_front(rotated_input_cb, block_size);
-                cb_reserve_back(rotated_input_cb, block_size);
+                cb_rotated_input.pop_front(block_size);
+                cb_rotated_input.reserve_back(block_size);
                 tile_regs_wait();
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     pack_tile(i, rotated_input_cb);
                 }
                 tile_regs_release();
-                cb_push_back(rotated_input_cb, block_size);
+                cb_rotated_input.push_back(block_size);
 
                 /**
                  * Write cos_interim + sin_interim to output_cb
@@ -244,9 +262,9 @@ void kernel_main() {
                 reconfig_data_format(intermediate_cb, rotated_input_cb);
                 pack_reconfig_data_format(output_cb);
                 add_tiles_init(intermediate_cb, rotated_input_cb);
-                cb_wait_front(intermediate_cb, block_size);
-                cb_wait_front(rotated_input_cb, block_size);
-                cb_reserve_back(output_cb, block_size);
+                cb_intermediate.wait_front(block_size);
+                cb_rotated_input.wait_front(block_size);
+                cb_output.reserve_back(block_size);
 
                 tile_regs_acquire();
                 tile_regs_wait();
@@ -256,10 +274,10 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_release();
-                cb_push_back(output_cb, block_size);
+                cb_output.push_back(block_size);
 
-                cb_pop_front(intermediate_cb, block_size);
-                cb_pop_front(rotated_input_cb, block_size);
+                cb_intermediate.pop_front(block_size);
+                cb_rotated_input.pop_front(block_size);
 
                 // Reconfigure for mul_bcast_col
                 reconfig_data_format(input_cb, reduce_result_cb);
@@ -267,20 +285,20 @@ void kernel_main() {
                 mul_bcast_cols_init_short(input_cb, reduce_result_cb);
             }
         }
-        cb_pop_front(reduce_result_cb, 1);
+        cb_reduce_result.pop_front(1);
 
         if constexpr (fuse_rope) {
             // We have processed an entire row, so free up the rope cos/sin CBs
-            cb_pop_front(rope_cos_cb, head_dim_tiles);
-            cb_pop_front(rope_sin_cb, head_dim_tiles);
+            cb_rope_cos.pop_front(head_dim_tiles);
+            cb_rope_sin.pop_front(head_dim_tiles);
         }
     }
-    cb_pop_front(epsilon_cb, 1);
-    cb_pop_front(reduce_scalar_cb, 1);
+    cb_epsilon.pop_front(1);
+    cb_reduce_scalar.pop_front(1);
     if constexpr (has_weight) {
-        cb_pop_front(weight_cb, num_tile_cols);
+        cb_weight.pop_front(num_tile_cols);
     }
     if constexpr (fuse_rope) {
-        cb_pop_front(transformation_mat_cb, 1);
+        cb_transformation_mat.pop_front(1);
     }
 }

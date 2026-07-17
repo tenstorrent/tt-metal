@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
     get_golden_generator,
@@ -20,9 +20,10 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
@@ -39,11 +40,13 @@ from helpers.test_variant_parameters import (
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
-ELTWISE_DIMENSIONS = [
-    (dest_sync, dims, DestAccumulation.No)
-    for dest_sync in (DestSync.Half, DestSync.Full)
-    for dims in generate_unary_input_dimensions(DestAccumulation.No, dest_sync)
-]
+
+def _eltwise_dest_acc_sync(dest_acc_modes):
+    return [
+        (dest_sync, dest_acc)
+        for dest_sync in (DestSync.Half, DestSync.Full)
+        for dest_acc in dest_acc_modes
+    ]
 
 
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
@@ -54,13 +57,12 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
 _TILE_SHAPE = construct_tile_shape()
 
 
-def valid_acc_to_dest(dest_sync_dims_dest_acc) -> list:
+def valid_acc_to_dest(input_dimensions) -> list:
     """Pick the acc_to_dest modes worth running for a given input size.
 
     acc_to_dest=True accumulates `get_num_tiles_per_accumulation(True)` result tiles into
     dest, so it only makes sense when the tile count is a non-zero multiple of that.
     """
-    _, input_dimensions, _ = dest_sync_dims_dest_acc
     total_tiles = (
         input_dimensions[0] * input_dimensions[1]
     ) // _TILE_SHAPE.total_tile_size()
@@ -71,29 +73,33 @@ def valid_acc_to_dest(dest_sync_dims_dest_acc) -> list:
     return [False]
 
 
+ELTWISE_FORMATS = input_output_formats(
+    [
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+    ],
+) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+
+
 @pytest.mark.quasar
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.MxFp8R,
-            DataFormat.MxFp8P,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-        ],
-    ),
+    formats=ELTWISE_FORMATS,
     mathop=[
         MathOperation.Elwadd,
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    # Math fidelity only affects multiplication; for add/sub only LoFi is meaningful.
-    math_fidelity=lambda mathop: (
+    # Math fidelity only affects multiplication; for add/sub and Int8 only LoFi is meaningful.
+    math_fidelity=lambda mathop, formats: (
         [MathFidelity.LoFi]
         if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
+        or formats.input_format == DataFormat.Int8
         else [
             MathFidelity.LoFi,
             MathFidelity.HiFi2,
@@ -109,7 +115,16 @@ def valid_acc_to_dest(dest_sync_dims_dest_acc) -> list:
         if not formats.input_format.is_mx_format()
         else [ImpliedMathFormat.Yes]
     ),
-    dest_sync_dims_dest_acc=ELTWISE_DIMENSIONS,
+    dest_sync_dest_acc=lambda formats: (
+        _eltwise_dest_acc_sync((DestAccumulation.Yes,))
+        if formats.input_format == DataFormat.Int8
+        else _eltwise_dest_acc_sync((DestAccumulation.No,))
+    ),
+    input_dimensions=runtime(
+        lambda dest_sync_dest_acc: generate_unary_input_dimensions(
+            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
+        )
+    ),
     acc_to_dest=valid_acc_to_dest,
     num_faces=[4],
 )
@@ -118,20 +133,27 @@ def test_eltwise_binary(
     mathop,
     math_fidelity,
     implied_math_format,
-    dest_sync_dims_dest_acc,
+    dest_sync_dest_acc,
+    input_dimensions,
     acc_to_dest,
     num_faces,
     boot_mode=BootMode.DEFAULT,
 ):
-    dest_sync_mode, input_dimensions, dest_acc = dest_sync_dims_dest_acc
+    dest_sync_mode, dest_acc = dest_sync_dest_acc
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
+    if formats.input_format == DataFormat.Int8:
+        stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
+    else:
+        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=stimuli_spec,
+        spec_B=stimuli_spec,
         output_format=formats.output_format,
     )
 
@@ -188,7 +210,7 @@ def test_eltwise_binary(
         boot_mode=boot_mode,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
         # This ensures Python-side format inference uses Float16_b for MX internal math
-        disable_format_inference=(implied_math_format == ImpliedMathFormat.Yes),
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

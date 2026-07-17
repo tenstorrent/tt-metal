@@ -15,6 +15,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.vision.classification.vit.common.common import load_torch_model
 from models.demos.vision.classification.vit.common.tt import ttnn_functional_vit
+from models.demos.vision.classification.vit.common.vit_compat import vit_encoder_module
 
 
 def get_expected_times(functional_vit):
@@ -36,8 +37,7 @@ def test_performance_vit_encoder(
 ):
     model = load_torch_model(model_location_generator)
     config = model.config
-    model = model.vit.encoder
-
+    model = vit_encoder_module(model)
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
 

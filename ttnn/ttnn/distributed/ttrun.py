@@ -777,9 +777,25 @@ def build_generate_rank_bindings_mpi_cmd(
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
 
-    # Pass LD_LIBRARY_PATH so generate_rank_bindings can find libtt_metal.so when spawned by mpirun
-    ld_path = os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD)))
-    cmd.extend(["-x", f"LD_LIBRARY_PATH={ld_path}"])
+    parent_env_prefix = _parent_env_prefix_from_environ()
+
+    if mock_rank_to_desc:
+        ranks = sorted(mock_rank_to_desc.keys())
+        phase1_config = TTRunConfig(
+            rank_bindings=[RankBinding(rank=r, mesh_id=0) for r in ranks],
+            mesh_graph_desc_path=mgd_path,
+            mock_cluster_rank_binding=dict(mock_rank_to_desc),
+        )
+    else:
+        phase1_config = TTRunConfig(
+            rank_bindings=[RankBinding(rank=0, mesh_id=0)],
+            mesh_graph_desc_path=mgd_path,
+        )
+        cmd.extend(
+            build_rank_environment_args(
+                phase1_config.rank_bindings[0], phase1_config, parent_env_prefix=parent_env_prefix
+            )
+        )
 
     # Add user-provided MPI args (e.g., --allow-run-as-root for Docker containers)
     if mpi_args:
@@ -797,9 +813,9 @@ def build_generate_rank_bindings_mpi_cmd(
         for i, rank in enumerate(sorted(mock_rank_to_desc.keys())):
             if i > 0:
                 cmd.append(":")
-            desc_path = mock_rank_to_desc[rank]
+            binding = phase1_config.rank_bindings[i]
             cmd.extend(["-np", "1"])
-            cmd.extend(["-x", f"TT_METAL_MOCK_CLUSTER_DESC_PATH={desc_path.resolve()}"])
+            cmd.extend(build_rank_environment_args(binding, phase1_config, parent_env_prefix=parent_env_prefix))
             cmd.append(str(executable.resolve()))
             cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
             cmd.extend(["--output-dir", str(output_dir.resolve())])
@@ -2192,9 +2208,9 @@ def legacy_flow(
     Mock Cluster Rank Binding YAML Example:
         rank_to_cluster_mock_cluster_desc:
           - rank: 0
-            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_0.yaml"
+            filename: "tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc/6u_dual_host_cluster_desc_rank_0.yaml"
           - rank: 1
-            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_1.yaml"
+            filename: "tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_dual_host/6u_dual_host_cluster_desc/6u_dual_host_cluster_desc_rank_1.yaml"
 
     See examples/ttrun/ for example configuration files.
 

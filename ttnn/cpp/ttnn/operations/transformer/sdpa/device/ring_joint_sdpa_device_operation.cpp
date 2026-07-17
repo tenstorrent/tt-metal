@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
@@ -26,6 +27,39 @@ namespace ttnn::prim {
 using namespace experimental::ccl;
 
 namespace {
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+
+// Chunked causal prefill does not have the same valid-pair geometry as a full causal
+// Sq x Sk attention window. A new Q chunk attends to all prior K/V tokens as a full
+// rectangle, then attends to its own chunk causally as a triangle:
+//
+//   valid_pairs_global = q_chunk * prefix_k + q_chunk * (q_chunk + 1) / 2
+//
+// Ring-joint shards Q rows across the ring, while every shard still sees the same
+// global K prefix, so each device models 1 / ring_size of the global valid pairs.
+// The generic SDPA causal model uses Sq * Sk / 2, which undercounts late chunked
+// prefill chunks where most work is the prefix rectangle.
+int compute_chunked_causal_sdpa_ideal_cycles(
+    uint32_t batch_size,
+    uint32_t num_heads_q,
+    uint32_t q_global,
+    uint32_t prefix_k_global,
+    uint32_t ring_size,
+    uint32_t DH,
+    uint32_t DV,
+    tt::tt_metal::MathFidelity math_fidelity,
+    int num_cores) {
+    if (ring_size == 0 || num_cores <= 0 || q_global == 0) {
+        return 0;
+    }
+
+    const double q = static_cast<double>(q_global);
+    const double prefix_k = static_cast<double>(prefix_k_global);
+    const double valid_pairs_per_device = (q * prefix_k + (q * (q + 1.0) / 2.0)) / static_cast<double>(ring_size);
+    return operations::transformer::sdpa::compute_sdpa_ideal_cycles_for_valid_pairs(
+        batch_size, num_heads_q, valid_pairs_per_device, DH, DV, math_fidelity, num_cores);
+}
 
 void validate_ring_joint_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& operation_attributes,
@@ -478,12 +512,33 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_shape[2],
         v_shape[2]);
 
-    TT_FATAL(
-        has_latent_v || NQH == NVH,
-        "Tensor-V mode requires Q num_heads to equal V num_heads. Got Q: {}, V: {}",
-        NQH,
-        NVH);
-    TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
+    if (!has_latent_v) {
+        const bool tensor_mha = (NQH == NKH) && (NKH == NVH);
+        const bool tensor_separate_v_shared_k = (NKH == 1) && (NVH == NQH);
+        const bool tensor_gqa_grouped_kv =
+            ring_joint::is_gqa_grouped_kv_head_mode(/*v_shares_k_buffer=*/false, NQH, NKH, NVH);
+
+        TT_FATAL(
+            tensor_mha || tensor_separate_v_shared_k || tensor_gqa_grouped_kv,
+            "Unsupported tensor-V head relationship. Expected MHA (NQH == NKH == NVH), separate-V shared-K "
+            "(NKH == 1 && NVH == NQH), or GQA (NKH == NVH < NQH && NQH % NKH == 0). Got NQH: {}, "
+            "NKH: {}, NVH: {}",
+            NQH,
+            NKH,
+            NVH);
+        TT_FATAL(
+            !has_joint_tensors || !tensor_gqa_grouped_kv,
+            "Ring joint SDPA GQA with joint tensors is unsupported. Got NQH: {}, NKH: {}, NVH: {}",
+            NQH,
+            NKH,
+            NVH);
+    } else {
+        TT_FATAL(
+            NKH == NVH || NKH == 1,
+            "K num_heads must be equal to V num_heads or 1 in latent-V mode. Got K: {}, V: {}",
+            NKH,
+            NVH);
+    }
 
     // Validate chunk sizes if program config is provided
 
@@ -578,48 +633,6 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
-    const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
-    const auto cache_key_logical_n = kv_pad_rotation_enabled ? 0 : args.logical_n;
-
-    std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
-    if (tensor_args.input_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.input_v.value());
-    }
-    if (tensor_args.joint_q.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_q.value());
-        input_tensors.emplace_back(tensor_args.joint_k.value());
-    }
-    if (tensor_args.joint_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.joint_v.value());
-    }
-    input_tensors.emplace_back(tensor_args.gathered_k);
-    if (tensor_args.gathered_v.has_value()) {
-        input_tensors.emplace_back(tensor_args.gathered_v.value());
-    }
-    return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
-        input_tensors,
-        args.joint_strategy,
-        args.scale,
-        args.is_causal,
-        args.is_balanced,
-        args.is_cross,
-        cache_key_logical_n,
-        args.ring_size,
-        args.compute_kernel_config,
-        args.program_config,
-        args.ccl_core_grid_offset,
-        args.kv_cache_batch_idx.has_value(),
-        kv_pad_rotation_enabled,
-        tensor_args.has_latent_v(),
-        tensor_args.v_num_heads(),
-        tensor_args.v_head_dim(args.latent_v_head_dim),
-        ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
-            args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
-    );
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceOperation::create_op_performance_model(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, RingJointSDPAResult& output_tensors) {
     Tensors input_tensors = {tensor_args.input_q, tensor_args.input_k};
@@ -658,9 +671,21 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     const uint32_t NQH = q_shape[1];
     const uint32_t N_local = q_shape[2];
     const uint32_t N_global = gathered_k_shape[2];
+    const bool has_joint_tensors =
+        tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
     const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const uint32_t DH = q_shape[3];
     const uint32_t DV = tensor_args.v_head_dim(args.latent_v_head_dim);
+
+    if (args.is_causal && args.has_kv_pad_rotation() && !has_joint_tensors) {
+        const uint32_t logical_n = static_cast<uint32_t>(args.logical_n);
+        const uint32_t prefix_k = args.kv_actual_isl.value();
+        const uint32_t new_q_global = logical_n - prefix_k;
+        const uint32_t ring_size = static_cast<uint32_t>(args.ring_size);
+        int ideal_cycles = compute_chunked_causal_sdpa_ideal_cycles(
+            B, NQH, new_q_global, prefix_k, ring_size, DH, DV, fidelity, grid.x * grid.y);
+        return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
+    }
 
     // RingJointSDPA: local Q and joint Q attend to (gathered K + joint K)
     // Total Q dimension: N_local + L, Total K dimension: N_global + L

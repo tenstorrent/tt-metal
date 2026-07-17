@@ -9,53 +9,59 @@
 #include "api/compute/eltwise_unary/lerp.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
-    tt::CBIndex predicate_cb,
-    tt::CBIndex true_cb,
-    tt::CBIndex false_cb,
-    tt::CBIndex cb_out,
+    uint32_t predicate_cb_id,
+    uint32_t true_cb_id,
+    uint32_t false_cb_id,
+    uint32_t cb_out_id,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
 
+    DataflowBuffer predicate_dfb(predicate_cb_id);
+    DataflowBuffer true_dfb(true_cb_id);
+    DataflowBuffer false_dfb(false_cb_id);
+    DataflowBuffer dfb_out(cb_out_id);
+
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
-    cb_wait_front(predicate_cb, num_tiles_per_cycle);  // predicate_cb is broadcast
+    predicate_dfb.wait_front(num_tiles_per_cycle);  // predicate_dfb is broadcast
 #endif
 #if BCAST_B
-    cb_wait_front(true_cb, num_tiles_per_cycle);  // true_cb is broadcast
+    true_dfb.wait_front(num_tiles_per_cycle);  // true_dfb is broadcast
 #endif
 #if BCAST_C
-    cb_wait_front(false_cb, num_tiles_per_cycle);  // false_cb is broadcast
+    false_dfb.wait_front(num_tiles_per_cycle);  // false_dfb is broadcast
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
 #if !BCAST_A
-        cb_wait_front(predicate_cb, num_tiles_per_cycle);
+        predicate_dfb.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_B
-        cb_wait_front(true_cb, num_tiles_per_cycle);
+        true_dfb.wait_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        cb_wait_front(false_cb, num_tiles_per_cycle);
+        false_dfb.wait_front(num_tiles_per_cycle);
 #endif
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        dfb_out.reserve_back(num_tiles_per_cycle);
 
         tile_regs_acquire();
 
         // Copy all 3 inputs to destination registers
-        copy_tile_init(predicate_cb);
-        copy_tile(predicate_cb, 0, 0);  // predicate to reg 0, 3, 6, ...
+        copy_tile_init(predicate_dfb.get_id());
+        copy_tile(predicate_dfb.get_id(), 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        copy_tile_init(true_cb);
-        copy_tile(true_cb, 0, 1);  // true to reg 1, 4, 7, ...
+        copy_tile_init(true_dfb.get_id());
+        copy_tile(true_dfb.get_id(), 0, 1);  // true to reg 1, 4, 7, ...
 
-        copy_tile_init(false_cb);
-        copy_tile(false_cb, 0, 2);  // false to reg 2, 5, 8, ...
+        copy_tile_init(false_dfb.get_id());
+        copy_tile(false_dfb.get_id(), 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the ternary operation
         TERNARY_SFPU_OP_INIT();
@@ -65,32 +71,32 @@ ALWI void process_tile(
 
         tile_regs_wait();
 
-        pack_tile(0, cb_out);  // result is stored in predicate register
+        pack_tile(0, dfb_out.get_id());  // result is stored in predicate register
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
+        dfb_out.push_back(num_tiles_per_cycle);
 
         // Pop non-broadcast CBs inside loop
 #if !BCAST_A
-        cb_pop_front(predicate_cb, num_tiles_per_cycle);
+        predicate_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_B
-        cb_pop_front(true_cb, num_tiles_per_cycle);
+        true_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if !BCAST_C
-        cb_pop_front(false_cb, num_tiles_per_cycle);
+        false_dfb.pop_front(num_tiles_per_cycle);
 #endif
     }
 
     // Pop broadcast CBs outside loop
 #if BCAST_A
-    cb_pop_front(predicate_cb, num_tiles_per_cycle);
+    predicate_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_B
-    cb_pop_front(true_cb, num_tiles_per_cycle);
+    true_dfb.pop_front(num_tiles_per_cycle);
 #endif
 #if BCAST_C
-    cb_pop_front(false_cb, num_tiles_per_cycle);
+    false_dfb.pop_front(num_tiles_per_cycle);
 #endif
 }
 
@@ -105,21 +111,22 @@ void kernel_main() {
         return;
     }
 
-    constexpr auto predicate_cb = tt::CBIndex::c_0;
-    constexpr auto true_cb = tt::CBIndex::c_1;
-    constexpr auto false_cb = tt::CBIndex::c_2;
-    constexpr auto cb_out = tt::CBIndex::c_3;
+    constexpr auto predicate_cb_id = tt::CBIndex::c_0;
+    constexpr auto true_cb_id = tt::CBIndex::c_1;
+    constexpr auto false_cb_id = tt::CBIndex::c_2;
+    constexpr auto cb_out_id = tt::CBIndex::c_3;
 
-    unary_op_init_common(predicate_cb, cb_out);
+    unary_op_init_common(predicate_cb_id, cb_out_id);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(predicate_cb, true_cb, false_cb, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
+        process_tile(predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
-        process_tile(predicate_cb, true_cb, false_cb, cb_out, remaining_iterations, tile_start, num_tiles_per_cycle);
+        process_tile(
+            predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, remaining_iterations, tile_start, num_tiles_per_cycle);
     }
 }

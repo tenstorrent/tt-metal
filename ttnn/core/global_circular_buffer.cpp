@@ -269,7 +269,7 @@ void validate_recv_contig_weight_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const tt::tt_metal::Tensor& weight,
     uint32_t ring_size) {
-    TT_FATAL(program_config.gather_in0, "receiver-contiguous DRAM-core prefetcher requires gather_in0=true");
+    TT_FATAL(program_config.gather_in0, "receiver-contiguous Tensor prefetcher requires gather_in0=true");
     TT_FATAL(ring_size > 0, "ring_size must be > 0");
 
     // The receiver-contiguous weight is an NdShardSpec DRAM tensor: num_shards == ring_size, each shard
@@ -279,7 +279,7 @@ void validate_recv_contig_weight_for_matmul_1d(
     TT_FATAL(
         nd_opt.has_value(),
         "weight must be allocated with an NdShardSpec (ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))) "
-        "for the receiver-contiguous DRAM-core prefetcher path");
+        "for the receiver-contiguous Tensor prefetcher path");
     const auto& shard_shape = nd_opt->shard_shape;
     TT_FATAL(
         shard_shape.rank() == 2,
@@ -342,7 +342,7 @@ void validate_recv_contig_weight_for_matmul_1d(
 
 }  // namespace
 
-uint32_t dram_core_prefetcher_block_count_for_matmul_1d(
+uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const tt::tt_metal::Tensor& weight,
     const GlobalCircularBuffer& gcb) {
@@ -383,8 +383,10 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
     // All matmuls share the GCB receiver rectangle, so they must agree on the ring shape, and that
     // ring must match bank_to_receivers' total receiver count.
     uint32_t max_page_bytes = 0;
+    bool all_configs_stream = true;
     for (size_t i = 0; i < program_configs.size(); ++i) {
         const auto& cfg = program_configs[i];
+        all_configs_stream = all_configs_stream && cfg.stream_in1;
         const auto& grid = cfg.compute_with_storage_grid_size;
         const uint32_t cfg_ring_size = grid.x * grid.y;
         TT_FATAL(
@@ -398,7 +400,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
             ring_size);
 
         // Per-(config, weight) recv-contig cross-checks (num_shards == ring_size, K % ring_size == 0,
-        // per_core_N == per-receiver N). Shared with dram_core_prefetcher_block_count_for_matmul_1d.
+        // per_core_N == per-receiver N). Shared with tensor_prefetcher_block_count_for_matmul_1d.
         validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], ring_size);
 
         // page_bytes_per_recv = (K_tiles / ring_size) * per_core_N * tile_bytes — one K-block per receiver.
@@ -412,19 +414,27 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
         max_page_bytes = std::max(max_page_bytes, page_bytes);
     }
 
-    // The matmul does wait_front(ring_size) per layer, so the GCB must hold at least one full layer's
-    // worth of pages. Same cap as the K-row-major builder (see create_global_circular_buffer_for_matmul_1d
-    // for why kMaxCbPagesBytes exists); no L1 budget check — callers size to fit their own receiver L1.
+    // A batched matmul does wait_front(ring_size) per layer, so the GCB must hold at least one full
+    // layer's worth of pages. A stream_in1 matmul instead consumes K-blocks FIFO as they land, so a
+    // shallow window is valid -- and shrinking the GCB is the whole point of streaming. Relax the
+    // floor to a double-buffer (one page filling while another drains) when every matmul sharing this
+    // GCB streams; a GCB shared with any batched matmul keeps the full-layer floor. Same cap as the
+    // K-row-major builder (see create_global_circular_buffer_for_matmul_1d for why kMaxCbPagesBytes
+    // exists); no L1 budget check — callers size to fit their own receiver L1.
     constexpr uint32_t kMaxCbPagesBytes = 131072u * 16u;
-    const uint32_t min_size = max_page_bytes * ring_size;
+    constexpr uint32_t kStreamMinWindowBlocks = 2;  // double-buffer floor for stream_in1
+    const uint32_t min_blocks = all_configs_stream ? kStreamMinWindowBlocks : ring_size;
+    const uint32_t min_size = max_page_bytes * min_blocks;
     TT_FATAL(
         size >= min_size,
-        "GCB size ({} B) must be at least ring_size * largest page ({} * {} = {} B); the matmul does "
-        "wait_front(ring_size) so it needs that many pages buffered before it consumes.",
+        "GCB size ({} B) must be at least {} * largest page ({} B) = {} B. {}",
         size,
-        ring_size,
+        min_blocks,
         max_page_bytes,
-        min_size);
+        min_size,
+        all_configs_stream ? "stream_in1 matmuls consume K-blocks FIFO but still need a double-buffered window."
+                           : "The matmul does wait_front(ring_size), so it needs a full layer buffered before "
+                             "it consumes.");
     TT_FATAL(
         size <= kMaxCbPagesBytes,
         "GCB size ({} B) exceeds the remote-CB page-count cap ({} B). Reduce size.",

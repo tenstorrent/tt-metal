@@ -70,10 +70,8 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
     const auto num_cores_y = grid.y;
     TT_FATAL(num_cores_y != 0, "Compute grid y-dimension must be non-zero");
 
-    const uint32_t in0_t = 2;        // input
-    const uint32_t in1_t = 1;        // zero
-    const uint32_t intermed0_t = 1;  // accumulated sum
-    const uint32_t out0_t = 2;       // output
+    const uint32_t in0_t = 2;   // input
+    const uint32_t out0_t = 2;  // output
     const auto
         [num_cores_to_be_used,
          all_cores,
@@ -92,24 +90,6 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),  // input
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in1_t * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),  // zero
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = intermed0_t * single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),  // accumulated sum
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
@@ -155,12 +135,23 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1};
 
+    // Enabling fp32 DEST accumulation for bf16 output forces the Wormhole HiFi3
+    // workaround below, which adversly affects the accuracy of the reduction.
+    const bool fp32_dest_acc_en = output.dtype() != tt::tt_metal::DataType::BFLOAT16;
+    // On Wormhole B0, HiFi4 must not be combined with fp32_dest_acc_en due to a hardware bug
+    // (see tenstorrent/tt-metal#38306); drop to HiFi3 only on that arch. Other architectures keep HiFi4.
+    const bool needs_wh_fp32_workaround = fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0;
+    const auto math_fidelity =
+        needs_wh_fp32_workaround ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+
     KernelDescriptor compute_desc_1;
     compute_desc_1.kernel_source = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp";
     compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc_1.core_ranges = core_group_1;
     compute_desc_1.compile_time_args = compute_args_group_1;
     compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false,
     };
 
@@ -173,6 +164,8 @@ tt::tt_metal::ProgramDescriptor ProdNcDeviceOperation::ProdNcProgramFactory::cre
         cd2.core_ranges = core_group_2;
         cd2.compile_time_args = compute_args_group_2;
         cd2.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = false,
         };
         compute_desc_2 = std::move(cd2);

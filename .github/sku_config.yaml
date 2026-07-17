@@ -3,6 +3,9 @@
 
 # Each SKU entry contains:
 #   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
+#   merge_queue_sku: (Optional) Concrete prio SKU to use when github.event_name is
+#     merge_group. Logical test-list SKUs should set this instead of listing prio
+#     SKUs in YAML. Multiple logical SKUs may share the same merge_queue_sku.
 #   allocation: (Optional) Configuration for TTOP allocation
 #     type: "Count" or "MGD"
 #     count: Number of nodes (for Count type)
@@ -24,13 +27,6 @@ skus:
       - pipeline-perf
       - in-service
 
-  wh_llmbox_perf_release:
-    runs_on:
-      - arch-wormhole_b0
-      - config-t3000
-      - pipeline-perf
-      - in-release
-
   bh_p100:
     runs_on:
       - cloud-virtual-machine
@@ -44,26 +40,19 @@ skus:
       - topology-6u
       - in-service
 
+  wh_galaxy_merge_gate:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-functional
+      - topology-6u
+      - in-service-dedicated-merge-gate
+
   wh_galaxy_perf:
     runs_on:
       - arch-wormhole_b0
       - pipeline-perf
       - topology-6u
       - in-service
-
-  wh_galaxy_release:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-functional
-      - topology-6u
-      - in-release
-
-  wh_galaxy_perf_release:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-perf
-      - topology-6u
-      - in-release
 
   bh_galaxy:
     runs_on:
@@ -78,20 +67,6 @@ skus:
       - pipeline-perf
       - topology-6u
       - in-service
-
-  bh_galaxy_release:
-    runs_on:
-      - arch-blackhole
-      - pipeline-functional
-      - topology-6u
-      - in-release
-
-  bh_galaxy_perf_release:
-    runs_on:
-      - arch-blackhole
-      - pipeline-perf
-      - topology-6u
-      - in-release
 
   wh_n150:
     runs_on:
@@ -117,6 +92,11 @@ skus:
     runs_on:
       - tt-ubuntu-2204-N300-llmbox-stable
 
+  wh_llmbox_civ2_viommu:
+    runs_on:
+      - tt-ubuntu-2204-N300-llmbox-viommu-stable
+    merge_queue_sku: wh_llmbox_civ2_prio
+
   bh_p100_perf:
     runs_on:
       - pipeline-perf
@@ -130,14 +110,12 @@ skus:
   bh_p150b_civ2_viommu:
     runs_on:
       - tt-ubuntu-2204-P150b-viommu-stable
-
-  bh_p150b_civ2_viommu_prio:
-    runs_on:
-      - tt-ubuntu-2204-P150b-viommu-prio-stable
+    merge_queue_sku: bh_p150b_civ2_viommu_prio
 
   bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
+    weights-cache-mode: lfc
 
   wh_n300_perf:
     runs_on:
@@ -152,6 +130,7 @@ skus:
       - arch-blackhole
       - P150
       - pipeline-functional
+    weights-cache-mode: cloud-mlperf
 
   bh_p150_perf:
     runs_on:
@@ -159,6 +138,7 @@ skus:
       - arch-blackhole
       - P150
       - pipeline-perf
+    weights-cache-mode: local-disk
 
   bh_loudbox:
     runs_on:
@@ -166,6 +146,7 @@ skus:
       - arch-blackhole
       - BH-LoudBox
       - pipeline-functional
+    weights-cache-mode: cloud-mlperf
 
   bh_p300:
     runs_on:
@@ -173,11 +154,14 @@ skus:
       - arch-blackhole
       - P300-viommu
       - pipeline-yyz2-lfc
+    weights-cache-mode: lfc
+
   bh_p300_viommu:
     runs_on:
       - pipeline-yyz2-lfc
       - P300-viommu
       - in-service
+    weights-cache-mode: lfc
 
   bh_loudbox_civ2_viommu:
     runs_on:
@@ -188,36 +172,79 @@ skus:
       - BH-Quietbox-2
       - pipeline-perf
       - in-service
+    weights-cache-mode: yyz4-mnt-models
 
-  bh_spsg:
+  bh_quietbox_2_iommu:
+    runs_on:
+      - BH-Quietbox-2-iommu
+      - pipeline-perf
+      - in-service
+    weights-cache-mode: yyz4-mnt-models
+
+  bh_sc1:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:
       type: Count
       count: 1
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
 
-  bh_sp1:
+  bh_sc4:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:
       type: Count
       count: 4
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
+      topologyKeys:
+        - exabox.tenstorrent.com/quad
 
-  bh_sp4:
+  bh_sc4-blitz:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: MGD
+      topologyKeys:
+        - exabox.tenstorrent.com/quad
+      mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
+
+  bh_sc4-mgd:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: MGD
+      topologyKeys:
+        - exabox.tenstorrent.com/quad
+      mgd_file: tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
+
+  bh_sc16:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:
       type: Count
       count: 16
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
+      topologyKeys:
+        - exabox.tenstorrent.com/SC16
+
+  cpu_medium:
+    runs_on:
+      - tt-ubuntu-2204-medium-stable
+    merge_queue_sku: cpu_medium_prio
+
+  # ---------------------------------------------------------------------------
+  # Merge-queue prio SKUs (merge_group events only).
+  # Referenced from logical SKUs via merge_queue_sku; do not list these in test
+  # YAML skus maps. Multiple logical SKUs may share the same merge_queue_sku.
+  # ---------------------------------------------------------------------------
+  wh_llmbox_civ2_prio:
+    runs_on:
+      - tt-ubuntu-2204-N300-llmbox-viommu-prio-stable
+
+  bh_p150b_civ2_viommu_prio:
+    runs_on:
+      - tt-ubuntu-2204-P150b-viommu-prio-stable
+
+  cpu_medium_prio:
+    runs_on:
+      - tt-ubuntu-2204-medium-prio-stable
 
   # Synthetic CPU SKUs for ttsim simulator jobs. Tests using these SKUs run on
   # ubuntu-latest; the impl is expected to invoke .github/actions/setup-ttsim
@@ -230,3 +257,9 @@ skus:
   sim_blackhole:
     runs_on:
       - ubuntu-latest
+  sim_wormhole_b0_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable
+  sim_blackhole_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable

@@ -9,7 +9,7 @@
 
 #include "sfpi.h"
 #include "ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
@@ -26,7 +26,7 @@ namespace ckernel::sfpu {
  *     x <  0:  mish(x) = x * u(u+2) / (u^2 + 2u + 2)
  *
  * The second form causes numerator ≈ denominator for sufficiently large positive x,
- * so any relative error in reciprocal is amplified by x. This is because _sfpu_reciprocal_<0>
+ * so any relative error in reciprocal is amplified by x. This is because sfpu_reciprocal_iter<0>
  * calls sfpi::approx_recip (~7-bit mantissa, ~0.4% relative error). By using the first form
  * the relative error in reciprocal is scaled by 2 / denom instead of by x.
  * The equivalent form x - 2x * inv_denom gives recip-error scaled as |x|·(2/denom) instead of 2/denom.
@@ -54,16 +54,16 @@ inline void calculate_mish() {
             }
 
             // denominator = (1 + u)^2 + 1 = u^2 + 2u + 2
-            sfpi::vFloat one_plus_u = u + sfpi::vConst1;
-            sfpi::vFloat denom = one_plus_u * one_plus_u + sfpi::vConst1;
+            sfpi::vFloat one_plus_u = u + 1.0f;
+            sfpi::vFloat denom = one_plus_u * one_plus_u + 1.0f;
 
             sfpi::vFloat inv_denom;
             if constexpr (APPROXIMATION_MODE) {
-                inv_denom = _sfpu_reciprocal_<0>(denom);
+                inv_denom = sfpu_reciprocal_iter<0>(denom);
             } else if constexpr (is_fp32_dest_acc_en) {
-                inv_denom = _sfpu_reciprocal_<2>(denom);
+                inv_denom = sfpu_reciprocal_iter<2>(denom);
             } else {
-                inv_denom = _sfpu_reciprocal_<1>(denom);
+                inv_denom = sfpu_reciprocal_iter<1>(denom);
             }
 
             v_if(x >= 0.0f) {
@@ -90,10 +90,10 @@ inline void calculate_mish() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void mish_init() {
     // exp does not need an init.
-    // calculate_mish uses the inline _sfpu_reciprocal_<N>, not _calculate_reciprocal_internal_
-    // so the SFPLOADMACRO fast-path init is not needed. But, we need _init_sfpu_reciprocal_'s
-    // vConstFloatPrgm0 = 2.0f for the inline NR step. So, call _init_sfpu_reciprocal_ directly.
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    // calculate_mish uses the inline sfpu_reciprocal_iter<N>, not _calculate_reciprocal_internal_
+    // so the SFPLOADMACRO fast-path init is not needed. But, we need sfpu_reciprocal_init's
+    // vConstFloatPrgm0 = 2.0f for the inline NR step. So, call sfpu_reciprocal_init directly.
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu

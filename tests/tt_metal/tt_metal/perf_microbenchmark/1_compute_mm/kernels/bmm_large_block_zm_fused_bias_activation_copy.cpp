@@ -7,6 +7,7 @@
 #include "internal/mod_div_lib.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 
 #ifdef FUSE_BIAS
@@ -34,8 +35,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
-    mm_block_init_short_with_dt(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -123,7 +124,8 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks > 1;
 
-    mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -377,7 +379,7 @@ void kernel_main() {
         }
         if constexpr (batch > 1) {
             // reconfigure init for matmul
-            mm_block_init_short(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+            matmul_block_init(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef FUSE_BIAS
             // reconfigure unpacker df for src A and src B
             reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);

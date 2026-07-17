@@ -16,6 +16,12 @@ enum class SigmoidMode {
     ACCURATE,
 };
 
+enum class GeluVariant {
+    ACCURATE,  // Piecewise-CDF / FP32-erf — exact GELU; matches F.gelu().
+    FAST_LUT,  // 6-segment piecewise-linear LUT approximation of exact GELU.
+    TANH,      // 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) in FP32; matches F.gelu(approximate="tanh").
+};
+
 }  // namespace ttnn::operations::unary
 
 namespace ttnn::operations::unary::detail {
@@ -107,7 +113,6 @@ DECLARE_UNARY_OP(erfc)
 
 DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(exp)
 DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(erf)
-DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(gelu)
 DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log)
 DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log10)
 DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(log2)
@@ -117,6 +122,25 @@ DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(sqrt)
 DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(mish)
 
 #undef DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE
+
+// GELU has three variants — exact (Accurate), 6-segment LUT (FastLut), and
+// FP32 tanh approximation (Tanh). The primary overload takes GeluVariant.
+// The bool overload is kept for backwards compatibility (true -> FAST_LUT,
+// false -> ACCURATE) — used by C++ callers like ttnn::glu and by Python
+// callers passing fast_and_approximate_mode.
+Tensor gelu(
+    const Tensor& input_tensor,
+    operations::unary::GeluVariant variant = operations::unary::GeluVariant::ACCURATE,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+Tensor gelu(
+    const Tensor& input_tensor,
+    bool fast_and_approximate_mode,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 #define DECLARE_UNARY_OP_WITH_FLOAT_PARAM(op_name)                                     \
     Tensor op_name(                                                                    \
@@ -128,8 +152,6 @@ DECLARE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(mish)
 
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(heaviside)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(leaky_relu)
-DECLARE_UNARY_OP_WITH_FLOAT_PARAM(relu_max)
-DECLARE_UNARY_OP_WITH_FLOAT_PARAM(relu_min)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(unary_remainder)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(celu)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(rpow)
@@ -198,6 +220,8 @@ Tensor selu(
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 DECLARE_UNARY_OP_SCALAR_VARIANT(fill)
+DECLARE_UNARY_OP_SCALAR_VARIANT(relu_max)
+DECLARE_UNARY_OP_SCALAR_VARIANT(relu_min)
 DECLARE_UNARY_OP_SCALAR_VARIANT(power)
 DECLARE_UNARY_OP_SCALAR_VARIANT(gt_unary)
 DECLARE_UNARY_OP_SCALAR_VARIANT(lt_unary)

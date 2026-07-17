@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -72,8 +72,8 @@ FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t 
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t dfb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in1 = 1;
 
     constexpr uint32_t total_num_rows = get_compile_time_arg_val(0);
     constexpr uint32_t third_dim = get_compile_time_arg_val(1);
@@ -90,13 +90,13 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
 
-    cb_in1.reserve_back(1);
-    uint32_t temp_addr_raw = cb_in1.get_write_ptr();
+    dfb_in1.reserve_back(1);
+    uint32_t temp_addr_raw = dfb_in1.get_write_ptr();
     uint32_t temp_addr = (temp_addr_raw + dram_alignment - 1) & ~(dram_alignment - 1);
-    cb_in1.push_back(1);
+    dfb_in1.push_back(1);
 
     auto read_block = [&](uint32_t num_rows,
                           uint32_t start_row_id,
@@ -107,8 +107,8 @@ void kernel_main() {
         uint32_t padding_rows = num_rows == 32 ? 0 : 32 - num_rows;
         bool has_rows = (num_rows + padding_rows) > 0;
 
-        cb_in0.reserve_back(single_block_size * has_rows);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        dfb_in0.reserve_back(single_block_size * has_rows);
+        uint32_t l1_write_addr = dfb_in0.get_write_ptr();
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
@@ -157,6 +157,7 @@ void kernel_main() {
                 }
 
                 tt_memmove<false, false, true, 0>(
+                    noc,
                     l1_write_addr,
                     temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset),
                     width_size);
@@ -170,7 +171,7 @@ void kernel_main() {
             l1_write_addr += width_size;
         }
 
-        cb_in0.push_back(single_block_size * has_rows);
+        dfb_in0.push_back(single_block_size * has_rows);
     };
 
     const uint32_t width_size = get_arg_val<uint32_t>(2);

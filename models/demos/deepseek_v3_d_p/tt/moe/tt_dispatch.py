@@ -29,7 +29,7 @@ devices. The buffer is flat: all experts_per_chip experts share a single token
 dimension of total capacity max_dispatch_buffer_token_size, packed dynamically with
 each expert's region starting at a TILE_HEIGHT-aligned offset. The per-device shape is:
   dispatched_buffer: (1, 1, max_dispatch_buffer_token_size, emb_dim)
-  metadata:          (1, 1, max_dispatch_buffer_token_size, metadata_len=5)
+  metadata:          (1, 1, max_dispatch_buffer_token_size, metadata_len=3)
 
 TtCombineModule reads from these buffers using the same offsets to reconstruct the
 original token ordering after expert processing.
@@ -78,8 +78,7 @@ class TtDispatchModule(LightweightModule):
             experts_per_chip: Number of experts hosted on each destination device.
             num_routed_experts: Total number of routed experts across all devices.
             num_experts_per_tok: Number of experts each token is routed to (top-k).
-            metadata_len: Number of fields in per-token metadata (5: chip, token, topk_idx,
-                routed_expert, weight).
+            metadata_len: Number of fields in per-token metadata (3: chip, token, topk_idx).
             max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
                 buffer per chip. Tokens that would push the total past this cap are
                 silently dropped by the kernel (prevents out-of-bounds DRAM writes).
@@ -202,6 +201,7 @@ class TtDispatchModule(LightweightModule):
         indices: ttnn.Tensor,
         tt_expert_offsets: ttnn.Tensor,
         tt_expert_dispatch_table: ttnn.Tensor,
+        padding_config: ttnn.Tensor = None,
     ):
         """
         Route input tokens to destination device dispatch buffers based on top-k expert indices.
@@ -215,7 +215,9 @@ class TtDispatchModule(LightweightModule):
         Args:
             x: Input token embeddings.
                 Shape per device: (1, seq_len_per_chip, emb_dim)
-            weights: Router weights for each token's top-k experts.
+            weights: Router weights for each token's top-k experts. Retained for call-site
+                compatibility; the dispatch op no longer consumes it (gate weighting is applied
+                downstream by the reduce op from its own weights tensor).
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok)
             indices: Top-k expert indices for each token.
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok)
@@ -227,6 +229,10 @@ class TtDispatchModule(LightweightModule):
                 Shape per device: (1, num_routed_experts)
                 Values >= 0 are destination chip IDs; -1 means the expert is not present in
                 this dispatch group.
+            padding_config: Optional per-device [local_real_tokens, pad_side] tensor (uint32,
+                ROW_MAJOR). When provided, the dispatch kernels bound their token loop to the
+                real (unpadded) tokens. Must match the tensor the gate used to sentinel-mark
+                padded tokens. None means process the full token range.
 
         Returns:
             dispatched_buffer: Flat expert-centric token buffer on each destination device.
@@ -234,9 +240,9 @@ class TtDispatchModule(LightweightModule):
                 Token at index i belongs to the expert whose region covers index i; regions are
                 TILE_HEIGHT-aligned and laid out by the expert region offsets from offset_cumsum.
             metadata: Per-token routing metadata written alongside dispatched_buffer.
-                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5),
+                Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=3),
                 int32, ROW_MAJOR.
-                Fields per token: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
+                Fields per token: [linearized_mesh_coord, token_idx, topk_idx].
                 Used by TtCombineModule to route processed tokens back to their origin.
         """
         logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
@@ -258,10 +264,10 @@ class TtDispatchModule(LightweightModule):
             tt_dispatch_metadata,
         ) = ttnn.experimental.deepseek_prefill.dispatch(
             input_tensor=x,
-            weights_tensor=weights,
             indices_tensor=indices,
             expert_offsets_tensor=tt_expert_offsets,
             expert_dispatch_table_tensor=tt_expert_dispatch_table,
+            padding_config=padding_config,
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_routed_experts=self.num_routed_experts,

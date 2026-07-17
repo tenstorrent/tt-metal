@@ -1,0 +1,172 @@
+name: "[internal] ttsim sanity tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      basic-docker-image:
+        required: true
+        type: string
+      package-artifact-name:
+        required: false
+        type: string
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_sanity_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "sanity"
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "ALL_SKUS_IN_TESTS" \
+            ./.github/sku_config.yaml
+
+  fetch-ttsim:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ttsim version
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/ttsim-version
+          sparse-checkout-cone-mode: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Read ttsim version
+        id: ttsim-version
+        run: echo "version=$(cat tt_metal/ttsim-version)" >> "$GITHUB_OUTPUT"
+      - name: Download wormhole_b0 ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ steps.ttsim-version.outputs.version }}
+          fileName: libttsim_wh.so
+          out-file-path: /tmp/ttsim
+      - name: Download blackhole ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ steps.ttsim-version.outputs.version }}
+          fileName: libttsim_bh.so
+          out-file-path: /tmp/ttsim
+      - name: Upload ttsim binaries artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ttsim-binaries
+          path: /tmp/ttsim/
+          if-no-files-found: error
+          retention-days: 1
+
+  ttsim-sanity-tests:
+    needs: [load-test-matrix, fetch-ttsim]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && needs.fetch-ttsim.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    permissions:
+      contents: read
+    container:
+      image: ${{ inputs.basic-docker-image || 'docker-image-unresolved!' }}
+      volumes:
+        - ${{ github.workspace }}:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      CC: gcc-12
+      CXX: g++-12
+      # ttsim installs under TT_METAL_HOME; setup-ttsim is invoked with root=$TT_METAL_HOME
+      # so it copies the soc descriptor from the installed package's tt_metal/soc_descriptors/.
+      TT_METAL_HOME: /usr/libexec/tt-metalium
+    steps:
+      - name: Checkout actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github/actions/download-artifact-with-retry
+            .github/actions/setup-ttsim
+            .github/scripts/utils/host-load-sidecar.sh
+          sparse-checkout-cone-mode: false
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Download packages artifact
+        uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
+        with:
+          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+
+      - name: ⬇️  Setup TTSim
+        uses: ./.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ matrix.test-group.sku }}
+          root: ${{ env.TT_METAL_HOME }}
+
+      # ttsim examples run on the simulator (no hardware power telemetry); wrap the run in the
+      # host-load sidecar to capture host CPU/memory/disk/network usage.
+      # The command is written to a file first (a quoted heredoc preserves its
+      # embedded quoting) and run under the sidecar; the report is written to /work/mem_report.json
+      # (uploaded below) and the sidecar propagates the run's exit code so failures still fail the job.
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          cat > /tmp/ttsim_cmd.sh <<'TTSIM_CMD_EOF'
+          ${{ matrix.test-group.cmd }}
+          TTSIM_CMD_EOF
+          .github/scripts/utils/host-load-sidecar.sh \
+            --interval 1 \
+            --label "${{ matrix.test-group.name }}" \
+            --output /work/mem_report.json \
+            -- bash --noprofile --norc -eo pipefail /tmp/ttsim_cmd.sh
+      - name: Upload mem report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: mem-report-${{ matrix.test-group.name }}
+          # /work/ is mounted from ${{ github.workspace }}; the host-load sidecar writes its
+          # CPU/memory/disk/network report to --output /work/mem_report.json, so upload-artifact
+          # reads it from there.
+          path: ${{ github.workspace }}/mem_report.json
+          if-no-files-found: warn
+          retention-days: 30

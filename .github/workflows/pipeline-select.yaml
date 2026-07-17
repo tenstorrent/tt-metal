@@ -32,6 +32,7 @@ on:
         type: boolean
         default: false
       cpp-unit:
+        description: "Run cpp unit tests"
         required: false
         type: boolean
         default: false
@@ -150,9 +151,8 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-ttnn-models-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    uses: ./.github/workflows/single-card-ttnn-models-frequent-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -160,9 +160,10 @@ jobs:
     if: ${{ needs.determine-tests.outputs.run-cpp-unit == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/cpp-post-commit.yaml
+    uses: ./.github/workflows/ops-unit-tests-impl.yaml
     with:
-      arch: wormhole_b0
-      runner-label: n300
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "wh_n300_civ2"
+      additional_test_categories: "cpp_accessor,cpp_lab_examples"

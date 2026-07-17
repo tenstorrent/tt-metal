@@ -17,7 +17,6 @@
 #include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
-#include "sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_typecast_fp16b_uint16.h"
 #include "sfpu/ckernel_sfpu_typecast_int32_fp32.h"
 
@@ -40,7 +39,7 @@ inline void _sfpu_configure_addrmod_()
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_7, csr_read<CSR::TRISC_ID>());
+        .set(ADDR_MOD_7);
 }
 
 /**

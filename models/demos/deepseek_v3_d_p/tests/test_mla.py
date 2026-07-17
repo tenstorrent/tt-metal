@@ -16,6 +16,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -34,6 +35,7 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     discover_traces,
     load_trace,
     partition_iters,
+    single_trace,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
@@ -51,6 +53,8 @@ def run_mla_inference(
     is_balanced,
     topology,
     tt_kvpe_cache,
+    return_indices=False,
+    inject_indices=None,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -83,6 +87,10 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
+        # Match the single-layer test cache (num_kvpe_cache_layers=1): the sparse single-shot write now
+        # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
+        # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
+        layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
@@ -118,15 +126,26 @@ def run_mla_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_output = mla_tt.forward(
+    # GLM-5.2 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
+    # feed a prior layer's to skip the indexer. Defaults leave the single-shot forward unchanged.
+    mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
         kvpe_cache=tt_kvpe_cache,
+        indexer_indices=inject_indices,
+        return_indexer_indices=return_indices,
     )
+    indices = None
+    if return_indices:
+        tt_output, indices = mla_out
+    else:
+        tt_output = mla_out
 
     ttnn.synchronize_device(mesh_device)
     ttnn.distributed_context_barrier()
 
+    if return_indices:
+        return tt_output, hidden_states, chunk_order, shard_dims, indices
     return tt_output, hidden_states, chunk_order, shard_dims
 
 
@@ -261,7 +280,7 @@ def run_model(
                     use_cache=True,
                 )
 
-            ref_kvpe = ref_cache.key_cache[0]  # layer 0
+            ref_kvpe = hf_cache_layer_kv(ref_cache, 0)[0]  # layer 0
 
             if not (is_ci_env or is_ci_v2_env):
                 # Save to cache for future runs
@@ -415,7 +434,7 @@ def test_ds_mla(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -427,12 +446,18 @@ def test_ds_mla(
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
         },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+        },
     ],
-    ids=["line", "ring"],
+    ids=["line", "ring", "fabric2d"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False], ids=["max_sl"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize(
     "seq_len",
     [5 * 1024, 25 * 1024],
@@ -475,10 +500,15 @@ def test_kimi_mla(
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
 # ---------------------------------------------------------------------------------------------------
-# Set DEEPSEEK_MLA_TRACE_DIR to the ROOT dir holding one subdir per layer-0 GPU trace (each with
+# Set MLA_CHUNKED_TRACE_DIR to the ROOT dir holding one subdir per layer-0 GPU trace (each with
 # mla_io/ + kv_cache/). It enables the prefill>0 scenarios (load the prior KV + reference from the
 # real GPU run); multi-user pulls one trace per user, cycling if there are fewer traces than users.
-DEEPSEEK_MLA_TRACE_DIR = os.environ.get("DEEPSEEK_MLA_TRACE_DIR")
+# The root may mix kimi and deepseek traces as siblings; discover_traces filters by variant name.
+MLA_CHUNKED_TRACE_DIR = os.environ.get("MLA_CHUNKED_TRACE_DIR")
+# MLA_CHUNKED_TRACE_PATH points straight at ONE specific trace dir (the leaf holding mla_io/ +
+# kv_cache/, not the root). It takes precedence over MLA_CHUNKED_TRACE_DIR and skips the root
+# scan/variant-filter entirely; the single trace is shared (cycled) across all users.
+MLA_CHUNKED_TRACE_PATH = os.environ.get("MLA_CHUNKED_TRACE_PATH")
 
 # Per-iteration VALID token counts for the rotation/padding edge cases, tuned for the TARGET 8x4 mesh
 # (sp=8, chunk_local=640, chunk=5120). Each cumulative kv_actual lands on a distinct rotation edge:
@@ -505,6 +535,7 @@ def _run_chunked_prefill(
     prefill_len=0,
     num_users=1,
     use_pretrained=False,
+    topology=ttnn.Topology.Linear,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -512,7 +543,7 @@ def _run_chunked_prefill(
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
                    (rotation) allowed; any prefix is preloaded from the CPU reference KV.
       * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
-                   ONLY: requires DEEPSEEK_MLA_TRACE_DIR (skips if unset); supports partial iters.
+                    ONLY: requires MLA_CHUNKED_TRACE_DIR or MLA_CHUNKED_TRACE_PATH (skips if both unset); supports partial iters.
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
@@ -531,8 +562,11 @@ def _run_chunked_prefill(
 
     use_trace = reference == "trace"
     if use_trace:
-        if DEEPSEEK_MLA_TRACE_DIR is None:
-            pytest.skip("reference='trace' requires DEEPSEEK_MLA_TRACE_DIR (trace-only scenario)")
+        if MLA_CHUNKED_TRACE_DIR is None and MLA_CHUNKED_TRACE_PATH is None:
+            pytest.skip(
+                "reference='trace' requires MLA_CHUNKED_TRACE_DIR (root) or "
+                "MLA_CHUNKED_TRACE_PATH (single trace) -- trace-only scenario"
+            )
         # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
         # the device's fixed-width chunk (masked by causality) -- they are not pad in the sequence --
         # so any iters_isl / prefill works exactly like the CPU ref. The only trace constraint is
@@ -540,7 +574,15 @@ def _run_chunked_prefill(
         use_pretrained = True  # the GPU trace was generated with the real checkpoint
 
     groups = partition_iters(iters_isl, num_users)
-    traces = discover_traces(DEEPSEEK_MLA_TRACE_DIR, num_users) if use_trace else None
+    # Resolve trace dirs: a single explicit trace (MLA_CHUNKED_TRACE_PATH) wins; otherwise scan the
+    # root (MLA_CHUNKED_TRACE_DIR) and filter the kimi/deepseek siblings by variant name.
+    if not use_trace:
+        traces = None
+    elif MLA_CHUNKED_TRACE_PATH is not None:
+        traces = single_trace(MLA_CHUNKED_TRACE_PATH, num_users)
+    else:
+        variant_name = request.getfixturevalue("variant").name
+        traces = discover_traces(MLA_CHUNKED_TRACE_DIR, num_users, variant_name)
 
     # Cache holds the max (kv_actual + chunk) window across all users/iters, slab-aligned, >= 2 slabs.
     max_window = chunk_size_global * 2
@@ -605,7 +647,7 @@ def _run_chunked_prefill(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_balanced=False,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         is_chunked=True,
         slot_num=num_users,
         layer_num=1,
@@ -638,9 +680,20 @@ def _run_chunked_prefill(
         logger.info(f"Preloading {prefill_len}-token prefix into {num_users} slot(s) (block-cyclic host->device)...")
         cache_host = torch.zeros(num_users, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
         for u in range(num_users):
-            cache_host[u, 0] = blockcyclic_cache_host(
-                users[u]["kv_prior"], sp, chunk_size_global, seq_len_cache, kvpe_dim
-            )[0, 0]
+            kv_prior = users[u]["kv_prior"]
+            if use_trace:
+                # The GPU trace stores k_pe in the HF half-split basis; the device cache is the Meta
+                # interleaved basis. Re-interleave the k_pe block before preload (k_nope is basis-
+                # agnostic) -- same transform the post-run cache comparison applies. Without this the
+                # 50k preloaded prefix attends in the wrong basis and only the output PCC (not the
+                # cache PCC, which checks just the new region) shows the ~0.92 drop.
+                kv_prior = kv_prior.clone()
+                d = kvpe_dim - config.kv_lora_rank
+                pe = kv_prior[:, config.kv_lora_rank :]
+                kv_prior[:, config.kv_lora_rank :] = torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(
+                    pe.shape[0], d
+                )
+            cache_host[u, 0] = blockcyclic_cache_host(kv_prior, sp, chunk_size_global, seq_len_cache, kvpe_dim)[0, 0]
         cache_host_tt = ttnn.from_torch(
             cache_host,
             dtype=ttnn.bfloat8_b,
@@ -687,7 +740,7 @@ def _run_chunked_prefill(
                 hidden_states=tt_h,
                 rope_tensors=indexed_rope,
                 kvpe_cache=tt_kvpe_cache,
-                kv_actual_isl=kv_actual,
+                actual_start=kv_actual,
                 cache_user_id=u,
             )
             out_flat = ttnn.to_torch(
@@ -767,35 +820,52 @@ _CHUNKED_SCENARIOS = (
     [(f"rot-{rid}", dict(iters_isl=lst)) for rid, lst in zip(ROTATED_VALID_IDS, ROTATED_VALID_LISTS)]
     # One representative case packing the most sp=8 edges: iter0 aligned partial, iter1 rotated
     # chip-aligned (offset=0) partial, iter2 rotated mid-chip straddle (offset=32) + multi-slab + full.
-    + [("maxedge", dict(iters_isl=[2560, 2592, 5120]))]
+    # NOTE: ids must not nest as substrings, else `-k <id>` can't isolate one (pytest -k is substring).
+    # Convention: "-Nu" = N users. "maxedge"/"deep" are intentional families (single- + multi-user).
+    + [("maxedge-1u", dict(iters_isl=[2560, 2592, 5120]))]
     + [
         ("production-50k+5k", dict(iters_isl=[5120] * 11)),
-        ("multiuser-U2", dict(iters_isl=[5120] * 4, num_users=2)),
+        ("fullchunk-2u", dict(iters_isl=[5120] * 4, num_users=2)),
         # Multi-user WITH padding/rotation: each user runs the full maxedge pattern in its own slot
         # (partition splits [..]*2 into one maxedge per user), exercising rotation + cross-user isolation.
-        ("maxedge-multiuser-U2", dict(iters_isl=[2560, 2592, 5120] * 2, num_users=2)),
+        ("maxedge-2u", dict(iters_isl=[2560, 2592, 5120] * 2, num_users=2)),
         ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
-        ("deep-multiuser-U2", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
+        ("deep-2u", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
     ]
 )
 
 
-# TODO(FABRIC_2D): the BH Galaxy 8x4 prefill target moved to FABRIC_2D (#45595, which fixed the MLA
-# ring all-gather writer this path uses). Add a fabric2d device_params variant (router config +
-# RELAXED_INIT + per-mesh num_links, via conftest's FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS) in a
-# follow-up, validated on BH Galaxy. This test currently covers FABRIC_1D only.
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+    ],
+    ids=["line", "ring", "fabric2d"],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["deepseek_v3", "kimi"])
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["dsv3", "kimi"])
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_params, variant):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
     and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
-    DEEPSEEK_MLA_TRACE_DIR), or run with no reference ('func'). Select with e.g.
-    -k 'maxedge and trace and 8x4'. See _run_chunked_prefill.
+    MLA_CHUNKED_TRACE_DIR/PATH), or run with no reference ('func'). Select with e.g.
+    -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
     Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
     KIMI_K2_6_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
@@ -804,13 +874,17 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
     reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
     scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 has no trace path (traces are deepseek-only) but otherwise runs the same
+    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic; needs kimi
+    GPU traces in MLA_CHUNKED_TRACE_DIR). It otherwise runs the same
     config-driven driver on any arch/mesh."""
-    if variant.name == "kimi_k2_6" and reference == "trace":
-        pytest.skip("kimi_k2_6: GPU traces are deepseek-only (no Kimi traces)")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
     if reference == "cpu" and os.environ.get(variant.env_var) and not kwargs.get("use_pretrained"):
         kwargs = {**kwargs, "use_pretrained": True}
-    _run_chunked_prefill(request, mesh_device, reference=reference, **kwargs)
+    topology = (
+        ttnn.Topology.Ring
+        if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
+        else ttnn.Topology.Linear
+    )
+    _run_chunked_prefill(request, mesh_device, reference=reference, topology=topology, **kwargs)

@@ -29,7 +29,7 @@ from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
-from ttexalens.hardware.risc_debug import CallstackEntryVariable
+from ttexalens.elf import CallstackEntryVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
@@ -78,6 +78,8 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                 return "?wrong line number? Check the first code line in the stack trace."
             code_line = lines[line - 1]
 
+            start_index = -1
+
             def scan_for_needle(needle: str) -> None:
                 nonlocal start_index
                 search_from = 0
@@ -100,7 +102,6 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                     start_index = new_index
                     search_from = new_index + 1
 
-            start_index = -1
             scan_for_needle("ASSERT(")
             if start_index == -1:
                 return "ASSERT() not found! Check the first code line in the stack trace."
@@ -174,7 +175,7 @@ def dump_lightweight_asserts(
         if not dispatcher_data.risc_enabled(risc_name):
             return None
 
-        risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
+        risc_debug = location.device.get_block(location).get_risc_debug(risc_name)
 
         # We don't care about cores that are in reset
         if risc_debug.is_in_reset():
@@ -189,6 +190,8 @@ def dump_lightweight_asserts(
         code_private_memory = risc_debug.get_code_private_memory()
         if code_private_memory is not None and code_private_memory.contains_private_address(pc):
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
+            if dispatcher_core_data.kernel_path is None:
+                return None
             elf = callstack_provider.elfs_cache[dispatcher_core_data.kernel_path]
             text_section = elf.get_section_by_name(".text")
             if text_section is None or dispatcher_core_data.kernel_offset is None:
@@ -219,7 +222,7 @@ def dump_lightweight_asserts(
         )
         arguments_and_locals = None
         assert_code = "?"
-        if callstack_data.kernel_callstack_with_message.callstack[0] is not None:
+        if callstack_data.kernel_callstack_with_message.callstack:
             fi = callstack_data.kernel_callstack_with_message.callstack[0].file_info
             assert_code = extract_assert_code(
                 fi.file if fi is not None else None,

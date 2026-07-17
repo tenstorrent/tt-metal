@@ -73,6 +73,13 @@ void kernel_main() {
         // input_batch_base: reader-only (phase-1 input offset). The writer always targets output
         // slot 0, so it reads the arg here only for alignment.
         (void)get_arg_val<uint32_t>(arg_idx++);
+        // valid_pages_per_batch_head: clamp the gather to the logical_n-valid slab prefix (must match
+        // the reader's clamp so cb_output producer/consumer page counts stay aligned). Default
+        // (full input) leaves the range unchanged.
+        const uint32_t valid_pages = get_arg_val<uint32_t>(arg_idx++);
+        if (valid_pages < input_tile_id_end[input_idx]) {
+            input_tile_id_end[input_idx] = valid_pages;
+        }
     }
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);

@@ -24,18 +24,6 @@
   save-perf-data: true
   model-type: SD3.5
 
-- name: Galaxy DiT Flux.1 model perf tests
-  cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "wh_4x8sp0tp1" --timeout=500
-  model: flux1-dev
-  skus:
-    wh_galaxy_perf:
-      timeout: 15
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  arch: wormhole_b0
-  save-perf-data: true
-  model-type: Flux.1-Dev
-
 - name: Galaxy DiT Motif model perf tests
   cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/motif/test_performance_motif.py -k "4x8cfg1sp0tp1" --timeout=1000
   model: motif
@@ -77,19 +65,26 @@
   save-perf-data: true
   model-type: mochi
 
-- name: Galaxy DiT Qwen-Image model perf tests
-  cmd: |
-    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-    pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x8" --timeout=1000
-  model: qwenimage
-  skus:
-    wh_galaxy_perf:
-      timeout: 20
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  arch: wormhole_b0
-  save-perf-data: true
-  model-type: QwenImage
+# TEMPORARILY DISABLED - see https://github.com/tenstorrent/tt-metal/issues/47355
+# The 4x8 Qwen-Image pipeline perf test hangs the device mid-pipeline in an
+# uninterruptible driver call (pytest --timeout does not fire). The hung process is
+# SIGKILLed by the CI action timeout, leaking TLB windows that `tt-smi reset` reports
+# as successfully reset but does not actually reclaim. This bricks the runner so that
+# all subsequent jobs fail with "Failed to allocate TLB window (tt_tlb_alloc -12)".
+# Re-enable once the hang is fixed / the runner reset reliably reclaims TLB windows.
+# - name: Galaxy DiT Qwen-Image model perf tests
+#   cmd: |
+#     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+#     pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x8" --timeout=1000
+#   model: qwenimage
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 20
+#   owner_id: U08TED0JM9D # Samuel Adesoye
+#   team: models
+#   arch: wormhole_b0
+#   save-perf-data: true
+#   model-type: QwenImage
 
 - name: Galaxy DeepSeek V3 decode perf tests
   cmd: export MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3/demo/test_decode_demo_perf.py --timeout=1200
@@ -117,3 +112,44 @@
 #   arch: wormhole_b0
 #   save-perf-data: false
 #   model-type: sentence_bert
+
+# TT-Train Blackhole Galaxy model perf tests
+#   To keep the workflow file as general as possible, tt-train specific setup will be called before each command via a script
+- name: Galaxy TinyLlama 1.1B DDP=32 train perf tests
+  cmd: |
+    ./tt-train/scripts/setup_pth.sh
+    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "tinyllama_1_1b_ddp32_shakespeare"
+  model: tinyllama_1_1b_ddp32_shakespeare
+  skus:
+    bh_galaxy_perf:
+      timeout: 75
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+  save-perf-data: false
+
+- name: Galaxy Llama 8B TP=8 DDP=4 train perf tests
+  cmd: |
+    ./tt-train/scripts/setup_pth.sh
+    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp8_ddp4_shakespeare"
+  model: llama_8b_tp8_ddp4_shakespeare
+  skus:
+    bh_galaxy_perf:
+      timeout: 50
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+  save-perf-data: false
+
+- name: Galaxy Llama 8B TP=4 DDP=8 train perf tests
+  cmd: |
+    ./tt-train/scripts/setup_pth.sh
+    python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/galaxy.yaml --filter-filenames "llama_8b_tp4_ddp8_shakespeare"
+  model: llama_8b_tp4_ddp8_shakespeare
+  skus:
+    bh_galaxy_perf:
+      timeout: 55
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  arch: blackhole
+  save-perf-data: false

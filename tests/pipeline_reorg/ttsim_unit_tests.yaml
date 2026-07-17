@@ -1,0 +1,32 @@
+# This file defines the test matrix for the ttsim unit tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
+#     dispatch input. On dispatch the impl filters this matrix to entries whose
+#     category appears in the comma-separated list; on schedule the filter is
+#     bypassed and every entry runs.
+
+# Entries use sim_<arch> SKUs (sim_wormhole_b0, sim_blackhole) and run under
+# the ttsim simulator on ubuntu-latest; the impl invokes setup-ttsim.
+# See .github/actions/setup-ttsim/action.yml.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# Disable ttsim tests due to low CPU capacity
+# - name: ttnn compute-fused validation tests
+#   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=600'
+#   skus:
+#     sim_wormhole_b0:
+#       timeout: 15
+#     sim_blackhole:
+#       timeout: 15
+#   owner_id: U076Z1JJUQZ # Edwin Lee
+#   team: ttsim
+#   category: compute_fused

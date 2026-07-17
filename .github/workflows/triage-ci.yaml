@@ -1,49 +1,59 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) Create CI Triage Issues"
 
 on:
   workflow_dispatch:
+    inputs:
+      max-issues:
+        description: "Maximum issues to create (0 = unlimited)"
+        type: number
+        default: 0
+      workflow-filter:
+        description: "Comma-separated workflow name substrings to restrict analysis. Empty = all."
+        type: string
+        default: ""
+      consecutive-failures-high-volume:
+        description: "Consecutive failures required for high-volume workflows"
+        type: number
+        default: 4
+      consecutive-failures-low-volume:
+        description: "Consecutive failures required for low-volume workflows"
+        type: number
+        default: 2
+      high-volume-runs-per-day:
+        description: "Threshold (>) for classifying a workflow as high-volume"
+        type: number
+        default: 5
+      llm-backend:
+        description: "LLM backend: 'copilot' or 'cursor'"
+        type: string
+        default: "copilot"
+      issue-repo:
+        description: "Repository where new issues will be created"
+        type: string
+        default: "tenstorrent/tt-metal"
+      target-repo:
+        description: "Repository to check workflow run history against"
+        type: string
+        default: "tenstorrent/tt-metal"
 
 permissions:
   contents: read
+  actions: read
+  issues: write
 
 jobs:
-  cursor-cli-smoke-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
-
-      - name: Ensure CURSOR_API_KEY is configured
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
-            exit 1
-          fi
-
-      - name: Install Cursor CLI
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
-
-      - name: Run simple Cursor prompt
-        env:
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          set -euo pipefail
-          output="$(agent -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
-            exit 1
-          fi
+  create-issues:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-create-issues.yaml@main
+    with:
+      issue-repo: ${{ inputs.issue-repo }}
+      target-repo: ${{ inputs.target-repo }}
+      max-issues: ${{ fromJSON(inputs.max-issues) }}
+      llm-backend: ${{ inputs.llm-backend }}
+      workflow-filter: ${{ inputs.workflow-filter }}
+      consecutive-failures-high-volume: ${{ fromJSON(inputs.consecutive-failures-high-volume) }}
+      consecutive-failures-low-volume: ${{ fromJSON(inputs.consecutive-failures-low-volume) }}
+      high-volume-runs-per-day: ${{ fromJSON(inputs.high-volume-runs-per-day) }}
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.TT_METAL_TICKETING_TOKEN }}
+      COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}

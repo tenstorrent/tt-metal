@@ -63,7 +63,11 @@ void kernel_main() {
 
     // ==================== Initialize reduction ====================
     binary_op_init_common(cb_in0, cb_in0, cb_out);
-    reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_out);
+    constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+    if constexpr (swap_operands) {
+        reconfig_data_format(cb_scaler, cb_in0);
+    }
+    reduce_init<REDUCE_OP, REDUCE_DIM>(cb_in0, cb_scaler, cb_out);
 
     // Wait for scaler to be ready (pushed by dataflow)
     cb_wait_front(cb_scaler, 1);
@@ -78,7 +82,7 @@ void kernel_main() {
 
         // Reduce across width for this row
         for (uint32_t col = 0; col < input_width_tiles; ++col) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, col, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM>(cb_in0, cb_scaler, col, scaler0, dst0);
         }
 
         // Commit and pack result

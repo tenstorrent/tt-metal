@@ -51,7 +51,7 @@ namespace {
 // The kernel occupies core {0,0} and all runtime args are set via emplace_runtime_args.
 KernelDescriptor MakeBlankReaderKernel(CoreCoord core = {0, 0}) {
     KernelDescriptor kd;
-    kd.kernel_source = "tt_metal/kernels/dataflow/blank.cpp";
+    kd.kernel_source = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
     kd.source_type = KernelDescriptor::SourceType::FILE_PATH;
     kd.core_ranges = CoreRangeSet{CoreRange{core}};
     kd.config = ReaderConfigDescriptor{};
@@ -609,6 +609,70 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_DuplicateBuffer_Retu
     EXPECT_TRUE(resolved.empty());
     EXPECT_TRUE(resolved.rt_args.empty());
     EXPECT_TRUE(resolved.cbs.empty());
+}
+
+// #48928: an OUTPUT buffer that aliases an INPUT (in-place op writing back into its input) is a
+// same-buffer-by-construction alias, not the ambiguous matmul(X, X) case.  With num_input_buffers
+// marking the input/output boundary, resolve_bindings must KEEP the fast path (non-empty bindings).
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasesInput_KeepsFastPath) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // [input=buf_a, output=buf_a]; first entry is the input, the second is the in-place output.
+    ResolvedBindings resolved =
+        resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get(), buf_a.get()}, /*num_input_buffers=*/1);
+
+    EXPECT_FALSE(resolved.empty());
+    ASSERT_EQ(resolved.rt_args.size(), 1u);
+    EXPECT_EQ(resolved.rt_args[0].tensor_buffer_idx, 0u);
+}
+
+// #48928: a duplicate purely WITHIN the input region (two distinct input operands that coincide,
+// matmul(X, X)) must still bail even when num_input_buffers is given.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_InputRegionDuplicate_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get(), buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // Both entries are inputs (no output region); the repeat is ambiguous → bail.
+    ResolvedBindings resolved =
+        resolve_bindings(program, desc, std::vector<Buffer*>{buf_a.get(), buf_a.get()}, /*num_input_buffers=*/2);
+
+    EXPECT_TRUE(resolved.empty());
+}
+
+// #48928: op(X, X, out=X) — X at two genuine input positions plus the in-place output_tensor slot.
+// The output-alias skip is granted ONCE; the extra input occurrence still bails, so a later
+// same-shape op(X, Y, out=X) cache hit can't patch input-b to X's address.
+TEST_F(DescriptorPatchingDeviceTest, Tensix_ResolveBindings_OutputAliasRepeatedInInputs_ReturnsEmpty) {
+    auto buf_a = MakeDramBuffer(device());
+
+    KernelDescriptor kd = MakeBlankReaderKernel({0, 0});
+    kd.emplace_runtime_args({0, 0}, {buf_a.get()});
+
+    ProgramDescriptor desc;
+    desc.kernels = {kd};
+
+    Program program{desc};
+    // [input_a=X, input_b=X, output_tensor=X | return=X]; num_input_buffers=3 (tensor_args), 1 output.
+    ResolvedBindings resolved = resolve_bindings(
+        program,
+        desc,
+        std::vector<Buffer*>{buf_a.get(), buf_a.get(), buf_a.get(), buf_a.get()},
+        /*num_input_buffers=*/3);
+
+    EXPECT_TRUE(resolved.empty());
 }
 
 // resolve_bindings fires TT_FATAL when a runtime-arg binding buffer is not in

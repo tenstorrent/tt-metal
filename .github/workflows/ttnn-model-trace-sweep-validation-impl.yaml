@@ -52,6 +52,7 @@ jobs:
     needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
@@ -526,7 +527,7 @@ jobs:
             local is_galaxy=0
             [[ "$tg" == *galaxy* ]] && is_galaxy=1
             local hw_series_filter=""
-            for series in n150 n300 p150b p100a galaxy; do
+            for series in n150 n300 p150b p100a p300a galaxy; do
               if [[ "$tg" == *"$series"* ]]; then hw_series_filter="$series"; break; fi
             done
             # Filter MODULE_SELECTOR to modules with vector files matching our
@@ -576,6 +577,8 @@ jobs:
               TTNN_VECTORS_EXPORT_DIR="$vectors_dir" \
               TTNN_MASTER_JSON_PATH="/work/model_tracer/traced_operations/ttnn_operations_master.json" \
               python3 model_tracer/generic_ops_tracer.py \
+                --include-failed \
+                --allow-test-failures \
                 tests/sweep_framework/sweeps_runner.py \
                 -o "$TRACE_OUT" \
                 -- \

@@ -6,7 +6,7 @@ on:
       test-category:
         required: true
         type: string
-        description: "Choice of 'smoke', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
+        description: "Choice of 'merge_gate', 'unit', 'perf'. Maps tests/pipeline_reorg/train_{test-category}_tests.yaml."
       docker-image:
         required: true
         type: string
@@ -50,12 +50,25 @@ on:
         type: number
         default: 0
         description: "If > 0, skip time budget verification and use this as job timeout."
+      subcategories:
+        required: false
+        type: string
+        default: ''
+        description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ inputs.subcategories != '' && steps.filter-categories.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/train_${{ inputs.test-category }}_tests.yaml
     steps:
@@ -75,11 +88,16 @@ jobs:
       - name: Verify test timeouts against budget
         if: ${{ inputs.timeout-minutes-override == 0 }}
         run: |
-          set -e
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -87,8 +105,21 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
+      - name: Filter matrix by subcategories
+        if: ${{ inputs.subcategories != '' }}
+        id: filter-categories
+        run: |
+          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          categories='${{ inputs.subcategories }}'
+          filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
+          {
+            echo "matrix<<EOF"
+            echo "$filtered"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
   tt-train-tests:
     needs: [load-test-matrix]
@@ -111,6 +142,7 @@ jobs:
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         TT_LOGGER_LEVEL: warn
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -179,7 +211,7 @@ jobs:
           retention-days: 30
 
       - name: Upload metrics data to AWS SFTP bucket
-        if: ${{ inputs.test-category == 'perf' }}
+        if: ${{ !cancelled() && inputs.test-category == 'perf' && hashFiles('docker-job/generated/tt-train-metrics/**') != '' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.TT_TRAIN_AWS_KEY }}

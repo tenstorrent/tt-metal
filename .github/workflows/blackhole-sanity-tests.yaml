@@ -1,0 +1,229 @@
+name: "Blackhole sanity tests"
+
+on:
+  workflow_call:
+    inputs:
+      enable-watcher:
+        description: "Enable watcher in BH Post commit"
+        default: false
+        type: boolean
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 22.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: string
+        default: "Release"
+        description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+      run-ttnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTNN unit tests"
+      run-profiler-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run profiler regression tests"
+      run-umd-sanity-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run UMD sanity tests"
+      run-ops-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run ops unit tests"
+      run-blackhole-multi-card-fast-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run Blackhole multi-card fast unit tests"
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
+      schedule-runs-all-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "When true (default), a scheduled run uses the Blackhole schedule suite (not gated on run-* alone). When false, only run-* inputs enable jobs—set false when calling from another workflow."
+  workflow_dispatch:
+    inputs:
+      enable-watcher:
+        description: "Enable watcher in BH Post commit"
+        default: false
+        type: boolean
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        description: "Build type for the workflow"
+        required: false
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+      enable-lto:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable Link Time Optimization (LTO)"
+      run-ttnn-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTNN unit tests"
+      run-profiler-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run profiler regression tests"
+      run-umd-sanity-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run UMD sanity tests"
+      run-ops-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run ops unit tests"
+      run-blackhole-multi-card-fast-unit-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run Blackhole multi-card fast unit tests"
+      enable-llk-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK asserts"
+  schedule:
+    - cron: "0 */4 * * *"
+  # Pause this since not enough runners to support every commit to main
+  # push:
+  #  branches: ["main"]
+
+run-name: >-
+  ${{ (inputs.enable-watcher == true && 'Blackhole sanity tests (watcher enabled)')
+  || 'Blackhole sanity tests' }}
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+  checks: write
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-umd-tests: true
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  resolve-docker-pull-refs:
+    needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      ci-test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+
+  profiler-tests:
+    needs: [resolve-docker-pull-refs, build-artifact]
+    if: ${{ always() && !cancelled() && (inputs.run-profiler-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "bh_p150b_civ2_viommu"
+      test-selection: post-commit
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  umd-sanity-tests:
+    needs: [resolve-docker-pull-refs, build-artifact]
+    if: ${{ always() && !cancelled() && (inputs.run-umd-sanity-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    secrets: inherit
+    uses: ./.github/workflows/umd-sanity-tests-impl.yaml
+    with:
+      enabled-skus: "bh_p150b_civ2_viommu"
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  ttnn-unit-tests:
+    needs: [resolve-docker-pull-refs, build-artifact, check-harbor]
+    if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
+    with:
+      enabled-skus: "bh_p150b_civ2"
+      docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+  ops-sanity-tests:
+    needs: [resolve-docker-pull-refs, build-artifact]
+    if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    secrets: inherit
+    uses: ./.github/workflows/ops-sanity-impl.yaml
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: "bh_p150b_civ2_viommu"
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
+  # Multi-card post-commit tests (QB2/P300 box).
+  blackhole-multi-card-fast-sanity-tests:
+    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
+    needs: [build-artifact]
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-multi-card-sanity-tests-impl.yaml
+    with:
+      enabled-skus: "bh_quietbox_2,bh_p300"
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

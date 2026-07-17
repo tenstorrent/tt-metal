@@ -5,12 +5,17 @@
 #include "fabric.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/internal/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
@@ -217,6 +222,102 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
+        "get_fabric_kernel_defines",
+        [](const std::string& api_type_str) {
+            tt::tt_fabric::FabricApiType api_type;
+            if (api_type_str == "Linear") {
+                api_type = tt::tt_fabric::FabricApiType::Linear;
+            } else if (api_type_str == "Mesh") {
+                api_type = tt::tt_fabric::FabricApiType::Mesh;
+            } else {
+                throw std::invalid_argument("api_type must be 'Linear' or 'Mesh', got: " + api_type_str);
+            }
+            return tt::tt_metal::internal::get_fabric_kernel_defines(api_type);
+        },
+        nb::arg("api_type") = "Linear",
+        R"(
+            Query the kernel defines required by the current fabric configuration.
+            Pure query — no PD mutation, no side effects. Safe to call before kernel compilation.
+
+            Args:
+                api_type: Fabric API type ("Linear" or "Mesh"). Defaults to "Linear".
+
+            Returns:
+                List of (name, value) tuples, e.g. [("FABRIC_2D", "1"), ("API_TYPE_Linear", "1")].
+        )");
+
+    mod.def(
+        "fabric_connection_rt_args",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+           const std::vector<uint32_t>& connection_link_indices,
+           tt::tt_metal::ProgramDescriptor& program_descriptor,
+           size_t kernel_idx,
+           tt::tt_metal::CoreCoord worker_core) {
+            std::vector<uint32_t> fabric_args;
+
+            tt::tt_metal::KernelHandle kernel_id = static_cast<tt::tt_metal::KernelHandle>(kernel_idx);
+            tt::tt_metal::internal::append_routing_plane_connection_rt_args_no_defines<tt::tt_metal::ProgramDescriptor>(
+                src_fabric_node_id,
+                dst_nodes,
+                connection_link_indices,
+                program_descriptor,
+                kernel_id,
+                worker_core,
+                fabric_args);
+
+            return fabric_args;
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_nodes"),
+        nb::arg("connection_link_indices"),
+        nb::arg("program_descriptor"),
+        nb::arg("kernel_idx"),
+        nb::arg("worker_core"),
+        R"(
+            Set up fabric connections: allocate semaphores and compute runtime args.
+            Does NOT inject kernel defines — use get_fabric_kernel_defines() for that.
+
+            Use this when kernel defines must be set before compilation (e.g., blaze
+            eager-compile model), and connection setup happens after compilation.
+
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_nodes: List of FabricNodeIds of destination chips (one per route)
+                connection_link_indices: List of link indices (empty for auto-select, size 1 for all routes, or per-route)
+                program_descriptor: ProgramDescriptor to add semaphores to (mutated)
+                kernel_idx: Index of the kernel in the program descriptor
+                worker_core: Logical core coordinate of the worker
+
+            Returns:
+                List of runtime args to extend into per-core NCRISC runtime args.
+        )");
+
+    mod.def(
+        "compute_fabric_connection_rt_args",
+        &tt::tt_metal::internal::compute_fabric_connection_rt_args,
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_nodes"),
+        nb::arg("connection_link_indices"),
+        nb::arg("teardown_sem_ids"),
+        nb::arg("buffer_index_sem_ids"),
+        R"(
+            Compute fabric connection RT args without any PD mutation.
+            Pure computation — resolves routing and assembles the flat RT args vector
+            using caller-provided semaphore IDs. No PD needed.
+
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_nodes: List of FabricNodeIds of destination chips
+                connection_link_indices: List of link indices (empty for auto-select)
+                teardown_sem_ids: Pre-allocated semaphore IDs (one per connection)
+                buffer_index_sem_ids: Pre-allocated semaphore IDs (one per connection)
+
+            Returns:
+                List of runtime args for RoutingPlaneConnectionManager::build_from_args().
+        )");
+
+    mod.def(
         "get_tt_fabric_packet_header_size_bytes",
         &tt::tt_fabric::get_tt_fabric_packet_header_size_bytes,
         R"(
@@ -228,6 +329,56 @@ void bind_fabric_api(nb::module_& mod) {
         &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
         R"(
             Returns the maximum fabric packet payload size in bytes.
+        )");
+
+    mod.def(
+        "get_physical_mesh_shapes",
+        []() {
+            // Return plain ints ({mesh_id: (rows, cols)}) to avoid MeshId/MeshShape
+            // Python-type friction -- callers just need the open shape per local mesh.
+            std::unordered_map<uint32_t, std::array<uint32_t, 2>> out;
+            for (const auto& [mid, shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
+                out[*mid] = {shape[0], shape[1]};
+            }
+            return out;
+        },
+        R"(
+            Physical shape of each mesh local to this rank, read from the active mesh graph descriptor.
+
+            Returns a {mesh_id: (rows, cols)} map scoped to get_user_physical_mesh_ids() -- i.e. only
+            this rank's local mesh(es). This is exactly the shape to pass to open_mesh_device, so it is
+            safe to call before the device is opened (the control plane lazily inits from the MGD).
+        )");
+
+    mod.def(
+        "get_eth_forwarding_direction",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+           const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::optional<int> {
+            auto dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+            if (!dir.has_value()) {
+                return std::nullopt;
+            }
+            return static_cast<int>(*dir);
+        },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        R"(
+            Query the ethernet forwarding direction a fabric packet would take from src to dst.
+
+            Returns the raw eth_chan_directions enum value (EAST=0, WEST=1, NORTH=2, SOUTH=3, Z=4),
+            or None if no route exists between the two chips. The returned int matches the
+            per-connection `tag` stored in RoutingPlaneConnectionManager, so it can be used by
+            callers to dedup fabric connections by direction.
+        )");
+
+    mod.def(
+        "get_all_fabric_mesh_ids",
+        &tt::tt_metal::internal::get_all_fabric_mesh_ids,
+        R"(
+            Returns every compute mesh id declared in the active mesh graph descriptor.
+
+            Unlike get_user_physical_mesh_ids (which is scoped to the local rank's meshes),
+            this enumerates peer meshes as well, enabling multi-mesh topology discovery.
         )");
 }
 

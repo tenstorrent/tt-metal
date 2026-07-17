@@ -31,15 +31,12 @@ on:
           - all
           - deepseek_prefill
       test-selection:
-        description: 'Select e2e tests to run: all tests, all SDPA tests, or one test id'
+        description: 'Select e2e tests to run: all tests, or one test id'
         required: false
         default: 'all'
         type: choice
         options:
           - all
-          - sdpa
-          - bh-sdpa-nightly-integration
-          - bh-ring-sdpa-perf
       build-type:
         required: false
         type: choice
@@ -72,7 +69,7 @@ on:
         required: false
         type: string
         default: 'all'
-        description: "Select all tests, the sdpa tag group, or one test id from tests/pipeline_reorg/blackhole_e2e_tests.yaml"
+        description: "Select all tests, or one test id from tests/pipeline_reorg/blackhole_e2e_tests.yaml"
       platform:
         required: false
         type: string

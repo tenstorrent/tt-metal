@@ -183,7 +183,7 @@ jobs:
             source tests/scripts/single_card/run_single_card_demo_tests.sh
           fi
           # For T3000 tests, source the test functions
-          if [[ "${{ matrix.test-group.sku }}" == "wh_llmbox_perf" || "${{ matrix.test-group.sku }}" == "wh_llmbox_perf_release" ]]; then
+          if [[ "${{ matrix.test-group.sku }}" == "wh_llmbox_perf" ]]; then
             source tests/scripts/t3000/run_t3000_demo_tests.sh
           fi
           # Execute the command

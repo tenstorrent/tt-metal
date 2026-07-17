@@ -33,16 +33,16 @@ void process_and_sort_tiles(
 
         tile_regs_acquire();
         reconfig_data_format_srca(input_cb_index);
-        transpose_wh_init_short(input_cb_index);
-        transpose_wh_tile(input_cb_index, 0, 0);
+        transpose_init(input_cb_index);
+        transpose_tile(input_cb_index, 0, 0);
         if (tiles_to_wait == 2) {
-            transpose_wh_tile(input_cb_index, 1, 1);
+            transpose_tile(input_cb_index, 1, 1);
         }
         reconfig_data_format_srca(index_cb_index);
-        transpose_wh_init_short(index_cb_index);
-        transpose_wh_tile(index_cb_index, 0, 2);
+        transpose_init(index_cb_index);
+        transpose_tile(index_cb_index, 0, 2);
         if (tiles_to_wait == 2) {
-            transpose_wh_tile(index_cb_index, 1, 3);
+            transpose_tile(index_cb_index, 1, 3);
         }
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
@@ -293,7 +293,7 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
     CircularBuffer dest_cb(dest_cb_index);
 
     reconfig_data_format_srca(transposed_cb_index);
-    transpose_wh_init_short(transposed_cb_index);
+    transpose_init(transposed_cb_index);
     // Pack using the DESTINATION CB format: transposed_cb may be bf16 (higher-precision
     // intermediate) while dest_cb is the original bfp8/bfp4 output format.
     pack_reconfig_data_format(dest_cb_index);
@@ -301,7 +301,7 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
     transposed_cb.wait_front(Kt);
     for (uint32_t i = 0; i < Kt; ++i) {
         tile_regs_acquire();
-        transpose_wh_tile(transposed_cb_index, i, 0);
+        transpose_tile(transposed_cb_index, i, 0);
         tile_regs_commit();
 
         dest_cb.reserve_back(1);

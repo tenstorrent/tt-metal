@@ -43,9 +43,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         UNPACK_FMT = to_ufmt(DataFormat::UInt16);
     }
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, UNPACK_FMT, UNPACK_FMT);
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::DEFAULT_TENSOR_SHAPE, UNPACK_FMT, UNPACK_FMT);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[0]), UNPACK_FMT, UNPACK_FMT);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_B[0]), UNPACK_FMT, UNPACK_FMT);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_C[0]), UNPACK_FMT, UNPACK_FMT);
@@ -62,12 +63,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// llk_math_eltwise_ternary_sfpu_params.h instantiates asserts with these; must match params.h / JIT.
+// llk_math_eltwise_ternary_sfpu_macros.h instantiates asserts with these; must match params.h / JIT.
 static constexpr ckernel::DstSync DST_SYNC_MODE = ckernel::DstSync::SyncHalf;
 static constexpr bool DST_ACCUM_MODE            = is_fp32_dest_acc_en;
 
-#include "llk_math_eltwise_ternary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 
 // using namespace sfpu;
 
@@ -113,7 +114,16 @@ void run_kernel(RUNTIME_PARAMETERS)
 
     // One SFPU replay advances one row of 32 lanes; 8 rows per face (matches llk_math_eltwise_ternary_sfpu_where).
     constexpr int k_where_iterations = 8;
-    _llk_math_eltwise_ternary_sfpu_params_(ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN), k_where_iterations>, 0, 1, 2, 0);
+    SFPU_TERNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_where_,
+        (false /*APPROXIMATE*/, static_cast<DataFormat>(UNPACK_A_IN), k_where_iterations),
+        0 /*DST_IN0*/,
+        1 /*DST_IN1*/,
+        2 /*DST_IN2*/,
+        0 /*DST_OUT*/,
+        VectorMode::RC);
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

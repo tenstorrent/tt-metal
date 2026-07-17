@@ -1505,6 +1505,83 @@ def test_issue_42753_regression(device, input_shape, begins, ends, step):
     assert_with_pcc(torch_output, tt_output_torch, 0.99)
 
 
+def test_issue_47602_program_cache_collision_on_shape_change(device):
+    """Back-to-back slice calls with different input shapes must produce correct
+    outputs for both ROW_MAJOR and TILE layouts when the program cache is enabled.
+    """
+    torch.manual_seed(47602)
+
+    def _to_tt(t, layout, device):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    # ── ROW_MAJOR path ──────────────────────────────────────────────────────
+    small_rm = torch.rand(1, 1, 32, 64, dtype=torch.bfloat16)
+    large_rm = torch.rand(1, 4, 512, 512, dtype=torch.bfloat16)
+
+    tt_small_rm = _to_tt(small_rm, ttnn.ROW_MAJOR_LAYOUT, device)
+    tt_large_rm = _to_tt(large_rm, ttnn.ROW_MAJOR_LAYOUT, device)
+
+    tt_out_small_rm = ttnn.slice(tt_small_rm, [0, 0, 0, 0], [1, 1, 32, 32], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_small_rm = device.num_program_cache_entries()
+
+    tt_out_large_rm = ttnn.slice(tt_large_rm, [0, 0, 0, 0], [1, 4, 256, 256], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_large_rm = device.num_program_cache_entries()
+
+    assert entries_after_large_rm > entries_after_small_rm, "large RM slice must be a cache-miss, not a hit"
+    assert_with_pcc(small_rm[:, :, :, :32], ttnn.to_torch(tt_out_small_rm), 0.9999)
+    assert_with_pcc(large_rm[:, :, :256, :256], ttnn.to_torch(tt_out_large_rm), 0.9999)
+
+    # ── TILE path ───────────────────────────────────────────────────────────
+    small_tile = torch.rand(1, 1, 32, 64, dtype=torch.bfloat16)
+    large_tile = torch.rand(1, 4, 512, 512, dtype=torch.bfloat16)
+
+    tt_small_tile = _to_tt(small_tile, ttnn.TILE_LAYOUT, device)
+    tt_large_tile = _to_tt(large_tile, ttnn.TILE_LAYOUT, device)
+
+    tt_out_small_tile = ttnn.slice(tt_small_tile, [0, 0, 0, 0], [1, 1, 32, 32], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_small_tile = device.num_program_cache_entries()
+
+    tt_out_large_tile = ttnn.slice(tt_large_tile, [0, 0, 0, 0], [1, 4, 256, 256], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_large_tile = device.num_program_cache_entries()
+
+    assert entries_after_large_tile > entries_after_small_tile, "large TILE slice must be a cache-miss, not a hit"
+    assert_with_pcc(small_tile[:, :, :, :32], ttnn.to_torch(tt_out_small_tile), 0.9999)
+    assert_with_pcc(large_tile[:, :, :256, :256], ttnn.to_torch(tt_out_large_tile), 0.9999)
+
+
+def test_issue_47602_same_shape_reuses_cache_entry(device):
+    """Same shape called twice must be a cache hit (entry count must not grow).
+
+    Verifies the hash is not over-aggressive: repeated slices with identical
+    inputs, shapes, and slice params reuse the same program rather than
+    compiling a new one each time.
+    """
+    torch.manual_seed(47602)
+
+    torch_input = torch.rand(1, 4, 128, 128, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn.slice(tt_input, [0, 0, 0, 0], [1, 4, 64, 64], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_first = device.num_program_cache_entries()
+
+    ttnn.slice(tt_input, [0, 0, 0, 0], [1, 4, 64, 64], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    entries_after_second = device.num_program_cache_entries()
+
+    assert entries_after_second == entries_after_first, "identical slice must be a cache hit, not a miss"
+
+
 @pytest.mark.parametrize(
     "shape, slice_start, slice_end",
     [
@@ -1534,3 +1611,26 @@ def test_slice_rm_nd_misaligned_last_dim(device, shape, slice_start, slice_end):
         slice_start[4] : slice_end[4],
     ]
     assert_with_pcc(torch_expected, ttnn.to_torch(tt_output), 0.9999)
+
+
+# 258112 exercises last_chunk_size < chunk_size (256 B tail); 262144 exercises the exact-divisor branch (last_chunk_size == chunk_size).
+@pytest.mark.parametrize("last_dim", [258112, 262144])
+def test_slice_rm_wide_row_chunking(device, last_dim):
+    """RM slice with a last-dim row wider than the double-buffered CB L1 budget."""
+    begins = [0, 2, 0]
+    ends = [6, 3, last_dim]
+    step = [1, 1, 1]
+
+    torch_input = torch.rand([6, 3, last_dim], dtype=torch.float32)
+    torch_output = torch_input[0:6, 2:3, 0:last_dim]
+
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.float32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))

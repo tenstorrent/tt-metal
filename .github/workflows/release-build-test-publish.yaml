@@ -122,7 +122,7 @@ jobs:
         run: |
           if [[ "${{ inputs.platform }}" == "${{ inputs.main-platform }}" ]]; then
             # Main platform runs all tests including multi-card
-            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf_release,wh_galaxy_release,bh_p100,bh_p150,bh_p150_perf,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
+            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf,wh_galaxy,bh_p100,bh_p150,bh_p150_perf,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
           else
             # Other platforms run only single-card tests
             echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf" >> "$GITHUB_OUTPUT"
@@ -203,6 +203,7 @@ jobs:
         image: [release, release-models]
     needs:
       - build-artifact-release
+      - check-harbor
       - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
@@ -214,6 +215,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
       image: ${{ matrix.image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
 
   resolve-docs-version:
     runs-on: ubuntu-latest

@@ -196,6 +196,14 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         2 * n_activated_expert_tiles,
         scores_data_format);
 
+    // Optional padding config: when absent, fall back to the output indices buffer so the writer's
+    // TensorAccessor compile-time args still line up (a 0 runtime address then disables padding).
+    auto cb_padding_config = tt::CBIndex::c_23;
+    auto* padding_config_buffer =
+        tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer() : output_indices.buffer();
+    uint32_t padding_config_page_size = static_cast<uint32_t>(padding_config_buffer->aligned_page_size());
+    tt::tt_metal::create_cb(cb_padding_config, program, all_cores, padding_config_page_size, 1, tt::DataFormat::UInt32);
+
     std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
         {"cb_in_scores", cb_in_scores},
         {"cb_in_bias", cb_in_bias},
@@ -247,7 +255,6 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         {"num_group_tiles", num_group_tiles},
         {"n_activated_experts", operation_attributes.n_activated_experts},
         {"n_activated_expert_tiles", n_activated_expert_tiles},
-        {"log_n_activated_experts", std::log2(operation_attributes.n_activated_experts)},
         {"cb_reduce_intermediate", cb_reduce_intermediate},
         {"cb_final_indices_transposed", cb_final_indices_transposed},
         {"cb_reduce_ones_scalar", cb_reduce_ones_scalar},
@@ -257,6 +264,10 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         {"cb_reciprocal_sums", cb_reciprocal_sums},
         {"cb_gathered_sigmoid", cb_gathered_sigmoid},
         {"stable_sort", static_cast<uint32_t>(operation_attributes.stable_sort)},
+        {"score_func", static_cast<uint32_t>(operation_attributes.score_func)},
+        // blocks::topk only reads log_tiles when tiles <= 2, so a ceil-log2 is safe. Used by the
+        // single-group (n_groups == 1) path which runs a plain top-k over all width_tiles.
+        {"log_width_tiles", static_cast<uint32_t>(std::ceil(std::log2(static_cast<double>(width_tiles))))},
     };
 
     std::vector<uint32_t> compute_compile_time_args = {};
@@ -308,11 +319,13 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         {"seq_len_tiles", tt::div_up(seq_len, tile_height)},
         {"remainder_tokens_per_tile", remainder_tokens_per_tile},
         {"n_activated_expert_tiles", n_activated_expert_tiles},
+        {"cb_padding_config", cb_padding_config},
     };
 
     std::vector<uint32_t> writer_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(output_weights.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_indices.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(padding_config_buffer).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
         program,
@@ -321,10 +334,13 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
+    uint32_t padding_config_addr =
+        tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer()->address() : 0;
+
     std::vector<uint32_t> reader_runtime_args = {scores.buffer()->address(), bias.buffer()->address(), 0, 0};
     std::vector<uint32_t> compute_runtime_args = {0, 0};
     std::vector<uint32_t> writer_runtime_args = {
-        output_weights.buffer()->address(), output_indices.buffer()->address(), 0, 0};
+        output_weights.buffer()->address(), output_indices.buffer()->address(), 0, 0, padding_config_addr};
 
     uint32_t start_height_tile = 0;
     uint32_t end_height_tile = 0;
@@ -374,6 +390,8 @@ void MoeGroupedTopkDeviceOperation::ProgramFactory::override_runtime_arguments(
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
         writer_runtime_args[0] = tensor_return_value[0].buffer()->address();
         writer_runtime_args[1] = tensor_return_value[1].buffer()->address();
+        writer_runtime_args[4] =
+            tensor_args.padding_config.has_value() ? tensor_args.padding_config->buffer()->address() : 0;
     }
 }
 

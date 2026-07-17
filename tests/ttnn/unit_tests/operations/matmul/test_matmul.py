@@ -12,7 +12,6 @@ import ttnn
 
 from models.common.utility_functions import (
     is_blackhole,
-    is_llk_assert_enabled,
     skip_for_slow_dispatch,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
@@ -43,23 +42,58 @@ def find_max_subblock(out_block_h, out_block_w):
 
 
 # Supported (transpose_tile, tile_w, tile_h, has_bias) combinations for tiny-tile matmul.
+# Verified empirically on wormhole_b0 with TT_METAL_LLK_ASSERTS=1 (issue #42927).
 # Excluded cases:
 #   - transpose_tile=True,  tile_w=16, any tile_h, any has_bias:
 #       in1=32x16 with transpose has no addr_mod handling in llk_math_matmul
 #   - transpose_tile=False, tile_w=16, tile_h=32, has_bias=True:
 #       Broadcast Row with 32x16 narrow tile not supported
+#   - transpose_tile=True, tile_h<16 (in0 height):
+#       Probing on wormhole_b0 showed these pass on the reuse path; in1 is
+#       Tile((32, tile_w), transpose_tile=True) so tile.cpp's transpose-height
+#       constraint (height == 16 or 32) is checked against in1's height (32),
+#       not in0's tile_h. See #42927.
 _TINY_TILE_SUPPORTED_COMBOS = frozenset(
     # (transpose_tile, tile_w, tile_h, has_bias)
     {
-        (False, 16, 16, False),
-        (False, 16, 16, True),
-        (False, 16, 32, False),
-        # (False, 16, 32, True) excluded
+        # tile_w=32, no transpose — all power-of-2 tile_h in {1,2,4,8,16,32} supported
+        (False, 32, 1, False),
+        (False, 32, 1, True),
+        (False, 32, 2, False),
+        (False, 32, 2, True),
+        (False, 32, 4, False),
+        (False, 32, 4, True),
+        (False, 32, 8, False),
+        (False, 32, 8, True),
         (False, 32, 16, False),
         (False, 32, 16, True),
         (False, 32, 32, False),
         (False, 32, 32, True),
-        # (True, 16, *, *) all excluded
+        # tile_w=16, no transpose — all power-of-2 tile_h supported except (32, True)
+        (False, 16, 1, False),
+        (False, 16, 1, True),
+        (False, 16, 2, False),
+        (False, 16, 2, True),
+        (False, 16, 4, False),
+        (False, 16, 4, True),
+        (False, 16, 8, False),
+        (False, 16, 8, True),
+        (False, 16, 16, False),
+        (False, 16, 16, True),
+        (False, 16, 32, False),
+        # (False, 16, 32, True) excluded
+        # transpose_tile=True, tile_w=32 — all power-of-2 tile_h in {1,2,4,8,16,32}
+        # (in1 is Tile((32, 32), transpose_tile=True); tile_h is in0 height, unconstrained
+        # by tile.cpp's transpose check which applies to in1's height=32). See #42927.
+        # (True, 16, *, *) all excluded (transposed in1 with tile_w=16 — C++ TT_FATAL)
+        (True, 32, 1, False),
+        (True, 32, 1, True),
+        (True, 32, 2, False),
+        (True, 32, 2, True),
+        (True, 32, 4, False),
+        (True, 32, 4, True),
+        (True, 32, 8, False),
+        (True, 32, 8, True),
         (True, 32, 16, False),
         (True, 32, 16, True),
         (True, 32, 32, False),
@@ -121,7 +155,7 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
 @pytest.mark.parametrize("m", [1024])
 @pytest.mark.parametrize("k", [64])
 @pytest.mark.parametrize("n_out", [512])
-@pytest.mark.parametrize("tile_h", [8, 16])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16])
 def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, tile_h, tile_w):
     torch.manual_seed(0)
@@ -303,7 +337,7 @@ def test_matmul_reuse_config_sharded_fd_column(
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
 @pytest.mark.parametrize("n", [256])
-@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in0_sharded", [True, False])
 @pytest.mark.parametrize("in1_sharded", [True, False])
@@ -313,12 +347,18 @@ def test_matmul_reuse_config_sharded_fd_column(
 def test_matmul_reuse_config_sharded_tiny_tile(
     device, b, h, m, k, n, tile_h, tile_w, in0_sharded, in1_sharded, out_sharded, in1_dtype, transpose_tile
 ):
-    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h) and is_llk_assert_enabled():
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h):
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
     torch.manual_seed(0)
 
     grid_size = (b, h)
+
+    # For very small tile_h, m=256 produces per_core_M = m/tile_h tiles per core
+    # which overflows L1. Scale m down so per_core_M stays <= 32 tiles per core.
+    max_per_core_m = 32
+    if m // tile_h > max_per_core_m:
+        m = max_per_core_m * tile_h
 
     in0 = torch.randn((b, h, m, k), dtype=torch.bfloat16)
     in1 = torch.randn((b, h, k, n), dtype=torch.bfloat16)
@@ -436,7 +476,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     mesh_device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
     torch.manual_seed(0)
-    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias):
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
     # PCC issue when height not equal to tile height
@@ -814,6 +854,14 @@ def run_matmul_2d_tiny_tile(
     transpose_tile,
     bias_layout="broadcast",
 ):
+    # For very small tile_h, the default m=512 produces out_block_h = m // grid_y // tile_h
+    # tiles per core which can overflow L1. Cap per-core M to <= 32 tiles.
+    max_out_block_h = 32
+    if m // grid_size[1] // tile_h > max_out_block_h:
+        m = max_out_block_h * grid_size[1] * tile_h
+    # n must be divisible by tile_w * grid_size[0]
+    n = ((n + tile_w * grid_size[0] - 1) // (tile_w * grid_size[0])) * (tile_w * grid_size[0])
+
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
     if bias_layout == "broadcast":
@@ -941,7 +989,7 @@ def run_matmul_2d_tiny_tile(
 @pytest.mark.parametrize("n", [768])
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("grid_size", [(8, 4)])
-@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in0_sharded", [True])
 @pytest.mark.parametrize("out_sharded", [True])
@@ -962,8 +1010,12 @@ def test_matmul_2d_tiny_tile(
     transpose_tile,
 ):
     torch.manual_seed(0)
-    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias):
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
+    # Bfp compressed dtypes (bfloat8_b, bfloat4_b) on the 2D mcast path require tile_h >= 16;
+    # smaller tile_h hangs the LLK unpack/pack path. tile_h in {16, 32} verified pre-#42927.
+    if in1_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and tile_h < 16:
+        pytest.skip("Bfp compressed dtype with tile_h < 16 not supported on 2D mcast path")
 
     for _ in range(2):
         run_matmul_2d_tiny_tile(
@@ -997,6 +1049,15 @@ def run_matmul_1d_tiny_tile(
     transpose_tile,
     bias_layout="broadcast",
 ):
+    # For very small tile_h, the default m=128 produces out_block_h = m // tile_h
+    # tiles per core which can overflow L1. Cap per-core M to <= 32 tiles.
+    max_out_block_h = 32
+    if m // tile_h > max_out_block_h:
+        m = max_out_block_h * tile_h
+    # n must be divisible by tile_w * num_cores
+    num_cores = grid_size[0] * grid_size[1]
+    n = ((n + tile_w * num_cores - 1) // (tile_w * num_cores)) * (tile_w * num_cores)
+
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
     if bias_layout == "broadcast":
@@ -1122,7 +1183,7 @@ def run_matmul_1d_tiny_tile(
 
 
 def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_h):
-    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, True) and is_llk_assert_enabled():
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, True):
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
 
@@ -1131,6 +1192,10 @@ def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_
     [
         (32, 32, 32, 32, 32, False),
         (16, 32, 32, 16, 32, False),
+        (8, 32, 32, 8, 32, False),
+        (4, 32, 32, 4, 32, False),
+        (2, 32, 32, 2, 32, False),
+        (1, 32, 32, 1, 32, False),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
@@ -1161,6 +1226,10 @@ def test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile(mesh_device, m, k, n
     [
         (32, 32, 32, 32, 32, False),
         (16, 32, 32, 16, 32, False),
+        (8, 32, 32, 8, 32, False),
+        (4, 32, 32, 4, 32, False),
+        (2, 32, 32, 2, 32, False),
+        (1, 32, 32, 1, 32, False),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
@@ -1215,7 +1284,7 @@ def test_linear_fused_non_broadcast_bias_2d_mesh_multiple_blocks(mesh_device, tr
 @pytest.mark.parametrize("n", [1024])
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("grid_size", [(8, 4)])
-@pytest.mark.parametrize("tile_h", [16, 32])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("in0_sharded", [True])
 @pytest.mark.parametrize("out_sharded", [True])
@@ -1236,8 +1305,12 @@ def test_matmul_1d_tiny_tile(
     transpose_tile,
 ):
     torch.manual_seed(0)
-    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias) and is_llk_assert_enabled():
+    if not is_tiny_tile_combo_supported(transpose_tile, tile_w, tile_h, has_bias):
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
+    # Bfp compressed dtypes (bfloat8_b, bfloat4_b) on the 1D mcast path require tile_h >= 16;
+    # smaller tile_h hangs the LLK unpack/pack path. See #42927.
+    if in1_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and tile_h < 16:
+        pytest.skip("Bfp compressed dtype with tile_h < 16 not supported on 1D mcast path")
 
     for _ in range(2):
         run_matmul_1d_tiny_tile(
@@ -1859,7 +1932,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
         ([1.0,2.0,3.0],[3.0,4.0,5.0])
     ])
 # fmt: on
-def test_matmul_same_shape_but_invalid(device, input_a, input_b):
+def test_matmul_same_shape_but_invalid(device, input_a, input_b, expect_error):
     torch.manual_seed(0)
     # pad the lists with zeros to make it 32 so that it fits nicely on the device.
     input_a += [0.0] * (32 - len(input_a))
@@ -1868,18 +1941,17 @@ def test_matmul_same_shape_but_invalid(device, input_a, input_b):
     torch_input_tensor_a = torch.as_tensor(input_a, dtype=torch.bfloat16).reshape((1, 1, 1, len(input_a)))
     torch_input_tensor_b = torch.as_tensor(input_b, dtype=torch.bfloat16).reshape((1, 1, 1, len(input_b)))
 
-    with pytest.raises(RuntimeError) as exception:
+    with expect_error(
+        RuntimeError,
+        "Expected size for first two dimensions of batch2 tensor to be: \\[1, 32\\] but got: \\[1, 1\\]\\.",
+    ):
         torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
-    assert "Expected size for first two dimensions of batch2 tensor to be: [1, 32] but got: [1, 1]." in str(
-        exception.value
-    )
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with pytest.raises(RuntimeError) as exception:
+    with expect_error(RuntimeError, "The width of the first tensor must be equal to the height of the second tensor"):
         ttnn.matmul(input_tensor_a, input_tensor_b)
-    assert "The width of the first tensor must be equal to the height of the second tensor" in str(exception.value)
 
 
 def test_tutorial_matmul(device):
@@ -3606,26 +3678,26 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         assert_numeric_metrics(result_conv, result_col, pcc_threshold=0.99)
 
 
-def test_from_torch_col_tilize_validation():
+def test_from_torch_col_tilize_validation(expect_error):
     torch.manual_seed(0)
     torch_tensor_2d = torch.randn(32, 64, dtype=torch.bfloat16)
     torch_tensor_1d = torch.randn(64, dtype=torch.bfloat16)
 
     # col_tilize requires BFP dtype
-    with pytest.raises(RuntimeError, match="col_tilize=True requires BFP dtype"):
+    with expect_error(RuntimeError, "col_tilize=True requires BFP dtype"):
         ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat16, col_tilize=True)
 
     # col_tilize requires ndim >= 2
-    with pytest.raises(RuntimeError, match="col_tilize=True requires tensor.ndim >= 2"):
+    with expect_error(RuntimeError, "col_tilize=True requires tensor.ndim >= 2"):
         ttnn.from_torch(torch_tensor_1d, dtype=ttnn.bfloat8_b, col_tilize=True)
 
     # col_tilize not supported with spec
     spec = ttnn.TensorSpec((32, 64), ttnn.bfloat8_b, ttnn.TILE_LAYOUT)
-    with pytest.raises(RuntimeError, match="col_tilize=True is not supported with spec"):
+    with expect_error(RuntimeError, "col_tilize=True is not supported with spec"):
         ttnn.from_torch(torch_tensor_2d, spec=spec, col_tilize=True)
 
     # col_tilize requires tile layout
-    with pytest.raises(RuntimeError, match="col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT"):
+    with expect_error(RuntimeError, "col_tilize=True requires layout to be None or ttnn.TILE_LAYOUT"):
         ttnn.from_torch(torch_tensor_2d, dtype=ttnn.bfloat8_b, layout=ttnn.ROW_MAJOR_LAYOUT, col_tilize=True)
 
 
@@ -3915,3 +3987,26 @@ def test_matmul_2d_nd_sharded_in1(device, m, k, n, grid_size, k_splits, n_splits
     # Same weight, same matmul program; only in1's DRAM layout differs, so the ND
     # read must reproduce the interleaved read bit-for-bit.
     assert_equal(out_interleaved, out_nd)
+
+
+def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
+    """Kt (K / tile_width) must be divisible by in0_block_w — error message must include both values."""
+    torch.manual_seed(0)
+    m, k, n = 64, 128, 64
+    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=3,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    with expect_error(RuntimeError, r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
+        ttnn.matmul(in0, in1, program_config=program_config)
