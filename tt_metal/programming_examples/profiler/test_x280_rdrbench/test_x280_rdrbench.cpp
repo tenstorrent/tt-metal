@@ -59,18 +59,18 @@ static constexpr uint64_t SRC_L1 = 0x80000ULL;          // worker L1 scratch: ct
 static constexpr uint64_t DST_BASE = 0x08040000ULL;     // LIM sink region (per-hart 128 KiB)
 static constexpr uint64_t BENCH_ENTRY = 0x08001000ULL;  // FW links at 0x08001000 (x280-lim.ld); boot there
 static constexpr uint64_t MW = 4;                       // marker words (self-describing 4-word marker)
-static const uint32_t KLIST[] = {
-    0u, 4u, 8u, 16u, 32u, 64u, 128u, 256u, 512u, 1024u, 2048u, 4096u, 5000u};  // matches rdrbench.c
-static constexpr int NK = 13;
-static const uint32_t ILPLIST[] = {1u};  // matches rdrbench.c
-static constexpr int NILP = 1;
-static constexpr uint32_t MAX_K = 5000u;
+static const uint32_t KLIST[] = {0u, 4u, 8u, 16u, 32u, 64u, 128u, 256u, 512u};  // matches rdrbench.c
+static constexpr int NK = 9;
+// rdrbench.c sweeps vector LMUL {1, 8} = {64 B, 512 B} per NoC read; these are just the row labels.
+static const char* WIDTHLBL[] = {"m1 (64B) ", "m8 (512B)"};
+static constexpr int NWID = 2;
+static constexpr uint32_t MAX_K = 512u;
 
 static constexpr uint64_t BENCH_RES = 0x08013000ULL;  // 2D grid results (dedicated LIM region)
 static constexpr uint64_t RES_STRIDE = 0x180ULL;      // NILP*NK u64 cycles + done, per hart
 static uint64_t res_slot(int h) { return BENCH_RES + (uint64_t)h * RES_STRIDE; }
-static uint64_t res_cell(int h, int ii, int ki) { return res_slot(h) + (uint64_t)(ii * NK + ki) * 8; }
-static uint64_t res_done(int h) { return res_slot(h) + (uint64_t)(NILP * NK) * 8; }
+static uint64_t res_cell(int h, int wi, int ki) { return res_slot(h) + (uint64_t)(wi * NK + ki) * 8; }
+static uint64_t res_done(int h) { return res_slot(h) + (uint64_t)(NWID * NK) * 8; }
 
 static CoreCoord l2cpu_tile(int idx) {
     switch (idx) {
@@ -350,12 +350,12 @@ int main(int argc, char** argv) {
         std::_Exit(1);
     }
 
-    // 2D ILP x K grid. The slower reader hart bounds a sweep; us_sweep = cycles/nrounds/pll (pll MHz).
-    // Cell = aggregate drain GB/s at that (ILP, K). K=0 column = poll-only lower bound (µs/sweep).
-    auto us_at = [&](int ii, int ki) {
+    // 2D WIDTH x K grid. The slower reader hart bounds a sweep; us_sweep = cycles/nrounds/pll (pll MHz).
+    // Cell = aggregate drain GB/s at that (width, K). K=0 column = poll-only lower bound (µs/sweep).
+    auto us_at = [&](int wi, int ki) {
         uint64_t maxc = 0;
         for (uint64_t h = 0; h < nharts; h++) {
-            uint64_t c = x280.lim_rd_u64(res_cell((int)h, ii, ki));
+            uint64_t c = x280.lim_rd_u64(res_cell((int)h, wi, ki));
             if (c > maxc) {
                 maxc = c;
             }
@@ -363,13 +363,13 @@ int main(int argc, char** argv) {
         return (double)maxc / (double)nrounds / (double)pll;
     };
     printf(
-        "\n=== X280 reader-drain ILP x K sweep (%llu readers, %u cores, %llu rounds, %llu-word markers) ===\n",
+        "\n=== X280 reader-drain WIDTH x K sweep (%llu readers, %u cores, %llu rounds, %llu-word markers) ===\n",
         (unsigned long long)nharts,
         num_cores,
         (unsigned long long)nrounds,
         (unsigned long long)MW);
 
-    // Grid A: aggregate drain GB/s (higher = better). Rows = ILP, cols = K (markers/core).
+    // Grid A: aggregate drain GB/s (higher = better). Rows = read width, cols = K (markers/core).
     printf("\n  drain GB/s   |");
     for (int ki = 1; ki < NK; ki++) {
         printf(" K=%-4u", KLIST[ki]);
@@ -380,17 +380,17 @@ int main(int argc, char** argv) {
         printf("-------");
     }
     printf("\n");
-    for (int ii = 0; ii < NILP; ii++) {
-        printf("  ILP=%-2u       |", ILPLIST[ii]);
+    for (int wi = 0; wi < NWID; wi++) {
+        printf("  %s    |", WIDTHLBL[wi]);
         for (int ki = 1; ki < NK; ki++) {
-            double us = us_at(ii, ki);
+            double us = us_at(wi, ki);
             double gbps = us > 0 ? ((double)KLIST[ki] * num_cores * MW * 4.0) / (us * 1e-6) / 1e9 : 0.0;
             printf(" %-6.2f", gbps);
         }
-        printf("     %.2f\n", us_at(ii, 0));
+        printf("     %.2f\n", us_at(wi, 0));
     }
 
-    // Grid B: ns per marker (lower = better) -- shows ILP amortizing per-core latency, esp. at small K.
+    // Grid B: ns per marker (lower = better).
     printf("\n  ns/marker    |");
     for (int ki = 1; ki < NK; ki++) {
         printf(" K=%-4u", KLIST[ki]);
@@ -400,10 +400,10 @@ int main(int argc, char** argv) {
         printf("-------");
     }
     printf("\n");
-    for (int ii = 0; ii < NILP; ii++) {
-        printf("  ILP=%-2u       |", ILPLIST[ii]);
+    for (int wi = 0; wi < NWID; wi++) {
+        printf("  %s    |", WIDTHLBL[wi]);
         for (int ki = 1; ki < NK; ki++) {
-            double us = us_at(ii, ki);
+            double us = us_at(wi, ki);
             double nspm = ((double)KLIST[ki] * num_cores) > 0 ? (us * 1000.0) / ((double)KLIST[ki] * num_cores) : 0.0;
             printf(" %-6.1f", nspm);
         }
