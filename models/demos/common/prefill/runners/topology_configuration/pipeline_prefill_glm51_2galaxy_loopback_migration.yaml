@@ -1,0 +1,56 @@
+# GLM-5.1 across TWO 8x4 galaxies — Stage 3: migration-layer LOOPBACK test (prefill slot->slot copy)
+# on top of pipelined prefill. De-risks the multi-host migration path on 2 galaxies before 4.
+#
+# REQUIRES the tt-metal branch `yeongyun/layer-ack-d2h-multi-host` AND a migration_endpoint up on
+# BOTH hosts (launch_migration_endpoints.sh, endpoint id 1 -> /mig_ep1_* queues).
+#
+# 78 layers split 39/39 across ranks 0->1. PREFILL_MIGRATION_SELFTEST=1 makes the runner itself:
+#   * publish the merged 2-galaxy KV chunk table (rank 0),
+#   * migrate slot 0 -> slot 1 over the migration layer,
+#   * verify slot 0 == slot 1 (KV copied correctly, traversing both galaxies).
+# No external scheduler for this bring-up step — swap it in once slot==slot PASSes.
+#
+# Launch (host order = cabling chain: mesh 0 -> first --host, mesh 1 -> second):
+#   PREFILL_MIGRATION_CLIENT_DIR=$ENGINE/disaggregation/migration/build_RelWithDebInfo/python \
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_glm51_2galaxy_loopback_migration.yaml \
+#     <h0>:1,<h1>:1
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
+
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto
+
+global_env:
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/glm51.json"
+
+  # Topology / transport (must match the producer's env).
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_NUM_LAYERS: "78"          # split 39/39 across the 2 ranks
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_NUM_USERS: "2"            # loopback needs a src (slot 0) + dst (slot 1)
+  PREFILL_SP: "8"
+  PREFILL_TP: "4"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+
+  # Migration loopback self-test + D2H LayerAck (same ack config as the working pcc_ack run, so the
+  # producer's ack drain completes; ENABLE_LAYER_ACK wires the feed, LAYER_ACK_D2H makes it device records).
+  PREFILL_MIGRATION_SELFTEST: "1"   # self-driven migrate(slot0->slot1) + slot==slot verify; implies table publish
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_LAYER_ACK_D2H: "1"
+  # Worker shmem queue names — MUST match launch_migration_endpoints.sh --prefill_endpoint_id 1.
+  PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
+  PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
+  PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
+  PREFILL_MIGRATION_GRANULARITY: "layerwise"
+  # Migration client .so dir. MUST be in global_env (ttrun does NOT forward shell PREFILL_*), and must
+  # exist at this same absolute path on BOTH hosts (NFS-shared or rsync'd).
+  PREFILL_MIGRATION_CLIENT_DIR: "/data/yeongyun/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python"
+
+  # Per-rank golden KV PCC after the loop.
+  PREFILL_REQUEST_LOOP_PCC: "1"
+  DEEPSEEK_PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.8"

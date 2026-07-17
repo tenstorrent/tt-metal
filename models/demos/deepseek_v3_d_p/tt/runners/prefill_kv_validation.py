@@ -382,6 +382,7 @@ def validate_after_prefill(
     real_end_per_slot: dict,
     num_users: int,
     total_chunks: int,
+    first_layer_idx: int = 0,
 ) -> None:
     """Post-prefill KV-cache validation entrypoint for the runner's PCC mode.
 
@@ -479,7 +480,13 @@ def validate_after_prefill(
                 gpt = None  # kv_cache_pcc_check reads the single DEEPSEEK_PREFILL_TRACE_PT
             logger.info(f"[request]  -> slot={s} n_chunks={n_chunks_s} real_len={real_len} golden={gpt or '<shared>'}")
             slot_pccs[s] = kv_cache_pcc_check(
-                pipeline, kvpe_cache, slot_id=s, n_chunks=n_chunks_s, pt_path_override=gpt, real_len=real_len
+                pipeline,
+                kvpe_cache,
+                slot_id=s,
+                n_chunks=n_chunks_s,
+                pt_path_override=gpt,
+                real_len=real_len,
+                first_layer_idx=first_layer_idx,
             )
         logger.success(
             f"[request] all {len(slots)} slot(s) PASSED KV-cache PCC: "

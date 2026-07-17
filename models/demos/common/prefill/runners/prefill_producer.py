@@ -46,6 +46,7 @@ Usage:
       python -m models.demos.common.prefill.runners.prefill_producer
 """
 
+import json
 import os
 import random
 import struct
@@ -71,6 +72,23 @@ CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
 
+
+def _apply_manifest_env():
+    """If PREFILL_MANIFEST is set, setdefault its flat PREFILL_* ``env`` map before get_adapter below,
+    so a topology binding that points at a per-model manifest (e.g. glm51.json -> PREFILL_MODEL) also
+    configures the producer. An explicitly exported env var still wins (setdefault). Mirrors
+    prefill_runner._apply_manifest_env; the migration users[] block is runner-only and ignored here."""
+    manifest_path = os.environ.get("PREFILL_MANIFEST")
+    if not manifest_path:
+        return
+    with open(manifest_path) as mp:
+        manifest = json.load(mp)
+    for key, val in manifest.get("env", {}).items():
+        if val is not None:
+            os.environ.setdefault(key, str(val))
+
+
+_apply_manifest_env()
 ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
 

@@ -1,0 +1,48 @@
+# GLM-5.1 on ONE 8x4 galaxy — BISECT binding for the loopback-migration bug.
+#
+# Purpose: run the SAME migration self-test (slot0->slot1 + slot==src verify) on a SINGLE rank, so the
+# NEW merge table builder (create_kv_chunk_address_table_kimi) runs with ONE stage but STILL 2 slots.
+# This isolates the multi-SLOT address math from the multi-STAGE (cross-galaxy) merge:
+#   * 1-rank FAILS (dst!=src ~0)  -> bug is the per-slot address math (the new `for slot` loop).
+#   * 1-rank PASSES (dst==src ~1) -> bug is the multi-stage merge (per-stage base_addr/fnids).
+#
+# All 78 layers on the one rank. REQUIRES a migration_endpoint on this host (endpoint id 1) and the
+# tt-metal branch. Drive with prefill_producer.py on this host.
+#
+# Launch:
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_glm51_1galaxy_loopback_migration.yaml \
+#     bh-glx-110-c09u14:1
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+
+mesh_graph_desc_path: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_x_graph_descriptor.textproto
+
+global_env:
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/glm51.json"
+
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_NUM_LAYERS: "78"          # all layers on the single rank (1 stage)
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_NUM_USERS: "2"            # loopback needs src (slot 0) + dst (slot 1) — exercises the slot loop
+  PREFILL_SP: "8"
+  PREFILL_TP: "4"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+
+  # Migration loopback self-test + D2H LayerAck (single-rank needs BOTH ack flags per the use_router gate).
+  PREFILL_MIGRATION_SELFTEST: "1"
+  PREFILL_LAYER_ACK_D2H: "1"
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_MIGRATION_CMD_QUEUE: "/mig_ep1_cmd"
+  PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
+  PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
+  PREFILL_MIGRATION_GRANULARITY: "layerwise"
+  PREFILL_MIGRATION_CLIENT_DIR: "/data/yeongyun/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python"
+
+  # Golden KV PCC on the request-loop output (confirms prefill is good on this config too).
+  PREFILL_REQUEST_LOOP_PCC: "1"
+  DEEPSEEK_PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.8"

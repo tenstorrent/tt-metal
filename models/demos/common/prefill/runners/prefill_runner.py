@@ -807,7 +807,7 @@ def run_request_loop(
     d2d_out=None,
     migration_driver=None,
     d2h_service=None,
-) -> dict:
+) -> tuple:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
@@ -829,6 +829,8 @@ def run_request_loop(
     t0 = time.perf_counter()
     c = 0
     first = None
+    # Per-slot chunk count for the optional post-loop KV-cache PCC (validate_after_prefill).
+    chunks_per_slot: dict = {}
     real_end_per_slot: dict = {}
     while not _shutdown:
         if n_selftest and c >= n_selftest:
@@ -859,9 +861,10 @@ def run_request_loop(
                 f"pos[{meta['actual_start']},{meta['actual_end']})); pumping migration driver"
             )
             migration_driver.pump(current_prefill_chunk=c)
-        # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
-        # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
+        # Track per-slot chunk count + real (non-pad) end position: the producer clamps actual_end to the
+        # real ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
         s = meta["slot_id"]
+        chunks_per_slot[s] = chunks_per_slot.get(s, 0) + 1
         real_end_per_slot[s] = max(real_end_per_slot.get(s, 0), meta["actual_end"])
         if first is None:
             first = t
@@ -871,7 +874,7 @@ def run_request_loop(
     if num_ranks > 1 and n_selftest:
         ttnn.distributed_context_barrier()
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
-    return real_end_per_slot
+    return chunks_per_slot, real_end_per_slot, c
 
 
 def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
@@ -1061,6 +1064,15 @@ def main() -> None:
     ttnn.close_mesh_device(mesh_device)
     logger.info(f"[pp rank {rank}] shutdown complete")
 
+    # Final teardown sync so all ranks enter the implicit atexit MPI_Finalize together. Ranks finish
+    # _serve_request at staggered times (the migration self-test + per-rank layer-completion drain don't
+    # end in lockstep), and the ULFM MPI_Finalize collective busy-waits on stragglers if they arrive
+    # apart — the desync that made a completed run hang. Lining them up here lets finalize converge into
+    # a clean exit. Mirrors the b1 pipeline demo, which barriers through its own teardown. Single-rank
+    # has no peers to sync.
+    if num_ranks > 1:
+        ttnn.distributed_context_barrier()
+
 
 def _serve_standalone(
     runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool
@@ -1218,7 +1230,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
         # ALL RANKS: deliver local device map + contribute this stage to the merged table (barrier).
         stage_layout = deliver_device_map_and_gather_stage_layout(
-            mesh_device, kv_caches, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
+            mesh_device, kv_caches[0], GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
         )
 
         if is_first_rank:
@@ -1389,7 +1401,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # In-loop migration self-test: rank 0 loopback-migrates src->dst, then EVERY rank asserts its
         # local dst KV slice equals its src slice (validate_migrations_pairwise). Env-gated so ALL ranks
         # take the same branch (the barrier below requires it); production serving is unaffected.
-        real_end_per_slot = run_request_loop(
+        chunks_per_slot, real_end_per_slot, total_chunks = run_request_loop(
             runtime,
             kv_caches,
             rank,
@@ -1401,6 +1413,22 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             migration_driver=mig_driver,
             d2h_service=d2h_service,
         )
+
+        # Golden KV-cache PCC (PREFILL_REQUEST_LOOP_PCC=1): after the request loop, PCC every populated
+        # slot's prefilled KV cache against its golden trace, over the slot's real (non-pad) extent. Per-rank
+        # first_layer_idx offsets the layer slice this rank populated, so a pipeline covers the full model.
+        if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1":
+            from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import validate_after_prefill
+
+            validate_after_prefill(
+                runtime,
+                kv_caches[0],
+                chunks_per_slot=chunks_per_slot,
+                real_end_per_slot=real_end_per_slot,
+                num_users=NUM_USERS,
+                total_chunks=total_chunks,
+                first_layer_idx=runtime.config.first_layer_idx,
+            )
 
         if _selftest:
             src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0"))
@@ -1446,7 +1474,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
             from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import validate_migrations_pairwise
 
-            validate_migrations_pairwise(runtime, kv_caches, [(src_slot, dst_slot)])
+            validate_migrations_pairwise(runtime, kv_caches[0], [(src_slot, dst_slot)])
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
         # spin timing out on a stalled router); without this, producer/router/ack segments + the

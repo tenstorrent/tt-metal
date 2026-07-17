@@ -1,0 +1,41 @@
+# GLM-5.1 pipeline prefill across FOUR 8x4 galaxies, standalone (trace-driven) mode with per-rank
+# golden KV PCC. The model's 78 layers split 20/20/19/19 across ranks 0->1->2->3; the hidden state
+# hops device-to-device at each galaxy boundary over the connected 4-galaxy MGD.
+#
+# Self-driven: rank 0 loads the prompt tokens from PREFILL_TRACE_DIR (no scheduler/producer needed),
+# feeds the pipeline, and after prefill EACH rank PCCs the KV slice it populated against that same
+# golden trace (offset by its first_layer_idx). All four ranks passing == full-78-layer validation.
+#
+# Launch (host order MUST match the physical cabling chain: mesh 0 -> first --host ... mesh 3 -> last):
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_glm51_4galaxy_standalone_pcc.yaml \
+#     bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u02:1,bh-glx-d08u08:1
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {}}
+
+# Connected 4x 8x4 BH-galaxy MGD: inter-galaxy links 0<->1<->2<->3.
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
+
+global_env:
+  # Model: GLM-5.1 (manifest sets PREFILL_MODEL=glm_5_1 + its knobs via setdefault).
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/glm51.json"
+
+  # Pipeline transport + topology.
+  PREFILL_STANDALONE: "1"       # trace-driven bounded loop (self-feeds), NOT the request loop
+  PREFILL_FABRIC_MODE: "2d"     # D2D pipeline transport needs FABRIC_2D
+  PREFILL_NUM_LAYERS: "78"      # split 20/20/19/19 across the 4 ranks
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_STANDALONE_NCHUNKS: "11"   # 11 x 5120 = 56320 tokens
+
+  # Golden trace: source of BOTH the input prompt tokens and the golden KV to PCC against.
+  # Each rank reads its own global layer range out of this dir, so it must be readable on ALL 4 hosts.
+  PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
+
+  # Per-rank KV-vs-golden PCC after prefill.
+  PREFILL_STANDALONE_PCC: "1"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.8"   # min per-layer threshold (deep-layer nope PCC dipped to ~0.85 single-galaxy)

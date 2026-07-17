@@ -1,0 +1,33 @@
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {}}
+
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
+
+global_env:
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/glm51.json"
+
+  # Topology / transport (must match the producer's env).
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_NUM_LAYERS: "78"          # split 39/39 across the 2 ranks
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_NUM_USERS: "2"
+  PREFILL_SP: "8"
+  PREFILL_TP: "4"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+
+  # Stage 2 — D2H multi-host LayerAck (no migration). Router aggregates rank 1 -> rank 0 via MPI and
+  # injects the single scheduler counter channel. ENABLE_LAYER_ACK forces the ack path on without
+  # migration (its usual trigger); LAYER_ACK_D2H switches the completion source to device records.
+  PREFILL_ENABLE_MIGRATION: "0"
+  PREFILL_ENABLE_LAYER_ACK: "1"
+  PREFILL_LAYER_ACK_D2H: "1"
+
+  # Stage 1 — per-rank golden KV PCC after the loop.
+  PREFILL_REQUEST_LOOP_PCC: "1"
+  DEEPSEEK_PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.8"

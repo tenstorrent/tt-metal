@@ -1,0 +1,43 @@
+# GLM-5.1 REQUEST-loop prefill across FOUR 8x4 galaxies, with per-rank golden KV PCC at the end.
+#
+# Request mode (H2D-driven, unbounded): rank 0 builds the H2D service; feed it with prefill_producer.py
+# on rank 0's HOST (the producer opens no device, so it doesn't contend for the galaxy). The 78 layers
+# split 20/20/19/19 across ranks 0->1->2->3; hidden state hops D2D at each galaxy boundary.
+#
+# PCC: on shutdown (producer sends the all -1 sentinel via PREFILL_SEND_SHUTDOWN=1), EACH rank PCCs the
+# KV slice it populated against the golden trace, offset by its first_layer_idx — so the four ranks'
+# logs together cover global layers 0..77. Migration is OFF (auto-disabled for num_ranks>1).
+#
+# Launch (host order MUST match the physical cabling chain: mesh 0 -> first --host ... mesh 3 -> last):
+#   ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+#     models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_glm51_4galaxy_request_pcc.yaml \
+#     bh-glx-d07u02:1,bh-glx-d07u08:1,bh-glx-d08u02:1,bh-glx-d08u08:1
+
+rank_bindings:
+  - {rank: 0, mesh_id: 0, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 1, mesh_id: 1, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 2, mesh_id: 2, mesh_host_rank: 0, env_overrides: {}}
+  - {rank: 3, mesh_id: 3, mesh_host_rank: 0, env_overrides: {}}
+
+# Connected 4x 8x4 BH-galaxy MGD: inter-galaxy links 0<->1<->2<->3.
+mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto
+
+global_env:
+  # Model. (No PREFILL_STANDALONE => request loop.)
+  PREFILL_MANIFEST: "models/demos/deepseek_v3_d_p/tt/runners/manifests/glm51.json"
+
+  # Topology / transport (must match the producer's transport env).
+  PREFILL_FABRIC_MODE: "2d"
+  PREFILL_NUM_LAYERS: "78"          # split 20/20/19/19 across the 4 ranks
+  PREFILL_CHUNK_SIZE: "5120"
+  PREFILL_MAX_SEQ_LEN: "56320"
+  PREFILL_NUM_USERS: "3"
+  PREFILL_SP: "8"
+  PREFILL_TP: "4"
+  PREFILL_H2D_SERVICE_ID: "ds_prefill"
+  PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"
+
+  # Per-rank golden KV PCC after the loop exits (each rank checks its own layer slice vs the golden).
+  PREFILL_REQUEST_LOOP_PCC: "1"
+  DEEPSEEK_PREFILL_TRACE_DIR: "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.88"   # min per-layer threshold

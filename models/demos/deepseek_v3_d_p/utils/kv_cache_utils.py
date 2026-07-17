@@ -21,6 +21,32 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 BH_NUM_DRAM_BANKS = 8
 PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
+# A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
+_TILE_DIM = 32  # bfp8 is tiled 32x32
+_BFP8_TILE_BYTES = 1088  # one 32x32 bfp8 tile: 1024 data + 64 exponent bytes
+_BF16_BYTES = 2
+
+
+def _dram_chunk_size_bytes(cache) -> int:
+    """Bytes of one 32-token DRAM-bank chunk ([.., 32, head_dim]) of `cache`, from its dtype:
+      * bfp8_b  (block-float, TILE):  (head_dim / 32) tiles x 1088 B/tile (1024 data + 64 exponent).
+      * bfloat16 (ROW_MAJOR):         32 tokens x head_dim x 2 B, contiguous.
+    Derived from the tensor so each cache (dense bf8 KVPE, bf16 sparse KVPE, bf8 index) sizes itself."""
+    head_dim = cache.shape[-1]
+    if cache.dtype == ttnn.bfloat8_b:
+        # bfp8 is tiled 32x32, so head_dim must be a whole number of tiles — otherwise integer division
+        # would silently undersize the chunk and corrupt the address table.
+        if head_dim % _TILE_DIM != 0:
+            raise ValueError(f"bfloat8_b KV cache head_dim {head_dim} must be a multiple of {_TILE_DIM} (tiled)")
+        return (head_dim // _TILE_DIM) * _BFP8_TILE_BYTES
+    if cache.dtype == ttnn.bfloat16:
+        # The bf16 contiguous sizing below assumes a ROW_MAJOR cache (32 tokens x head_dim packed with no
+        # tile padding). A TILE-laid-out bf16 cache would need the tiled sizing instead, so reject it here.
+        if cache.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError(f"bfloat16 KV cache must be ROW_MAJOR for contiguous chunk sizing, got {cache.layout}")
+        return NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * head_dim * _BF16_BYTES
+    raise ValueError(f"unsupported KV cache dtype for chunk sizing: {cache.dtype}")
+
 
 def create_kv_chunk_address_table_ds(
     config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users=1

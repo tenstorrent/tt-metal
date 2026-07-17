@@ -365,11 +365,17 @@ class TtPrefillRuntime:
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
             NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
             PREFILL_CHUNK_OUTPUT_TOKENS,
+            _dram_chunk_size_bytes,
             create_kv_chunk_address_table_kimi,
         )
 
-        # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
-        chunk_size_bytes = 19584
+        # Per-DRAM-bank chunk size = one NdShardSpec shard ([32, head_dim]) in the cache's real
+        # dtype/layout (matches main's _dram_chunk_size_bytes). Used as BOTH the per-bank read size and
+        # the per-round DRAM stride in create_kv_chunk_address_table_kimi, so it MUST equal the physical
+        # bank size: dense MLA kvpe is bf8_b/TILE (19584 B); sparse-DSA (GLM) kvpe is bf16/ROW_MAJOR
+        # (36864 B). Deriving from kv_caches[0] fixes the sparse cache — a hardcoded dense size truncated
+        # reads and mis-strided every bank (-> garbage / out-of-bounds).
+        chunk_size_bytes = _dram_chunk_size_bytes(kv_caches[0])
         assert self.config.chunk_size == PREFILL_CHUNK_OUTPUT_TOKENS, (
             f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
             f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but config.chunk_size="
