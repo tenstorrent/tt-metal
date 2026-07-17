@@ -1,1 +1,0 @@
-/localdev/ebanerjee/tt-dm-codegen/common/templates/writer_bank_ab.cpp
