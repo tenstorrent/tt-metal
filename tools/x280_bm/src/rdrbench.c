@@ -7,7 +7,7 @@
  * PARALLELISM: `ilp` cores' 64 B flits are launched in flight (ilp independent NoC reads) before draining
  * them, overlapping the per-transaction NoC latency (the lever from x280_baremetal_fw_step1).
  *
- * Sweeps a 2D grid in ONE boot: ILP = {1,2,4,8,16} x K = {0,4,8,16,32,64,128,256,500}. Results (per-hart,
+ * Sweeps K = {0,4,8,16,...,4096,5000} in ONE boot at ILP=1 (single outstanding read). Results (per-hart,
  * per-(ilp,K) cycle counts) land in a dedicated LIM region (BENCH_RES); the host computes drain rate.
  *
  * LIM layout:
@@ -34,12 +34,12 @@
 
 #define DONE_MAGIC 0x5EADE5511BULL
 
-#define NILP 5
-static const uint32_t ILPLIST[NILP] = {1u, 2u, 4u, 8u, 16u};
-#define NK 9
-static const uint32_t KLIST[NK] = {0u, 4u, 8u, 16u, 32u, 64u, 128u, 256u, 500u};
+#define NILP 1
+static const uint32_t ILPLIST[NILP] = {1u};
+#define NK 13
+static const uint32_t KLIST[NK] = {0u, 4u, 8u, 16u, 32u, 64u, 128u, 256u, 512u, 1024u, 2048u, 4096u, 5000u};
 
-#define RES_STRIDE 0x180u /* NILP*NK=45 u64 cycles + done (46 u64 = 0x170), padded */
+#define RES_STRIDE 0x180u /* NILP*NK=13 u64 cycles + done, padded */
 #define RES_SLOT(h) (BENCH_RES + (uint64_t)(h) * RES_STRIDE)
 #define RES_CELL(h, ii, ki) (RES_SLOT(h) + (uint64_t)((ii) * NK + (ki)) * 8)
 #define RES_DONE(h) (RES_SLOT(h) + (uint64_t)(NILP * NK) * 8)

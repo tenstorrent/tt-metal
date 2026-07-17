@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// X280 READER-DRAIN microbenchmark. Isolates the round-robin reader (no relay/SPSC/D2H): 2 reader
-// harts each own half the core grid and, per core, POLL the 16-word control region then DRAIN K
-// markers from that core's single L1 buffer. Sweeps K = {0,4,8,16,32,64,128,256,500} in ONE boot
-// (K=0 = poll-only lower bound = round-robin overhead) and reports us/sweep, Mmarker/s, ns/marker,
-// and drain GB/s per K. No live producer: each core's L1 is pre-filled with a static buffer.
+// X280 READER-DRAIN microbenchmark. Isolates the round-robin reader (no relay/D2H): 2 reader harts
+// each own half the core grid and, per core, POLL the 16-word control region then DRAIN K markers
+// from that core's L1 buffer into the reader's OWN streaming 256 KiB LIM SPSC ring. Sweeps K =
+// {0,4,8,...,4096,5000} at ILP=1 in ONE boot (K=0 = poll-only lower bound = round-robin overhead)
+// and reports drain GB/s + ns/marker per K. No live producer: each core's L1 is pre-filled static.
 //
 // Build:  make -C tools/x280_bm                               (rdrbench.bin)
 //         cmake --build build_Release --target test_x280_rdrbench
@@ -59,11 +59,12 @@ static constexpr uint64_t SRC_L1 = 0x80000ULL;          // worker L1 scratch: ct
 static constexpr uint64_t DST_BASE = 0x08040000ULL;     // LIM sink region (per-hart 128 KiB)
 static constexpr uint64_t BENCH_ENTRY = 0x08001000ULL;  // FW links at 0x08001000 (x280-lim.ld); boot there
 static constexpr uint64_t MW = 4;                       // marker words (self-describing 4-word marker)
-static const uint32_t KLIST[] = {0u, 4u, 8u, 16u, 32u, 64u, 128u, 256u, 500u};  // matches rdrbench.c
-static constexpr int NK = 9;
-static const uint32_t ILPLIST[] = {1u, 2u, 4u, 8u, 16u};  // matches rdrbench.c
-static constexpr int NILP = 5;
-static constexpr uint32_t MAX_K = 500u;
+static const uint32_t KLIST[] = {
+    0u, 4u, 8u, 16u, 32u, 64u, 128u, 256u, 512u, 1024u, 2048u, 4096u, 5000u};  // matches rdrbench.c
+static constexpr int NK = 13;
+static const uint32_t ILPLIST[] = {1u};  // matches rdrbench.c
+static constexpr int NILP = 1;
+static constexpr uint32_t MAX_K = 5000u;
 
 static constexpr uint64_t BENCH_RES = 0x08013000ULL;  // 2D grid results (dedicated LIM region)
 static constexpr uint64_t RES_STRIDE = 0x180ULL;      // NILP*NK u64 cycles + done, per hart
