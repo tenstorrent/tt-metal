@@ -32,6 +32,7 @@
 - tt-metal Stage 11 handoff-metadata commit: `98de8fd3c6f98387da50726de4678e2bbe703aec` (`Complete Gemma 4 TTI handoff metadata`).
 - tt-metal Stage 11 readiness-blocker commit: `6425539564d` (`Record Gemma 4 release readiness blockers`).
 - tt-metal Stage 11 evidence-reconciliation commit: `f095b3c6498d9c18ff3d952eb5619088be2f2576` (`Reconcile Gemma 4 release evidence`).
+- tt-metal Stage 11 expanded-blocker commit: `e4538bfa467` (`Expand Gemma 4 release blocker evidence`).
 
 ## Commands and environment
 
