@@ -390,6 +390,17 @@ class HunyuanTtAttention(LightweightModule):
             v_attn = self.ccl.all_gather(v_attn, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
 
         if use_cache and kv_cache is not None and not kv_cache.trace_fixed:
+            # Cached K/V persist across ALL layers — must be DRAM, never L1. The
+            # resid_mem_config gate only sizes the current layer's live set, not
+            # cumulative cross-layer storage: 32×(K+V) L1-resident overflows the
+            # per-core budget above ISL 416 (clash in a deep-layer residual norm).
+            # No-op at large ISL where attn_mc is already DRAM.
+            if k_attn.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                k_l1, k_attn = k_attn, ttnn.to_memory_config(k_attn, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(k_l1)
+            if v_attn.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                v_l1, v_attn = v_attn, ttnn.to_memory_config(v_attn, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(v_l1)
             kv_cache.replace(layer_idx, k_attn, v_attn)
 
         # ---- 5. GQA expansion: interleaved repeat K/V heads to match Q --------
