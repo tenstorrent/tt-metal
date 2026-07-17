@@ -9,6 +9,8 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <bit>
 
 namespace ttnn::prim {
@@ -208,104 +210,17 @@ uint32_t SparseSDPAMsaOperation::compute_chunk_start_local(
     return attrs.chunk_start_idx.value() + device_index * S;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAMsaOperation::get_dynamic_runtime_args(
+void SparseSDPAMsaOperation::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const SparseSDPAMsaParams& attrs,
     const SparseSDPAMsaInputs& t,
-    Tensor& /*output*/,
+    Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    const uint32_t n_kv = t.k.logical_shape()[1];
-    const bool patch_kv = attrs.has_indexed_kv_cache() || n_kv > 1;
-    // n_kv==1 non-indexed programs use zero K/V tile offsets and need no per-group strides; but causal
-    // masking still patches the per-device chunk_start every dispatch, so don't early-return then.
-    if (!patch_kv && !attrs.causal_enabled()) {
-        return {};
-    }
-    const uint32_t chunk_start_local = compute_chunk_start_local(attrs, t, mesh_dispatch_coordinate);
-    // Indexed programs patch per-slot tile offsets on every dispatch. GQA programs also patch per-KV-group strides
-    // because interleaved K/V T is intentionally excluded from the program hash.
-    constexpr uint32_t tw = tt::constants::TILE_WIDTH;
-    constexpr uint32_t th = tt::constants::TILE_HEIGHT;
-    const uint32_t T = t.k.logical_shape()[2];
-    const uint32_t d = t.q.logical_shape()[3];
-    const uint32_t v_dim = t.v.logical_shape()[3];
-    const uint32_t s = attrs.cache_batch_idx.value_or(0);
-    const uint32_t tiles_per_row = T / th;
-    const uint32_t k_group_tile_stride = tiles_per_row * (d / tw);
-    const uint32_t v_group_tile_stride = tiles_per_row * (v_dim / tw);
-    const uint32_t k_batch_tile_offset = s * n_kv * k_group_tile_stride;
-    const uint32_t v_batch_tile_offset = s * n_kv * v_group_tile_stride;
-    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
-    const uint32_t num_cores = grid.x * grid.y;
-    std::vector<tt::tt_metal::DynamicRuntimeArg> args;
-    // Reader and writer both gather K/V halves, so patch both kernels.
-    args.reserve(
-        (attrs.has_indexed_kv_cache() ? 4 : 0) * num_cores + (n_kv > 1 ? 4 : 0) * num_cores +
-        (attrs.causal_enabled() ? 1 : 0) * num_cores);
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        if (attrs.causal_enabled()) {
-            // Same per-device chunk_start on every core (the reader derives per-token global pos from it).
-            args.push_back(
-                {sparse_sdpa_msa_rt::kReaderKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kReaderChunkStartArg,
-                 chunk_start_local,
-                 /*is_common=*/false});
-        }
-        if (attrs.has_indexed_kv_cache()) {
-            args.push_back(
-                {sparse_sdpa_msa_rt::kReaderKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kReaderKBatchOffsetArg,
-                 k_batch_tile_offset,
-                 /*is_common=*/false});
-            args.push_back(
-                {sparse_sdpa_msa_rt::kReaderKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kReaderVBatchOffsetArg,
-                 v_batch_tile_offset,
-                 /*is_common=*/false});
-            args.push_back(
-                {sparse_sdpa_msa_rt::kWriterKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kWriterKBatchOffsetArg,
-                 k_batch_tile_offset,
-                 /*is_common=*/false});
-            args.push_back(
-                {sparse_sdpa_msa_rt::kWriterKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kWriterVBatchOffsetArg,
-                 v_batch_tile_offset,
-                 /*is_common=*/false});
-        }
-        if (n_kv > 1) {
-            args.push_back(
-                {sparse_sdpa_msa_rt::kReaderKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kReaderKGroupStrideArg,
-                 k_group_tile_stride,
-                 /*is_common=*/false});
-            args.push_back(
-                {sparse_sdpa_msa_rt::kReaderKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kReaderVGroupStrideArg,
-                 v_group_tile_stride,
-                 /*is_common=*/false});
-            args.push_back(
-                {sparse_sdpa_msa_rt::kWriterKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kWriterKGroupStrideArg,
-                 k_group_tile_stride,
-                 /*is_common=*/false});
-            args.push_back(
-                {sparse_sdpa_msa_rt::kWriterKernelIdx,
-                 core,
-                 sparse_sdpa_msa_rt::kWriterVGroupStrideArg,
-                 v_group_tile_stride,
-                 /*is_common=*/false});
-        }
-    }
-    return args;
+    // Re-derive the descriptor from the single source of truth (create_descriptor, threaded with this device's
+    // coordinate for the per-rank causal chunk_start) and re-apply its per-core args + buffer addresses to the
+    // cached program. No rebuild; supersedes get_dynamic_runtime_args and resolve_bindings.
+    auto desc = SparseSDPAMsaProgramFactory::create_descriptor(attrs, t, tensor_return_value, mesh_dispatch_coordinate);
+    tt::tt_metal::apply_descriptor_runtime_args(program, desc);
 }
 
 Tensor sparse_sdpa_msa(
