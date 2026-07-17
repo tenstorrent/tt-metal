@@ -21,6 +21,7 @@ Prints a PASS/FAIL table and exits non-zero if any cell failed. Results stream t
 a killed sweep can be read back rather than re-run.
 """
 import argparse
+import glob
 import json
 import os
 import re
@@ -32,8 +33,31 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", "..", "..", ".."))
 TEST = os.path.join(HERE, "test_pipeline_ltx_distilled.py")
+# Artifacts live outside the source tree, keyed by worktree so parallel trees do not collide.
+_TREE = os.path.basename(REPO)
+DEFAULT_CACHE = os.path.expanduser(f"~/.cache/tt-metal-cache/{_TREE}")
+DEFAULT_OUT = os.path.expanduser(f"~/.cache/ltx-matrix/{_TREE}-results.json")
 
-MODELS = ["ltx", "sulphur", "sulphur-lora", "10eros-lora", "lora1.1-cond72", "lora1.1-cond32"]
+# Resolved per cell and handed to the cell as LTX_CHECKPOINT, the way ltx_server's build_worker_env
+# does it. Left to default_ltx_checkpoint, an unset LTX_CHECKPOINT resolves to a bare HF repo ref that
+# is not on disk, and the cell SKIPS — which pytest exits 0 for, i.e. a green cell that rendered
+# nothing.
+LTX_ROOT = os.environ.get("LTX_MODEL_ROOT", "/home/sulphur")
+MODELS = {
+    "ltx": f"{LTX_ROOT}/hf/hub/models--Lightricks--LTX-2.3/snapshots/*/ltx-2.3-22b-distilled-1.1.safetensors",
+    "sulphur": f"{LTX_ROOT}/models/sulphur_distil_bf16.safetensors",
+    "sulphur-lora": f"{LTX_ROOT}/models/sulphur_lora_fused_distil.safetensors",
+    "10eros-lora": f"{LTX_ROOT}/models/10eros_distil_fused.safetensors",
+    "lora1.1-cond72": f"{LTX_ROOT}/models/ltx11_cond72_fused_distil.safetensors",
+    "lora1.1-cond32": f"{LTX_ROOT}/models/ltx11_cond32_fused_distil.safetensors",
+}
+
+
+def resolve_checkpoint(model):
+    hits = sorted(glob.glob(MODELS[model]))
+    return hits[0] if hits else None
+
+
 TIERS = ["high", "medium", "fast"]
 RESOLUTIONS = ["1080p", "720p"]
 MODES = ["t2v", "i2v"]
@@ -57,28 +81,60 @@ def cells(models, tiers, resolutions, modes):
                     yield m, t, r, mode
 
 
-def run_cell(model, tier, res, mode, timeout, extra_env, direct=False):
+# The broker restarts under its own auto-update, and an in-flight `tt-device-mcp run` just loses its
+# socket. That says nothing about the cell, so it must never be recorded as one — retry instead.
+BROKER_GONE = ("Connection refused", "no tt-device-mcp server reachable", "Connection failed")
+
+
+def run_cell(model, tier, res, mode, timeout, extra_env, direct=False, attempts=3):
+    ckpt = resolve_checkpoint(model)
+    if ckpt is None:
+        return {
+            "model": model,
+            "tier": tier,
+            "res": res,
+            "mode": mode,
+            "status": "SKIP",
+            "rc": None,
+            "seconds": 0.0,
+            "metrics": [],
+            "log_tail": f"checkpoint absent: {MODELS[model]}",
+        }
     cell_env = {
         "LTX_MATRIX": "1",
         "LTX_MATRIX_MODEL": model,
         "LTX_MATRIX_RES": res,
         "LTX_MATRIX_MODE": mode,
         "LTX_QUALITY": tier,
+        "LTX_CHECKPOINT": ckpt,
         "TT_METAL_HOME": REPO,
         "PYTHONPATH": REPO,
-        # Keyed per tree: build_key ignores the source tree, so sharing one cache between worktrees
-        # lets a divergent tree's prewarm manifest poison this one. Pinning it also means only the
-        # first cell pays the cold JIT compile — the other 35 run warm.
-        "TT_METAL_CACHE": os.environ.get("TT_METAL_CACHE", os.path.join(REPO, ".jit-cache")),
+        # Keyed per tree, and OUTSIDE it: build_key ignores the source tree, so one shared cache lets
+        # a divergent worktree's prewarm manifest poison this one. Pinning it also means only the
+        # first cell pays the cold JIT compile. Kept out of the repo — a build artifact is not source.
+        "TT_METAL_CACHE": os.environ.get("TT_METAL_CACHE", DEFAULT_CACHE),
         **(KF_ENV if mode == "i2v" else {}),
         **extra_env,
     }
     # The tier expands into quant + sigmas at import; a stale explicit value from the caller's shell
     # would silently outrank it and the cell would report a tier it never ran.
+    for k in ("LTX_QUANT", "LTX_S1_SIGMAS", "LTX_S2_SIGMAS", "LTX_FAST"):
+        cell_env.pop(k, None)
+    for attempt in range(1, attempts + 1):
+        rec = _run_once(model, tier, res, mode, timeout, cell_env, direct)
+        if not (rec["status"] == "FAIL" and any(b in (rec["log_tail"] or "") for b in BROKER_GONE)):
+            return rec
+        if attempt < attempts:
+            print(f"    broker unreachable (restart?) — retry {attempt}/{attempts - 1}", flush=True)
+            time.sleep(30)
+    rec["status"] = "SKIP"  # never ran: an infra outage is not a verdict on the cell
+    return rec
+
+
+def _run_once(model, tier, res, mode, timeout, cell_env, direct):
     env = {**os.environ, **cell_env}
     for k in ("LTX_QUANT", "LTX_S1_SIGMAS", "LTX_S2_SIGMAS", "LTX_FAST"):
         env.pop(k, None)
-        cell_env.pop(k, None)
     pytest_cmd = f"python -m pytest '{TEST}::test_ltx_matrix_cell' -q -s --no-header -p no:cacheprovider"
     if direct:
         cmd = ["bash", "-lc", f"source python_env/bin/activate && {pytest_cmd}"]
@@ -105,8 +161,22 @@ def run_cell(model, tier, res, mode, timeout, extra_env, direct=False):
     except subprocess.TimeoutExpired as e:
         out, rc = (e.stdout or b"").decode(errors="replace") + f"\nTIMEOUT after {timeout}s", 124
     dt = time.time() - t0
-    status = {0: "PASS", 5: "SKIP"}.get(rc, "SKIP" if " skipped" in out and " failed" not in out else "FAIL")
+    # `tt-device-mcp run` exits 0 for "the job ran to completion", NOT for "your command passed" — it
+    # reports the real code as "EXIT CODE: N" in its output. Reading its own rc marks every cell PASS.
+    if not direct:
+        m = re.search(r"^EXIT CODE:\s+(\d+|None)", out, re.M)
+        rc = int(m.group(1)) if m and m.group(1) != "None" else (rc if m is None else 1)
     metrics = re.findall(r"MATRIX \S+ (?:t2v|i2v pin f\d+): .*", out)
+    # pytest exits 0 on a SKIP, so rc alone cannot tell a rendered cell from one that never ran. A
+    # pass has to show its work: no metric lines means nothing was rendered, whatever the code says.
+    if re.search(r"\d+ skipped", out) and not re.search(r"\d+ (passed|failed)", out):
+        status = "SKIP"
+    elif rc == 0 and metrics:
+        status = "PASS"
+    elif rc == 0:
+        status = "FAIL"  # green code, zero evidence
+    else:
+        status = "FAIL"
     return {
         "model": model,
         "tier": tier,
@@ -128,7 +198,7 @@ def main():
     ap.add_argument("--res", default=",".join(RESOLUTIONS))
     ap.add_argument("--modes", default=",".join(MODES))
     ap.add_argument("--timeout", type=int, default=1500, help="per cell; the broker caps a job at 1500s")
-    ap.add_argument("--out", default=os.path.join(HERE, "ltx_matrix_results.json"))
+    ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--direct", action="store_true", help="run cells here instead of via the broker")
     ap.add_argument("--env", action="append", default=[], metavar="K=V", help="extra env for every cell")
@@ -146,6 +216,7 @@ def main():
             print(f"  would run {m}/{t}/{r}/{mode}")
         return 0
 
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     results = []
     for i, (m, t, r, mode) in enumerate(todo, 1):
         print(f"[{i}/{len(todo)}] {m}/{t}/{r}/{mode} ...", flush=True)

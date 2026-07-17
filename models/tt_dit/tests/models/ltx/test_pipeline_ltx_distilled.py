@@ -445,6 +445,20 @@ _KF_SEED = int(os.environ.get("LTX_I2V_KF_SEED", "11"))
 _KF_PINS = (("gen433_frame0.png", 0), ("gen433_last.png", "last"), ("gen433_kf72.png", 72))
 
 
+def _pin_took(pccs_own, pccs_foil, idx):
+    """Did the pin at ``idx`` take? Its frame must look like ITS OWN reference and not like the other
+    pins' references.
+
+    Absolute PCC cannot answer this on its own. A frame-0 pin lands ~0.99 because nothing precedes it,
+    while an interior pin reconciles with generated neighbours on both sides and legitimately sits
+    ~0.83 — so any single threshold either passes a broken interior pin or fails a healthy one (0.85
+    failed a pin measured at 0.83-vs-0.45-against-foils, which is a pin that plainly took). The margin
+    over the other references is what isolates identity from reconciliation.
+    """
+    own, foil = pccs_own[idx], max(pccs_foil[idx])
+    return own > 0.7 and own > foil + 0.2
+
+
 def _kf_gen_images(num_frames):
     """The served gen's conditioning list: [(png, pixel_frame, s1, s2), ...] at full strength, in the
     order the server builds it (the frame-0 upload, then each keyframe). None if the assets are
@@ -565,9 +579,14 @@ def test_pipeline_distilled_i2v(
     # Score each separately — a frame-0-only check stayed green right through the interior-keyframe
     # scramble that reached users.
     refs = {idx: _luma(png, scale=True) for png, idx, _, _ in kf_images}
-    pccs = {idx: _pcc(ref, _luma(str(i2v), idx)) for idx, ref in refs.items()}
-    for idx, p in sorted(pccs.items()):
-        print(f"\nI2V_E2E pin f{idx}: PCC-vs-own-reference={p:.4f}", flush=True)
+    got = {idx: _luma(str(i2v), idx) for idx in refs}
+    pccs = {idx: _pcc(refs[idx], got[idx]) for idx in refs}
+    foils = {idx: [_pcc(refs[j], got[idx]) for j in refs if j != idx] for idx in refs}
+    for idx in sorted(pccs):
+        print(
+            f"\nI2V_E2E pin f{idx}: PCC-vs-own={pccs[idx]:.4f} vs-others={['%.2f' % f for f in foils[idx]]}",
+            flush=True,
+        )
 
     # (b) no pin decoded to garbage. A pin whose neighbours went off-distribution comes back as a
     # high-frequency checkerboard, which spikes the Laplacian at the pinned frames while chromatic
@@ -591,8 +610,11 @@ def test_pipeline_distilled_i2v(
     if traced:
         pipeline.release_traces()
 
-    for idx, p in sorted(pccs.items()):
-        assert p > 0.85, f"pin f{idx} does not reproduce its conditioning frame (PCC={p:.4f}) — conditioning broken"
+    for idx in sorted(pccs):
+        assert _pin_took(pccs, foils, idx), (
+            f"pin f{idx} does not reproduce its OWN conditioning frame (PCC={pccs[idx]:.4f} vs "
+            f"{['%.2f' % f for f in foils[idx]]} for the other pins' frames) — conditioning broken"
+        )
     for idx, r in sorted(pin_sharp.items()):
         assert r < 1.6, (
             f"pinned frame f{idx} is {r:.2f}x the clean-frame sharpness — it decoded to high-frequency "
@@ -1625,7 +1647,9 @@ def test_ltx_matrix_cell(
         return float(np.corrcoef(a.flatten(), b.flatten())[0, 1])
 
     refs = {idx: _luma(png, 0, scale=True) for png, idx, _, _ in kf_images}
-    pccs = {idx: _pcc(ref, _luma(str(i2v), idx)) for idx, ref in refs.items()}
+    got = {idx: _luma(str(i2v), idx) for idx in refs}
+    pccs = {idx: _pcc(refs[idx], got[idx]) for idx in refs}
+    foils = {idx: [_pcc(refs[j], got[idx]) for j in refs if j != idx] for idx in refs}
 
     def _sharpness(frame):
         f = _luma(str(i2v), frame)
@@ -1636,13 +1660,20 @@ def test_ltx_matrix_cell(
     assert base_sharp > 0.0, f"{cell}: i2v is a flat/blank field — nothing was rendered"
     pin_sharp = {idx: _sharpness(idx) / base_sharp for idx in refs}
     for idx in sorted(refs):
-        print(f"MATRIX {cell} i2v pin f{idx}: PCC={pccs[idx]:.4f} structure={pin_sharp[idx]:.2f}x", flush=True)
+        print(
+            f"MATRIX {cell} i2v pin f{idx}: PCC={pccs[idx]:.4f} "
+            f"vs-others={['%.2f' % f for f in foils[idx]]} structure={pin_sharp[idx]:.2f}x",
+            flush=True,
+        )
 
     if traced:
         pipeline.release_traces()
 
     for idx in sorted(pccs):
-        assert pccs[idx] > 0.85, f"{cell}: i2v pin f{idx} did not take (PCC={pccs[idx]:.4f})"
+        assert _pin_took(pccs, foils, idx), (
+            f"{cell}: i2v pin f{idx} did not take (PCC={pccs[idx]:.4f} vs "
+            f"{['%.2f' % f for f in foils[idx]]} for the other pins' frames)"
+        )
     for idx in sorted(pin_sharp):
         assert pin_sharp[idx] < 1.6, (
             f"{cell}: i2v pin f{idx} is {pin_sharp[idx]:.2f}x the clean-frame sharpness — "
