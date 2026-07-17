@@ -7,7 +7,10 @@ namespace ttnn::operations::my_matmul {
 // 1) Always the single-core factory.
 MyMatmulDeviceOperation::program_factory_t MyMatmulDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return SingleCore{};
+    // TODO: define when to use which
+
+    // return SingleCore{};
+    return MultiCore{};
 }
 
 // 2) Validate. Keep it meaningful but light — this is where you catch caller mistakes.
