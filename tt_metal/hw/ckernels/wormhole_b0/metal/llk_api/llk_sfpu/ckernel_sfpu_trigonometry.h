@@ -380,7 +380,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - 1.0f;
 
-        v_if(absval_minus_1 > 0.0f) { t0 = sfpu_reciprocal<false>(t0); }
+        v_if(absval_minus_1 >= 0.0f) { t0 = sfpu_reciprocal<false>(t0); }
         v_endif;
 
         sfpi::vFloat t1 = t0 * t0;
@@ -396,7 +396,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
 
         t1 = t1 * t0;
 
-        v_if(absval_minus_1 > 0.0f) { t1 = PI_2 - t1; }
+        v_if(absval_minus_1 >= 0.0f) { t1 = PI_2 - t1; }
         v_endif;
 
         result = sfpi::copysgn(t1, val);
