@@ -26,6 +26,9 @@ from pathlib import Path
 
 from models.tt_transformers.tt.model_config import ModelArgs
 
+# l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
+GDN_CONV1D_L1_SMALL_SIZE = 24576
+
 
 class Qwen36ModelArgs(ModelArgs):
     """Model configuration for Qwen3.5-9B on Blackhole P150."""

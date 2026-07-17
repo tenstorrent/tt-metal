@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
 )
@@ -110,6 +111,16 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # ---- conv taps (4), sharded per Q/K/V head grouping ----
     taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
+    # Depthwise conv1d weight used in the prefill path
+    _kk = args.gdn_conv_kernel_size
+    tw["conv1d_w"] = ttnn.as_tensor(
+        torch.stack([t.float() for t in taps], dim=-1).reshape(-1, 1, _kk).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        device=mesh,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     return tw
 
 
@@ -139,6 +150,10 @@ class TPGatedDeltaNet:
         # trace; pre-allocating here (outside any trace) makes the GDN prefill trace-safe. Mirrors
         # the single-device gdn/weights.py create_chunk_masks_seq usage.
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
+        # Depthwise conv1d for prefill
+        self._conv1d_w = tw.get("conv1d_w")
+        self._conv1d_w_dev = None
+        self._conv1d_ccfg = None
         self.conv_states = None
         self.rec_state = None
         # When True, decode/prefill update rec_state IN PLACE (ttnn.copy into the fixed
@@ -215,6 +230,77 @@ class TPGatedDeltaNet:
         ttnn.copy(zcc, self.conv_carry)
         ttnn.deallocate(zcc)
 
+    def _conv1d_prefill(self, qkv, conv_state, T):
+        """Depthwise conv1d + SiLU
+        Returns (conv [1,T,C] TILE
+        DRAM-interleaved, new_state [1,K-1,C] TILE for the cross-chunk carry).
+        """
+        K, C = self.K, self.qkv_dim_tp
+        DR = ttnn.DRAM_MEMORY_CONFIG
+        if conv_state is None:
+            pad = ttnn.zeros(
+                [1, K - 1, C], device=self.mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=DR
+            )
+            xp = ttnn.concat([pad, qkv], dim=1, memory_config=DR)
+            ttnn.deallocate(pad)
+        else:
+            xp = ttnn.concat([conv_state, qkv], dim=1, memory_config=DR)
+        Lp = (K - 1) + T
+        # new_state = last K-1 real conv inputs (TILE, for the carry buffer) — take before RM cast.
+        new_state = ttnn.to_layout(ttnn.slice(xp, (0, Lp - (K - 1), 0), (1, Lp, C)), ttnn.TILE_LAYOUT)
+        xp_rm = ttnn.to_layout(xp, ttnn.ROW_MAJOR_LAYOUT, memory_config=DR)
+        ttnn.deallocate(xp)
+        if self._conv1d_ccfg is None:
+            self._conv1d_ccfg = ttnn.init_device_compute_kernel_config(
+                self.mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+            )
+        # SiLU fused into the conv epilogue — runs on the sharded output in-kernel, so it costs
+        # no extra dispatch or DRAM round-trip vs. a standalone ttnn.silu.
+        cfg = ttnn.Conv1dConfig(
+            weights_dtype=ttnn.bfloat16,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        )
+        w = self._conv1d_w_dev if self._conv1d_w_dev is not None else self._conv1d_w
+        try:
+            out, _, [w_dev, _] = ttnn.conv1d(
+                input_tensor=xp_rm,
+                weight_tensor=w,
+                in_channels=C,
+                out_channels=C,
+                device=self.mesh,
+                bias_tensor=None,
+                kernel_size=K,
+                stride=1,
+                padding=0,
+                batch_size=1,
+                input_length=Lp,
+                conv_config=cfg,
+                compute_config=self._conv1d_ccfg,
+                groups=C,
+                dtype=ttnn.bfloat16,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+        except RuntimeError as e:
+            # The depthwise conv1d needs an L1_SMALL scratch region; if the device was opened
+            # without enough l1_small_size, ttnn TT_FATALs deep in the allocator with an opaque
+            # "bank size is 0 B" message. Surface the real cause + fix instead.
+            if "L1_SMALL" in str(e) or "bank size is 0" in str(e):
+                raise RuntimeError(
+                    f"GDN prefill conv1d failed to allocate its L1_SMALL scratch buffer. The device "
+                    f"must be opened with l1_small_size >= {GDN_CONV1D_L1_SMALL_SIZE} (the production demo/vLLM "
+                    f"value). Set it in the device open, e.g. device_params={{'l1_small_size': {GDN_CONV1D_L1_SMALL_SIZE}}} "
+                    f"(see models/demos/blackhole/qwen36/demo/text_demo.py DEVICE_PARAMS). "
+                    f"Original error: {e}"
+                ) from e
+            raise
+        self._conv1d_w_dev = w_dev
+        ttnn.deallocate(xp_rm)
+        out = ttnn.to_memory_config(out, DR)  # sharded -> DRAM interleaved for the head-split
+        out = ttnn.reshape(out, (1, T, C))
+        return out, new_state  # SiLU already applied in the conv epilogue (cfg.activation)
+
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
 
@@ -259,18 +345,23 @@ class TPGatedDeltaNet:
         # FIR causal conv1d + SiLU over the sequence. conv_state = the carried last K-1 conv
         # inputs of the previous chunk (left context); zero == None for a from-scratch pass.
         # valid_len makes new_state capture the last K-1 REAL tokens (not padding).
-        conv, conv_new_state = _causal_conv1d_fir(
-            qkv,
-            None,
-            None,
-            self.K,
-            self.mesh,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            conv_state=self.conv_carry if carry else None,
-            weight_taps=tw["conv_taps"],
-            bias_dev=None,
-            valid_len=valid_len,
-        )
+        if valid_len is None and self._conv1d_w is not None:
+            # Native depthwise conv1d for the full-chunk path.
+            # The masked tail and decode keep the manual FIR.
+            conv, conv_new_state = self._conv1d_prefill(qkv, self.conv_carry if carry else None, T)
+        else:
+            conv, conv_new_state = _causal_conv1d_fir(
+                qkv,
+                None,
+                None,
+                self.K,
+                self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                conv_state=self.conv_carry if carry else None,
+                weight_taps=tw["conv_taps"],
+                bias_dev=None,
+                valid_len=valid_len,
+            )
         ttnn.deallocate(qkv)
 
         kd = self.key_dim_tp
