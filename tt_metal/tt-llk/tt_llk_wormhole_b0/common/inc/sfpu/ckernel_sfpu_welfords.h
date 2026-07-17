@@ -302,6 +302,24 @@ sfpi_inline void _two_pass_accumulate_m2_single_()
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
 }
 
+sfpi_inline void _two_pass_accumulate_m2_block_()
+{
+    // Alternate residuals between LREG6 and LREG7 so useful work separates
+    // their two-cycle producers from consumers. M2 updates remain in row
+    // order, preserving the numerical behavior of the serial implementation.
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG7, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG6, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG7, 0);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPNOP;
+    TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, 0);
+    // Protect the following block's transpose, which reads LREG5.
+    TTI_SFPNOP;
+}
+
 template <bool accumulate_m2, std::uint32_t I, std::uint32_t J>
 sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t end_row)
 {
@@ -316,6 +334,11 @@ sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t en
     _welfords_load_block_<I, J>();
     if constexpr (accumulate_m2)
     {
+        if (first == 0 && last == 4)
+        {
+            _two_pass_accumulate_m2_block_();
+            return;
+        }
 #define TWO_PASS_M2_ROW(N, R)   \
     if (first <= N && last > N) \
         _two_pass_accumulate_m2_single_<R>();
@@ -343,6 +366,20 @@ sfpi_inline void _two_pass_update_rows_(std::uint32_t start_row, std::uint32_t n
 {
     if (num_rows == 0)
     {
+        return;
+    }
+    if (start_row == 0 && num_rows == 32)
+    {
+        // Constant row bounds let the compiler remove the intersection and
+        // per-row predicates from this common full-tile path.
+        _two_pass_block_rows_<accumulate_m2, 0, 0>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, 0, 1>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, 0, 2>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, 0, 3>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, 1, 0>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, 1, 1>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, 1, 2>(0, 32);
+        _two_pass_block_rows_<accumulate_m2, 1, 3>(0, 32);
         return;
     }
     const std::uint32_t end_row = start_row + num_rows;
