@@ -172,7 +172,6 @@ void kernel_main() {
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
     uint32_t credits_sem_l1 = get_semaphore(credits_semaphore_id);
     volatile tt_l1_ptr uint32_t* credits_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(credits_sem_l1);
-    uint64_t self_credits_noc_addr = get_noc_addr(my_x[noc_index], my_y[noc_index], credits_sem_l1);
 
     // Wait on the same counter_ready sem reader_untilize waits on (neither kernel resets it,
     // so both see the single increment from the sender's multicast).  Then read the sender's
@@ -281,7 +280,9 @@ void kernel_main() {
                     if (local_credits == 0) {
                         credits_sem.wait_min(1);
                         uint32_t n = *credits_sem_ptr;
-                        noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+                        // Atomic credit return: up() with a wrapped -n. Semaphore<>::down() is a
+                        // local, non-atomic decrement that would race the sender's credit increments.
+                        credits_sem.up(noc, my_x[noc_index], my_y[noc_index], (uint32_t)(-(int32_t)n));
                         noc.async_atomic_barrier();
                         local_credits += n;
                     }
@@ -330,7 +331,8 @@ void kernel_main() {
 
     credits_sem.wait_min(SLOTS_PER_UNTILIZER - local_credits);
     uint32_t n = *credits_sem_ptr;
-    noc_semaphore_inc(self_credits_noc_addr, (uint32_t)(-(int32_t)n));
+    // Atomic credit return (see note above): up() with a wrapped -n.
+    credits_sem.up(noc, my_x[noc_index], my_y[noc_index], (uint32_t)(-(int32_t)n));
     counter_ready_sem.set(0);
     noc.async_atomic_barrier();
 
