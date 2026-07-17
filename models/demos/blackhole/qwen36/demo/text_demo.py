@@ -38,9 +38,15 @@ from models.tt_transformers.tt.model_config import determine_device_name
 # 2x across the mesh (see attention/tp.py). The mesh MUST be a 1-D line (1,8), not (2,4):
 # the TP collectives take the reduce_scatter-over-line path only when an axis is 1.
 # On a single device the model runs its validated single-device path, on a multi-device
-# mesh it needs FABRIC_1D for the TP collectives (see tp_common notes).
+# mesh it needs a 1-D fabric for the TP collectives (see tp_common notes). The 4-device
+# configs use FABRIC_1D; the 8-device (1,8) LoudBox uses FABRIC_1D_RING — plain FABRIC_1D
+# has no deadlock avoidance and wedges the erisc routers under full-context (>=64K) CCL
+# traffic, whereas FABRIC_1D_RING adds dateline deadlock avoidance (its larger router now
+# fits the ETH kernel-config buffer, see bh dev_mem_map.h). Ring vs line topology of the
+# CCL op itself is unchanged (ccl_topology() stays Linear); only the fabric layer changes.
 _MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
+_TP_FABRIC = ttnn.FabricConfig.FABRIC_1D_RING if _MESH_SHAPE == (1, 8) else ttnn.FabricConfig.FABRIC_1D
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh
 # needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 256 MiB matches the validated
 # TP serving config and is ample for the single 2048-token chunk trace — negligible vs the
@@ -50,9 +56,7 @@ DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
         "num_command_queues": 2,
-        **(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}
-        ),
+        **({"fabric_config": _TP_FABRIC, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}),
     }
 ]
 

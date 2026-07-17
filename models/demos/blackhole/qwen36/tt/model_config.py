@@ -214,23 +214,27 @@ class Qwen36ModelArgs(ModelArgs):
         )
 
     def ccl_topology(self):
-        """Force Linear reduce-scatter on the 8-device P150 LINE mesh (MESH_DEVICE="(1, 8)").
+        """CCL topology for the 8-device P150 (1,8) mesh (MESH_DEVICE="(1, 8)").
 
-        The base returns Topology.Ring for P150_X8, but this deployment opens it as a 1xN line
-        (a 1 in cluster_shape → no ring-closing dev(N-1)->dev0 link). A Ring reduce-scatter over
-        that line under-drains the shared, double-buffered fabric semaphores when a >1024-token
-        prefill rounds to the 2048 masked bucket (a full-bucket, 2x-load reduce-scatter over the
-        longer 8-hop chain); a later decode reduce-scatter then waits on the stale completion,
-        producing sporadic multi-second decode stalls that escalate to a device timeout
-        (system_memory_manager.cpp TT_THROW). Linear has no wraparound dependency and drains
-        cleanly. Scoped to num_devices>=8 lines so the validated 4-device Ring configs
-        (P300X2 / P150X4, which ring correctly) are untouched. Mirrors the base's own
-        "1x4 submesh does not support ring topology; fallback to linear" guard.
+        History: with FABRIC_1D this deployment opened as a bare 1xN line with no ring-closing
+        dev(N-1)->dev0 link, so a Ring reduce-scatter under-drained the shared, double-buffered
+        fabric semaphores (a later reduce-scatter waited on a stale completion -> device timeout);
+        the fix then was to force Linear. That constraint is gone: the 8-device deployment now runs
+        on FABRIC_1D_RING (dateline deadlock avoidance), which closes the ring via the wrap-around
+        mesh, so Ring CCL has its dev(N-1)->dev0 link and drains cleanly — and Ring is required so
+        the CCL routing matches the ring fabric under sustained (chunked-prefill replay) load.
+        Default Ring; QWEN36_CCL_TOPOLOGY=Linear forces the old line behavior (FABRIC_1D fallback).
+        Scoped to num_devices>=8 lines so the validated 4-device configs (P300X2 / P150X4) are
+        untouched.
         """
+        import os
+
         import ttnn
 
         if self.num_devices >= 8 and 1 in tuple(getattr(self, "cluster_shape", ()) or ()):
-            return ttnn.Topology.Linear
+            if os.environ.get("QWEN36_CCL_TOPOLOGY", "Ring") == "Linear":
+                return ttnn.Topology.Linear
+            return ttnn.Topology.Ring
         return super().ccl_topology()
 
     def _set_hf_params(self, checkpoint_dir):
