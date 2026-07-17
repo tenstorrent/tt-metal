@@ -462,11 +462,7 @@ RegimeAMatmulProgramFactory::cached_program_t RegimeAMatmulProgramFactory::creat
 
     // ---- Circular buffers (spec §5) on all cores ----
     mkcb(program, all_cores, 0, cb.cb0_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in0 k-slice resident
-    // in1 CB depth is 4 blocks by default (cb1_tiles = 4*kb*N_sub); DIAG_CB1_D2/D8 rescale to 2/8 blocks
-    // (host-side only; the reader/compute are depth-agnostic). Mask 0 -> unchanged cb.cb1_tiles.
-    const uint32_t cb1_block = cb.cb1_tiles / 4u;
-    const uint32_t cb1_depth = (diag & RegimeADiag::DIAG_CB1_D2) ? 2u : (diag & RegimeADiag::DIAG_CB1_D8) ? 8u : 4u;
-    mkcb(program, all_cores, 1, cb1_depth * cb1_block, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1
+    mkcb(program, all_cores, 1, cb.cb1_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // in1 (depth 4)
     mkcb(program, all_cores, 2, cb.cb2_tiles, tt::DataFormat::Float16_b, kTileBytesBf16);  // out
     mkcb(program, all_cores, 3, cb.cb3_tiles, tt::DataFormat::Float32, kTileBytesFp32);    // fp32 intermediate
     if (cb.cb7_tiles > 0u) {

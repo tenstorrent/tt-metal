@@ -105,20 +105,19 @@ enum RegimeADiag : uint32_t {
     DIAG_PLACE_READERS_FIRST = 1u << 19,
     DIAG_PLACE_CURRENT = 1u << 21,
 
-    // in1-delivery experiment (M-split follow-up + optimization #5). ADOPTED as production defaults after a
+    // in1-delivery optimization (M-split follow-up + optimization #5). ADOPTED as production defaults after a
     // gated A/B on the Mt<=8 campaign winners: forward-signal-first (per-block flush moved AFTER the valid
     // signal, releasing the slave without waiting on the reader's flush) is a consistent +1.0..+2.3% on Sm>1
     // shapes, and coalesced contiguous-block reads are +0.5..+3.8% (both vs the old order), zero-regression on
     // controls (wide-N / deep-K / bandwidth-bound) and PCC-exact (20/20 random-operand + 10x relaunch stress
     // all max_rel_err=0, watcher-clean). The DEFAULT path (mask 0) does BOTH; these two bits select the OLD
-    // behaviour as the A/B baseline. CB1 depth REJECTED (neutral-to-slightly-negative) -> diagnostic-only
-    // depth-2/8 override. All cache-hashed; none exposed via the public API.
+    // behaviour as the A/B baseline. (in1 CB depth 2/8 was also tested and REJECTED -- neutral-to-slightly-
+    // negative, so depth 4 stands; that diagnostic was removed after the experiment.) All cache-hashed; none
+    // exposed via the public API.
     DIAG_FWD_FLUSH_FIRST = 1u << 22,  // A/B baseline: OLD write->flush->signal in1 forward. Default = write->
                                       // signal->flush: the per-block flush is RETAINED (moved after the signal)
                                       // so the async write departs this CB slot before it is reused (source
                                       // lifetime); it is merely off the slave-release critical path.
-    DIAG_CB1_D2 = 1u << 23,           // (rejected) in1 CB depth 2 (default 4). Host-side; kernels depth-agnostic.
-    DIAG_CB1_D8 = 1u << 24,           // (rejected) in1 CB depth 8 (default 4). D2/D8 mutually exclusive.
     DIAG_NO_COALESCE = 1u << 25,      // A/B baseline: OLD K_block per-row in1 reads (default now issues one
                                       // coalesced read per physically-contiguous block; falls back per-row).
 };
