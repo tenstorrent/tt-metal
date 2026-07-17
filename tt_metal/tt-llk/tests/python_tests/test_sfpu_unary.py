@@ -354,36 +354,61 @@ def test_eltwise_unary_sfpu_float_bfp4_b(
     )
 
 
+# Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
+# shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
+# the 32-bit int path). Golden is exact (no PCC/tolerance).
+_INT_UNARY_OPS = [
+    MathOperation.LeftShift,
+    MathOperation.RightShift,
+    MathOperation.UnaryMaxInt32,
+    MathOperation.UnaryMinInt32,
+    MathOperation.UnaryMaxUint32,
+    MathOperation.UnaryMinUint32,
+]
+
+# Ops whose kernel interprets DST as unsigned; run them under UInt32.
+_UINT32_INT_UNARY_OPS = {
+    MathOperation.UnaryMaxUint32,
+    MathOperation.UnaryMinUint32,
+}
+
+
+def _int_unary_stimuli_spec(mathop):
+    # Shifts use a fixed shift of 3, so keep inputs small-positive: x << 3 must stay
+    # inside the positive int32 range (Dst is sign-magnitude, so hitting the sign bit
+    # would diverge from the two's-complement golden).
+    if mathop in (MathOperation.LeftShift, MathOperation.RightShift):
+        return StimuliSpec.uniform(low=0.0, high=1_000_000.0)
+    # Unary max/min compare against the fixed scalar 1000; straddle it so both the
+    # keep-input and take-scalar branches are exercised. Positive-only keeps signed
+    # and unsigned interpretations identical (safe under sign-magnitude Dst).
+    return StimuliSpec.uniform(low=0.0, high=2000.0)
+
+
 @parametrize(
-    formats=input_output_formats([DataFormat.Int32]),
-    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
-    mathop=[
-        MathOperation.Neg,
-        MathOperation.Fill,
-    ],
-    fast_mode=[FastMode.No, FastMode.Yes],
+    mathop=_INT_UNARY_OPS,
     dest_acc=[DestAccumulation.Yes],
-    input_dimensions=[[128, 256]],
+    input_dimensions=[[64, 64]],
 )
 def test_eltwise_unary_sfpu_int(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
     mathop: MathOperation,
-    fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if formats.input_format == DataFormat.Int32:
-        pytest.skip(reason=f"Int32 tests break fast tilize, tracked in #495")
+    int_format = (
+        DataFormat.UInt32 if mathop in _UINT32_INT_UNARY_OPS else DataFormat.Int32
+    )
+    formats = InputOutputFormat(int_format, int_format)
 
     eltwise_unary_sfpu(
-        "sources/eltwise_unary_sfpu_int.cpp",
+        "sources/eltwise_unary_sfpu_test.cpp",
         formats,
         dest_acc,
-        approx_mode,
+        ApproximationMode.No,
         mathop,
-        fast_mode,
+        FastMode.No,
         input_dimensions,
+        spec_A=_int_unary_stimuli_spec(mathop),
     )
 
 
@@ -441,6 +466,20 @@ DOMAIN_MATHOPS = [
     MathOperation.UnaryMin,
     MathOperation.UnaryPower,
     MathOperation.Xielu,
+    # Trigonometric / inverse / hyperbolic and round (per-op safe domains).
+    MathOperation.Tan,
+    MathOperation.Atan,
+    MathOperation.Asin,
+    MathOperation.Acos,
+    MathOperation.Sinh,
+    MathOperation.Cosh,
+    MathOperation.Round,
+    # gelu derivative and log-with-base (log2).
+    MathOperation.GeluDerivative,
+    MathOperation.LogWithBase,
+    # gelu LUT approximation and exp-with-base (exp(0.5*x)).
+    MathOperation.GeluAppx,
+    MathOperation.ExpWithBase,
 ]
 
 # Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
@@ -448,6 +487,9 @@ DOMAIN_MATHOPS = [
 DOMAIN_CUSTOM_TOLERANCES = {
     # Coarse 3-segment LUT: good PCC but abs error peaks ~0.12 near the knees.
     MathOperation.SigmoidAppx: (0.13, 0.05),
+    # gelu_appx is a 6-segment piecewise-linear LUT of gelu; abs error peaks near
+    # the segment knees, so loosen tolerance the same way as sigmoid_appx.
+    MathOperation.GeluAppx: (0.13, 0.05),
 }
 
 
@@ -474,6 +516,18 @@ def test_eltwise_unary_sfpu_domain(
         # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
         if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
             pytest.skip(reason="This combination is not supported on BH architecture")
+
+    if TestConfig.WITH_COVERAGE and mathop in [
+        MathOperation.GeluDerivative,
+        MathOperation.LogWithBase,
+        MathOperation.GeluAppx,
+    ]:
+        # gelu/log-family `#pragma GCC unroll` loops compile to invalid assembly
+        # under coverage instrumentation (tt-metal#33268 / tt-llk#883), same as the
+        # float-sweep skips for Gelu/Log above.
+        pytest.skip(
+            reason="gelu/log-family ops fail to compile under coverage instrumentation"
+        )
 
     # Per-op input domain, clipped to where the op is defined (e.g. erfinv: |x| < 1).
     specs = for_op(mathop, formats.input_format)
@@ -599,13 +653,27 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     )
 
 
-def _logical_not_stimuli_spec():
-    # logical_not(x) = (x == 0) ? 1 : 0. Random floats never hit 0, so force a
-    # regular subset to exactly 0.0 so both branches fire and output is non-constant.
+# Threshold comparison ops: each maps every element to 0/1 by comparing against a
+# fixed threshold, so a plain random float sweep never lands on the threshold and the
+# output collapses to a constant (PCC undefined). Keyed by mathop:
+#   logical_not(x) = (x == 0) ? 1 : 0   -> threshold 0.0
+#   unary_eq / unary_ne(x)  compare vs 0.5 -> threshold 0.5
+_THRESHOLD_OPS = [
+    MathOperation.LogicalNotUnary,
+    MathOperation.UnaryEq,
+    MathOperation.UnaryNe,
+]
+
+
+def _threshold_op_stimuli_spec(mathop):
+    # Force a regular subset onto the op's threshold so both the equal and not-equal
+    # branches fire and the output is non-constant.
+    threshold = 0.0 if mathop == MathOperation.LogicalNotUnary else 0.5
+
     def dist(size, dtype, generator):
         idx = torch.arange(size, dtype=torch.float32)
-        x = (idx % 7) - 3.0  # spans [-3, 3], hits 0 once per 7 elements
-        x[0::3] = 0.0  # additional guaranteed zeros
+        x = (idx % 5) - 2.0  # {-2, -1, 0, 1, 2}; none equal 0.5
+        x[0::3] = threshold  # guaranteed threshold hits
         return x.to(dtype)
 
     return StimuliSpec(distribution=dist, seed=0)
@@ -614,11 +682,11 @@ def _logical_not_stimuli_spec():
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
-    mathop=[MathOperation.LogicalNotUnary],
+    mathop=_THRESHOLD_OPS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=[[64, 64]],
 )
-def test_eltwise_unary_sfpu_logical_not(
+def test_eltwise_unary_sfpu_threshold(
     formats: list[InputOutputFormat],
     approx_mode: ApproximationMode,
     mathop: MathOperation,
@@ -641,7 +709,7 @@ def test_eltwise_unary_sfpu_logical_not(
         mathop,
         FastMode.No,
         input_dimensions,
-        spec_A=_logical_not_stimuli_spec(),
+        spec_A=_threshold_op_stimuli_spec(mathop),
     )
 
 

@@ -2177,8 +2177,19 @@ class UnarySFPUGolden:
             MathOperation.Ceil: self._ceil,
             MathOperation.Trunc: self._trunc,
             MathOperation.Frac: self._frac,
+            MathOperation.Round: self._round,
+            MathOperation.Tan: self._tan,
+            MathOperation.Atan: self._atan,
+            MathOperation.Asin: self._asin,
+            MathOperation.Acos: self._acos,
+            MathOperation.Sinh: self._sinh,
+            MathOperation.Cosh: self._cosh,
             MathOperation.Gelu: self._gelu,
+            MathOperation.GeluAppx: self._gelu,
             MathOperation.GeluTanh: self._gelu_tanh,
+            MathOperation.GeluDerivative: self._gelu_derivative,
+            MathOperation.LogWithBase: self._log_with_base,
+            MathOperation.ExpWithBase: self._exp_with_base,
             MathOperation.Neg: self._neg,
             MathOperation.Tanh: self._tanh,
             MathOperation.Fill: self._fill,
@@ -2214,6 +2225,8 @@ class UnarySFPUGolden:
             MathOperation.UnaryLt: self._unary_lt,
             MathOperation.UnaryGe: self._unary_ge,
             MathOperation.UnaryLe: self._unary_le,
+            MathOperation.UnaryNe: self._unary_ne,
+            MathOperation.UnaryEq: self._unary_eq,
             MathOperation.UnaryMax: self._unary_max,
             MathOperation.UnaryMin: self._unary_min,
             MathOperation.Polygamma: self._polygamma,
@@ -2233,7 +2246,29 @@ class UnarySFPUGolden:
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Typecast: self._typecast,
+            # Integer unary ops (routed through the integer path in __call__).
+            MathOperation.LeftShift: self._left_shift,
+            MathOperation.RightShift: self._right_shift,
+            MathOperation.UnaryMaxInt32: self._unary_max_int32,
+            MathOperation.UnaryMinInt32: self._unary_min_int32,
+            MathOperation.UnaryMaxUint32: self._unary_max_int32,
+            MathOperation.UnaryMinUint32: self._unary_min_int32,
         }
+        # Elementwise integer unary ops that use the dedicated exact-int path in
+        # __call__. Only these ops are routed there; other integer-capable ops
+        # (e.g. ReduceColumn/ReduceRow, Typecast) keep their own layout handling.
+        self._integer_unary_ops = {
+            MathOperation.LeftShift,
+            MathOperation.RightShift,
+            MathOperation.UnaryMaxInt32,
+            MathOperation.UnaryMinInt32,
+            MathOperation.UnaryMaxUint32,
+            MathOperation.UnaryMinUint32,
+        }
+        # Fixed dispatch constants shared with sfpu_operations.h: unary shift by 3
+        # bits, integer unary max/min against the scalar 1000.
+        self._int_shift_amount = 3
+        self._int_maxmin_scalar = 1000
         self.data_format = None
         self.dest_acc = DestAccumulation.No
 
@@ -2256,6 +2291,17 @@ class UnarySFPUGolden:
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
+
+        # Elementwise integer unary ops run on a dedicated exact-int path: tilize ->
+        # per-element op -> untilize, staying in the integer dtype (no float dst
+        # coercion / FTZ). Gated on the op set so integer-capable non-elementwise ops
+        # (ReduceColumn/ReduceRow, Typecast) keep their own layout handling below.
+        if (
+            operation in self._integer_unary_ops
+            and input_format is not None
+            and input_format.is_integer()
+        ):
+            return self._call_integer(operation, operand1, input_format, dimensions)
 
         # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
         if input_format == DataFormat.Bfp2_b:
@@ -2515,6 +2561,15 @@ class UnarySFPUGolden:
     def _log(self, x):
         return self._torch_unary(x, torch.log)
 
+    # log_with_base dispatches _calculate_log_ with base_scale = fp16a bits of
+    # 1/ln(2) (0x3DC5). sFloat16a rounds it to the fp16 value below, so the golden
+    # multiplies ln(x) by that exact rounded scale (=> log2(x) modulo the kernel's
+    # own ln approximation, which is within the same tolerance as plain log).
+    _LOG_WITH_BASE_SCALE = 1.4423828125  # fp16(1/ln 2)
+
+    def _log_with_base(self, x):
+        return self._torch_unary(x, lambda t: torch.log(t) * self._LOG_WITH_BASE_SCALE)
+
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)
 
@@ -2553,6 +2608,31 @@ class UnarySFPUGolden:
     def _frac(self, x):
         # Fractional part with sign of x: frac(x) = x - trunc(x)
         return (x - math.trunc(x)) if math.isfinite(x) else x
+
+    def _round(self, x):
+        # decimals=0, round-half-to-even (matches the kernel's _round_even_ and
+        # torch.round / Python's banker's rounding).
+        return float(round(x)) if math.isfinite(x) else x
+
+    def _tan(self, x):
+        return math.tan(x)
+
+    def _atan(self, x):
+        return math.atan(x)
+
+    def _asin(self, x):
+        # Domain restricted to [-1, 1] by the stimuli spec.
+        return math.asin(x)
+
+    def _acos(self, x):
+        # Domain restricted to [-1, 1] by the stimuli spec.
+        return math.acos(x)
+
+    def _sinh(self, x):
+        return math.sinh(x)
+
+    def _cosh(self, x):
+        return math.cosh(x)
 
     def _square(self, x):
         if not math.isfinite(x * x):
@@ -2654,6 +2734,50 @@ class UnarySFPUGolden:
         )
         return torch.exp2(input_tensor).item()
 
+    def _exp_with_base(self, x):
+        # Matches the dispatch: calculate_exponential with SCALE_EN and a bf16
+        # scale of 0.5, i.e. exp(0.5 * x). 0.5 is exact in bf16, so the only error
+        # versus this golden is the shared exp approximation itself.
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.exp(0.5 * input_tensor).item()
+
+    def _call_integer(self, operation, operand1, input_format, dimensions):
+        """Exact integer golden: tilize -> elementwise op -> untilize, in int dtype.
+
+        tilize/untilize is a pure permutation and cancels for elementwise ops, but is
+        kept to mirror the float/binary golden layout handling exactly.
+        """
+        torch_dtype = format_dict[input_format]
+        tensor = (
+            operand1 if isinstance(operand1, torch.Tensor) else torch.tensor(operand1)
+        )
+        tensor = tensor.to(torch_dtype).flatten()
+        tilized = tilize_block(tensor, dimensions, input_format).flatten()
+        op = self.ops[operation]
+        op_res = [int(op(int(x))) for x in tilized.tolist()]
+        result = torch.tensor(op_res, dtype=torch_dtype)
+        result = untilize_block(result, input_format, dimensions).flatten()
+        return result
+
+    def _left_shift(self, x):
+        # Matches calculate_left_shift with a fixed shift of 3; stimuli are bounded so
+        # the result never leaves the positive int32 range (no overflow/wrap).
+        return int(x) << self._int_shift_amount
+
+    def _right_shift(self, x):
+        # Arithmetic right shift by 3; Python >> on ints is arithmetic (sign-propagating).
+        return int(x) >> self._int_shift_amount
+
+    def _unary_max_int32(self, x):
+        return max(int(x), self._int_maxmin_scalar)
+
+    def _unary_min_int32(self, x):
+        return min(int(x), self._int_maxmin_scalar)
+
     def _neg(self, x):
         return -x
 
@@ -2680,6 +2804,14 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.gelu(input_tensor, approximate="tanh").item()
+
+    def _gelu_derivative(self, x):
+        # d/dx [x * Phi(x)] = Phi(x) + x * phi(x), with the erf-based standard
+        # normal CDF/PDF (matches the kernel's exact-gelu derivative, not the
+        # tanh approximation): Phi(x) = 0.5*(1+erf(x/sqrt2)), phi(x) = N(0,1) pdf.
+        phi = math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+        cdf = 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+        return cdf + x * phi
 
     def _fill(self, x, const_value=5):
         input_tensor = (
@@ -2850,6 +2982,12 @@ class UnarySFPUGolden:
 
     def _unary_le(self, x):
         return 1.0 if x <= self._UNARY_COMP_THRESHOLD else 0.0
+
+    def _unary_ne(self, x):
+        return 1.0 if x != self._UNARY_COMP_THRESHOLD else 0.0
+
+    def _unary_eq(self, x):
+        return 1.0 if x == self._UNARY_COMP_THRESHOLD else 0.0
 
     def _unary_max(self, x):
         return max(x, self._UNARY_MAX_MIN_VALUE)
@@ -3276,6 +3414,16 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
                 MathOperation.SfpuLogsigmoid: self._logsigmoid,
+                # Integer / format-typed binary SFPU ops.
+                MathOperation.SfpuEqInt: self._eq_int,
+                MathOperation.SfpuNeInt: self._ne_int,
+                MathOperation.SfpuMaxInt32: self._max,
+                MathOperation.SfpuMinInt32: self._min,
+                MathOperation.SfpuMaxUint32: self._max,
+                MathOperation.SfpuMinUint32: self._min,
+                MathOperation.SfpuRemainderInt32: self._remainder_int,
+                MathOperation.SfpuRemainderUint32: self._remainder_int,
+                MathOperation.SfpuFmodInt32: self._fmod_int,
             }
         )
 
@@ -3519,6 +3667,23 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # (src1) and x=t2 (src2). Evaluated in fp32 to mirror the SFPU minimax path;
         # the kernel is an approximation, so the match relies on the PCC tolerance.
         return torch.atan2(t1.to(torch.float32), t2.to(torch.float32))
+
+    def _eq_int(self, t1, t2):
+        # Integer equality, exact 0/1 (calculate_binary_eq_int over Int32 dest bits).
+        return int(int(t1) == int(t2))
+
+    def _ne_int(self, t1, t2):
+        return int(int(t1) != int(t2))
+
+    def _remainder_int(self, t1, t2):
+        # Integer remainder. Stimuli are non-negative with divisor >= 1, so the result is
+        # convention-agnostic (trunc/floor/unsigned all agree) and equals Python's a % b.
+        return int(int(t1) % int(t2))
+
+    def _fmod_int(self, t1, t2):
+        # int32 fmod (sign follows dividend). Non-negative stimuli make it equal to a % b,
+        # matching the internal unsigned-remainder kernel.
+        return int(int(t1) % int(t2))
 
     def _mul_int32(self, t1, t2):
         # int32 multiply, low 32 bits. The kernel stores two's-complement bits via
