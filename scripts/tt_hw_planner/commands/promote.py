@@ -36,6 +36,52 @@ def _reset_cc_fallbacks(demo_dir: Path) -> None:
         print(f"  [promote] cleared attempts for {len(prior_attempts)} components (fresh budget)")
 
 
+def _promote_normalize_ungraduated(demo_dir: Path) -> None:
+    """Promote's job is to graduate EVERY not-on-device component — the
+    REUSE/ADAPT/NEW tag is just a label and must not exempt anything. Any
+    REUSE/ADAPT that is not verified on device (its reuse target was never wired
+    into this demo — the shared classifier decides) is normalized into the
+    NEW work-path so the existing capture/scaffold/gate/can_stop graduate it
+    exactly like any other component. The ``tt_reuse_target`` is preserved as a
+    wrap-hint (and surfaced in the notes) so the loop reuses the existing module
+    rather than writing from scratch. Verified-wired reuse is left untouched.
+    Scoped to promote only; up/auto-up are unaffected."""
+    from ..bringup_loop import _safe_id, _stub_has_graduated_from_autofill  # noqa: F401
+    from ..final_categorization import reuse_adapt_on_device
+
+    status_path = demo_dir / "bringup_status.json"
+    if not status_path.is_file():
+        return
+    try:
+        data = json.loads(status_path.read_text())
+    except Exception:
+        return
+    comps = data.get("components") or []
+    verified = reuse_adapt_on_device(demo_dir, comps)
+    normalized: List[str] = []
+    for c in comps:
+        name = str(c.get("name", "")).strip()
+        if not name or c.get("status") not in ("REUSE", "ADAPT"):
+            continue
+        if name in verified:
+            continue
+        target = c.get("tt_reuse_target")
+        c["status"] = "NEW"
+        hint = f"[promote] reuse target `{target}` not wired — wrap it natively to graduate." if target else ""
+        c["notes"] = (hint + " " + (c.get("notes") or "")).strip()
+        normalized.append(name)
+    if not normalized:
+        return
+    try:
+        status_path.write_text(json.dumps(data, indent=2))
+    except Exception:
+        return
+    print(
+        f"  [promote] {len(normalized)} unwired REUSE/ADAPT component(s) normalized to the graduate "
+        f"path (tag is not an exemption): {', '.join(normalized)}"
+    )
+
+
 def _latest_worktree_demo(model_id: str):
     """Find the newest active worktree holding this model's demo, point BRINGUP_ROOT there, and return its demo_dir (or None)."""
     from ..bringup_loop import find_demo_dir
@@ -137,6 +183,7 @@ def _cmd_promote_impl(args) -> int:
         return 2
 
     _reset_cc_fallbacks(demo_dir)
+    _promote_normalize_ungraduated(demo_dir)
 
     if (getattr(args, "engine", "cc") or "cc") == "cc":
         from .._cli_helpers.bringup_cc import run_bringup_cc
