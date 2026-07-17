@@ -1508,26 +1508,36 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
         return n;
     }
 
-    // DECODE the X280 stream (Inc-2a) and PUBLISH to the ring. No enrich/Tracy here -- a consumer thread
-    // does both off the receiver. The COLLECT hart already RESHAPED each raw marker into a WorkerZoneWire
-    // with STRUCTURAL identity (core_x/y, risc taken from the mirror index it drained) and packed 2 per
-    // 64B page. So there's no raw decode and no STICKY_META forward-fill here (that was the orphan source):
-    // just lift out the valid slots. Validity: the FW sets header.reserved=0xA5A5 on real records; a padded
-    // slot has reserved=0 -> skip. `wz` persists across drain calls (single receiver thread).
+    // DECODE the X280 stream (Tier-1 compact) and PUBLISH to the ring. No enrich/Tracy here -- a consumer
+    // thread does both off the receiver. The COLLECT hart ships each raw 2-word marker VERBATIM plus a
+    // packed identity word (16B, 4 per 64B page); it does NO field extraction on-device. Here we expand
+    // each compact record into the in-memory WorkerZoneWire the ring + consumer use: identity from the
+    // packed word (structural, from the mirror index -> no STICKY_META forward-fill / orphans), and
+    // timer_id/timestamp from the raw marker words. Validity: w0 bit31 (a real marker is 0x80000000|...);
+    // a padded/stale slot has w0=0 -> skip. `wz` persists across drain calls (single receiver thread).
     static std::vector<exp::WorkerZoneWire> wz;
     wz.clear();
-    ZoneScopedN("X280-DecodeWZW");  // WorkerZoneWire slots -> ring (reshape already done on the X280 collect hart)
-    constexpr uint16_t kWzValid = 0xA5A5;  // collect-hart validity sentinel
-    const uint32_t kWzPerPage = (page_words * sizeof(uint32_t)) / sizeof(exp::WorkerZoneWire);  // 64B/28B = 2
+    ZoneScopedN("X280-DecodeWZW");         // compact records -> WorkerZoneWire -> ring
+    constexpr uint16_t kWzValid = 0xA5A5;  // in-memory WorkerZoneWire validity (kept for the ring/consumer)
+    const uint32_t kRecPerPage = (page_words * sizeof(uint32_t)) / sizeof(exp::WorkerZoneWireCompact);  // 64/16 = 4
     const auto* page_bytes = reinterpret_cast<const uint8_t*>(x280_page_buf.data());
     for (uint32_t pg = 0; pg < n; pg++) {
         const uint8_t* page = page_bytes + static_cast<size_t>(pg) * page_words * sizeof(uint32_t);
-        for (uint32_t s = 0; s < kWzPerPage; s++) {
-            exp::WorkerZoneWire rec;
-            std::memcpy(&rec, page + s * sizeof(exp::WorkerZoneWire), sizeof(exp::WorkerZoneWire));
-            if (rec.header.reserved != kWzValid) {
+        for (uint32_t s = 0; s < kRecPerPage; s++) {
+            exp::WorkerZoneWireCompact c;
+            std::memcpy(&c, page + s * sizeof(exp::WorkerZoneWireCompact), sizeof(exp::WorkerZoneWireCompact));
+            if ((c.w0 & 0x80000000u) == 0) {
                 continue;  // padded/stale slot -> skip
             }
+            exp::WorkerZoneWire rec;
+            rec.header.type = static_cast<uint16_t>(exp::ProfilerPacketType::WorkerZone);
+            rec.header.reserved = kWzValid;
+            rec.core_x = c.ident & 0x3FFu;
+            rec.core_y = (c.ident >> 10) & 0x3FFu;
+            rec.risc = (c.ident >> 20) & 0xFu;
+            rec.timer_id = (c.w0 >> 12) & 0x7FFFFu;  // (type<<16) | name-hash
+            rec.time_hi = c.w0 & 0xFFFu;             // 12 valid bits
+            rec.time_lo = c.w1;
             wz.push_back(rec);
         }
     }
@@ -2158,7 +2168,7 @@ void RealtimeProfilerManager::shutdown() {
                 // ~96% idle and hide it. Answers "where do the reader/collect cores spend the burst?"
                 try {
                     constexpr uint64_t kGauge = 0x08016400ull;
-                    constexpr uint64_t kOnset = kGauge + 0x180, kStall = kGauge + 0x200, kFlags = kGauge + 0x280;
+                    constexpr uint64_t kOnset = kGauge + 0x300, kStall = kGauge + 0x400, kFlags = kGauge + 0x500;
                     uint64_t onset_valid = dev_state.x280_driver->lim_rd_u64(kFlags + 0);
                     uint64_t stall_valid = dev_state.x280_driver->lim_rd_u64(kFlags + 8);
                     if (onset_valid && stall_valid) {
@@ -2190,13 +2200,19 @@ void RealtimeProfilerManager::shutdown() {
                                 pct(parse, wall),
                                 pct(backoff, wall));
                         }
+                        // col[10..18]=cwall,copy,swait,scan,prod,rd,pack,pub,moved
                         uint64_t cwall = rd(kStall, 10) - rd(kOnset, 10);
                         uint64_t copy = rd(kStall, 11) - rd(kOnset, 11);
                         uint64_t swait = rd(kStall, 12) - rd(kOnset, 12);
                         uint64_t scan = rd(kStall, 13) - rd(kOnset, 13);
                         uint64_t prod = rd(kStall, 14) - rd(kOnset, 14);
+                        uint64_t crd = rd(kStall, 15) - rd(kOnset, 15);
+                        uint64_t cpack = rd(kStall, 16) - rd(kOnset, 16);
+                        uint64_t cpub = rd(kStall, 17) - rd(kOnset, 17);
+                        uint64_t moved = rd(kStall, 18) - rd(kOnset, 18);
                         uint64_t reshape = copy > swait ? copy - swait : 0;
                         uint64_t empty = cwall > copy ? cwall - copy : 0;
+                        uint64_t other = copy > (crd + cpack + cpub + swait) ? copy - (crd + cpack + cpub + swait) : 0;
                         log_info(
                             tt::LogMetal,
                             "[Real-time profiler] Device {}: BURST collect ({} us): scan-empty(round-robin)={:.1f}%  "
@@ -2210,6 +2226,24 @@ void RealtimeProfilerManager::shutdown() {
                             scan,
                             prod,
                             pct(prod, scan));
+                        // Reshape sub-breakdown: which part of the copy path is the cycle hog. Percentages
+                        // are of the copy path (cwall minus the empty round-robin scan). Per-marker/-page ns
+                        // assume the X280 ~1 GHz (1 cyc ~= 1 ns).
+                        log_info(
+                            tt::LogMetal,
+                            "[Real-time profiler] Device {}: BURST reshape split (of copy path): reads(LIM 2w)={:.1f}%"
+                            " ({} ns/marker)  pack(w_wzw 7 stores)={:.1f}% ({} ns/marker)  publish(fence+S_PROD)="
+                            "{:.1f}% ({} ns/page)  loop/bitops={:.1f}%  | {} markers, {} pages",
+                            dev_state.chip_id,
+                            pct(crd, copy),
+                            moved ? crd / moved : 0,
+                            pct(cpack, copy),
+                            moved ? cpack / moved : 0,
+                            pct(cpub, copy),
+                            moved ? cpub / (moved / 2 ? moved / 2 : 1) : 0,
+                            pct(other, copy),
+                            moved,
+                            moved / 2);
                     } else {
                         log_info(
                             tt::LogMetal,

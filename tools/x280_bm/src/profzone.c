@@ -139,10 +139,10 @@
  * The relay latches all of these at burst-onset (idle->active edge) and at stall (freeze); the host
  * diffs the two snapshots to get the reader/collect time distribution over just the burst window. */
 #define LIVE_RDR(h) (GAUGE_BASE + 0x80 + (uint64_t)(h) * 0x28) /* 5 u64: poll,bulk,mwait,backoff,wall */
-#define LIVE_COL (GAUGE_BASE + 0x140)                          /* 5 u64: cwall,copy,swait,scanned,productive */
-#define SNAP_ONSET (GAUGE_BASE + 0x180)                        /* rdr0[5] rdr1[5] col[5] = 15 u64 */
-#define SNAP_STALL (GAUGE_BASE + 0x200)                        /* rdr0[5] rdr1[5] col[5] = 15 u64 */
-#define SNAP_FLAGS (GAUGE_BASE + 0x280)                        /* +0 onset_valid, +8 stall_valid */
+#define LIVE_COL (GAUGE_BASE + 0x140)   /* 9 u64: cwall,copy,swait,scanned,productive,rd,pack,pub,moved */
+#define SNAP_ONSET (GAUGE_BASE + 0x300) /* rdr0[5] rdr1[5] col[9] = 19 u64 (152 B) */
+#define SNAP_STALL (GAUGE_BASE + 0x400) /* rdr0[5] rdr1[5] col[9] = 19 u64 (152 B) */
+#define SNAP_FLAGS (GAUGE_BASE + 0x500) /* +0 onset_valid, +8 stall_valid */
 
 /* Fill-trajectory ring: the relay (idle-ish) appends a time-stamped snapshot of all four gauges
  * every TRAJ_PERIOD_CYC, so the host can reconstruct fill-vs-time (which queue climbs to capacity,
@@ -173,7 +173,9 @@ static inline void snapshot_breakdown(uint64_t dst) {
     for (int i = 0; i < 5; i++) {
         *(volatile uint64_t*)(dst + 0 + i * 8) = *(volatile uint64_t*)(LIVE_RDR(0) + i * 8);  /* rdr0 */
         *(volatile uint64_t*)(dst + 40 + i * 8) = *(volatile uint64_t*)(LIVE_RDR(1) + i * 8); /* rdr1 */
-        *(volatile uint64_t*)(dst + 80 + i * 8) = *(volatile uint64_t*)(LIVE_COL + i * 8);    /* col */
+    }
+    for (int i = 0; i < 9; i++) {
+        *(volatile uint64_t*)(dst + 80 + i * 8) = *(volatile uint64_t*)(LIVE_COL + i * 8); /* col */
     }
 }
 /* copy one 64 B page as a single wide vector load+store (LIM->FIFO or LIM->LIM) */
@@ -222,6 +224,22 @@ static inline void w_wzw(
     w32(dst + 16, timer_id);
     w32(dst + 20, time_hi);
     w32(dst + 24, time_lo);
+}
+
+/* Tier-1 compact self-describing record: 16 B = [ident, w0, w1, pad], 4 per 64B page. The raw 2-word
+ * marker (w0,w1) is shipped VERBATIM -- it already carries timer_id + timestamp -- so the collect hart
+ * does NO field extraction and only 3 stores/marker (vs 7 for the 28B WorkerZoneWire), and the host
+ * unpacks timer_id/time from w0/w1. `ident` packs the STRUCTURAL identity from the mirror index:
+ *   ident = core_x[0:9] | core_y[10:19] | risc[20:23].
+ * VALIDITY is w0 bit31 (a real marker is always 0x80000000|...); a padded/stale slot has w0=0 -> skip.
+ * pad word is left unwritten (host ignores it) so this is 3 stores, not 4. */
+#define REC_BYTES 16u
+#define REC_PER_PAGE 4u /* 4 * 16 B = 64 B page */
+#define PACK_IDENT(cx, cy, r) (((cx) & 0x3FFu) | (((cy) & 0x3FFu) << 10) | (((r) & 0xFu) << 20))
+static inline void w_rec(uint64_t dst, uint32_t ident, uint32_t w0, uint32_t w1) {
+    w32(dst + 0, ident);
+    w32(dst + 4, w0); /* raw marker word0 (bit31 set = valid) */
+    w32(dst + 8, w1); /* raw marker word1 */
 }
 
 /* ---- boot-handoff: return to the resident idle FW instead of parking in wfi ----
@@ -451,6 +469,7 @@ int main(uint64_t hartid) {
             chead[i] = 0;
         }
         uint32_t single_prod = 0;
+        uint32_t last_pub = 0;         /* last single_prod published to S_PROD (batched publish) */
         uint32_t pending = 0;          /* 0 or 1 WorkerZoneWire already written to the in-progress page */
         uint64_t moved = 0, loops = 0; /* moved = WorkerZoneWire records emitted (zone start/end only) */
         uint64_t cyc_copy = 0;         /* time in the reshape+pack path (INCLUDES cyc_swait) */
@@ -458,7 +477,38 @@ int main(uint64_t hartid) {
          * expect ~0 since relay is idle -> confirms collect is limited by its OWN work, not downstream).
          * scanned/productive = round-robin volume: how much of the ~550-mirror sweep is empty vs found data. */
         uint64_t cyc_swait = 0, swait_spins = 0, scanned = 0, productive = 0;
+        /* reshape sub-breakdown (subsets of cyc_copy): where the reshape/pack path burns cycles.
+         * cyc_rd = scalar LIM reads of the 2 marker words; cyc_pack = the 7 w32 stores in w_wzw;
+         * cyc_pub = fence + S_PROD publish per completed page. copy - (rd+pack+pub+swait) = loop/bitops. */
+        uint64_t cyc_rd = 0, cyc_pack = 0, cyc_pub = 0;
         uint64_t t_start = rdcycle_();
+/* Reshape one raw marker (2 words) into the single-SPSC page. Filters non-zone; reserves a page on
+ * the pending==0 edge (blocks on a full ring); packs via w_wzw; advances single_prod on the 2nd
+ * record. Does NOT fence/publish -- that is BATCHED once per mirror drain (see below). Mutates
+ * pending/single_prod/moved and the cyc_* counters; can `goto collect_done` on P_STOP mid-page. */
+#define EMIT_MARKER(W0, W1)                                                                  \
+    do {                                                                                     \
+        uint32_t _w0 = (W0);                                                                 \
+        uint32_t _type = (_w0 >> 28) & 0x7u;                                                 \
+        if (_type == PT_ZONE_START || _type == PT_ZONE_END) {                                \
+            if (pending == 0) { /* starting a new page: reserve it (block on a full ring) */ \
+                while ((uint32_t)(single_prod + 1u - r32(S_CONS)) > SINGLE_NREC) {           \
+                    swait_spins++;                                                           \
+                    if (r64(P_STOP)) {                                                       \
+                        goto collect_done;                                                   \
+                    }                                                                        \
+                }                                                                            \
+            }                                                                                \
+            uint64_t _pg = single_store + (uint64_t)(single_prod % SINGLE_NREC) * PAGE;      \
+            w_rec(_pg + (uint64_t)pending * REC_BYTES, ident, _w0, (W1));                    \
+            pending++;                                                                       \
+            if (pending == REC_PER_PAGE) { /* page full (4 records) */                       \
+                single_prod++;                                                               \
+                pending = 0;                                                                 \
+            }                                                                                \
+            moved++;                                                                         \
+        }                                                                                    \
+    } while (0)
         for (;;) {
             uint64_t progressed = 0;
             loops++;
@@ -481,6 +531,7 @@ int main(uint64_t hartid) {
                 uint32_t risc = (uint32_t)(i % NRISC);
                 uint32_t cx = coords[core_idx * 2 + 0];
                 uint32_t cy = coords[core_idx * 2 + 1];
+                uint32_t ident = PACK_IDENT(cx, cy, risc); /* constant per mirror -> computed once */
                 while (mh != mtail) {
                     uint32_t midx = mh % MIRROR_DEPTH;
                     uint32_t seg = MIRROR_DEPTH - midx; /* contiguous mirror words until wrap */
@@ -490,51 +541,39 @@ int main(uint64_t hartid) {
                     }
                     volatile uint32_t* mk = (volatile uint32_t*)(MSTORE(i) + (uint64_t)midx * 4);
                     uint64_t tcp = rdcycle_();
-                    for (uint32_t k = 0; k + 1u < seg; k += 2u) { /* each marker = 2 words */
-                        uint32_t w0 = mk[k];
-                        uint32_t type = (w0 >> 28) & 0x7u;
-                        if (type != PT_ZONE_START && type != PT_ZONE_END) {
-                            continue; /* drop STICKY_META (identity is structural) + non-zone types */
-                        }
-                        uint32_t timer_id = (w0 >> 12) & 0x7FFFFu; /* (type<<16)|hash */
-                        uint32_t thi = w0 & 0xFFFu;
-                        uint32_t w1 = mk[k + 1];
-                        if (pending == 0) {
-                            /* start a new single-SPSC page (2 records/page): reserve 1 page (block on relay) */
-                            uint64_t tsw = rdcycle_();
-                            while ((uint32_t)(single_prod + 1u - r32(S_CONS)) > SINGLE_NREC) {
-                                swait_spins++; /* blocked on FULL single-SPSC => relay is the wall */
-                                if (r64(P_STOP)) {
-                                    cyc_swait += rdcycle_() - tsw;
-                                    cyc_copy += rdcycle_() - tcp;
-                                    goto collect_done;
-                                }
-                            }
-                            cyc_swait += rdcycle_() - tsw;
-                            w_wzw(
-                                single_store + (uint64_t)(single_prod % SINGLE_NREC) * PAGE,
-                                cx,
-                                cy,
-                                risc,
-                                timer_id,
-                                thi,
-                                w1);
-                            pending = 1;
-                        } else {
-                            uint64_t pg = single_store + (uint64_t)(single_prod % SINGLE_NREC) * PAGE;
-                            w_wzw(pg + WZW_BYTES, cx, cy, risc, timer_id, thi, w1);
-                            fence_();
-                            single_prod++; /* page complete (2 records) */
-                            w32(S_PROD, single_prod);
-                            pending = 0;
-                        }
-                        moved++;
+                    uint32_t k = 0;
+                    /* ILP batch-read: 8 independent LIM loads (4 markers) issued back-to-back keep
+                     * multiple reads in flight, amortizing the ~67 ns single-read latency that made
+                     * scalar per-marker reads 36% of the copy path (FINDINGS: reads were the #1 hog). */
+                    for (; k + 8u <= seg; k += 8u) {
+                        uint32_t b0 = mk[k + 0], b1 = mk[k + 1], b2 = mk[k + 2], b3 = mk[k + 3];
+                        uint32_t b4 = mk[k + 4], b5 = mk[k + 5], b6 = mk[k + 6], b7 = mk[k + 7];
+                        EMIT_MARKER(b0, b1);
+                        EMIT_MARKER(b2, b3);
+                        EMIT_MARKER(b4, b5);
+                        EMIT_MARKER(b6, b7);
+                    }
+                    for (; k + 1u < seg; k += 2u) { /* tail: < 4 markers */
+                        uint32_t w0 = mk[k], w1 = mk[k + 1];
+                        EMIT_MARKER(w0, w1);
                     }
                     cyc_copy += rdcycle_() - tcp;
                     mh += seg;
                     w32(MHEAD(i), mh); /* free mirror -> reader unblocks */
                     chead[i] = mh;
                     progressed = 1;
+                }
+                /* Batched publish: fence + advance S_PROD ONCE per mirror drain, not per page (the
+                 * per-page fence was ~17% of the copy path). Complete pages become visible to the
+                 * relay here; a half-filled page (pending==1) waits for its 2nd record. Unpublished
+                 * pages are bounded by one mirror (<=256), well under SINGLE_NREC, so the reserve
+                 * check (single_prod vs S_CONS) stays correct. */
+                if (single_prod != last_pub) {
+                    uint64_t tpb = rdcycle_();
+                    fence_();
+                    w32(S_PROD, single_prod);
+                    cyc_pub += rdcycle_() - tpb;
+                    last_pub = single_prod;
                 }
             }
             w64(G_MIRROR, loop_mirror_max); /* publish fullest mirror this loop (host samples over time) */
@@ -546,6 +585,10 @@ int main(uint64_t hartid) {
             w64(LIVE_COL + 16, cyc_swait);
             w64(LIVE_COL + 24, scanned);
             w64(LIVE_COL + 32, productive);
+            w64(LIVE_COL + 40, cyc_rd);   /* reshape sub-breakdown: marker LIM reads */
+            w64(LIVE_COL + 48, cyc_pack); /* w_wzw stores */
+            w64(LIVE_COL + 56, cyc_pub);  /* fence + publish per page */
+            w64(LIVE_COL + 64, moved);    /* records emitted (for per-marker cost) */
             if (!progressed) {
                 /* done when stopping AND every reader finished AND all mirrors drained. */
                 if (r64(P_STOP)) {
@@ -571,18 +614,20 @@ int main(uint64_t hartid) {
             }
         }
     collect_done:;
-        /* Flush a half-filled page: pad slot 1 (WorkerZoneWire header.reserved=0 -> host skips it) and
-         * publish, so the last odd record isn't stranded. (A full 2-record page publishes inline above.) */
+        /* Flush a partial page: zero the unused trailing record slots (w0=0 -> host skips them) and
+         * publish, so the last <4 records aren't stranded. (A full 4-record page publishes inline.) */
         if (pending) {
             uint64_t pg = single_store + (uint64_t)(single_prod % SINGLE_NREC) * PAGE;
-            for (uint32_t w = 0; w < WZW_BYTES / 4u; w++) {
-                w32(pg + WZW_BYTES + (uint64_t)w * 4u, 0); /* zero slot 1 -> reserved=0 -> skipped */
+            for (uint32_t s = pending; s < REC_PER_PAGE; s++) {
+                w32(pg + (uint64_t)s * REC_BYTES + 4, 0); /* zero w0 -> invalid -> skipped */
             }
             fence_();
             single_prod++;
             w32(S_PROD, single_prod);
+            last_pub = single_prod;
             pending = 0;
         }
+#undef EMIT_MARKER
         const uint64_t cwall = rdcycle_() - t_start;
         w64(COLLECT_STATS + 0, moved);
         w64(COLLECT_STATS + 8, loops);

@@ -54,6 +54,24 @@ struct WorkerZoneWire {
 #pragma pack(pop)
 static_assert(sizeof(WorkerZoneWire) == 28, "WorkerZoneWire must match the X280 presenter layout");
 
+// Tier-1 compact on-wire record (X280 -> host). 16 B, 4 per 64B page. The X280 collect hart ships the
+// raw 2-word marker (w0,w1) VERBATIM plus a packed identity word, doing only 3 stores/marker and no
+// field extraction; the host expands each record into a WorkerZoneWire below. This is the transported
+// format; WorkerZoneWire remains the in-memory struct the ring + consumer use. Keep in sync with
+// tools/x280_bm/src/profzone.c (w_rec / PACK_IDENT). Little-endian both ends.
+//   ident = core_x[0:9] | core_y[10:19] | risc[20:23]
+//   w0    = raw marker word0 = 0x80000000 | (timer_id<<12) | time_hi(12b)   (bit31 set => valid)
+//   w1    = raw marker word1 = time_lo
+#pragma pack(push, 1)
+struct WorkerZoneWireCompact {
+    uint32_t ident;  // 0  — packed structural identity (from the mirror index)
+    uint32_t w0;     // 4  — raw marker word0 (bit31 = valid sentinel)
+    uint32_t w1;     // 8  — raw marker word1 (time_lo)
+    uint32_t pad;    // 12 — unwritten by the FW; ignored by the host
+};
+#pragma pack(pop)
+static_assert(sizeof(WorkerZoneWireCompact) == 16, "compact record must be 16 B (4 per 64B page)");
+
 // ---------------------------------------------------------------------------------------
 // Enriched packets (callback-facing). Not size- or POD-constrained; never transported.
 // Each exposes a static kType so a single Register(callback) can auto-file it.
