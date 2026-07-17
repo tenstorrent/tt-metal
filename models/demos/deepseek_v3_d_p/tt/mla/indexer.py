@@ -468,7 +468,7 @@ class TtIndexer:
         return full
 
     def _score_blockcyclic_fused(
-        self, q_dev, weights, index_kv_cache, cfg, start_pos, end_pos, cache_batch_idx, seq_len
+        self, q_dev, weights, index_kv_cache, cfg, start_pos, end_pos, cache_batch_idx, seq_len, seq_subshard_axis=None
     ):
         """Ring-fused block-cyclic score: overlap the SP all-gather of the key cache with the scoring, in
         place of the blocking _gather_index_kbuf barrier + standalone indexer_score_dsa. Passes this chip's
@@ -507,8 +507,13 @@ class TtIndexer:
             chunk_start_idx=start_pos,
             program_config=cfg,
             cache_batch_idx=None,  # k_local is already sliced to this slot (batch-1) → no in-kernel select
+            # 2D SP×TP: the query rows were ALSO sub-sharded over the TP axis (q_dev is S/(sp·tp) tall); name
+            # that axis so the score adds each device's tp_rank*Sq block-cyclic sub-offset. The K cache stays
+            # SP-sharded + TP-replicated, so k_local / the ring AG (along cluster_axis=sp_axis) are unchanged.
+            # None keeps the SP-only path. chunk_local == seq_len (S/sp) regardless (== Sq·tp when TP-split).
+            seq_subshard_axis=seq_subshard_axis,
             block_cyclic_sp_axis=self.sp_axis,
-            block_cyclic_chunk_local=seq_len,  # per-chip chunk == chunk_size_global / sp == Sq
+            block_cyclic_chunk_local=seq_len,  # per-chip chunk == chunk_size_global / sp (== Sq·tp when TP-split)
             kv_len=end_pos,
         )
         ttnn.deallocate(k_local)  # AG input; the persistent gather buffer is owned by tt_ccl (not freed)
@@ -718,16 +723,24 @@ class TtIndexer:
             # below is told the valid length (valid_length=end_pos) so it never reads or ranks that stale tail
             # — which is the future top-k would drop anyway (causally -inf), so the selection is unchanged.
             #
-            # SP>1 with all heads resident and NO TP sub-shard FUSES the SP all-gather into the score
-            # (ring_indexer_score_dsa, ring-joint style: the per-slab gather overlaps the scoring). Otherwise
-            # the blocking gather + standalone indexer_score_dsa: SP==1 has nothing to gather; head-streaming
-            # configs the fused op rejects; and the TP×SP sub-shard (tpsp) needs seq_subshard_axis, which the
-            # SP-only fused ring path does not carry (it hard-codes tp_index=0). head_group_size 0, or ==
-            # heads_local, means all heads resident.
+            # SP>1 with all heads resident FUSES the SP all-gather into the score (ring_indexer_score_dsa,
+            # ring-joint style: the per-slab gather overlaps the scoring). Otherwise the blocking gather +
+            # standalone indexer_score_dsa: SP==1 has nothing to gather; head-streaming configs the fused op
+            # rejects. The 2D SP×TP sub-shard (tpsp) IS fused — the K cache stays SP-sharded + TP-replicated so
+            # the ring AG is unchanged, and seq_subshard_axis carries the TP query sub-offset into the score.
+            # head_group_size 0, or == heads_local, means all heads resident.
             heads_local = self.index_args.index_n_heads // self.tp_factor
-            if self.sp_factor > 1 and cfg.head_group_size in (0, heads_local) and not tpsp:
+            if self.sp_factor > 1 and cfg.head_group_size in (0, heads_local):
                 logits = self._score_blockcyclic_fused(
-                    q_dev, weights, index_kv_cache, cfg, start_pos, end_pos, cache_batch_idx, seq_len
+                    q_dev,
+                    weights,
+                    index_kv_cache,
+                    cfg,
+                    start_pos,
+                    end_pos,
+                    cache_batch_idx,
+                    seq_len,
+                    seq_subshard_axis=self.tp_axis if tpsp else None,
                 )
             else:
                 k_full = self._gather_index_kbuf(index_kv_cache, cache_batch_idx)  # [1,1,T,D_idx] TILE, block-cyclic

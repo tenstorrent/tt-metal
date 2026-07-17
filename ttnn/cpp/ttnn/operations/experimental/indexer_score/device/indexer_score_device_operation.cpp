@@ -818,6 +818,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> kv_len,
+    std::optional<uint32_t> seq_subshard_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
@@ -842,6 +843,7 @@ ttnn::Tensor ring_indexer_score_dsa(
         cache_batch_idx,
         kv_len,
         cluster_axis,
+        seq_subshard_axis,  // 2D SP×TP: the TP axis the query is sub-sharded over (nullopt = SP-only)
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
         k_local,

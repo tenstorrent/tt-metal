@@ -125,9 +125,15 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t T = k.logical_shape()[2];
 
     const uint32_t device_index = device_index_for(args, coord, q);
-    // The fused ring path is SP-only (cluster_axis == block_cyclic_sp_axis); no 2D SP×TP seq sub-shard here,
-    // so the TP sub-shard rank is always 0.
-    const auto geom = device_causal_geometry(args, device_index, /*tp_index=*/0, Sq);
+    // 2D SP×TP: the K cache is SP-sharded + TP-replicated and the ring AG still gathers along the SP axis
+    // (cluster_axis), so the reader's K sourcing is unchanged; TP only sub-shards the QUERY rows. tp_index is
+    // this device's rank along seq_subshard_axis (the TP axis) -- device_causal_geometry adds its tp_index*Sq
+    // slab-local sub-offset (rotation-exact, incl. straddle). 0 (SP-only) when seq_subshard_axis is unset.
+    const uint32_t tp_index =
+        (args.seq_subshard_axis.has_value() && q.device_storage().get_coords().size() > 1)
+            ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.seq_subshard_axis)
+            : 0u;
+    const auto geom = device_causal_geometry(args, device_index, tp_index, Sq);
     const uint32_t chunk_t = geom.chunk_start_tiles;
 
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;

@@ -220,6 +220,10 @@ void bind_indexer_score(nb::module_& mod) {
             compute_kernel_config: optional DeviceComputeKernelConfig (only math_fidelity honored)
             cache_batch_idx: optional int, batch slot of a shared K cache; see indexer_score_dsa
             kv_len: optional int, valid tile-aligned key prefix in (0, T]; see indexer_score_dsa
+            seq_subshard_axis: optional int, 2D SP×TP -- the (TP) mesh axis the query rows are ALSO block-cyclic
+                sub-sharded over, on top of the SP shard. The K cache stays SP-sharded + TP-replicated (the ring
+                AG still gathers along cluster_axis), so only the causal query geometry gains the tp_rank*Sq
+                sub-offset. nullopt = query sharded on the SP axis only. See indexer_score_dsa.
             block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
                 see indexer_score_dsa
             block_cyclic_chunk_local: optional int, per-shard chunk length; required with block_cyclic_sp_axis
@@ -242,6 +246,7 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("cache_batch_idx") = std::nullopt,
         nb::arg("kv_len") = std::nullopt,
+        nb::arg("seq_subshard_axis") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt);
 }
