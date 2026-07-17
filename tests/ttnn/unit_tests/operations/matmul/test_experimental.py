@@ -52,7 +52,6 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
     assert_numeric_metrics(torch_output_tensor, output_tensor, pcc_threshold=0.9999)
 
 
-@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("input_a_is_sharded", [True, False])
 @pytest.mark.parametrize("output_is_sharded", [True, False])
 @pytest.mark.parametrize("m_size, num_cores", [[5632, 22]])
