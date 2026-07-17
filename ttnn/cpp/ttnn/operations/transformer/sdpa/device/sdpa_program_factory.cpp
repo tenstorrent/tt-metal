@@ -149,6 +149,10 @@ ChunkedParams compute_chunked_params(
     return p;
 }
 
+tt::DataFormat qk_intermediate_dataformat(bool fp32_dest_acc_en) {
+    return fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+}
+
 }  // namespace
 
 ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
@@ -656,7 +660,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
-    tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat qk_im_df = qk_intermediate_dataformat(fp32_dest_acc_en);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
     TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
