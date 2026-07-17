@@ -253,8 +253,10 @@ class Cosmos3JointAttention(Module):
         # a whole tray (8 chips). SDPA is matmul-heavy internally — same risk
         # class as the trunk's linears, which already use get_matmul_core_grid.
         grid = get_matmul_core_grid(mesh_device)
-        self.sdpa_q_chunk_size = 128
-        self.sdpa_k_chunk_size = 128
+        # Chunk sizes tile the SDPA over the query/KV sequence; larger chunks trade L1
+        # footprint for fewer iterations. Overridable to sweep throughput at 189f/720p.
+        self.sdpa_q_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_Q_CHUNK", "128"))
+        self.sdpa_k_chunk_size = int(os.environ.get("TT_COSMOS3_SDPA_K_CHUNK", "128"))
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid,
             q_chunk_size=self.sdpa_q_chunk_size,
