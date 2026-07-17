@@ -194,9 +194,7 @@ class TestConfig:
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
-    DUMP_RAW_COUNTERS: ClassVar[bool] = False
-    DUMP_RAW_METRICS: ClassVar[bool] = False
-    DUMP_CSV_COUNTERS: ClassVar[bool] = False
+    DUMP_PERF_COUNTERS: ClassVar[bool] = False
 
     # === Addresses ===
     RUNTIME_ADDRESS_NON_COVERAGE: ClassVar[int] = 0x20000
@@ -234,6 +232,15 @@ class TestConfig:
 
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+
+    # Host-written L1 mux-group selector (count-time selector, one group per window; host re-runs per
+    # group). Must equal counters.h PERF_COUNTERS_L1_MUX_SEL_ADDR = VALID_COUNT_ADDR + MAX_ZONES*4.
+    PERF_COUNTERS_L1_MUX_SEL_ADDR: ClassVar[int] = (
+        PERF_COUNTERS_ZONES_BASE
+        + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+        + 8
+        + PERF_COUNTERS_MAX_ZONES * 4
+    )
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print

@@ -2,12 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import re
 from pathlib import Path
 
 import pandas as pd
 from loguru import logger
-from ttexalens.tt_exalens_lib import read_words_from_device
+from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .test_config import TestConfig
@@ -23,14 +24,65 @@ COUNTER_BANK_NAMES = {
     4: "TDMA_PACK",
 }
 
-# Config word layout (must match counters.h:
-# PERF_CFG_VALID_BIT / PERF_CFG_L1_MUX_SHIFT / PERF_CFG_COUNTER_SHIFT / PERF_CFG_BANK_MASK).
-PERF_CFG_VALID_BIT = 1 << 31
-PERF_CFG_L1_MUX_SHIFT = 17
-PERF_CFG_L1_MUX_MASK = 0x7
-PERF_CFG_COUNTER_SHIFT = 8
-PERF_CFG_COUNTER_MASK = 0x1FF
-PERF_CFG_BANK_MASK = 0xFF
+# Config word layout — parsed from the canonical C++ header (counters.h) so the Python decode and the
+# on-device layout can't drift. (Was hand-copied with a "must match counters.h" comment.)
+
+
+def _counters_h_path() -> Path:
+    """Locate the LLK test-harness counters.h (authoritative PERF_CFG_* bit layout)."""
+    rel = Path("tt_metal/tt-llk/tests/helpers/include/counters.h")
+    for parent in Path(__file__).resolve().parents:
+        if (parent / rel).is_file():
+            return parent / rel
+    raise RuntimeError(f"Could not locate {rel} above {__file__}")
+
+
+def _eval_int_expr(expr: str) -> int:
+    """Safely evaluate a C++ integer constant expression (literals + << >> | & ~ + - *).
+
+    No eval() — parse to an AST and walk only integer nodes/operators, so a malformed header can't
+    execute code (ast.literal_eval can't help here because it rejects `1 << 31`).
+    """
+    ops = {
+        ast.LShift: lambda a, b: a << b,
+        ast.RShift: lambda a, b: a >> b,
+        ast.BitOr: lambda a, b: a | b,
+        ast.BitAnd: lambda a, b: a & b,
+        ast.Add: lambda a, b: a + b,
+        ast.Sub: lambda a, b: a - b,
+        ast.Mult: lambda a, b: a * b,
+    }
+
+    def ev(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return node.value
+        if isinstance(node, ast.BinOp) and type(node.op) in ops:
+            return ops[type(node.op)](ev(node.left), ev(node.right))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+            return ~ev(node.operand)
+        raise ValueError(f"Unsupported integer expression: {expr!r}")
+
+    return ev(ast.parse(expr.strip(), mode="eval").body)
+
+
+def _parse_perf_cfg(text: str) -> dict:
+    """Parse PERF_CFG_* config-word constants (hex/dec literals, u/U/l/L suffixes, `<<`)."""
+    cfg = {}
+    for name, expr in re.findall(r"PERF_CFG_([A-Z0-9_]+)\s*=\s*([^;]+);", text):
+        expr = re.sub(
+            r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]+", r"\1", expr
+        )  # strip C++ integer suffixes
+        cfg[name] = _eval_int_expr(expr)
+    return cfg
+
+
+_PERF_CFG = _parse_perf_cfg(_counters_h_path().read_text())
+PERF_CFG_VALID_BIT = _PERF_CFG["VALID_BIT"]
+PERF_CFG_L1_MUX_SHIFT = _PERF_CFG["L1_MUX_SHIFT"]
+PERF_CFG_L1_MUX_MASK = _PERF_CFG["L1_MUX_MASK"]
+PERF_CFG_COUNTER_SHIFT = _PERF_CFG["COUNTER_SHIFT"]
+PERF_CFG_COUNTER_MASK = _PERF_CFG["COUNTER_MASK"]
+PERF_CFG_BANK_MASK = _PERF_CFG["BANK_MASK"]
 
 
 # --- Counter id -> name tables, parsed live from the canonical metal hw_counters.h ---
@@ -102,6 +154,25 @@ def _load_counter_names(arch: ChipArchitecture) -> dict:
 
 # Active-arch table: {bank: {id: name}} with L1 keyed by (id, mux).
 COUNTER_NAMES = _load_counter_names(get_chip_architecture())
+
+
+def l1_mux_groups() -> list[int]:
+    """
+    Distinct L1 mux groups present in the active-arch inventory.
+
+    The L1 perf-cnt mux is a count-time input selector, so only one 8-client group can be measured
+    per count window. Callers re-run the kernel once per group (see write_l1_mux_sel) so every L1
+    client reads real data. Returns [0] when no L1 counters are configured.
+    """
+    muxes = sorted({mux for (_cid, mux) in COUNTER_NAMES.get("L1", {})})
+    return muxes or [0]
+
+
+def write_l1_mux_sel(location: str, mux: int) -> None:
+    """Select which L1 mux group the kernel measures during the next run's count window."""
+    write_words_to_device(
+        location, TestConfig.PERF_COUNTERS_L1_MUX_SEL_ADDR, [mux & PERF_CFG_L1_MUX_MASK]
+    )
 
 
 def _zone_config_addr(zone: int) -> int:
@@ -248,52 +319,82 @@ def read_counters(location: str = "0,0") -> pd.DataFrame:
     return pd.DataFrame(all_results)
 
 
-def print_counters(results: pd.DataFrame) -> None:
+# ── Counter CSV Export ────────────────────────────────────────────────
+
+
+def export_counters(
+    all_counters: pd.DataFrame,
+    run_type_name: str,
+    zone_names: list[str] | None = None,
+) -> pd.DataFrame:
     """
-    Log all counter results in a readable format.
+    Export raw hardware counter values as a DataFrame for a separate counters CSV.
+
+    Produces one row per zone with columns: marker, then
+    ``{run_type_name}_mean({bank}.{counter_name})`` and
+    ``{run_type_name}_std({bank}.{counter_name})`` for every counter observed.
 
     Args:
-        results: DataFrame with counter results (from read_counters).
+        all_counters: Concatenated raw counter DataFrame from read_counters()
+                      (with ``zone`` and ``run_index`` columns).
+        run_type_name: Run type prefix for column names (e.g., "L1_TO_L1").
+        zone_names: Optional list mapping zone index to display name.
+
+    Returns:
+        DataFrame with one row per zone.
     """
-    if results.empty:
-        logger.info("No counter results to display.")
-        return
+    if all_counters.empty:
+        return pd.DataFrame()
 
-    if "zone" in results.columns:
-        zones = results["zone"].unique()
-        for zone in zones:
-            zone_results = results[results["zone"] == zone]
-            logger.info("\n{}\nZONE: {}\n{}", "═" * 100, zone, "═" * 100)
-            _print_zone_counters(zone_results)
-    else:
-        logger.info("\n{}\nPERFORMANCE COUNTER RESULTS\n{}", "=" * 100, "=" * 100)
-        _print_zone_counters(results)
+    zone_to_marker = {}
+    if zone_names:
+        for i, name in enumerate(zone_names):
+            zone_to_marker[f"ZONE_{i}"] = name
 
+    zones = sorted(all_counters["zone"].unique())
+    has_runs = "run_index" in all_counters.columns
+    rows = []
 
-def _print_zone_counters(results: pd.DataFrame) -> None:
-    """Helper to log counters for a single zone."""
-    lines = []
+    for zone in zones:
+        zone_df = all_counters[all_counters["zone"] == zone]
+        marker_name = zone_to_marker.get(zone, zone)
+        row = {"marker": marker_name}
 
-    for bank in ["INSTRN_THREAD", "FPU", "TDMA_UNPACK", "L1", "TDMA_PACK"]:
-        bank_df = results[results["bank"] == bank]
-        if bank_df.empty:
-            continue
+        # Get unique counters in this zone (preserving discovery order)
+        counter_keys = (
+            zone_df[["bank", "counter_name"]].drop_duplicates().values.tolist()
+        )
 
-        cycles = bank_df["cycles"].iloc[0] if len(bank_df) > 0 else 0
+        for bank, counter_name in counter_keys:
+            mask = (zone_df["bank"] == bank) & (zone_df["counter_name"] == counter_name)
+            col_name = f"{bank}.{counter_name}"
 
-        lines.append(f"\n  ┌─ {bank} (cycles: {cycles:,})")
-        lines.append(f"  │ {'Counter Name':<40} {'Count':>15} {'Rate':>12}")
-        lines.append(f"  │ {'─' * 40} {'─' * 15} {'─' * 12}")
+            if has_runs:
+                per_run = zone_df.loc[mask].groupby("run_index")["count"].mean()
+                if len(per_run) >= 2:
+                    row[f"{run_type_name}_mean({col_name})"] = float(per_run.mean())
+                    row[f"{run_type_name}_std({col_name})"] = float(per_run.std())
+                elif len(per_run) == 1:
+                    row[f"{run_type_name}_{col_name}"] = float(per_run.iloc[0])
+            else:
+                values = zone_df.loc[mask, "count"]
+                row[f"{run_type_name}_{col_name}"] = float(values.mean())
 
-        for _, row in bank_df.iterrows():
-            name = row["counter_name"]
-            if pd.notna(row["l1_mux"]):
-                name = f"{name} (mux{int(row['l1_mux'])})"
-            count = row["count"]
-            rate = (count / cycles) if cycles else 0.0
-            lines.append(f"  │ {name:<40} {count:>15,} {rate:>12.4f}")
+            # Also export cycles for this counter
+            col_cycles = f"{col_name}.cycles"
+            if has_runs:
+                per_run_cyc = zone_df.loc[mask].groupby("run_index")["cycles"].mean()
+                if len(per_run_cyc) >= 2:
+                    row[f"{run_type_name}_mean({col_cycles})"] = float(
+                        per_run_cyc.mean()
+                    )
+                    row[f"{run_type_name}_std({col_cycles})"] = float(per_run_cyc.std())
+                elif len(per_run_cyc) == 1:
+                    row[f"{run_type_name}_{col_cycles}"] = float(per_run_cyc.iloc[0])
+            else:
+                cyc_values = zone_df.loc[mask, "cycles"]
+                row[f"{run_type_name}_{col_cycles}"] = float(cyc_values.mean())
 
-        lines.append(f"  └{'─' * 70}")
+        rows.append(row)
 
-    if lines:
-        logger.info("\n".join(lines))
+    return pd.DataFrame(rows)

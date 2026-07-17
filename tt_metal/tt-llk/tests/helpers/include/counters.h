@@ -59,7 +59,9 @@ constexpr std::uint32_t perf_counters_sync_ctrl_addr(std::uint32_t zone)
 constexpr std::uint32_t PERF_COUNTERS_ENABLED_FLAG_ADDR = PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE;
 constexpr std::uint32_t PERF_COUNTERS_BANK_MASK_ADDR    = PERF_COUNTERS_ENABLED_FLAG_ADDR + 4;
 constexpr std::uint32_t PERF_COUNTERS_VALID_COUNT_ADDR  = PERF_COUNTERS_BANK_MASK_ADDR + 4;
-constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END        = PERF_COUNTERS_VALID_COUNT_ADDR + PERF_COUNTERS_MAX_ZONES * 4;
+// Host-written L1 mux group (0..4) measured this run; the mux is a count-time selector (one group/window).
+constexpr std::uint32_t PERF_COUNTERS_L1_MUX_SEL_ADDR = PERF_COUNTERS_VALID_COUNT_ADDR + PERF_COUNTERS_MAX_ZONES * 4;
+constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END      = PERF_COUNTERS_L1_MUX_SEL_ADDR + 4;
 
 // Ceiling = profiler's lowest L1 addr (llk_profiler::EPOCH_ADDR, 0x16AFF0). Literal here (BRISC has
 // no llk_profiler ns); the LLK_PROFILER section adds a symbolic assert so it can't drift.
@@ -183,7 +185,8 @@ inline void configure_hardware()
         const counter_bank bank = static_cast<counter_bank>(bank_id);
         if (bank == counter_bank::l1)
         {
-            const std::uint8_t l1_mux = (metadata >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK;
+            // Count-time mux group for this run (host-selected; see PERF_COUNTERS_L1_MUX_SEL_ADDR).
+            const std::uint8_t l1_mux = *reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_L1_MUX_SEL_ADDR) & PERF_CFG_L1_MUX_MASK;
             std::uint32_t cur         = ckernel::reg_read(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
             ckernel::reg_write(
                 RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(PERF_CFG_L1_MUX_MASK << PERF_CNT_MUX_CTRL_SHIFT)) | (l1_mux << PERF_CNT_MUX_CTRL_SHIFT));
@@ -388,15 +391,14 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         }
         std::uint32_t bank_id    = cw & PERF_CFG_BANK_MASK;
         std::uint32_t counter_id = (cw >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK;
-        std::uint32_t l1_mux     = (cw >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK;
         const bank_regs& br      = banks[bank_id];
-        if (bank_id == static_cast<std::uint32_t>(counter_bank::l1))
+        // L1 mux is set once per run in configure_hardware (count-time); the readout ignores it.
+        const std::uint32_t mode_val = counter_id << PERF_CFG_COUNTER_SHIFT;
+        ckernel::reg_write(br.mode_reg, mode_val);
+        // Readback poll: the readout mux is clocked, so OUT lags the mode write by a cycle (else off-by-one reads).
+        while (ckernel::reg_read(br.mode_reg) != mode_val)
         {
-            const std::uint32_t cur = ckernel::reg_read(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-            ckernel::reg_write(
-                RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL, (cur & ~(PERF_CFG_L1_MUX_MASK << PERF_CNT_MUX_CTRL_SHIFT)) | (l1_mux << PERF_CNT_MUX_CTRL_SHIFT));
         }
-        ckernel::reg_write(br.mode_reg, counter_id << PERF_CFG_COUNTER_SHIFT);
         counter_counts[out_idx] = ckernel::reg_read(br.out_l + 4u);
         ++out_idx;
     }

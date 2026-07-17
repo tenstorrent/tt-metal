@@ -13,28 +13,27 @@ from typing import Any, ClassVar
 import pandas as pd
 import pytest
 
-from .counters import print_counters, read_counters
+from .counters import export_counters, l1_mux_groups, read_counters, write_l1_mux_sel
 from .device import BootMode
 from .format_config import FormatConfig
 from .llk_params import DestAccumulation, L1Accumulation, PerfRunType
 from .logger import logger
-from .metrics import compute_metrics, export_counters, export_metrics, print_metrics
+from .metrics import compute_metrics, export_metrics
 from .profiler import Profiler, ProfilerData
 from .stimuli_config import StimuliConfig
 from .test_config import BuildMode, ProfilerBuild, TestConfig
 from .test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 
 
-def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
+def perf_zone_names() -> list[str]:
     """
-    Return zone names for mapping counter zones to profiler markers.
+    Fixed counter-zone → profiler-marker names: zone 0 = INIT, zone 1 = TILE_LOOP.
 
-    Zone 0 = INIT, Zone 1 = TILE_LOOP. This matches the order in which
-    MEASURE_PERF_COUNTERS is called in all perf test source files
-    (get_zone_id allocates sequential IDs on first encounter).
+    This matches the order in which MEASURE_PERF_COUNTERS is called in all perf test source files
+    (get_zone_id allocates sequential IDs on first encounter), so the mapping is a convention, not
+    read from the ELF.
     """
-    _ = elf_dir
-    return ["INIT", "TILE_LOOP"]  # Counter zone 0 = INIT, zone 1 = TILE_LOOP
+    return ["INIT", "TILE_LOOP"]
 
 
 # Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
@@ -144,58 +143,6 @@ class PerfReport:
 
         # apply masks
         frame[mask].to_csv(TestConfig.PERF_DATA_DIR / filename, index=False)
-
-
-def dump_scatter(testname: str, report: PerfReport):
-    # FIXME: was broken by the new pandas implementation (https://github.com/tenstorrent/tt-llk/issues/857)
-
-    # generate a scatter plot using plotly.graph_objects (no pandas required)
-
-    if not report.sweep_names or not report.stat_names:
-        # This is possible on CI when the whole split of the test is skipped
-        return
-
-    dir = create_benchmark_dir(testname)
-    output_path = dir / f"{testname}.html"
-
-    # x: sweep values, y: stat values per (run_type × stat). Names look like mean(L1_TO_L1).
-    fig = go.Figure()
-
-    mean_columns = [
-        (name, i) for i, name in enumerate(report.stat_names) if name.startswith("mean")
-    ]
-
-    hover = [
-        ", ".join(f"{name}={val}" for name, val in zip(report.sweep_names, sweep))
-        for sweep in report.sweep_values
-    ]
-
-    # For each stat column (run type), plot all points
-    for stat_name, stat_idx in mean_columns:
-        y_vals = [stat[stat_idx] for stat in report.stat_values]
-
-        fig.add_trace(
-            go.Scatter(
-                x=list(range(len(report.sweep_values))),
-                y=y_vals,
-                mode="markers+lines",
-                name=stat_name,
-                text=hover,
-                hoverinfo="text+y",
-            )
-        )
-
-    # X-axis label
-    xaxis_title = "Sweep index (see hover for values)"
-
-    fig.update_layout(
-        title=f"Performance Scatter Plot: {testname}",
-        xaxis_title=xaxis_title,
-        yaxis_title="Cycles / Tile",
-        legend_title="Run Type / Stat",
-    )
-
-    fig.write_html(str(output_path))
 
 
 def get_unique_base_names(input_dir: Path):
@@ -429,31 +376,50 @@ class PerfConfig(TestConfig):
             variant_raw_data = []
             variant_counter_results = []
             for run_index in range(run_count):
-                self.write_runtimes_to_L1()
-                self.run_elf_files()
-                self.wait_for_tensix_operations_finished()
-                # Counter config is written by BRISC from built-in array (local L1 write).
-                # Python NOC write is skipped to avoid L1 controller state change that
-                # causes ~7 cycle overhead on Float16 unpack operations.
+                # L1 perf-cnt mux is a count-time selector (one 8-client group per window). Pass 0 also
+                # yields profiler timing + non-L1 counters; extra passes capture the other L1 groups.
+                mux_groups = l1_mux_groups() if TestConfig.ENABLE_PERF_COUNTERS else [0]
+                run_counter_frames = []
+                profiler_data = None
+                for pass_idx, mux in enumerate(mux_groups):
+                    if TestConfig.ENABLE_PERF_COUNTERS:
+                        write_l1_mux_sel(TestConfig.TENSIX_LOCATION, mux)
+                    self.write_runtimes_to_L1()
+                    self.run_elf_files()
+                    self.wait_for_tensix_operations_finished()
+                    # Counter config is written by BRISC from the built-in array (local L1 write); the
+                    # Python NOC write is skipped (it perturbs Float16 unpack timing by ~7 cycles).
 
-                profiler_data = Profiler.get_data(
-                    self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
-                )
-
-                if TestConfig.ENABLE_PERF_COUNTERS:
-                    try:
-                        counter_results = read_counters(
-                            location=TestConfig.TENSIX_LOCATION
+                    if pass_idx == 0:
+                        profiler_data = Profiler.get_data(
+                            self.test_name, self.variant_id, TestConfig.TENSIX_LOCATION
                         )
-                        if counter_results is not None and not counter_results.empty:
-                            counter_results["run_index"] = run_index
-                            variant_counter_results.append(counter_results)
-                            if TestConfig.DUMP_RAW_COUNTERS:
-                                print_counters(counter_results)
-                            if TestConfig.DUMP_RAW_METRICS:
-                                print_metrics(counter_results)
-                    except Exception as e:
-                        logger.warning("Error reading counters: {}", e)
+
+                    if TestConfig.ENABLE_PERF_COUNTERS:
+                        try:
+                            counter_results = read_counters(
+                                location=TestConfig.TENSIX_LOCATION
+                            )
+                            if (
+                                counter_results is not None
+                                and not counter_results.empty
+                            ):
+                                # Keep only rows this pass measured correctly: L1 rows for the selected
+                                # mux group, plus (pass 0 only) every non-L1 row.
+                                is_l1 = counter_results["bank"] == "L1"
+                                keep = is_l1 & (counter_results["l1_mux"] == mux)
+                                if pass_idx == 0:
+                                    keep = keep | ~is_l1
+                                counter_results = counter_results[keep].copy()
+                                if not counter_results.empty:
+                                    run_counter_frames.append(counter_results)
+                        except Exception as e:
+                            logger.warning("Error reading counters: {}", e)
+
+                if run_counter_frames:
+                    run_counters = pd.concat(run_counter_frames, ignore_index=True)
+                    run_counters["run_index"] = run_index
+                    variant_counter_results.append(run_counters)
 
                 # Tag profiler data with run index for proper L1-to-L1 pairing
                 profiler_data.df["run_index"] = run_index
@@ -467,14 +433,9 @@ class PerfConfig(TestConfig):
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
 
-                # Read zone names from ELF .perf_counter_meta section
-                zone_names = read_perf_zone_names_from_elf(
-                    TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
-                )
+                zone_names = perf_zone_names()
 
                 computed = compute_metrics(all_counters)
-                if TestConfig.DUMP_RAW_METRICS:
-                    print_metrics(all_counters)
 
                 # Export efficiency metrics (percentages only) to the main CSV
                 csv_df = export_metrics(
@@ -487,7 +448,7 @@ class PerfConfig(TestConfig):
 
                 # Export raw counter values to the separate counters CSV
                 if (
-                    TestConfig.DUMP_CSV_COUNTERS
+                    TestConfig.DUMP_PERF_COUNTERS
                     and PerfConfig.COUNTER_REPORT is not None
                 ):
                     counter_csv_df = export_counters(
