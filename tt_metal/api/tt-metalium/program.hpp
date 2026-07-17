@@ -6,7 +6,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -47,6 +49,10 @@ public:
 
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
+
+    // Metal 2.0: Returns the program's identifying name (from its source ProgramSpec).
+    // Returns std::nullopt for Programs not constructed via MakeProgramFromSpec.
+    const std::optional<std::string>& get_program_spec_name() const;
 
     //////////////////////////////
     // Buffer related functions:

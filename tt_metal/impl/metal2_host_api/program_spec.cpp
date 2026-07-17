@@ -2912,6 +2912,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
     // Step 3: Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
+    program_impl->set_program_spec_name(spec.program_id);
 
     // Register TensorParameters with the program for ValidateProgramRunArgs to consult at enqueue.
     for (const auto& tensor_parameter : spec.tensor_parameters) {

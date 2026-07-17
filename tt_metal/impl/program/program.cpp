@@ -2287,6 +2287,12 @@ void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; 
 
 void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
 
+void detail::ProgramImpl::set_program_spec_name(const std::string& name) { program_spec_name_ = name; }
+
+const std::optional<std::string>& detail::ProgramImpl::get_program_spec_name() const { return program_spec_name_; }
+
+const std::optional<std::string>& Program::get_program_spec_name() const { return internal_->get_program_spec_name(); }
+
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);

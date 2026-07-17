@@ -55,6 +55,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/mesh_workload_run_params.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/mesh_workload_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_run_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp

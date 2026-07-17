@@ -359,6 +359,12 @@ public:
         bool match_padded_shape_only,
         bool enqueue_invariant);
 
+    // Metal 2.0: Program identifier from its ProgramSpec.
+    // Set by MakeProgramFromSpec; not populated for Programs constructed via other paths.
+    // Used by SetMeshWorkloadRunParameters to dispatch run params by program name.
+    void set_program_spec_name(const std::string& name);
+    const std::optional<std::string>& get_program_spec_name() const;
+
     // Metal 2.0: Get handle from name (TT_FATAL if not found)
     KernelHandle get_kernel_handle(const std::string& name) const;
     uint32_t get_dfb_handle(const std::string& name) const;
@@ -521,6 +527,10 @@ private:
         std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
+
+    // Metal 2.0: Set by MakeProgramFromSpec to the source ProgramSpec's program_id.
+    // Only populated for Metal 2.0 programs.
+    std::optional<std::string> program_spec_name_;
 
     // Semaphores
     std::vector<Semaphore> semaphores_;
