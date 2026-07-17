@@ -8,6 +8,7 @@
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
+#include "tilize_multi_core_sharded_retile_program_factory.hpp"
 #include "tilize_multi_core_retile_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -271,6 +272,12 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     // A tiled input whose tile shape differs from the requested tile shape is re-laid out by the
     // dedicated retile factory.
     if (is_retile(operation_attributes, tensor_args)) {
+        // A sharded input can be re-tiled in place (zero-copy) when the shard geometry is
+        // compatible with the optimized sharded path; otherwise fall back to the interleaved retile.
+        if (input_tensor_a.memory_config().is_sharded() &&
+            can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+            return ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory{};
+        }
         return ttnn::prim::TilizeMultiCoreRetileProgramFactory{};
     }
 
@@ -336,19 +343,26 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> TilizeDeviceOperation::get_dynamic_
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // Only the sharded factory is CB-bound (in/out addresses ride on the sharded CBs, no Buffer* rt-arg).
-    // Re-apply reader arg0 (num_tiles_per_shard, unchanged) on the first core to trip the fast-path so
-    // apply_resolved_bindings re-patches the CB base addresses instead of rebuilding create_descriptor.
-    if (!std::holds_alternative<TilizeMultiCoreShardedProgramFactory>(
-            select_program_factory(operation_attributes, tensor_args))) {
+    // Only the sharded factories are CB-bound (in/out addresses ride on the sharded CBs, no Buffer*
+    // rt-arg). Re-apply reader arg0 (num_tiles_per_shard, unchanged) on the first core to trip the
+    // fast-path so apply_resolved_bindings re-patches the CB base addresses instead of rebuilding
+    // create_descriptor.
+    const auto factory = select_program_factory(operation_attributes, tensor_args);
+    const bool is_sharded_tilize = std::holds_alternative<TilizeMultiCoreShardedProgramFactory>(factory);
+    const bool is_sharded_retile = std::holds_alternative<TilizeMultiCoreShardedRetileProgramFactory>(factory);
+    if (!is_sharded_tilize && !is_sharded_retile) {
         return {};
     }
     const auto& shard_spec = tensor_args.input_tensor.shard_spec().value();
+    // The reader consumes input-geometry tiles: the sharded retile reader sees the (differing) input
+    // tile shape, whereas the plain sharded tilize reads row-major sticks counted with the op tile.
+    const uint32_t reader_tile_hw = is_sharded_retile ? tensor_args.input_tensor.tensor_spec().tile().get_tile_hw()
+                                                      : operation_attributes.tile.get_tile_hw();
     return {tt::tt_metal::DynamicRuntimeArg{
         /*kernel_idx=*/0,
         corerange_to_cores(shard_spec.grid).front(),
         /*arg_idx=*/0,
-        shard_spec.shape[0] * shard_spec.shape[1] / operation_attributes.tile.get_tile_hw()}};
+        shard_spec.shape[0] * shard_spec.shape[1] / reader_tile_hw}};
 }
 
 ttnn::Tensor tilize(
