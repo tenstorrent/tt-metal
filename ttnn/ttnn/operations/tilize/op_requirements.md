@@ -81,7 +81,7 @@ Bullet 3 FAIL: golden responsible cells 42/72 below majority threshold.
 ```
 
 **Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
-### [ ] Refinement 2 — Sharded I/O (legacy_2d HEIGHT/WIDTH/BLOCK + nd)
+### [~] Refinement 2 — Sharded I/O (legacy_2d HEIGHT/WIDTH/BLOCK + nd)
 
 **Goal**: add `"legacy_2d"` and `"nd"` to `SUPPORTED["shard_api"]`, and
 `HEIGHT_SHARDED`, `WIDTH_SHARDED`, `BLOCK_SHARDED`, `"nd"` to `SUPPORTED["out_scheme"]`.
@@ -115,3 +115,47 @@ whole point is the zero-copy shard write).
 cells pass identity per scheme; `test_golden_main_tests.py` sharded tests
 (`test_tilize_row_major_to_width_sharded`, `test_tilize_nd_sharded`) pass; no DRAM write
 on the sharded output path (tt-npe shows zero output-side DRAM traffic).
+
+**Landed [~] (2026-07-17)**: same-spec, one-shard-per-core, zero-copy path for ALL
+schemes (HEIGHT/WIDTH/BLOCK legacy + nd, ROW & COL orientation, rank 2/3/4). Both CBs
+aliased onto the local L1 shard buffers; the compute kernel tilizes each core's resident
+RM shard straight into its resident TILE shard — no reader, no writer, no DRAM/NoC at all
+(strictly stronger than the design's "write becomes L1 loopback": there is no transfer on
+either side). `test_golden.py` sharded cells 100% (77/77 responsible, was 42; the 35
+sharded xfails now pass), `test_regression.py` 9/9, `test_tilize_row_major_to_width_sharded`
+PASS. All named axis values are in SUPPORTED. Deferred to **Refinement 2b** (refused cleanly
+in `validate()`, never a hang / wrong output): multi-shard-per-core, interleaved↔sharded
+crossover, and cross-spec resharding — these are what keep `test_tilize_nd_sharded` /
+`test_tilize_nd_sharded_to_legacy_sharded` from fully passing.
+
+### [ ] Refinement 2b — Sharded I/O remainder (multi-shard-per-core, crossover, cross-spec reshard)
+
+**Goal**: extend the sharded path beyond same-spec one-shard-per-core to the cases
+Refinement 2 refuses (`test_tilize_nd_sharded` / `test_tilize_nd_sharded_to_legacy_sharded`
+crossover + cross-spec + cliff-core cases). Three independent sub-levers, in ascending
+difficulty — land them in this order:
+
+1. **Multi-shard-per-core (same-spec, even)** — when `num_shards % num_cores == 0` and
+   `num_shards > num_cores`, a core owns `k = num_shards/num_cores` contiguous shards. Each
+   shard is a contiguous RM block whose folded height is a multiple of 32, so the whole bank
+   tilizes as `k * (shard_h/32)` blocks of `Wt` tiles straight into the concatenated output
+   bank (shard-index order matches on both sides because in/out use the same distribution).
+   **Exact lever**: in `_create_sharded_program_descriptor`, set
+   `num_blocks = (num_shards // num_cores) * (shard_h_folded // 32)` (uniform CT arg); in
+   `validate()`, relax the `num_shards != num_cores` refusal to `num_shards % num_cores != 0`
+   for the even case. Cliff cores (uneven `num_shards % num_cores != 0`, e.g. `[23,96,160]`
+   over 4 cores) need per-core RT `num_blocks` derived from the shard→core distribution — a
+   second step. Probe first with `[4,128,128]`/`[2,64,64]` nd (8 shards / 4 cores).
+
+2. **Interleaved↔sharded crossover** — DRAM-interleaved RM input → sharded TILE output
+   (reader reads the rows for each core's output shard from DRAM, aliased output CB), and
+   the reverse (aliased input shard → compute → DRAM-interleaved TILE writer). HEIGHT output
+   sharding maps to per-core contiguous tile-row ranges (reuse the interleaved reader with a
+   per-core `start_row` = output-shard row offset); WIDTH/BLOCK need column-chunk reads.
+
+3. **Cross-spec resharding** — input shard spec ≠ output shard spec (different grid / shard
+   shape / scheme, incl. nd→legacy). Requires cross-core NoC data movement (a shard's data
+   redistributes across cores) — the largest lift; keep zero-DRAM by moving through L1.
+
+**Done when**: `test_tilize_nd_sharded` and `test_tilize_nd_sharded_to_legacy_sharded` pass;
+no regression on the Refinement 2 same-spec cells; no hangs.

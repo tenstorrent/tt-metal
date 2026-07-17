@@ -1,5 +1,91 @@
 # tilize — changelog
 
+## Refinement 2 — Sharded I/O (legacy_2d HEIGHT/WIDTH/BLOCK + nd)  [~ partial]
+
+- **Date**: 2026-07-17
+- **What was done**: Added the **same-spec, one-shard-per-core, zero-copy** sharded
+  path for ALL schemes — legacy_2d HEIGHT / WIDTH / BLOCK (ROW & COL orientation)
+  and nd (NdShardSpec), rank 2/3/4. New compute-only kernel
+  `kernels/tilize_compute_sharded.cpp`: both circular buffers are aliased directly
+  onto the local L1 shard buffers via `ttnn.cb_descriptor_from_sharded_tensor`
+  (the input CB's page_size is overridden from the RM stick size to `tile_size` so
+  the tilize helper accounts in whole tiles while the row-major bytes sit in the
+  same L1 — the established sharded-tilize aliasing, cf.
+  `examples/compute_block_size._tile_paged_backed_cb`). The kernel arms the
+  resident RM input shard with one self `cb_reserve_back`/`cb_push_back` (nobody
+  else pushes it), then `compute_kernel_lib::tilize<Wt>(num_blocks)` packs the
+  tiles straight into the resident TILE output shard. **No reader, no writer, no
+  DRAM/NoC traffic on either side** — strictly stronger than the design's "write
+  becomes an L1 loopback" (there is no transfer at all). Correctness rests on the
+  RM shard being a contiguous `shard_h × shard_w` block = exactly `shard_h/32`
+  tile-rows of `shard_w/32` tiles, which is what `tilize_block` consumes; because
+  input and output use the IDENTICAL shard spec, each core tilizes its own local
+  block and global identity is preserved regardless of scheme / orientation.
+  Registry: `SUPPORTED["shard_api"]` += `legacy_2d`, `nd`;
+  `SUPPORTED["out_scheme"]` += HEIGHT/WIDTH/BLOCK + `nd`; `EXCLUSIONS` +=
+  single-core+sharded (inherently multi-core); `validate()._shard_api_of` fixed to
+  return `"nd"` for `ND_SHARDED` (was mislabelling nd as legacy_2d). `validate()`
+  gates the sharded sub-cases it does NOT implement (interleaved↔sharded crossover,
+  cross-spec resharding, multi-shard-per-core) with clean `UnsupportedAxisValue`
+  refusals **before any device work** — so those cases fail loudly, never hang and
+  never produce wrong output.
+- **Accuracy achieved**: bit-exact identity (`torch.equal`, PCC=1.0, max_abs=0) for
+  bf16 / fp32 / uint32 / uint16 / int32 across HEIGHT/WIDTH/BLOCK(row,col)/nd(r4,r3)
+  same-spec shards.
+- **Golden test progress**: full `eval/golden_tests/tilize/` (no test_translated.py
+  in the dir) = **152 passed / 39 failed / 83 skipped / 2 errors** in 6.36s, **no
+  hang** (was 111 passed / 45 failed / 35 xfailed / 2 errors pre-refinement →
+  **+41 pass, −6 fail, 35 sharded xfails converted**). `test_golden.py` responsible
+  cells **77/77 pass** (was 42; the 35 sharded xfails now pass) — 0 fail, 0 xpass
+  drift. `test_regression.py` 9/9. `test_tilize_row_major_to_width_sharded` PASS.
+  The 39 failures are ALL clean `UnsupportedAxisValue`/`ExcludedCell` refusals in
+  the non-registry `test_golden_main_tests.py` (interleaved↔sharded crossover ×10,
+  cross-spec reshard ×13, multi-shard-per-core ×4, single-core+sharded excluded ×8)
+  — every one an out-of-scope case deferred to Refinement 2b, none a regression of
+  a previously-passing cell, none a hang. The 2 errors are the pre-existing
+  `device_params` + `use_module_device` test-infra conflict in the deepseek trace
+  test (present in the prior phase).
+- **Perf gate**: **compute-bound by construction** (the zero-copy lever's purpose).
+  The sharded path issues ZERO NoC/DRAM transactions — both operands are resident
+  in L1 and the CBs alias them — so the only work is the `tilize_block` FPU
+  byte-reshuffle. `/perf-roofline-dm` re-target: the DM roofline is **0 bytes** on
+  both sides (design "Done when: no DRAM write on the sharded output path; tt-npe
+  shows zero output-side DRAM traffic" — satisfied by construction; there is also
+  zero *input*-side DRAM). DM perf checklist: every lever is either N/A (no
+  transfers to coalesce/overlap/place) or satisfied — the per-core CB footprint is
+  exactly one shard (bounded by the mem_config, never by total `Wt`). Clean device
+  Tracy kernel-duration deferred (device profiler not enabled in this
+  pre-compiled-firmware build — same caveat Phase 0/R1 recorded); the structural
+  zero-transfer guarantee is the defensible perf claim here.
+- **Issues encountered**:
+  1. **nd memory_layout is `ND_SHARDED`, not `INTERLEAVED`** — the initial
+     nd-detection (copied from the pre-refinement stub) checked `== INTERLEAVED`
+     and mis-routed every nd tensor. Fixed across `_scheme_of`, `_shard_api_of`,
+     `_folded_shard_shape`, `_shard_dims`.
+  2. **ttnn normalizes an nd spec to its legacy equivalent on the input tensor**
+     (a `(1,1,64,64)`/2×2 nd spec becomes `BLOCK_SHARDED` on `from_torch`, while
+     the passed output mc stays `ND_SHARDED`) — so a naïve `memory_layout ==`
+     same-spec check wrongly rejected physically-identical specs. Fixed by
+     comparing PHYSICAL placement (`buffer_type`, folded shard shape, orientation,
+     grid) in `_same_shard_spec`, invariant to the normalization.
+  3. **Multi-shard-per-core hangs the precompile real-alloc path** — a config with
+     `num_shards > num_cores` (e.g. `[4,128,128]`/`[2,64,64]` nd = 8 shards / 4
+     cores) has each core owning 2 shards; the zero-copy kernel, sized to ONE
+     shard, under-processed the bank. In an isolated `assert` run this only
+     produced wrong output (fast fail), but in `run_safe_pytest`'s
+     `UP_FRONT_REAL_ALLOC` precompile warm pass it **hung the whole golden suite**
+     (>8 min, tool-capped). Root-caused via the precompile collect log (last
+     started test = that nd case). Fixed by refusing `num_shards != num_cores` in
+     `validate()` so the case never reaches the device — suite now completes in
+     6.36s. (Even multi-shard is correct-in-principle and is the first lever of
+     Refinement 2b.)
+- **Tests added**: `tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py`
+  (15 cases: 7 same-spec scheme×orientation identity + fp32/uint32/uint16/int32 on
+  the sharded path + a wide-width shard + 3 clean-refusal contract tests for the
+  Refinement 2b cases — single-core-sharded ExcludedCell, interleaved crossover,
+  multi-shard-per-core). All 15 pass; full unit dir 110 passed, no regression.
+  Probe `probes/probe_sharded.py` (all schemes identity).
+
 ## Refinement 1b — uint32 integer passthrough (debug: fix gate violations)
 
 - **Date**: 2026-07-17

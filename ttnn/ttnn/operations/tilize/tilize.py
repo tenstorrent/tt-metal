@@ -192,6 +192,30 @@ def _same_shard_spec(in_mc, out_mc):
     return _shard_props(in_mc) == _shard_props(out_mc)
 
 
+def _num_shards(tensor_shape, mc):
+    """Number of shards the tensor is divided into (product of per-dim ceil
+    divisions). Rank-aligns the shard shape to the tensor from the right;
+    legacy 2D specs cover the last-2-dims-folded view."""
+    if mc.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED:
+        shard = list(mc.nd_shard_spec.shard_shape)
+    else:
+        shard = list(mc.shard_spec.shape)
+    ts = list(tensor_shape)
+    if len(shard) < len(ts):
+        # legacy 2D shard covers the folded [H_folded, W] view.
+        h = 1
+        for d in ts[:-1]:
+            h *= d
+        ts = [h, ts[-1]]
+    k = min(len(shard), len(ts))
+    shard = shard[-k:]
+    ts = ts[-k:]
+    n = 1
+    for t, s in zip(ts, shard):
+        n *= -(-t // s)  # ceil division
+    return n
+
+
 def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True):
     # --- hard input validation (independent of the registry) ---
     if not ttnn.is_tensor_storage_on_device(input_tensor):
@@ -249,6 +273,18 @@ def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True
         shard_h, shard_w = _folded_shard_shape(in_mc)
         if shard_h % TILE != 0 or shard_w % TILE != 0:
             raise UnsupportedAxisValue(f"tilize: sharded shard dims must be tile-aligned, got ({shard_h}, {shard_w})")
+        # The zero-copy path tilizes exactly ONE resident shard per core. Configs
+        # where a core owns multiple shards (num_shards > num_cores) or where cores
+        # sit idle (num_shards < num_cores) are not yet wired (Refinement 2b) —
+        # refuse cleanly rather than under-process the buffer (which corrupts output
+        # and can hang the precompile real-alloc path).
+        n_shards = _num_shards(shape, in_mc)
+        n_cores = _shard_spec_of(in_mc).grid.num_cores()
+        if n_shards != n_cores:
+            raise UnsupportedAxisValue(
+                f"tilize: sharded path requires one shard per core "
+                f"(got {n_shards} shards over {n_cores} cores; multi-shard-per-core is Refinement 2b)"
+            )
 
 
 # ---------------------------------------------------------------------------
