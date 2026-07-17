@@ -111,7 +111,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
     tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
+    distributed::MeshWorkload workload = make_l1_write_workload(mesh_device, node, address, value, "cq_kernel");
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::MeshEvent event = cq.enqueue_record_event_to_host();
 
