@@ -406,6 +406,63 @@ header h1 {
     height: 100%;
 }
 
+/* Diagram Section */
+
+.diagram-section {
+    margin-bottom: 16px;
+}
+
+.diagram-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.diagram-toggle {
+    padding: 12px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.15s;
+}
+
+.diagram-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.diagram-chevron {
+    font-size: 10px;
+    color: var(--text-secondary);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+}
+
+.diagram-item.open .diagram-chevron {
+    transform: rotate(90deg);
+}
+
+.diagram-content {
+    display: none;
+    padding: 0 16px 16px 16px;
+    text-align: center;
+}
+
+.diagram-item.open .diagram-content {
+    display: block;
+}
+
+.diagram-img {
+    max-width: 100%;
+    max-height: 400px;
+    border-radius: 4px;
+}
+
 /* FAQ Section */
 
 .faq-section {
