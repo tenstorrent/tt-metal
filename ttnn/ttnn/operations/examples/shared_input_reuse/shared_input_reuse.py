@@ -18,7 +18,7 @@ each core gets the stream:
 
 Output is one tile per core (`N` tiles) — negligible next to the multi-MB read — so the kernel is
 READ-bound and the measured delta is the read strategy. Geometry is fixed (one 2×`grid_x` rectangle used
-by both variants), so core placement is not a hidden variable (contrast `reader_placement`, which
+by both variants), so core placement is not a hidden variable (contrast `noc_placement`, which
 isolates exactly that: WHERE a fixed-work line sits). See README.md.
 """
 
