@@ -116,7 +116,18 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
         // Fallback single-tile MOP (block_ct_dim_ct not threaded by the caller).
         UNPACK((llk_unpack_tilize_init<true /*unpack_to_dest*/>(icb, block /*full_ct_dim*/)));
     }
-    // Sync-only math init (no MOP): sets up the UNPACK->PACK DEST-dvalid client scheme for unpack-to-dest.
+    // Arm the UNPACK_TO_DEST -> PACK per-bank DEST-dvalid handshake. UNPACR_TILIZE is issued with SET_DVALID=0
+    // and delegates ALL cross-thread ordering to the *_DEST_DVALID_CTRL wait masks, which are ONLY programmed by
+    // set_up_dest_dvalid_per_thread(). The tt-metal path never called it (the math init below does NOT set it up
+    // for unpack_to_dest — llk_math_unary_datacopy_api.h skips it), so the masks were unarmed: no per-bank
+    // back-pressure -> the unpacker laps the packer -> fused tilize corrupts DEST data (PCC~0) and tilize-only
+    // intermittently deadlocks. Arm it here in init (per thread) before any section_done. Producer=UNPACK,
+    // consumer=PACK; MATH is a bypassed no-MOP forwarder on this path (NOT in the dvalid chain).
+    // Ref: tt-llk/tests/sources/quasar/unpack_tilize_quasar_test.cpp:29-30,162-163.
+    UNPACK((llk_unpack_setup_dest_dvalid()));
+    PACK((llk_pack_setup_dest_dvalid()));
+    // Math init keeps ONLY the ALU data-format state for the (bypassed) A2D forwarder. It does NOT set up the
+    // dvalid scheme (the prior comment claiming so was wrong — the setup is the two calls above).
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
           DST_ACCUM_MODE,

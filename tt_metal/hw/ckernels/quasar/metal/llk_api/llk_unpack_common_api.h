@@ -98,6 +98,23 @@ inline void llk_unpack_dest_dvalid_section_done() {
 }
 
 /**
+ * @brief Arms the UNPACK_TO_DEST -> PACK per-bank DEST-dvalid handshake on the UNPACK thread
+ *        (programs UNPACK_TO_DEST_DVALID_CTRL so a refill waits for PACK to drain the bank).
+ *
+ * WHY THIS IS REQUIRED: UNPACR_TILIZE for the unpack-to-dest tilize is built with SET_DVALID=0 and delegates
+ * ALL cross-thread ordering to the *_DEST_DVALID_CTRL wait masks. Those masks are ONLY programmed by
+ * set_up_dest_dvalid_per_thread(), and the tt-metal compute stack never called it (the tilize_init math-init
+ * that claimed to "set up the dvalid client scheme" actually skips it for unpack_to_dest — see
+ * llk_math_unary_datacopy_api.h). With the masks unarmed there is no per-bank back-pressure, so the unpacker
+ * laps the packer: fused tilize corrupts DEST data (PCC~0) and tilize-only intermittently deadlocks. Producer =
+ * UNPACK, consumer = PACK (MATH is bypassed on this path). Call ONCE in init, before any section_done.
+ * Mirrors tt-llk/tests/sources/quasar/unpack_tilize_quasar_test.cpp:29-30.
+ */
+inline void llk_unpack_setup_dest_dvalid() {
+    set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+}
+
+/**
  * Reprograms unpacker THCON OUT_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
  */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>

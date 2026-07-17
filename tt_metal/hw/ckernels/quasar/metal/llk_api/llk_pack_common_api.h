@@ -101,6 +101,16 @@ inline void llk_pack_dest_dvalid_section_done() {
 }
 
 /**
+ * @brief Arms the UNPACK_TO_DEST -> PACK per-bank DEST-dvalid handshake on the PACK thread
+ *        (programs PACK_DEST_DVALID_CTRL so PACR waits on the UNPACK dvalid bit before draining a bank).
+ *        Pairs with llk_unpack_setup_dest_dvalid() on T0 — see its comment for why this is required. Call ONCE
+ *        in init, before any section_done. Mirrors unpack_tilize_quasar_test.cpp:162-163.
+ */
+inline void llk_pack_setup_dest_dvalid() {
+    set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
+}
+
+/**
  * All the following functions are added to enable Math <-> Pack synchronization
  * on the destination register using semaphores.
  *
