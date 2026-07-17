@@ -45,6 +45,7 @@
 #include <unordered_set>
 #include <algorithm>
 #include <vector>
+#include <system_error>
 
 #ifndef TT_EMULE_CXX_COMPILER
 #error "TT_EMULE_CXX_COMPILER must be defined by CMake"
@@ -845,12 +846,20 @@ static std::function<void()> jit_compile_kernel(
     }
     std::string abs_kernel = std::filesystem::absolute(kernel_src_path).string();
 
-    // 2. Create temp directory
-    char tmpdir[] = "/tmp/tt_emule_jit_XXXXXX";
-    if (!mkdtemp(tmpdir)) {
-        throw std::runtime_error("jit_compile_kernel: mkdtemp failed");
+    // 2. Create temp build directory. Honor TMPDIR/TMP/TEMP (via temp_directory_path) rather than a
+    // hardcoded /tmp: on shared hosts /tmp is often a small, contended tmpfs, and the JIT scratch (one
+    // dir per kernel compile) must land wherever the caller pointed temp at.
+    std::error_code tmp_ec;
+    std::filesystem::path tmp_base = std::filesystem::temp_directory_path(tmp_ec);
+    if (tmp_ec) {
+        tmp_base = "/tmp";
     }
-    std::string dir(tmpdir);
+    std::string tmpl = (tmp_base / "tt_emule_jit_XXXXXX").string();
+    std::vector<char> tmpdir(tmpl.c_str(), tmpl.c_str() + tmpl.size() + 1);
+    if (!mkdtemp(tmpdir.data())) {
+        throw std::runtime_error("jit_compile_kernel: mkdtemp failed for template: " + tmpl);
+    }
+    std::string dir(tmpdir.data());
 
     // 2b. Preprocess the kernel source for x86: rewrite RISC-V inline asm
     // (mhartid, fence) and raw L1 arg-val pointer casts. -I kernel_dir (below)
@@ -3170,6 +3179,16 @@ static std::vector<std::vector<std::vector<std::unique_ptr<tt_emule::EmuleDFBInt
 struct ResolvedProgram {
     std::map<CoreCoord, std::vector<KernelInfo>> core_kernels;
     uint32_t emule_sem_base = 0;
+    // Fabric connection routing captured at first resolve. __emule_fabric_record_conn populates the global
+    // g_conn_route/g_mux_dir during host program construction — but ttnn's program cache SKIPS construction
+    // on a cache hit, so an intervening different op leaves the globals holding ITS routes. Routing is a
+    // property of the program (like the compiled kernels), so snapshot it here and restore it into the
+    // globals at every dispatch, so a cache-hit reinstates its own directions. See tt-emule
+    // docs/fabric-ccl-emulation.md. (g_ring_adj is the static physical ring, accumulated globally and not
+    // snapshotted; g_worker_dir is a run-time cache captured empty here so restore resets it per op.)
+    std::unordered_map<uint32_t, std::vector<ConnRoute>> conn_route;
+    std::unordered_map<uint64_t, uint32_t> worker_dir;
+    std::unordered_map<uint64_t, uint32_t> mux_dir;
 };
 static std::unordered_map<ProgramId, ResolvedProgram> g_resolved_programs;
 static std::deque<ProgramId> g_resolved_lru;
@@ -3395,6 +3414,17 @@ static ResolvedProgram& prepare_program(IDevice* device, Program& program) {
         pid,
         resolved.core_kernels.size());
 
+    // Snapshot this program's fabric routing (recorded into the globals by __emule_fabric_record_conn during
+    // this program's host construction, just before this first resolve) so a later program-cache HIT — which
+    // skips construction — can restore its own directions instead of inheriting an intervening op's. See the
+    // ResolvedProgram fields and the restore in execute_program_emulated.
+    {
+        std::lock_guard<std::mutex> lk(g_conn_route_mu);
+        resolved.conn_route = g_conn_route;
+        resolved.worker_dir = g_worker_dir;
+        resolved.mux_dir = g_mux_dir;
+    }
+
     // LRU-bound the cache (safety net; entries are otherwise valid for the program's life).
     if (g_resolved_programs.size() >= kMaxResolvedPrograms && !g_resolved_lru.empty()) {
         g_resolved_programs.erase(g_resolved_lru.front());
@@ -3443,6 +3473,18 @@ void execute_program_emulated(IDevice* device, Program& program) {
     g_conn_route_dirty.store(true, std::memory_order_relaxed);
 
     ResolvedProgram& resolved = prepare_program(device, program);  // compile-once (memoized)
+
+    // Restore this program's fabric routing into the globals before the run resolves any 1D send direction.
+    // On a fresh resolve this equals what record_conn just recorded (no-op); on a program-cache HIT (which
+    // skipped construction + record_conn) it reinstates this program's directions over whatever an
+    // intervening op left behind. g_ring_adj (static physical ring) is intentionally left accumulated. See
+    // ResolvedProgram / tt-emule docs/fabric-ccl-emulation.md.
+    {
+        std::lock_guard<std::mutex> lk(g_conn_route_mu);
+        g_conn_route = resolved.conn_route;
+        g_worker_dir = resolved.worker_dir;
+        g_mux_dir = resolved.mux_dir;
+    }
 
     const bool defer = g_emule_mesh_defer;  // mesh register phase (the run is deferred)
     dispatch_to_device(device, program, resolved, defer);
