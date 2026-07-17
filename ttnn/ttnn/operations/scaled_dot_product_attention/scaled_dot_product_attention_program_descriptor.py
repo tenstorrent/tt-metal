@@ -372,6 +372,21 @@ def create_program_descriptor(
     # (defeats the AICLK drift between fresh invocations). Unset/other => normal gate.
     if os.environ.get("SDPA_FUSE_ROWSUM") == "0":
         fuse_rowsum = 0
+    # R5 (perf): PV matmul output-subblock HEIGHT knob — grow out_subblock_h to fill the DEST
+    # budget (the compute kernel's decomp_h: h = dest_limit/out_subblock_w when the output is
+    # single-N-subblock, so the PV matmul (N=Dt=4, dest_limit=8 in the fp32_dest_acc_en=False
+    # throughput regime) would use the full 8-tile DEST per pass instead of 4, halving the
+    # subblock/pack passes). MEASURED same-session A/B on the flagged 1x10x9472x128 shape:
+    # h=2 (on) 5.461 ms vs h=1 (off) 5.443 ms — FLAT/marginally negative. Root cause: filling
+    # the full 8-tile half-sync DEST section per subblock defeats the intra-DEST math/pack
+    # pipeline that h=1 (4-tile subblocks, 4 tiles free) enables. So this correct, general,
+    # self-gating lever is PARKED at its trivial default (grow_subblock_h=0 => h=1, byte-
+    # identical to R4) — the decomp_h scaffolding stays a live knob (SDPA_PV_SB_H=1 re-enables
+    # it same-session for re-measurement, e.g. under a future full-sync-DEST or FPU∥SFPU
+    # overlap scheme that would expose the pack overhead). Unset => parked (off).
+    grow_subblock_h = 0
+    if os.environ.get("SDPA_PV_SB_H") == "1":
+        grow_subblock_h = 1
     compute_ct = [
         Dt,
         Sq_chunk_t,
@@ -386,6 +401,7 @@ def create_program_descriptor(
         fast_exp,
         fuse_rowsum,
         1 if causal else 0,
+        grow_subblock_h,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),

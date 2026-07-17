@@ -81,6 +81,41 @@ FORCE_INLINE void decomp_n(uint32_t n, uint32_t dest_limit, uint32_t& in1_num_su
     in1_num_subblocks = n / w;
 }
 
+// R5 (perf): grow the matmul output-subblock HEIGHT to fill the DEST budget. decomp_n
+// (above, R3a) picks out_subblock_w toward dest_limit, but out_subblock_h was hard-1, so
+// a matmul whose N tile-count < dest_limit (the PV matmul: N=Dt=4, dest_limit=8 in the
+// fp32_dest_acc_en=False throughput regime) used only out_subblock_w=4 of the 8-tile DEST
+// per subblock pass — half empty. Growing the height to (dest_limit / out_subblock_w)
+// packs 2x the tiles per pass (fewer tile_regs_acquire/commit/pack cycles, same FMA work).
+//
+// SAFE ONLY when out_subblock_w == n (in1_num_subblocks == 1): with a single N-subblock the
+// SubblockMajor pack lays tiles out tile-row-major for ANY height (subblock (sb_m,0) is rows
+// [sb_m*h .. +h) x all N cols, row-major within, concatenated in sb_m order => full
+// row-major), which the downstream reduce / Col-broadcast steps require. When n splits into
+// multiple N-subblocks (out_subblock_w < n) a height > 1 would interleave subblock rows and
+// break row-major, so h stays 1 there. Also requires h | m. Self-gating: the fp32-DEST
+// regime (dest_limit=4, PV out_subblock_w=4=budget) yields hmax=1 => byte-identical.
+FORCE_INLINE void decomp_h(
+    uint32_t m,
+    uint32_t out_subblock_w,
+    uint32_t n,
+    uint32_t dest_limit,
+    uint32_t& in0_num_subblocks,
+    uint32_t& out_subblock_h) {
+    uint32_t h = 1;
+    if (out_subblock_w == n) {            // single N-subblock => output stays tile-row-major for any h
+        h = dest_limit / out_subblock_w;  // h * out_subblock_w <= dest_limit (fill DEST)
+        if (h > m) {
+            h = m;
+        }
+        while (h > 1 && (m % h) != 0) {  // largest divisor of m within the budget
+            --h;
+        }
+    }
+    out_subblock_h = h;
+    in0_num_subblocks = m / h;
+}
+
 constexpr uint32_t cb_q_in = 0;
 constexpr uint32_t cb_k_in = 1;
 constexpr uint32_t cb_v_in = 2;
@@ -193,6 +228,11 @@ void kernel_main() {
     // keys are always in the future), so has_kv_pad's phase-3b add is disabled when
     // causal is set (below) to avoid a double mask.
     constexpr bool is_causal = get_compile_time_arg_val(12) != 0;
+    // R5 (perf): grow the PV matmul output-subblock height to fill the DEST budget (see
+    // decomp_h). Compile-gated so it can be A/B measured same-session (SDPA_PV_SB_H=0 on
+    // the host forces this to 0 => h=1, the pre-R5 baseline). decomp_h itself self-gates
+    // to the throughput regime, so this defaults on and is inert for fp32-DEST.
+    constexpr bool grow_subblock_h = get_compile_time_arg_val(13) != 0;
 
     const uint32_t num_wu = get_arg_val<uint32_t>(0);
     const uint32_t start_wu = get_arg_val<uint32_t>(1);
@@ -245,6 +285,17 @@ void kernel_main() {
         const uint32_t sq_off = qc * Sq_chunk_t;
         const uint32_t sq_valid = (Sq_chunk_t < Sq_t - sq_off) ? Sq_chunk_t : (Sq_t - sq_off);
         const uint32_t sq_dt = sq_valid * Dt;
+
+        // R5 (perf): PV matmul output-subblock decomposition. out_subblock_w (= pv_out_sb_w,
+        // loop-invariant) is decomp_n(Dt); the HEIGHT grows to fill the DEST budget when the
+        // output is single-N-subblock (row-major-safe) — see decomp_h. M = sq_valid varies
+        // per q-chunk (partial last chunk), so the height is re-derived per work unit. When
+        // the lever is off (grow_subblock_h=0) or decomp_h finds no room this is h=1,
+        // in0_num_subblocks=sq_valid (the pre-R5 decomposition).
+        uint32_t pv_in0_sb = sq_valid, pv_sb_h = 1;
+        if constexpr (grow_subblock_h) {
+            decomp_h(sq_valid, pv_out_sb_w, Dt, dest_limit, pv_in0_sb, pv_sb_h);
+        }
 
         // R4 causal block-skip: mirror the reader — process only KV chunks not fully
         // in the future of this Q chunk (skv_off < sq_off + sq_valid). The first
@@ -493,7 +544,7 @@ void kernel_main() {
                 v_buf,
                 pv_buf,
                 pv_buf,
-                MatmulBlockShape::of(sq_valid, pv_in1_sb, 1, pv_out_sb_w, skv_valid, 1));
+                MatmulBlockShape::of(pv_in0_sb, pv_in1_sb, pv_sb_h, pv_out_sb_w, skv_valid, 1));
 
             // Phase 10: accumulate O += PV.
             if (first) {
