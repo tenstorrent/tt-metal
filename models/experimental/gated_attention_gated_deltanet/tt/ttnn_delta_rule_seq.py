@@ -300,6 +300,44 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
     return L_inv_4d
 
 
+def _bmm_progcfg(device, mt, nt, kt):
+    """Batched-matmul program config for the per-chunk [C, K] @ [K, C] products (kk and qk).
+    The per_core_M/N is the full [mt,nt] output block, while num_output_blocks is the batch size.
+    This allows the chunk-batch elements to efficiently fan out across the device grid.
+    """
+    if device is None or mt < 1 or nt < 1 or kt < 1:
+        return None
+    try:
+        grid = device.compute_with_storage_grid_size()
+        per_core_M, per_core_N = mt, nt
+        # out_subblock: largest h*w <= 4 tiles (fp32 DST limit) dividing per_core_M/N
+        osb_h, osb_w, best = 1, 1, 0
+        for h in range(1, per_core_M + 1):
+            if per_core_M % h:
+                continue
+            for w in range(1, per_core_N + 1):
+                if per_core_N % w:
+                    continue
+                if h * w <= 4 and h * w > best:
+                    best, osb_h, osb_w = h * w, h, w
+        # in0_block_w: largest divisor of kt, capped at 4 for L1 safety in fp32
+        in0_bw = 1
+        for c in (4, 3, 2, 1):
+            if c <= kt and kt % c == 0:
+                in0_bw = c
+                break
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=in0_bw,
+            out_subblock_h=osb_h,
+            out_subblock_w=osb_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+        )
+    except Exception as exc:
+        raise RuntimeError("Failed to build the batched matmul program configuration") from exc
+
+
 def chunk_gated_delta_rule_seq(
     q,  # [BH, T, K] float32 on mesh
     k,  # [BH, T, K] float32 on mesh
@@ -424,13 +462,11 @@ def chunk_gated_delta_rule_seq(
 
     _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
 
+    _bmm_cfg = _bmm_progcfg(mesh_device, chunk_size // _TILE, chunk_size // _TILE, K // _TILE)
+
     # ---- Decay preprocessing ----
-    g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
-    decay = ttnn.reshape(
-        ttnn.matmul(g_c_3d, triu_ones, memory_config=None, compute_kernel_config=_hifi_cfg),
-        [batch, chunk_size],
-        memory_config=None,
-    )
+    triu_ones_2d = ttnn.reshape(triu_ones, [chunk_size, chunk_size], memory_config=None)
+    decay = ttnn.matmul(g_c, triu_ones_2d, memory_config=None, compute_kernel_config=_hifi_cfg)
     decay_offset = decay[:, 0:1]
     decay_raw = decay
     decay = ttnn.subtract(decay_raw, decay_offset, memory_config=None)
@@ -458,7 +494,7 @@ def chunk_gated_delta_rule_seq(
     del k
     k_c = ttnn.move(k_c)
     k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=_cmc)
-    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, program_config=_bmm_cfg)
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
@@ -547,7 +583,7 @@ def chunk_gated_delta_rule_seq(
     combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
     ttnn.deallocate(L_mask_4d)
     k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
-    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg, program_config=_bmm_cfg)
     ttnn.deallocate(k_c_4d_t)
     intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
     ttnn.deallocate(qk_4d)
