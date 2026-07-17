@@ -233,7 +233,7 @@ jobs:
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
           sudo rm -rf /home/user/tt-metal
-          sudo mkdir -p /home/user
+          sudo mkdir -p /home/user/tt-metal
           sudo chown "$(id -u):$(id -g)" /home/user
           tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/tt-metal
 
