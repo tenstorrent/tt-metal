@@ -8,19 +8,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 
-// Partial-width-sharded matmul cross-core K-reduction.
-//
-// Each B core produces a partial product (compute -> partial_cb). The K_blocks cores
-// that share an N-slice all reduce onto the *base* core (the k_idx == 0 core, which
-// owns that output N-slice):
-//
-//   1. Every core ships its partial into slot `k_idx` of the base core's reduce_cb via
-//      a unicast NoC write, then atomically bumps the base core's reduce semaphore.
-//   2. The base core waits until all K_blocks partials have arrived, then publishes the
-//      reduce_cb to its compute kernel (which sums the blocks into the output).
-//
-// reduce_cb is allocated identically on every core, so a sender can use its own local
-// reduce_cb write pointer as the (matching) destination L1 address on the base core.
+// Cross-core K-reduction: each core unicasts its partial to slot k_idx on the base core.
 void kernel_main() {
     constexpr uint32_t partial_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t reduce_cb_index = get_compile_time_arg_val(1);
@@ -42,17 +30,13 @@ void kernel_main() {
     Semaphore<> reduce_sem(reduce_sem_id);
     UnicastEndpoint base_core;
 
-    // Reserve the whole reduce region up front on the base core so incoming unicast
-    // writes (which target a fixed L1 address) land in valid CB space.
     if (is_base) {
         reduce_cb.reserve_back(K_blocks * block_num_tiles);
     }
 
-    // Wait for this core's partial product from compute.
     partial_cb.wait_front(block_num_tiles);
 
-    // reduce_cb has the same L1 address on every core, so our local write pointer is
-    // also the base core's reduce_cb base address. Write into this core's k_idx slot.
+    // reduce_cb is at the same L1 offset on every core.
     const uint32_t dst_addr = reduce_cb.get_write_ptr() + k_idx * block_size_bytes;
     noc.async_write(
         partial_cb,
@@ -66,7 +50,6 @@ void kernel_main() {
     noc.async_atomic_barrier();
 
     partial_cb.pop_front(block_num_tiles);
-    // Base core: once all K_blocks partials have arrived, publish them to compute.
     if (is_base) {
         reduce_sem.wait(K_blocks);
         reduce_cb.push_back(K_blocks * block_num_tiles);

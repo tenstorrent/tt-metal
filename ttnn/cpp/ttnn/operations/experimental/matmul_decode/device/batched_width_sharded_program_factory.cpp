@@ -18,28 +18,7 @@ namespace ttnn::operations::experimental::matmul_decode {
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Batched width-sharded matmul: C[b] = A[b] @ B[b] for a rank-3 activation A ([batch, M, K]),
-// where the weights are folded along BOTH the batch (B) and N dimensions.
-//
-// The caller reshapes/permutes the [batch, K, N] weights into a width-sharded tensor whose shard
-// shape is [Bc * K, Nc] across b_blocks * n_blocks cores (Bc = batch / b_blocks, Nc = N / n_blocks),
-// so the weights' logical shape becomes [Bc * K, b_blocks * N]. Cores are laid out b-major in
-// row-major order, so the core at row-major index `c` owns weight block
-// (b_idx = c / n_blocks, n_idx = c % n_blocks).
-//
-// Because a batched matmul is block-diagonal in the batch dimension, there is NO cross-core
-// reduction (contrast PartialWidthSharded, which sums K-partials across cores): every core owns a
-// distinct (batch-block, N-block) and independently computes its own [Bc, M, Nc] output block.
-//
-// Pipeline (per core):
-//   1. Reader (reader_batched_width_sharded): NoC-read only this core's batch block ([Bc*M, K]) out
-//      of the width(K)-sharded activation resident on the sender cores, and publish this core's
-//      resident weight block. Gathering just Bc (not all batch) batches keeps full_in0 small.
-//   2. Compute (compute_batched_width_sharded): for each of the Bc batches in this core's block,
-//      matmul that batch's A ([M, K]) with the corresponding weight sub-block ([K, Nc]) to produce
-//      a [Bc, M, Nc] output block. Block-diagonal -> no cross-core reduction.
-//   3. Writer (writer_batched_width_sharded): scatter the [Bc, M, Nc] block into the
-//      DRAM-interleaved output tensor by tile (page) index.
+// Batched width-sharded: weights folded along batch and N; block-diagonal, no cross-core reduction.
 ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -59,9 +38,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
 
-    // With tiny tiles (e.g. tile height 16) the in0/in1/out tiles no longer share a common
-    // geometry, so each circular buffer carries its own tile descriptor as well as its own page
-    // (tile) size. full_in0 (gathered A) reuses the in0 tile.
     const TileDescriptor in0_tile_desc{inputA_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
@@ -95,10 +71,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         "Output tensor tile width {} must be equal to the tile width 32",
         output_tile_width);
 
-    // ---- Recover the (batch x N) block-folded geometry ----
-    // operation_attributes M, N, K, batch are the real (unfolded) matmul dimensions; the weights
-    // tensor has been reshaped, so its logical shape is [Bc * K, b_blocks * N] rather than
-    // [batch, K, N].
     const uint32_t batch = operation_attributes.batch;
     const uint32_t b_blocks = operation_attributes.b_blocks;
     const uint32_t n_blocks = operation_attributes.n_blocks;
@@ -109,8 +81,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
     const uint32_t Nc_tiles = div_up(Nc, tt::constants::TILE_WIDTH);
 
-    // The compute kernel processes the entire M dimension in a single DST block
-    // (out_block_h = M_tiles), so M_tiles must fit in DST (<= 8 tiles in half-sync mode).
     TT_FATAL(
         M_tiles <= 8,
         "batched matmul_decode requires out_block_h (= M_tiles) <= 8 so it fits in DST, but got M_tiles={} (M={}, "
@@ -132,7 +102,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
 
     const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     const auto inputB_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
-    // The output is DRAM interleaved (no shard grid); the compute/writer run on the weight cores.
 
     const uint32_t num_B_cores = inputB_core_range_set.num_cores();
     TT_FATAL(
@@ -165,25 +134,17 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
 
     ProgramDescriptor desc;
 
-    // ---- Circular buffers ----
     constexpr uint32_t in0_cb_index = CBIndex::c_0;       // this core's A slice (gather source)
     constexpr uint32_t in1_cb_index = CBIndex::c_1;       // this core's weight block (resident)
     constexpr uint32_t out_cb_index = CBIndex::c_2;       // this core's output block (compute -> writer)
     constexpr uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
 
-    // Output block per core: [Bc, M, Nc] -> Bc * M_tiles * Nc_tiles tiles.
     const uint32_t out_block_num_tiles = Bc * M_tiles * Nc_tiles;
-    // Gathered A: only THIS core's batch block ([Bc*M, K]) -> b_blocks smaller than the full A.
     const uint32_t full_in0_num_tiles = Bc * M_tiles * K_tiles;
-    // A shard resident on each sender core (all batch*M rows for this sender's K-slice).
     const uint32_t a_shard_tiles = batch * M_tiles * inA_K_tiles_per_core;
-    // Per-sender batch-block slice the reader gathers (Bc*M rows for this sender's K-slice).
     const uint32_t block_slice_tiles = Bc * M_tiles * inA_K_tiles_per_core;
-    // Resident weight block tiles: [Bc*K, Nc].
     const uint32_t in1_num_tiles = b_shard_K_tiles * Nc_tiles;
 
-    // ---- Weight/compute cores: laid out b-major in row-major order ----
-    // Core c owns (b_idx = c / n_blocks, n_idx = c % n_blocks).
     const std::vector<CoreCoord> b_cores = corerange_to_cores(inputB_core_range_set, std::nullopt, true);
     std::vector<CoreRange> b_core_ranges;
     b_core_ranges.reserve(b_cores.size());
@@ -191,8 +152,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         b_core_ranges.emplace_back(core, core);
     }
 
-    // in0: the width(K)-sharded activation, resident on the sender cores (buffer-backed). Allocated
-    // across the whole bbox so its shard address is valid on every compute core that reads it.
     desc.cbs.push_back(CBDescriptor{
         .total_size = a_shard_tiles * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -204,7 +163,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         }}},
         .buffer = input_tensor_a.buffer(),
     });
-    // in1: this core's resident weight block (buffer-backed): [Bc * K, Nc].
     desc.cbs.push_back(CBDescriptor{
         .total_size = in1_num_tiles * in1_tile_size,
         .core_ranges = inputB_core_range_set,
@@ -216,8 +174,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         }}},
         .buffer = input_tensor_b.buffer(),
     });
-    // out: this core's output block (compute -> writer). NOT buffer-backed: the writer scatters it
-    // into the DRAM-interleaved output tensor.
     desc.cbs.push_back(CBDescriptor{
         .total_size = out_block_num_tiles * out_tile_size,
         .core_ranges = inputB_core_range_set,
@@ -228,7 +184,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
             .tile = out_tile_desc,
         }}},
     });
-    // full_in0: gathered batch-block A [Bc*M, K] (only on the compute cores).
     desc.cbs.push_back(CBDescriptor{
         .total_size = full_in0_num_tiles * in0_tile_size,
         .core_ranges = inputB_core_range_set,
@@ -240,10 +195,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         }}},
     });
 
-    // ---- Reader kernel (batch-block A gather) ----
-    // Each compute core NoC-reads only its batch block's rows out of every sender's resident A shard
-    // (no multicast / semaphores needed; the sharded activation is already in L1). The sender
-    // physical coords are passed as runtime args.
     const uint32_t num_senders = inputA_core_range_set.num_cores();
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
     std::vector<uint32_t> sender_phys_coords;
@@ -284,7 +235,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     }
     desc.kernels.push_back(std::move(reader_kernel_desc));
 
-    // ---- Writer kernel (scatter [Bc, M, Nc] into DRAM-interleaved output) ----
     KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
@@ -311,7 +261,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     }
     desc.kernels.push_back(std::move(writer_kernel_desc));
 
-    // ---- Compute kernel (per-batch-block matmul -> [Bc, M, Nc]) ----
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/compute_batched_width_sharded.cpp";

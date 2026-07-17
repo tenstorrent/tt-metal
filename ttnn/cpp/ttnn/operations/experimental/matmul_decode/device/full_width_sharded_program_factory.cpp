@@ -18,19 +18,7 @@ namespace ttnn::operations::experimental::matmul_decode {
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Full width-sharded matmul: B and the output are width(N)-sharded across the
-// core grid, with each core owning a contiguous slice of the N dimension. A is
-// width(K)-sharded across a subset of cores ("senders"); since every core needs
-// the full A to compute its N slice, the reader gathers A onto all cores.
-//
-// Sets up the in0 / in1 / out / full_in0 circular buffers, the gather semaphores, the
-// reader kernel, and the compute kernel:
-//   - Reader: multicasts each sender's A slice to every core (assembling full_in0) and
-//     publishes B, which is already resident in L1. Sender cores are split across both
-//     NoCs to balance multicast traffic.
-//   - Compute: matmul_block over the gathered full A and this core's B slice, accumulating
-//     over K into the output (sharded) CB; the output width shard is produced via the
-//     buffer-backed out CB (no separate writer kernel).
+// Full width-sharded: B/output are width(N)-sharded; reader gathers full A onto every core.
 ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -50,9 +38,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
 
-    // With tiny tiles (e.g. tile height 16) the in0/in1/out tiles no longer share a
-    // common geometry, so each circular buffer must carry its own tile descriptor in
-    // addition to its own page (tile) size. full_in0 (gathered A) reuses the in0 tile.
+    // Tiny tiles can give in0/in1/out different geometries; each CB needs its own tile descriptor.
     const TileDescriptor in0_tile_desc{inputA_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
@@ -96,7 +82,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
 
     log_debug(tt::LogOp, "MatmulDecode: inputA_tile: {}", inputA_tile);
 
-    // Full output width (in tiles) to shard across the core grid.
     uint32_t M_tiles = div_up(operation_attributes.M, inputA_tile_height);
     uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
 
@@ -139,7 +124,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     uint32_t inB_N_tiles_per_core = inputB_shard_shape[1] / tt::constants::TILE_WIDTH;
     ProgramDescriptor desc;
 
-    // ---- Circular buffers (allocated on every participating core) ----
     constexpr uint32_t in0_cb_index = CBIndex::c_0;
     constexpr uint32_t in1_cb_index = CBIndex::c_1;
     constexpr uint32_t out_cb_index = CBIndex::c_2;
@@ -189,14 +173,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
             .tile = in0_tile_desc,
         }}},
     });
-    // Two semaphores drive the two-hub gather-then-broadcast:
-    //   - `stage`: every sender atomically increments it on its owning hub
-    //     after writing its A slice into that hub's full_in0_cb.  Each hub waits
-    //     for it to reach the number of senders in its half.
-    //   - `done`: each hub increments it on every core once it has broadcast its
-    //     half; every core waits for it to reach 2 (both hubs finished).
-    // Both live on the full mcast rectangle so they are addressable on every
-    // core that references them (including padding cores inside the box).
+    // stage: senders bump owning hub after slice write; done: each hub bumps all cores after its mcast half.
     const uint32_t num_senders = inputA_core_range_set.num_cores();
     constexpr uint32_t stage_sem_id = 0;
     constexpr uint32_t done_sem_id = 1;
@@ -212,24 +189,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         .initial_value = 0,
     });
 
-    // ---- Reader kernel ----
-    //
-    // Runs on every core in the mcast rectangle.  Two "hub" cores sit at
-    // opposite corners of the rectangle: hub 0 at the start corner (NOC0) and
-    // hub 1 at the end corner (NOC1).  The K-slices are split into two
-    // contiguous halves, one per hub.  Each sender writes its slice into its
-    // owning hub's full_in0_cb (on the hub's NOC) and bumps that hub's `stage`
-    // semaphore; each hub then multicasts its assembled half to all cores and
-    // bumps the `done` semaphore so every core knows A is fully gathered.
     const CoreRange mcast_bbox = all_compute_cores_with_bbox.bounding_box();
-    const CoreCoord hub0_logical = mcast_bbox.start_coord;  // start corner -> NOC0
-    const CoreCoord hub1_logical = mcast_bbox.end_coord;    // end corner   -> NOC1
+    const CoreCoord hub0_logical = mcast_bbox.start_coord;
+    const CoreCoord hub1_logical = mcast_bbox.end_coord;
     const CoreCoord mcast_start_phys = device->worker_core_from_logical_core(hub0_logical);
     const CoreCoord mcast_end_phys = device->worker_core_from_logical_core(hub1_logical);
     const uint32_t num_receivers = all_compute_cores_with_bbox.num_cores();
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
-    // Hub 0 owns the first split_H slices (contiguous region [0, split_H)),
-    // hub 1 owns the remaining slices.
     const uint32_t split_H = num_senders / 2;
 
     TT_FATAL(
@@ -249,20 +215,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         static_cast<uint32_t>(mcast_end_phys.y),
         stage_sem_id,
         done_sem_id,
-        // Hub 0 == rectangle start corner, hub 1 == rectangle end corner.
         static_cast<uint32_t>(mcast_start_phys.x),
         static_cast<uint32_t>(mcast_start_phys.y),
         static_cast<uint32_t>(mcast_end_phys.x),
         static_cast<uint32_t>(mcast_end_phys.y),
         split_H,
-        // in1 (B), already resident in L1.
         in1_cb_index,
         K_tiles * inB_N_tiles_per_core,
     };
 
-    // Map each A-holding core to its K-slice index (its sender_id runtime arg).  Cores are
-    // walked in row-major order so the slice ordering matches the width-sharded
-    // layout of input A across `inputA_core_range_set`.
     const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
     std::map<CoreCoord, uint32_t> sender_id_by_core;
     for (uint32_t id = 0; id < sender_cores.size(); id++) {
@@ -313,40 +274,27 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         return reader_kernel_desc;
     };
 
-    // Group cores by the NOC they must run on, picking the NOC whose traffic
-    // direction points the right way for each core's role.  NOC0 flows toward
-    // increasing coords (down/right); NOC1 flows toward decreasing coords
-    // (up/left).
-    //   - Hub 0 (top-left start corner) broadcasts down/right over the whole
-    //     rectangle -> NOC0.
-    //   - Hub 1 (bottom-right end corner) broadcasts up/left -> NOC1.
-    //   - A sender feeding hub 0 must write up/left to reach the top-left corner
-    //     -> NOC1.
-    //   - A sender feeding hub 1 must write down/right to reach the bottom-right
-    //     corner -> NOC0.
-    //   - Pure receiver cores use the default NoC.
-    // Hub assignment takes precedence over slice ownership in the rare case a
-    // hub core is also a sender owned by the other hub.
+    // Pick NOC by traffic direction: hub0 mcasts on NOC0, hub1 on NOC1; senders use the NOC toward their hub.
     std::vector<CoreCoord> noc0_cores;
     std::vector<CoreCoord> noc1_cores;
     std::vector<CoreCoord> default_noc_cores;
     for (const auto& core : all_reader_cores) {
         const HubRole role = role_of(core);
         if (role == HubRole::Hub0) {
-            noc0_cores.push_back(core);  // hub 0 broadcasts down/right
+            noc0_cores.push_back(core);
             continue;
         }
         if (role == HubRole::Hub1) {
-            noc1_cores.push_back(core);  // hub 1 broadcasts up/left
+            noc1_cores.push_back(core);
             continue;
         }
         const auto it = sender_id_by_core.find(core);
         if (it == sender_id_by_core.end()) {
             default_noc_cores.push_back(core);
         } else if (it->second < split_H) {
-            noc1_cores.push_back(core);  // sender -> hub 0 (top-left): write up/left
+            noc1_cores.push_back(core);
         } else {
-            noc0_cores.push_back(core);  // sender -> hub 1 (bottom-right): write down/right
+            noc0_cores.push_back(core);
         }
     }
 
@@ -360,13 +308,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         desc.kernels.push_back(build_reader_kernel(default_noc_cores, NOC::RISCV_1_default));
     }
 
-    // ---- Compute kernel ----
-    //
-    // Matmul over gathered full A and this core's B slice.
-    // Blocking: in0_block_w (K) = inA_K_tiles_per_core, out_block_h (M) = M_tiles,
-    // out_block_w (N) = 1. The compute kernel processes the entire M dimension in
-    // a single DST block (out_block_h = M_tiles), so M_tiles must fit in DST
-    // (<= 8 tiles in half-sync mode). Enforce M < 256 (=> M_tiles <= 8).
     TT_FATAL(
         M_tiles <= 8,
         "full_width_sharded matmul_decode requires out_block_h (= M_tiles) <= 8 so it fits in DST, but got M_tiles={} "
