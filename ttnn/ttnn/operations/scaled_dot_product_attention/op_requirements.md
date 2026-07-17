@@ -715,7 +715,7 @@ FPU∥SFPU warp-specialization is helper-infeasible per R3c). The knob-turn leve
 now **exhausted with measurement**; the next lever is a matmul-efficiency scheme-change,
 filed as **R5a**.
 
-### [ ] Refinement 5a — Short-K PV matmul batching (raise effective K past the operand-load floor)
+### [~] Refinement 5a — Short-K PV matmul batching (raise effective K past the operand-load floor)
 
 **Type**: perf
 
@@ -744,3 +744,67 @@ needs raw-LLK FA-3 warp-specialization, which failed the gate twice) and is the 
 
 **Done when**: measured device-ns improves on the flagged shape beyond R5's 5.44 ms via the
 wider-K PV matmul, soft `pcc_threshold=0.997` holds, golden green, no guard-set regression.
+
+**Landed (R5a, partial)**: applied the mandated `/perf-measure` **classify-the-bottleneck
+ablation FIRST** (a lever aimed at the wrong bound moves nothing) and it proved the wider-K PV
+lever **cannot** meet the Done-when — so the risky wider-block restructure was **not shipped**.
+Evidence (Blackhole p150b, 110 cores; same-session 4-variant ablation, warm median of 5, steady
+AICLK; stub the PV/QKᵀ payload, keep every CB reserve/wait/pop/push intact — byte-identical L1
+layout and producer/consumer counts, golden stays 1685/0 at the parked default):
+- baseline **5.445 ms**; stub PV matmul **5.138 ms**; stub PV+rescale/accum **5.061 ms**; stub
+  BOTH matmuls+accum **5.049 ms**.
+- **PV matmul = 0.314 ms (5.8%)**, **rescale+accumulate = 0.077 ms (1.4%)**, **QKᵀ matmul =
+  0.012 ms (0.2%)** → **total matmul+accum = 0.403 ms (7.4%)**. The residual **92.6% (5.05 ms)
+  is the serialized SFPU softmax + fixed overhead**, irreducible by ANY matmul-efficiency lever.
+- The wider-K PV lever keeps the total FMA (the bulk of the 5.8%) and can only amortize the
+  per-call pack/init overhead + the **1.4% rescale/accumulate** (halved for B=2 → **<1%**). R5
+  already measured that reducing matmul subblock/pass count is flat (decomp_h: DEST-pipeline
+  bound, not overhead-bound) — the same mechanism K-batching would touch. So the realistic win
+  is **<1%**, below the cost/risk of the required restructure: the wider softmax block doubles
+  `cb_scores`/`cb_exp` (+256 KB) → overflows the ~1.4 MB L1 → forces `KV_DEPTH=1` (loses the
+  double-buffer) or a chunk shrink; and the flagged shape (`Skv_t=296=8·37` prime chunks, 370
+  work units on 110 cores ⇒ >1 wu/core) is exactly the R1b/R3a **ring-straddle catastrophic
+  regression** regime — a partial PV-batch (37 is prime, so any B>1 leaves a remainder) offsets
+  the linearly-indexed `cb_scores`/`cb_exp` reduce window past the wrap. Net: the restructure
+  would very likely regress by more than the <1% it could win.
+- A **measurement-only ablation gate** (compile-time `ablate_pv`, env `SDPA_ABLATE_PV`, default
+  0 = byte-identical to R5, **produces garbage when enabled — /perf-measure instrument only**)
+  is retained so the finding is reproducible (consistent with the queue's retained `SDPA_*` A/B
+  knobs). No SUPPORTED change (perf); golden **1685 passed / 584 xfailed / 0 failed** (identical
+  to R4/R5); guard set 8/8; flagged-shape soft PCC≥0.997 held. `[~]` because the Done-when needs
+  a measured device-ns win and the ablation proves the lever's target has no exploitable headroom
+  (it is aimed at the wrong bound), so no win is bankable — the matmul-efficiency lever class is
+  now **measurement-exhausted** (R5 knob-turns + R5a K-batching). The next lever is the SFPU-side
+  structural ceiling — filed as **R5b**.
+
+### [ ] Refinement 5b — FA-3 FPU∥SFPU overlap: run the matmuls concurrent with the SFPU softmax (raw-LLK, last resort)
+
+**Type**: perf
+
+**Goal** (sharper follow-up from R5a — the exact next lever after the matmul-efficiency class is
+measurement-exhausted): R5a's 4-variant `/perf-measure` ablation proved the flagged
+`1×10×9472×128` shape spends only **7.4%** of wall time in the two matmuls + O accumulate
+(PV 5.8%, QKᵀ 0.2%, rescale/accum 1.4%) and **92.6% in the serialized SFPU softmax + overhead**
+(exp — already fast, R3c — plus the row-max reduce and the pipeline). Every matmul-efficiency
+lever (R5 subblock knob-turns, R5a K-batching) is therefore capped at ~7.4% (unreachable), so the
+residual ~11× gap to `expected_math_util=0.35` (0.14 measured) is **structural**: the FPU (matmuls)
+sits idle during the SFPU softmax because the two engines are driven by the single MATH RISC and
+share DST, so consecutive kernel_lib helpers serialize. The only lever that touches the 92.6% is
+**FA-3 warp-specialization**: async matmul on one DST bank while the SFPU softmax runs on the
+other, so QKᵀ[j+1]/PV[j] overlap the exp/reduce of chunk *j*.
+
+**Verifier notes**: no SUPPORTED change (perf). This is the **structural ceiling** the queue has
+been converging on since R3a. It is **helper-infeasible** — the kernel_lib chain is single-MATH,
+single-DST-window (op_design.md's own CB rationale sizes `cb_scores`/`cb_exp` depth-1 because
+"consecutive helpers each own all 3 TRISCs and cannot pipeline"; `FlashAttention.md` §5 lists
+matmul/softmax cross-unit pipelining as **unimplemented future work**). It needs a raw-LLK
+dual-DST-bank hand-schedule that **abandons the helper library** and **failed the completion gate
+twice** in R3c's two overlap attempts. Treat as a **last resort**: only attempt with an explicit
+raw-LLK budget, a deterministic debug test first, and the full golden suite under `--dev` for no
+intermittent hang. If it is judged out of scope, the queue is at its measured structural ceiling
+(the aspirational util=0.35 is a hardware-overlap target, not a knob-turn) and R5a's parked state
+is the shipped optimum.
+
+**Done when**: measured device-ns improves on the flagged shape beyond R5a's 5.44 ms via true
+FPU∥SFPU overlap, soft `pcc_threshold=0.997` holds, golden green, no guard-set regression — OR the
+raw-LLK overlap is shown infeasible/gate-fatal (as in R3c) and the queue closes at its ceiling.

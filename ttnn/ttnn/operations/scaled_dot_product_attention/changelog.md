@@ -671,3 +671,55 @@
   asserts soft PCC≥0.997 on both variants). The flagged-shape perf harness + R3 guard set
   (R3) and the fused-rowsum debug suite (R3e, exercising h∈{1,2,3,4}) cover the lever's
   correctness.
+
+## Refinement 5a — Short-K PV matmul batching (raise effective K past the operand-load floor) (partial)
+- Date: 2026-07-17
+- What was done: Applied the mandated `/perf-measure` classify-the-bottleneck ablation FIRST
+  (a perf lever aimed at the wrong bound moves nothing), which proved the proposed wider-K PV
+  matmul lever cannot meet the Done-when on the flagged `1×10×9472×128` shape — so the risky
+  wider-block restructure was **not shipped**. A measurement-only ablation gate was added
+  (compile-time `ablate_pv`, env `SDPA_ABLATE_PV`, default 0 = byte-identical to R5) that stubs
+  the PV/QKᵀ matmul payload while keeping every CB reserve/wait/pop/push intact (so L1 layout and
+  producer/consumer counts are byte-identical; the golden suite stays green at the default), then
+  measured a 4-variant same-session A/B on the flagged shape.
+- Perf measured (Blackhole p150b, 110 cores; device FW ns, warm median of 5, fresh cache;
+  same-session 4-variant ablation, steady AICLK):
+  * baseline **5.445 ms**; stub PV matmul **5.138 ms**; stub PV+rescale/accum **5.061 ms**; stub
+    BOTH matmuls+accum **5.049 ms**.
+  * **PV matmul = 0.314 ms (5.8%)**, **rescale+accumulate = 0.077 ms (1.4%)**, **QKᵀ matmul =
+    0.012 ms (0.2%)** → **total matmul + accum = 0.403 ms (7.4%)**. The residual **92.6%
+    (5.05 ms) is the serialized SFPU softmax + fixed overhead**, irreducible by any
+    matmul-efficiency lever.
+  * The wider-K PV lever keeps the total FMA (the bulk of the 5.8%) and can only amortize the
+    per-call pack/init overhead + the 1.4% rescale/accum (halved for B=2 → **<1%**). R5 already
+    measured that reducing matmul subblock/pass count is flat (decomp_h — DEST-pipeline bound,
+    not overhead-bound), the same mechanism K-batching touches, so the realistic win is <1%,
+    below the cost/risk of the required restructure (the wider softmax block doubles
+    `cb_scores`/`cb_exp`, +256 KB → overflows the ~1.4 MB L1 → forces `KV_DEPTH=1` or a chunk
+    shrink; and the flagged shape — `Skv_t=296=8·37` prime chunks, 370 work units on 110 cores ⇒
+    >1 wu/core — is exactly the R1b/R3a ring-straddle catastrophic-regression regime, since any
+    B>1 batch of a prime chunk-count leaves a remainder that offsets the linearly-indexed
+    `cb_scores`/`cb_exp` reduce window past the ring wrap). Net: the restructure would very
+    likely regress by more than the <1% it could win — a lever aimed at the wrong bound.
+- Accuracy achieved: flagged-shape soft PCC≥0.997 held; golden `TOLERANCES` met across the suite
+  (no numeric change — shipped runtime is byte-identical to R5, `ablate_pv=0`).
+- Golden test progress: **1685 passed / 584 xfailed / 0 failed** (identical to R4/R5; no
+  SUPPORTED change — perf refinement, knob parked at its byte-identical default). Guard set
+  8/8 (mask none/custom × small/medium × DRAM/L1); flagged-shape perf harness green.
+- Issues encountered: none — no hang, no corruption (the ablation gate is compile-time-elided at
+  its default; the stub branches only fire under `SDPA_ABLATE_PV`). The finding is a measured
+  dead end for the matmul-efficiency lever class, not a bug.
+- Why **[~] partial**: R5a's Done-when requires a measured device-ns win, and the ablation proves
+  the lever's target (the matmuls, 7.4% of wall time, mostly irreducible FMA) has no exploitable
+  headroom — the matmul-efficiency lever class (R5 knob-turns + R5a K-batching) is now
+  measurement-exhausted. The residual ~11× gap to `expected_math_util=0.35` (0.14 measured) is
+  the 92.6% serialized SFPU softmax, reachable only via FA-3 FPU∥SFPU warp-specialization
+  (helper-infeasible, R3c — needs a raw-LLK dual-DST-bank async schedule that failed the gate
+  twice). Filed as **Refinement 5b** (the structural ceiling / last resort). The wider-block
+  restructure was correctly NOT shipped (the measurement shows it can't win and would risk a
+  larger regression); the reproducible ablation instrument is retained as a documented
+  measurement-only knob (`SDPA_ABLATE_PV`, byte-identical default).
+- Tests added:
+  `tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_r5a_ab.py`
+  (same-session 4-variant PV/QKᵀ ablation harness for the flagged shape via the `SDPA_ABLATE_PV`
+  toggle — the /perf-measure classify-the-bottleneck instrument documenting the R5a finding).

@@ -387,6 +387,14 @@ def create_program_descriptor(
     grow_subblock_h = 0
     if os.environ.get("SDPA_PV_SB_H") == "1":
         grow_subblock_h = 1
+    # R5a (perf, MEASUREMENT-ONLY): PV-matmul + O-rescale/accumulate ablation gate. Bounds
+    # the headroom any PV-batching lever could remove by stubbing that payload while keeping
+    # CB sync intact (/perf-measure). SDPA_ABLATE_PV=1 stubs the PV matmul; =2 also stubs the
+    # per-chunk O rescale + accumulate. Unset/other => 0 (shipped path, byte-identical).
+    ablate_pv = 0
+    _abl = os.environ.get("SDPA_ABLATE_PV")
+    if _abl in ("1", "2", "3"):
+        ablate_pv = int(_abl)
     compute_ct = [
         Dt,
         Sq_chunk_t,
@@ -402,6 +410,7 @@ def create_program_descriptor(
         fuse_rowsum,
         1 if causal else 0,
         grow_subblock_h,
+        ablate_pv,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),

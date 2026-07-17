@@ -235,6 +235,20 @@ void kernel_main() {
     // SDPA_PV_SB_H=1 (same-session A/B re-measurement); unset => 0 (parked). decomp_h also
     // self-gates (h=1 for fp32-DEST), so even enabled it is inert outside the throughput regime.
     constexpr bool grow_subblock_h = get_compile_time_arg_val(13) != 0;
+    // R5a (perf, MEASUREMENT-ONLY ablation): bound the PV-matmul + O-rescale/accumulate
+    // headroom (the max any PV-batching lever could remove) by stubbing that payload while
+    // keeping every CB reserve/wait/pop/push intact (/perf-measure ablation method).
+    //   0 = off (normal, shipped path).
+    //   1 = stub the PV matmul FMA+pack only (drain cb_exp/cb_v like the real matmul,
+    //       push a garbage cb_pv). Rescale/accumulate/normalize run normally. -> PV-matmul cost.
+    //   2 = also stub the per-chunk O rescale (phase 8) + accumulate (phase 10): drain
+    //       cb_corr(alpha) + cb_pv, leave cb_out_accum resident from the first-chunk copy.
+    //       -> PV-matmul + rescale + accumulate cost (the whole "PV+accum" zone).
+    //   3 = also stub the QK^T matmul (phase 2) -> total matmul + accum headroom (both FPU
+    //       matmuls off; softmax/reduces run on garbage). Bounds the whole matmul-efficiency
+    //       lever class (R5/R5a) against the SFPU-softmax residual.
+    // Gated by env SDPA_ABLATE_PV in the descriptor; 0 for every shipped build.
+    constexpr uint32_t ablate_pv = get_compile_time_arg_val(14);
 
     const uint32_t num_wu = get_arg_val<uint32_t>(0);
     const uint32_t start_wu = get_arg_val<uint32_t>(1);
@@ -340,19 +354,31 @@ void kernel_main() {
             const uint32_t qk_in1_sb = skv_valid / qk_out_sb_w;
 
             // Phase 2: scores = Q_scaled . K^T  (transpose B; cb_q_scaled retained).
-            ckl::matmul_block<
-                /*transpose=*/true,
-                /*packer_l1_acc=*/false,
-                LastBlockTarget::Out,
-                OutputCBLayout::SubblockMajor,
-                ckl::matmul_config::InitMode::Short,
-                ckl::InputPolicy::WaitAndRetainOnLastBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock>(
-                q_scaled_buf,
-                k_buf,
-                scores_buf,
-                scores_buf,
-                MatmulBlockShape::of(sq_valid, qk_in1_sb, 1, qk_out_sb_w, Dt, 1));
+            if constexpr (ablate_pv >= 3) {
+                // Ablation (mode 3): QK^T matmul FMA+pack stubbed — wait cb_q_scaled (retained,
+                // not popped), drain cb_k_in like the real matmul, push a garbage cb_scores.
+                // Downstream mask/rowmax/exp run on garbage (perf-representative). Bounds total
+                // matmul headroom together with the PV+accum stub (modes >=1, >=2).
+                cb_wait_front(cb_q_scaled, sq_dt);
+                cb_wait_front(cb_k_in, skv_valid * Dt);
+                cb_pop_front(cb_k_in, skv_valid * Dt);
+                cb_reserve_back(cb_scores, sq_skv);
+                cb_push_back(cb_scores, sq_skv);
+            } else {
+                ckl::matmul_block<
+                    /*transpose=*/true,
+                    /*packer_l1_acc=*/false,
+                    LastBlockTarget::Out,
+                    OutputCBLayout::SubblockMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndRetainOnLastBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock>(
+                    q_scaled_buf,
+                    k_buf,
+                    scores_buf,
+                    scores_buf,
+                    MatmulBlockShape::of(sq_valid, qk_in1_sb, 1, qk_out_sb_w, Dt, 1));
+            }
 
             // Phase 3: additive mask (custom mode), in place, before the row-max.
             if constexpr (has_mask) {
@@ -519,38 +545,60 @@ void kernel_main() {
 
             // Phase 8: rescale running output O by alpha (Col bcast; pops alpha).
             if (!first) {
-                ckl::mul<
-                    cb_out_accum,
-                    cb_corr,
-                    cb_out_accum,
-                    BroadcastDim::Col,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::Bulk,
-                    OutputLifecycle::Streaming,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
-                    OperandKind::Scalar,
-                    OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
+                if constexpr (ablate_pv >= 2) {
+                    // Ablation: rescale stubbed — just drain alpha (kept CB balance).
+                    cb_wait_front(cb_corr, sq_valid);
+                    cb_pop_front(cb_corr, sq_valid);
+                } else {
+                    ckl::mul<
+                        cb_out_accum,
+                        cb_corr,
+                        cb_out_accum,
+                        BroadcastDim::Col,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::Bulk,
+                        OutputLifecycle::Streaming,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::PackTileReconfig::Output,
+                        OperandKind::Scalar,
+                        OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
+                }
             }
 
             // Phase 9: PV = P . V -> cb_pv (cb_exp + cb_v popped).
-            ckl::matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/false,
-                LastBlockTarget::Out,
-                OutputCBLayout::SubblockMajor,
-                ckl::matmul_config::InitMode::Short,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock>(
-                exp_buf,
-                v_buf,
-                pv_buf,
-                pv_buf,
-                MatmulBlockShape::of(pv_in0_sb, pv_in1_sb, pv_sb_h, pv_out_sb_w, skv_valid, 1));
+            if constexpr (ablate_pv >= 1) {
+                // Ablation: PV matmul FMA+pack stubbed — drain the operands exactly like
+                // the real matmul (cb_exp sq_skv, cb_v skv_valid*Dt) and push a garbage
+                // cb_pv (sq_dt) so downstream CB balance is byte-identical.
+                cb_wait_front(cb_exp, sq_skv);
+                cb_pop_front(cb_exp, sq_skv);
+                cb_wait_front(cb_v_in, skv_valid * Dt);
+                cb_pop_front(cb_v_in, skv_valid * Dt);
+                cb_reserve_back(cb_pv, sq_dt);
+                cb_push_back(cb_pv, sq_dt);
+            } else {
+                ckl::matmul_block<
+                    /*transpose=*/false,
+                    /*packer_l1_acc=*/false,
+                    LastBlockTarget::Out,
+                    OutputCBLayout::SubblockMajor,
+                    ckl::matmul_config::InitMode::Short,
+                    ckl::InputPolicy::WaitAndPopPerKBlock,
+                    ckl::InputPolicy::WaitAndPopPerKBlock>(
+                    exp_buf,
+                    v_buf,
+                    pv_buf,
+                    pv_buf,
+                    MatmulBlockShape::of(pv_in0_sb, pv_in1_sb, pv_sb_h, pv_out_sb_w, skv_valid, 1));
+            }
 
             // Phase 10: accumulate O += PV.
             if (first) {
                 ckl::copy<cb_pv, cb_out_accum>(EltwiseShape::tiles(sq_dt));  // O = PV
+            } else if constexpr (ablate_pv >= 2) {
+                // Ablation: accumulate stubbed — drain cb_pv; cb_out_accum stays resident.
+                cb_wait_front(cb_pv, sq_dt);
+                cb_pop_front(cb_pv, sq_dt);
             } else {
                 ckl::add<cb_out_accum, cb_pv, cb_out_accum>(EltwiseShape::tiles(sq_dt));
             }
