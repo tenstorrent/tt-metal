@@ -192,9 +192,9 @@
     scripts/run_safe_pytest.sh tests/ttnn/unit_tests/tensor/test_tensor_serialization.py::test_large_read_only_file_backed_tensor_upload
   skus:
     wh_n150_civ2:
-      timeout: 10
+      timeout: 5
     bh_p150b_civ2_viommu:
-      timeout: 10
+      timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
