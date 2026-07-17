@@ -30,7 +30,6 @@ SWEEP_TYPES = {
 SCHEDULE_TYPES = {
     "0 2 * * *": "lead_models",
     "0 3 * * *": "model_traced",
-    "0 4 * * 3,6": "comprehensive",
 }
 
 

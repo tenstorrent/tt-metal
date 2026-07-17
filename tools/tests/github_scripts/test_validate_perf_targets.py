@@ -588,6 +588,133 @@ def test_verify_perf_respects_metric_specific_tolerance(monkeypatch):
     )
 
 
+def _write_single_target(tmp_path: Path, perf: dict, accuracy: dict | None = None) -> None:
+    """Write a minimal targets + tests YAML pair for a demo-model/wh_n150 entry."""
+    targets = {
+        "version": 1,
+        "targets": {
+            "demo-model": {
+                "aliases": [],
+                "skus": {
+                    "wh_n150": {
+                        "entries": [
+                            {
+                                "batch_size": 1,
+                                "seq_len": 128,
+                                "status": "active",
+                                "perf": perf,
+                                "accuracy": accuracy or {},
+                            }
+                        ]
+                    }
+                },
+            }
+        },
+    }
+    (tmp_path / "models/model_targets.yaml").write_text(yaml.safe_dump(targets), encoding="utf-8")
+    tests_yaml = [{"model": "demo-model", "skus": {"wh_n150": {"tier": 1}}, "team": "models"}]
+    (tmp_path / "tests/pipeline_reorg/models_e2e_tests.yaml").write_text(yaml.safe_dump(tests_yaml), encoding="utf-8")
+
+
+def test_report_shows_measured_and_target_on_pass(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=110.0,
+    )
+    _write_single_target(tmp_path, perf={"decode_t/s/u": 100.0})
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Both the measured value and the target are surfaced in the report table.
+    assert "decode_t/s/u" in result.stdout
+    assert "110.0" in result.stdout
+    assert "100.0" in result.stdout
+    assert "pass" in result.stdout
+
+
+def test_report_shows_measurement_without_target(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    # decode has a target; prefill_decode t/s/u is measured but has no target entry.
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=100.0,
+        extra_measurements=[
+            {"step_name": "inference_prefill_decode", "name": "tokens/s/user", "value": 55.0},
+        ],
+    )
+    _write_single_target(tmp_path, perf={"decode_t/s/u": 100.0})
+
+    result = _run_validator(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no-target" in result.stdout
+    assert "55.0" in result.stdout
+
+
+def test_report_written_to_github_step_summary(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=110.0,
+    )
+    _write_single_target(tmp_path, perf={"decode_t/s/u": 100.0})
+
+    summary_path = tmp_path / "summary.md"
+    result = _run_validator(tmp_path, extra_env={"GITHUB_STEP_SUMMARY": str(summary_path)})
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    summary = summary_path.read_text(encoding="utf-8")
+    assert "Report and Validate Perf and Accuracy targets" in summary
+    assert "decode_t/s/u" in summary
+    assert "110.0" in summary
+
+
+def test_report_present_on_regression(tmp_path):
+    (tmp_path / "generated/benchmark_data").mkdir(parents=True)
+    (tmp_path / "models").mkdir(parents=True)
+    (tmp_path / "tests/pipeline_reorg").mkdir(parents=True)
+
+    _write_complete_run(
+        tmp_path / "generated/benchmark_data/complete_run_1.json",
+        model="demo-model",
+        batch_size=1,
+        seq_len=128,
+        decode_tsu=40.0,
+    )
+    _write_single_target(tmp_path, perf={"decode_t/s/u": 100.0})
+
+    result = _run_validator(tmp_path)
+    # Regression still fails the step, but the measured value is reported too.
+    assert result.returncode == 1
+    assert "40.0" in result.stdout
+    assert "fail" in result.stdout
+
+
+def test_render_summary_empty_reports_placeholder():
+    validator = _load_validator_module()
+    empty_result = validator.ValidationResult()
+    summary = validator._render_summary(empty_result)
+    assert "No perf/accuracy measurements reported" in summary
+
+
 def test_extract_metric_value_fails_for_ambiguous_unqualified_metric_name():
     validator = _load_validator_module()
     lookup = {
