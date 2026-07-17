@@ -291,4 +291,16 @@ and stage-only commit scope.  Local checkpoint SHAs are recorded below after
 creation; no push is performed.
 
 - Implementation and evidence clean-pass checkpoint: `8ef1520f95abddb4a0f8220bad079f375dc66afa`.
-- Provenance documentation checkpoint: this follow-up commit; no push.
+- Provenance documentation checkpoint: `223a4385a0b1e8f834419bc06e508c70761e611c`.
+
+The persistent-goal completion audit then rechecked current committed code,
+all retained JUnit gates, context-capacity math, final profiler rows, artifact
+paths, stage-only commit scope, and live discovery of both P300c devices.  The
+current non-hardware static selection passed 9/9.  Fresh independent reviewer
+`/root/final_stage_review` inspected HEAD
+`223a4385a0b1e8f834419bc06e508c70761e611c` read-only and returned
+`clean-pass` with no required work.  The reviewer classified the exact-active
+prefill cost, near-tied router stress, firmware Ethernet-watcher teardown,
+serialized overlapping-handle hang, and post-success nanobind diagnostics as
+controlled or fixed rather than open decoder defects.  This review-ledger
+update is the final local metadata commit; no push is performed.
