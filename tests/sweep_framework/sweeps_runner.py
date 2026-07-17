@@ -364,13 +364,21 @@ def run(input_queue, output_queue, config: SweepsConfig):
                 # Clear the reused device's program cache so this module starts
                 # clean (no cross-module kernel-binary collision, kernel.cpp:443).
                 clear_job_device_program_cache()
+                # Advance cur_module BEFORE opening so a failed open isn't retried
+                # for every subsequent vector of the same module.
+                cur_module = module_name
                 try:
                     cur_gen = get_devices(test_module)
                     cur_device, _device_name = next(cur_gen)
                 except AssertionError as e:
-                    output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None, None])
+                    # Device failed to open for this module: emit exactly ONE
+                    # result for THIS request and move on. Do NOT fall through to
+                    # also run the vector — a second output_queue.put() desyncs the
+                    # persistent worker (the extra result is consumed as the next
+                    # vector's result, misattributing every later result in the job).
                     cur_device = None
-                cur_module = module_name
+                    output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None, None])
+                    continue
 
             test_vector = deserialize_vector_structured(test_vector)
             try:

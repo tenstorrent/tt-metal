@@ -67,17 +67,28 @@ def _traced_device_count(test_vector) -> int:
             continue
         for shape_key in ("mesh_device_shape", "distribution_shape"):
             raw = placement.get(shape_key)
+            # Placement shapes may be stored as a string repr ("[8, 4]") OR as an
+            # actual list/tuple, depending on the framework path that produced the
+            # vector (see framework/vector_source.py / parse_placement_from_traced).
+            # Handle both so a structured 32-chip shape isn't miscounted as 1 device
+            # and allowed to bypass the Galaxy skip below.
+            dims = None
             if isinstance(raw, str):
                 try:
                     dims = _ast.literal_eval(raw)
                 except (ValueError, SyntaxError):
-                    continue
-                if isinstance(dims, (list, tuple)) and dims:
+                    dims = None
+            elif isinstance(raw, (list, tuple)):
+                dims = raw
+            if isinstance(dims, (list, tuple)) and dims:
+                try:
                     total = 1
                     for d in dims:
                         total *= int(d)
-                    if total > 1:
-                        return total
+                except (TypeError, ValueError):
+                    continue
+                if total > 1:
+                    return total
     return 1
 
 
@@ -100,13 +111,15 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     currently down). Skip the Galaxy configs to protect the run/box until then.
     The <=8-device (N150/N300/T3K) chunked-SDPA configs are untouched and pass.
 
-    Remove once the chunked-SDPA Galaxy device hang is reproduced + fixed
-    (SDPA / llama-galaxy team). See project_galaxy_dispatch_reinit_hang memory.
+    Tracked by https://github.com/tenstorrent/tt-metal/issues/50186 — remove this
+    skip once the chunked-SDPA Galaxy device hang is reproduced + fixed on healthy
+    32-chip hardware (SDPA / llama-galaxy team).
     """
     if _traced_device_count(test_vector) > 8:
         return (
             True,
-            "chunked SDPA reconstruction hangs the 6u Galaxy device (32-chip); see invalidate_vector docstring",
+            "chunked SDPA Galaxy (32-chip) config wedges the device; skipped pending "
+            "https://github.com/tenstorrent/tt-metal/issues/50186",
         )
     return False, None
 

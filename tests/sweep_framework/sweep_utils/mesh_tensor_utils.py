@@ -18,6 +18,7 @@ import torch
 import ttnn
 from typing import Optional, Dict, Tuple
 import ast
+from loguru import logger
 
 
 def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[ttnn.TensorMemoryLayout]:
@@ -271,22 +272,34 @@ def create_mesh_device(
     if not _job_device_enabled():
         return _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
 
+    global _JOB_DEVICE, _JOB_DEVICE_KEY
     key = _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth)
     if key is None:
+        # Not safely keyable (e.g. auto-detect axis) -> don't cache this device.
+        # Close any live cached device FIRST so this uncached open never runs a
+        # SECOND mesh alongside it (the open guard also closes, but do it
+        # explicitly here so the one-live-device invariant is local and obvious).
+        # Refuse if the close fails rather than open a second live mesh.
+        if _JOB_DEVICE is not None and not close_job_device():
+            raise RuntimeError(
+                "create_mesh_device: refusing an unkeyable open because the cached "
+                "job device could not be closed (would leave two live mesh devices)"
+            )
         return _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
 
-    global _JOB_DEVICE, _JOB_DEVICE_KEY
     if _JOB_DEVICE is not None and _JOB_DEVICE_KEY == key:
         return _JOB_DEVICE
     if _JOB_DEVICE is not None:
-        # Config changed: really close the old device (device must be closed before
-        # a fabric reconfig) then open the new one.
-        try:
-            _orig_close_mesh_device(_JOB_DEVICE)
-        except Exception:
-            pass
-        _JOB_DEVICE = None
-        _JOB_DEVICE_KEY = None
+        # Config changed: really close the old device before opening the new one
+        # (a device must be closed before a fabric reconfig). If the close FAILS,
+        # refuse to reopen -- a second live mesh corrupts context state; surface
+        # the teardown error instead of silently reopening. close_job_device()
+        # nulls _JOB_DEVICE/_KEY on success.
+        if not close_job_device():
+            raise RuntimeError(
+                "create_mesh_device: refusing to reopen on a config change because "
+                "the prior job device could not be closed (would leave two live meshes)"
+            )
     _JOB_DEVICE = _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
     _JOB_DEVICE_KEY = key
     return _JOB_DEVICE
@@ -314,8 +327,14 @@ def _guarded_set_fabric_config(*args, **kwargs):
     fabric (e.g. conv2d heavy<->light: close -> set_fabric_config -> reopen) call
     ttnn.close_mesh_device first, but that is deferred for the cached job device —
     so really close it here before the reconfig, or metal asserts 'SetFabricConfig
-    not allowed while devices are still open'. create_mesh_device reopens after."""
-    close_job_device()
+    not allowed while devices are still open'. create_mesh_device reopens after.
+    If the close FAILS, refuse the reconfig rather than reconfigure fabric with a
+    live device (which is illegal / corrupts state)."""
+    if not close_job_device():
+        raise RuntimeError(
+            "set_fabric_config: refusing to reconfigure fabric because the cached job "
+            "device could not be closed (a live mesh would make the reconfig illegal)"
+        )
     return _orig_set_fabric_config(*args, **kwargs)
 
 
@@ -337,9 +356,14 @@ def _guarded_open_mesh_device(*args, **kwargs):
     open; the next create_mesh_device reopens and re-caches it. Safe against the
     cache-miss reopen path in create_mesh_device (which nulls _JOB_DEVICE before
     calling _create_mesh_device_uncached -> here close_job_device is a no-op) and
-    calls _orig_open_mesh_device (not the wrapper), so no re-entrancy."""
+    calls _orig_open_mesh_device (not the wrapper), so no re-entrancy. If the close
+    FAILS, refuse to open rather than leave two live mesh devices."""
     if _job_device_enabled():
-        close_job_device()
+        if not close_job_device():
+            raise RuntimeError(
+                "open_mesh_device: refusing to open a new mesh because the cached job "
+                "device could not be closed (would leave two live mesh devices)"
+            )
     return _orig_open_mesh_device(*args, **kwargs)
 
 
@@ -358,16 +382,26 @@ def clear_job_device_program_cache() -> None:
             pass
 
 
-def close_job_device() -> None:
-    """Really close the cached job device (job end / worker teardown)."""
+def close_job_device() -> bool:
+    """Really close the cached job device (job end / worker teardown, config
+    change, fabric reconfig).
+
+    Returns True on success (or when nothing is cached). On a close FAILURE it
+    KEEPS _JOB_DEVICE set (does not forget it) and returns False, so callers that
+    require all devices closed before proceeding — a fabric reconfig or a fresh
+    mesh open — can refuse rather than run a second live mesh and corrupt context.
+    Best-effort teardown callers may ignore the result."""
     global _JOB_DEVICE, _JOB_DEVICE_KEY
-    if _JOB_DEVICE is not None:
-        try:
-            _orig_close_mesh_device(_JOB_DEVICE)
-        except Exception:
-            pass
-        _JOB_DEVICE = None
-        _JOB_DEVICE_KEY = None
+    if _JOB_DEVICE is None:
+        return True
+    try:
+        _orig_close_mesh_device(_JOB_DEVICE)
+    except Exception:
+        logger.exception("close_job_device: failed to close the cached job device; keeping it cached")
+        return False
+    _JOB_DEVICE = None
+    _JOB_DEVICE_KEY = None
+    return True
 
 
 def _create_mesh_device_uncached(
