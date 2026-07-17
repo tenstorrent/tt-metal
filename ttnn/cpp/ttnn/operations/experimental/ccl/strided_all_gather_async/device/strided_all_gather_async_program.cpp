@@ -323,49 +323,14 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     auto [unicast_forward_args, unicast_backward_args] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         sender_device_coord, forward_coord, backward_coord, mesh_device);
 
-    // Option W: carve `num_directions_per_link` extra cores as per-direction matmul-signal aggregators,
-    // ordered after the mux/worker cores in all_cores (see placement below).
+    // Option W: carve `num_directions_per_link` extra trailing cores as per-direction matmul-signal
+    // aggregators. choose_worker_cores(1, T) fills T cores row-major from the offset, so the first
+    // num_links*num_cores_per_link are the AG worker/mux cores (unchanged layout) and the last ones
+    // are the aggregators.
     const uint32_t num_agg_cores = writer_signals_mm ? num_directions_per_link : 0;
     const uint32_t total_worker_cores = num_links * num_cores_per_link + num_agg_cores;
-    // choose_worker_cores reserves the op's worker region (the AG subdevice's bottom rows) row-major.
-    // We keep it to inherit that region, then re-place cores within it: each (link,dir) group's mux on
-    // the top row directly above its workers on the bottom row, with the aggregators in the top row's
-    // free columns 1-2. all_cores preserves the [mux, w0..wN-1] per group then [agg per dir] order that
-    // the rest of the factory indexes by, so only the physical coordinates change.
-    const auto [reserved_core_range, reserved_cores] =
+    const auto [all_core_range, all_cores] =
         ttnn::ccl::choose_worker_cores(1, total_worker_cores, mesh_device, std::nullopt, core_grid_offset);
-    const uint32_t region_base_x = reserved_cores.front().x;
-    const uint32_t region_top_y = reserved_cores.front().y;
-    const uint32_t group_stride = num_workers_per_direction;  // columns spanned by one (link,dir) group
-    const uint32_t num_groups = num_links * num_directions_per_link;
-    uint32_t region_max_x = region_base_x;
-    for (const auto& c : reserved_cores) {
-        if (c.x > region_max_x) {
-            region_max_x = c.x;
-        }
-    }
-    TT_FATAL(
-        region_max_x - region_base_x + 1 >= num_groups * group_stride,
-        "Strided AG core placement needs {} columns for {} mux groups of {} workers, region has {}.",
-        num_groups * group_stride,
-        num_groups,
-        group_stride,
-        region_max_x - region_base_x + 1);
-
-    std::vector<CoreCoord> all_cores;
-    all_cores.reserve(total_worker_cores);
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            const uint32_t group_col = region_base_x + (link * num_directions_per_link + dir) * group_stride;
-            all_cores.emplace_back(group_col, region_top_y);  // mux on the top row
-            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                all_cores.emplace_back(group_col + worker, region_top_y + 1);  // its workers directly below
-            }
-        }
-    }
-    for (uint32_t agg = 0; agg < num_agg_cores; agg++) {
-        all_cores.emplace_back(region_base_x + 1 + agg, region_top_y);  // aggregators: top row, cols 1-2
-    }
     std::set<CoreRange> sender_worker_core_ranges;
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
