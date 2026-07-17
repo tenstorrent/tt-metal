@@ -46,6 +46,7 @@ void bind_tilize(nb::module_& mod) {
         nb::arg("dtype") = nb::none(),
         nb::arg("use_multicore") = true,
         nb::arg("use_low_perf") = false,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("tile") = tt::tt_metal::Tile{});
 }
 }  // namespace ttnn::operations::experimental::quasar::detail

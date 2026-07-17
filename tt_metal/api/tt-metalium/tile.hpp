@@ -43,8 +43,11 @@ struct Tile {
     // operators
     bool operator==(const Tile& other) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("tile_shape", "face_shape", "num_faces");
-    auto attribute_values() const { return std::forward_as_tuple(tile_shape, face_shape, num_faces); }
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("tile_shape", "face_shape", "num_faces", "transpose_within_face", "transpose_of_faces");
+    auto attribute_values() const {
+        return std::forward_as_tuple(tile_shape, face_shape, num_faces, transpose_within_face, transpose_of_faces);
+    }
 
 private:
     std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH};

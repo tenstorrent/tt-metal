@@ -182,10 +182,17 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
     return output;
 }
 
-Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
-    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
+Tensor to_layout(const Tensor& input_tensor, Layout target_layout, std::optional<Tile> tile) {
+    GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, tile);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for to_layout conversion");
-    Tensor output = Tensor(tt::tt_metal::to_layout(input_tensor.host_tensor(), target_layout));
+    Tensor output = [&] {
+        switch (target_layout) {
+            case Layout::ROW_MAJOR: return Tensor(tt::tt_metal::to_row_major_layout(input_tensor.host_tensor()));
+            case Layout::TILE:
+                return Tensor(tt::tt_metal::to_tile_layout(input_tensor.host_tensor(), tile.value_or(Tile{})));
+            default: TT_THROW("Target layout {} is not supported", target_layout);
+        }
+    }();
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;

@@ -96,12 +96,13 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to tilize need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    TT_FATAL(operation_attributes.tile == tt::tt_metal::Tile{}, "Device tilize only supports the default tile");
 
     TT_FATAL(
-        input_tensor_a.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+        input_tensor_a.padded_shape()[-1] % operation_attributes.tile.get_width() == 0,
         "Input tensor width must be divisible by TILE_WIDTH");
     TT_FATAL(
-        input_tensor_a.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0,
+        input_tensor_a.padded_shape()[-2] % operation_attributes.tile.get_height() == 0,
         "Input tensor height must be divisible by TILE_HEIGHT");
 
     auto width = input_tensor_a.padded_shape()[-1];
@@ -158,18 +159,22 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
-                PageConfig(Layout::TILE),
+                PageConfig(Layout::TILE, operation_attributes.tile),
                 mem_config,
                 input_tensor.logical_shape(),
                 input_tensor.padded_shape()))};
     }
 
     auto output_layout = TensorLayout(
-        operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config);
+        operation_attributes.output_dtype,
+        PageConfig(Layout::TILE, operation_attributes.tile),
+        operation_attributes.output_mem_config);
     return {TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout(
-            operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
+            operation_attributes.output_dtype,
+            PageConfig(Layout::TILE, operation_attributes.tile),
+            operation_attributes.output_mem_config))};
 }
 
 TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_factory(
@@ -198,12 +203,12 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     }
     auto sub_core_grids = operation_attributes.sub_core_grids;
 
-    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_row = input_tensor_a.padded_shape()[-1] / operation_attributes.tile.get_width();
 
-    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_col = input_tensor_a.padded_shape()[-2] / operation_attributes.tile.get_height();
 
-    int32_t ntiles = input_tensor_a.physical_volume() / tt::constants::TILE_HW;
-    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    int32_t ntiles = input_tensor_a.physical_volume() / operation_attributes.tile.get_tile_hw();
+    uint32_t ntiles_per_block = input_tensor_a.padded_shape()[-1] / operation_attributes.tile.get_width();
     uint32_t nblocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_block);
 
     auto* device = input_tensor_a.device();
@@ -218,7 +223,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
         uint32_t num_blocks_block = (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) /
-                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+                                    operation_attributes.tile.get_tile_hw();
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
             return ttnn::prim::qsr::TilizeMultiCoreBlockProgramFactory{};
@@ -241,11 +246,13 @@ ttnn::Tensor tilize(
     bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    tt::tt_metal::Tile tile) {
     return ttnn::device_operation::launch<TilizeDeviceOperation>(
         TilizeParams{
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
+            .tile = tile,
             .use_multicore = use_multicore,
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,

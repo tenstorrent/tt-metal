@@ -553,17 +553,17 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     }
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Converting from {} to Row Major is unsupported.", tensor.layout());
+    auto tile = tensor.tensor_spec().tile();
     // Construct the new tensor spec first to verify that this is a supported Tensor configuration
     TensorSpec new_tensor_spec(
         tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             tensor.dtype(),
-            PageConfig(Layout::ROW_MAJOR),
+            PageConfig(Layout::ROW_MAJOR, tile),
             MemoryConfig{},
             tensor.logical_shape(),
             tensor.padded_shape()));
 
-    auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
 
     auto transformed_buffer = tensor.buffer().transform(
@@ -580,6 +580,11 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
 template <typename T>
 HostTensor to_tile_layout_impl(const HostTensor& tensor, Tile tile) {
     if (tensor.layout() == Layout::TILE) {
+        TT_FATAL(
+            tensor.tensor_spec().tile() == tile,
+            "Cannot reinterpret TILE tensor with tile {} as requested tile {}",
+            tensor.tensor_spec().tile(),
+            tile);
         return tensor;
     }
 
@@ -645,14 +650,6 @@ HostTensor to_tile_layout(const HostTensor& tensor, const Tile& tile) {
             return CMAKE_UNIQUE_NAMESPACE::to_tile_layout_impl<T>(tensor, tile);
         }
     });
-}
-
-HostTensor to_layout(const HostTensor& tensor, Layout target_layout) {
-    switch (target_layout) {
-        case Layout::ROW_MAJOR: return to_row_major_layout(tensor);
-        case Layout::TILE: return to_tile_layout(tensor, tensor.tensor_spec().tile());
-        default: TT_THROW("Target layout {} is not supported", target_layout);
-    }
 }
 
 // ======================================================================================
@@ -915,10 +912,7 @@ HostTensor pad_impl(
         [&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    auto tile = tt::tt_metal::Tile();
-    if (tensor.layout() == Layout::TILE) {
-        tile = tensor.tensor_spec().tile();
-    }
+    auto tile = tensor.tensor_spec().tile();
 
     return HostTensor::from_buffer(
         std::move(transformed_buffer),
@@ -1054,10 +1048,11 @@ HostTensor pad(
 }
 
 HostTensor pad_to_tile(const HostTensor& tensor, float pad_value) {
+    const auto tile = tensor.tensor_spec().tile();
     uint32_t height = tensor.padded_shape()[-2];
     uint32_t width = tensor.padded_shape()[-1];
-    uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
-    uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
+    uint32_t padded_height = round_up(height, tile.get_height());
+    uint32_t padded_width = round_up(width, tile.get_width());
 
     ttsl::SmallVector<uint32_t> padded_shape;
     ttsl::SmallVector<uint32_t> input_tensor_start;
@@ -1090,18 +1085,19 @@ HostTensor unpad(
 }
 
 HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& output_tensor_shape) {
+    const auto tile = tensor.tensor_spec().tile();
     for (auto index = -3; index >= -static_cast<int>(tensor.padded_shape().rank()); index--) {
         TT_FATAL(
             tensor.logical_shape()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
     TT_FATAL(
-        tensor.padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
-            tensor.padded_shape()[-1] % constants::TILE_WIDTH == 0,
-        "Last 2 dims of input shape must be multiples of 32");
+        tensor.padded_shape()[-2] % tile.get_height() == 0 && tensor.padded_shape()[-1] % tile.get_width() == 0,
+        "Last 2 dims of input shape must be multiples of tile shape {}",
+        tile.get_tile_shape());
     TT_FATAL(
-        tensor.padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
-            tensor.padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
+        tensor.padded_shape()[-2] < output_tensor_shape[-2] + tile.get_height() &&
+            tensor.padded_shape()[-1] < output_tensor_shape[-1] + tile.get_width(),
         "Last 2 dims of output must be within range to have been padded to input");
     Shape output_tensor_start(ttsl::SmallVector<uint32_t>(tensor.padded_shape().rank(), 0));
     Shape output_tensor_end(ttsl::SmallVector<uint32_t>(tensor.padded_shape().rank(), 1));

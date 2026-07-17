@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Tests for the host-only layout conversion tt::tt_metal::to_layout(const HostTensor&, Layout).
+// Tests for the host-only layout conversion helpers in tt::tt_metal.
 //
 // Group 1 (no sharding): a matrix of {conversion direction} x {dtype}. For each cell, to_layout's
 // output is compared against an INDEPENDENTLY constructed reference tensor built directly in the
@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -48,6 +50,19 @@ TensorSpec make_spec(const Shape& shape, DataType dtype, Layout layout) {
 TensorSpec make_tile_spec(const Shape& shape, DataType dtype, const Tile& tile) {
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     return TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::TILE, tile), memory_config));
+}
+
+HostTensor convert_layout(const HostTensor& tensor, Layout target_layout, std::optional<Tile> tile = std::nullopt) {
+    switch (target_layout) {
+        case Layout::ROW_MAJOR: return to_row_major_layout(tensor);
+        case Layout::TILE: return to_tile_layout(tensor, tile.value_or(Tile{}));
+        default: TT_THROW("Target layout {} is not supported", target_layout);
+    }
+}
+
+TensorSpec make_row_major_spec(const Shape& shape, DataType dtype, const Tile& tile) {
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    return TensorSpec(shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR, tile), memory_config));
 }
 
 // A deterministic ramp that is in-range for every dtype under test (incl. UINT8).
@@ -108,7 +123,7 @@ TEST_P(HostTensorToLayoutMatrix, MatchesFreshConstruction) {
         const auto data = make_ramp<T>(shape.volume());
 
         const auto source = HostTensor::from_vector<T>(data, make_spec(shape, dtype, src));
-        const auto result = to_layout(source, tgt);
+        const auto result = convert_layout(source, tgt);
         const auto expected = HostTensor::from_vector<T>(data, make_spec(shape, dtype, tgt));
 
         EXPECT_EQ(result.layout(), tgt);
@@ -238,7 +253,7 @@ TEST(HostTensorToLayout, Bfloat8BToRowMajorDoesNotThrow) {
     const auto data = make_ramp<float>(shape.volume());
     const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::BFLOAT8_B, Layout::TILE));
 
-    EXPECT_NO_THROW(std::ignore = to_layout(source, Layout::ROW_MAJOR));
+    EXPECT_NO_THROW(std::ignore = convert_layout(source, Layout::ROW_MAJOR));
 }
 
 TEST(HostTensorToLayout, Bfloat4BToRowMajorDoesNotThrow) {
@@ -246,7 +261,7 @@ TEST(HostTensorToLayout, Bfloat4BToRowMajorDoesNotThrow) {
     const auto data = make_ramp<float>(shape.volume());
     const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::BFLOAT4_B, Layout::TILE));
 
-    EXPECT_NO_THROW(std::ignore = to_layout(source, Layout::ROW_MAJOR));
+    EXPECT_NO_THROW(std::ignore = convert_layout(source, Layout::ROW_MAJOR));
 }
 
 // G3: dtypes that cannot be converted to TILE. FP8_E4M3 is constrained to ROW_MAJOR, so tilizing it
@@ -256,7 +271,43 @@ TEST(HostTensorToLayout, Fp8E4m3CannotConvertToTile) {
     const auto data = make_ramp<float>(shape.volume());
     const auto source = HostTensor::from_vector<float>(data, make_spec(shape, DataType::FP8_E4M3, Layout::ROW_MAJOR));
 
-    EXPECT_ANY_THROW(std::ignore = to_layout(source, Layout::TILE));
+    EXPECT_ANY_THROW(std::ignore = convert_layout(source, Layout::TILE));
+}
+
+TEST(HostTensorToLayout, CustomTileRoundTripWithPaddingPreservesData) {
+    const Shape shape{30, 50};
+    const Tile tile{{16, 32}};
+    const auto data = make_ramp<float>(shape.volume());
+
+    const auto source = HostTensor::from_vector<float>(data, make_row_major_spec(shape, DataType::FLOAT32, tile));
+    const auto tiled = to_tile_layout(pad_to_tile(source, 0.0f), tile);
+    const auto round_tripped = unpad_from_tile(to_row_major_layout(tiled), shape);
+    const auto expected = HostTensor::from_vector<float>(data, make_row_major_spec(shape, DataType::FLOAT32, tile));
+
+    EXPECT_EQ(tiled.tensor_spec().tile(), tile);
+    EXPECT_EQ(tiled.padded_shape(), Shape({32, 64}));
+    EXPECT_EQ(round_tripped.logical_shape(), shape);
+    EXPECT_EQ(round_tripped.padded_shape(), shape);
+    expect_equal_shard_data(round_tripped, expected);
+}
+
+TEST(HostTensorToLayout, TileToTileMismatchIncludingTransposeThrows) {
+    const Shape shape{32, 32};
+    const auto data = make_ramp<float>(shape.volume());
+    const auto source = HostTensor::from_vector<float>(data, make_tile_spec(shape, DataType::FLOAT32, Tile{{32, 32}}));
+
+    EXPECT_ANY_THROW(std::ignore = to_tile_layout(source, Tile{{32, 32}, true}));
+}
+
+TEST(HostTensorToLayout, TileReflectionIncludesTransposeFlags) {
+    const Tile default_tile{{32, 32}};
+    const Tile transposed_tile{{32, 32}, true};
+
+    EXPECT_FALSE(default_tile == transposed_tile);
+    std::stringstream ss;
+    ss << transposed_tile;
+    EXPECT_THAT(ss.str(), ::testing::HasSubstr("transpose_within_face=1"));
+    EXPECT_THAT(ss.str(), ::testing::HasSubstr("transpose_of_faces=1"));
 }
 
 }  // namespace

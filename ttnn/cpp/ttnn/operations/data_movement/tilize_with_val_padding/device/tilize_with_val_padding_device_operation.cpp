@@ -61,10 +61,10 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     CoreRangeSet available_grid =
         operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
     uint32_t num_blocks = operation_attributes.output_padded_shape.volume() /
-                          operation_attributes.output_padded_shape[-1] / tt::constants::TILE_HEIGHT;
-    uint32_t num_tiles_per_row = operation_attributes.output_padded_shape[-1] / tt::constants::TILE_WIDTH;
+                          operation_attributes.output_padded_shape[-1] / operation_attributes.tile.get_height();
+    uint32_t num_tiles_per_row = operation_attributes.output_padded_shape[-1] / operation_attributes.tile.get_width();
 
-    uint32_t num_tiles_per_col = operation_attributes.output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t num_tiles_per_col = operation_attributes.output_padded_shape[-2] / operation_attributes.tile.get_height();
 
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
@@ -72,7 +72,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
         uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
-                                    (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+                                    operation_attributes.tile.get_tile_hw();
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
             return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
@@ -88,6 +88,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
+    TT_FATAL(operation_attributes.tile == tt::tt_metal::Tile{}, "Device tilize only supports the default tile");
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or
@@ -128,11 +129,12 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     uint32_t num_rows = operation_attributes.output_padded_shape[-1];
     uint32_t inner_dim = operation_attributes.output_padded_shape[-2];
     TT_FATAL(
-        inner_dim % TILE_WIDTH == 0 && num_rows % TILE_HEIGHT == 0,
+        inner_dim % operation_attributes.tile.get_width() == 0 &&
+            num_rows % operation_attributes.tile.get_height() == 0,
         "To be tilizable output tensor shape {} must be divisible by tile size ({}, {})",
         operation_attributes.output_padded_shape,
-        TILE_WIDTH,
-        TILE_HEIGHT);
+        operation_attributes.tile.get_width(),
+        operation_attributes.tile.get_height());
 
     const uint32_t alignment_requirement = hal::get_l1_alignment();
     if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -188,7 +190,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
             input_shape,
             TensorLayout::fromPaddedShape(
                 operation_attributes.output_dtype,
-                PageConfig(Layout::TILE),
+                PageConfig(Layout::TILE, operation_attributes.tile),
                 mem_config,
                 input_shape,
                 operation_attributes.output_padded_shape));
@@ -198,7 +200,7 @@ TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_specs(
         input_shape,
         TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
-            PageConfig(Layout::TILE),
+            PageConfig(Layout::TILE, operation_attributes.tile),
             operation_attributes.output_mem_config,
             input_shape,
             operation_attributes.output_padded_shape));
@@ -218,13 +220,15 @@ Tensor tilize_with_val_padding(
     bool use_multicore,
     bool enough_space_width,
     bool enough_space_height,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    tt::tt_metal::Tile tile) {
     return ttnn::device_operation::launch<TilizeWithValPaddingDeviceOperation>(
         TilizeWithValPaddingParams{
             .output_padded_shape = output_padded_shape,
             .pad_value = pad_value,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .output_dtype = output_dtype.value_or(input_tensor.dtype()),
+            .tile = tile,
             .use_multicore = use_multicore,
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,

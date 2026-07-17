@@ -51,18 +51,34 @@ ttnn::Tensor tilize(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     bool use_low_perf,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    tt::tt_metal::Tile tile) {
+    if (input_tensor.layout() == Layout::TILE) {
+        TT_FATAL(
+            input_tensor.tensor_spec().tile() == tile,
+            "ttnn::experimental::quasar::tilize: TILE tensor already uses tile {}, cannot reinterpret as {}",
+            input_tensor.tensor_spec().tile(),
+            tile);
+        TT_FATAL(
+            !memory_config.has_value() || memory_config.value() == input_tensor.memory_config(),
+            "ttnn::experimental::quasar::tilize: cannot silently drop requested memory_config on already-TILE input");
+        TT_FATAL(
+            !output_dtype.has_value() || output_dtype.value() == input_tensor.dtype(),
+            "ttnn::experimental::quasar::tilize: cannot silently drop requested dtype on already-TILE input");
+        return input_tensor;
+    }
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
         output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
                                  : input_single_tile_size;
 
-    uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
-    uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t input_tile_width = tile.get_width();
+    uint32_t input_tile_height = tile.get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
-    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-1] / input_tile_height;
+    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / input_tile_height;
 
     bool enough_space_width = ttnn::operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
@@ -78,7 +94,8 @@ ttnn::Tensor tilize(
             enough_space_width,
             enough_space_height,
             use_low_perf,
-            sub_core_grids);
+            sub_core_grids,
+            tile);
     };
 
     return ttnn::operations::experimental::quasar::build_ndiml_tilize(base_tilize, sub_core_grids)(input_tensor);

@@ -137,13 +137,14 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
 
     // Check that the tile shape is the same for the input and output tensors
     if (input_tensor_a.layout() == Layout::TILE) {
-        const auto output_tile = tensor_args.preallocated_output.has_value()
-                                     ? tensor_args.preallocated_output.value().tensor_spec().tile()
-                                     : tt::tt_metal::TensorLayout(
-                                           output_dtype,
-                                           tt::tt_metal::PageConfig(input_tensor_a.layout()),
-                                           operation_attributes.output_mem_config)
-                                           .get_tile();
+        const auto output_tile =
+            tensor_args.preallocated_output.has_value()
+                ? tensor_args.preallocated_output.value().tensor_spec().tile()
+                : tt::tt_metal::TensorLayout(
+                      output_dtype,
+                      tt::tt_metal::PageConfig(input_tensor_a.layout(), input_tensor_a.tensor_spec().tile()),
+                      operation_attributes.output_mem_config)
+                      .get_tile();
         TT_FATAL(
             input_tensor_a.tensor_spec().tile().get_tile_shape() == output_tile.get_tile_shape(),
             "Input and output tensors must have the same tile shape when layout is TILE");
@@ -160,7 +161,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
 
     auto output_layout = tt::tt_metal::TensorLayout(
         operation_attributes.output_dtype,
-        tt::tt_metal::PageConfig(input_tensor.layout()),
+        tt::tt_metal::PageConfig(input_tensor.layout(), input_tensor.tensor_spec().tile()),
         operation_attributes.output_mem_config);
     auto output_padded_shape = output_layout.compute_padded_shape(
         input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a different
@@ -169,7 +170,7 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(input_tensor.layout()),
+            tt::tt_metal::PageConfig(input_tensor.layout(), input_tensor.tensor_spec().tile()),
             operation_attributes.output_mem_config,
             input_tensor.logical_shape(),
             output_padded_shape))};

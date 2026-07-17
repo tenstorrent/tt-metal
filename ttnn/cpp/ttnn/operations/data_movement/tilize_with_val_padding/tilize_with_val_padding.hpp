@@ -16,7 +16,8 @@ ttnn::Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> output_dtype = std::nullopt,
     bool use_multicore = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    tt::tt_metal::Tile tile = {});
 
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
@@ -25,13 +26,15 @@ ttnn::Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> output_dtype = std::nullopt,
     bool use_multicore = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    tt::tt_metal::Tile tile = {});
 
 ttnn::Tensor tilize_with_zero_padding(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<DataType> output_dtype = std::nullopt,
     bool use_multicore = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    tt::tt_metal::Tile tile = {});
 
 }  // namespace ttnn

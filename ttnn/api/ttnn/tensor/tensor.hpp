@@ -154,7 +154,7 @@ public:
         ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
-    [[nodiscard]] Tensor to_layout(Layout target_layout) const;
+    [[nodiscard]] Tensor to_layout(Layout target_layout, std::optional<Tile> tile = std::nullopt) const;
 
     [[nodiscard]] Tensor pad(
         const tt::tt_metal::Shape& output_padded_shape,

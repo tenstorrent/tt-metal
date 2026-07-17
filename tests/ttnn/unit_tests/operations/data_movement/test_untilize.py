@@ -10,6 +10,11 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
+UNTILIZE_APIS = (
+    ("core", ttnn.untilize),
+    ("quasar", ttnn.experimental.quasar.untilize),
+)
+
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.int32])
 @pytest.mark.parametrize("tensor_shape", [[2, 2, 256, 512]])
@@ -2930,3 +2935,18 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor)
 
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
+
+
+@pytest.mark.parametrize("api_name,untilize_fn", UNTILIZE_APIS)
+def test_untilize_rejects_custom_tile_input(api_name, untilize_fn, device, expect_error):
+    torch_input = torch.rand((32, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((16, 32)),
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "device untilize only supports the default tile"):
+        untilize_fn(tt_input)

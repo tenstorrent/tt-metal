@@ -52,7 +52,8 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
             const std::optional<MemoryConfig>&,
             std::optional<DataType>,
             bool,
-            const std::optional<CoreRangeSet>&>(&ttnn::tilize_with_val_padding),
+            const std::optional<CoreRangeSet>&,
+            tt::tt_metal::Tile>(&ttnn::tilize_with_val_padding),
         nb::arg("input_tensor"),
         nb::arg("output_tensor_shape"),
         nb::arg("pad_value"),
@@ -60,7 +61,8 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("tile") = tt::tt_metal::Tile{});
 }
 
 void bind_tilize_with_zero_padding(nb::module_& mod) {
@@ -90,7 +92,8 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_dtype") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("tile") = tt::tt_metal::Tile{});
 }
 
 }  // namespace ttnn::operations::data_movement::detail
