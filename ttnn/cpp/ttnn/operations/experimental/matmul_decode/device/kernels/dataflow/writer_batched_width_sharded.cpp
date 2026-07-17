@@ -9,18 +9,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
-// Batched-width-sharded matmul output writer.
-//
-// Each core owns a distinct (batch-block, N-block) and produces a [Bc, M, Nc] output block in
-// out_cb (compute -> writer). The output tensor is DRAM INTERLEAVED with logical shape
-// [d0, d1, M, N] (= the torch reference), i.e. a tile grid of [batch*M_tiles, N_tiles]. This
-// kernel scatters each local tile to its global tile (page) index:
-//
-//   out_row = b*M_tiles + mt   (b = b_idx*Bc + bc_i)
-//   out_col = n_idx*Nc_tiles + nc
-//   page_id = out_row * N_tiles + out_col
-//
-// out_cb is packed by compute in (bc_i, mt, nc) order, so the local tile offset advances linearly.
+// Scatter [Bc, M, Nc] output block to DRAM-interleaved tile pages.
 void kernel_main() {
     constexpr uint32_t out_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t Bc = get_compile_time_arg_val(1);
@@ -30,8 +19,8 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<5>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t b_idx = get_arg_val<uint32_t>(1);  // batch-block index owned by this core
-    const uint32_t n_idx = get_arg_val<uint32_t>(2);  // N-block index owned by this core
+    const uint32_t b_idx = get_arg_val<uint32_t>(1);
+    const uint32_t n_idx = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t out_num_tiles = Bc * M_tiles * Nc_tiles;
 

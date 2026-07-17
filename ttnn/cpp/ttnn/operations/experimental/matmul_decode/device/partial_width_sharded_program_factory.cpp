@@ -18,26 +18,7 @@ namespace ttnn::operations::experimental::matmul_decode {
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Partial width-sharded matmul: C = A @ B, where B is sharded along BOTH K and N.
-//
-// The caller reshapes/permutes a [K, N] weight into a width-sharded tensor whose
-// shard shape is [Kc, Nc] across K_blocks * N_blocks cores (Kc = K / K_blocks,
-// Nc = N / N_blocks). Cores are laid out k-major in row-major order, so the core at
-// row-major index `c` owns B block (k_idx = c / N_blocks, n_idx = c % N_blocks).
-//
-// Pipeline (per core):
-//   1. Reader (reader_partial_width_sharded, same two-hub gather as the full-width path):
-//      gather the *entire* A matrix onto every core via multicast, and publish this
-//      core's resident B block.
-//   2. Compute (phase 1): matmul this core's K-slice of A with its B block to produce
-//      a *partial* [M, Nc] product.
-//   3. Writer: NoC-write the partial into slot `k_idx` of the reduce CB on the base
-//      core (the k_idx == 0 core for this n_idx, which owns the output N-slice), then
-//      bump the base core's reduce semaphore.
-//   4. Compute (phase 2, base cores only): once all K_blocks partials have arrived,
-//      sum them into the output shard.
-//
-// Base cores (k_idx == 0) coincide with the width(N)-sharded output cores.
+// Partial width-sharded: B is sharded along K and N; K-partials reduce onto base cores.
 ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -57,10 +38,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
     const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
 
-    // With tiny tiles (e.g. tile height 16) the in0/in1/out tiles no longer share a
-    // common geometry, so each circular buffer must carry its own tile descriptor in
-    // addition to its own page (tile) size. full_in0 (gathered A) reuses the in0 tile;
-    // the partial and reduce CBs hold [M, Nc] products and reuse the out tile.
     const TileDescriptor in0_tile_desc{inputA_tile};
     const TileDescriptor in1_tile_desc{inputB_tile};
     const TileDescriptor out_tile_desc{output_tile};
@@ -105,15 +82,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     IDevice* device = input_tensor_a.device();
 
-    // ---- Recover the 2D (K x N) block-sharding geometry ----
-    // Operation attributes M,N,K are the real matmul dimensions. Weights tensor has been reshaped, so its logical shape
-    // is no longer [K, N].
     const uint32_t M_tiles = div_up(operation_attributes.M, inputA_tile_height);
     const uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
     const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
 
-    // The compute kernel processes the entire M dimension in a single DST block
-    // (out_block_h = M_tiles), so M_tiles must fit in DST (<= 8 tiles in half-sync mode).
     TT_FATAL(
         M_tiles <= 8,
         "partial_width_sharded matmul_decode requires out_block_h (= M_tiles) <= 8 so it fits in DST, but got "
@@ -135,7 +107,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     const uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
 
     const std::array<uint32_t, 2> inputB_shard_shape = input_tensor_b.memory_config().shard_spec().value().shape;
-    // Shard shape correctly maps to the per core K and N dimensions.`
     const uint32_t Kc = inputB_shard_shape[0];
     const uint32_t Nc = inputB_shard_shape[1];
     const uint32_t Kc_tiles = Kc / tt::constants::TILE_WIDTH;
@@ -166,7 +137,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         N_blocks,
         output_core_range_set.num_cores());
 
-    // A is multicast onto every B core; senders are the A-holding cores.
     log_debug(
         tt::LogOp,
         "num_B_cores: {}, num_B_cores_along_N: {}, num_B_cores_along_K: {}, K_blocks: {}, N_blocks: {}",
@@ -196,7 +166,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     ProgramDescriptor desc;
 
-    // ---- Circular buffers ----
     constexpr uint32_t in0_cb_index = CBIndex::c_0;       // this core's A slice (gather source)
     constexpr uint32_t in1_cb_index = CBIndex::c_1;       // this core's B block (resident)
     constexpr uint32_t out_cb_index = CBIndex::c_2;       // final output shard (base cores)
@@ -206,7 +175,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     const uint32_t block_num_tiles = M_tiles * Nc_tiles;  // tiles in one (partial / output) shard
 
-    // in0: this core's resident A slice (buffer-backed).
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * inA_K_tiles_per_core * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -218,7 +186,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }}},
         .buffer = input_tensor_a.buffer(),
     });
-    // in1: this core's resident B block (buffer-backed).
     desc.cbs.push_back(CBDescriptor{
         .total_size = Kc_tiles * Nc_tiles * in1_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -230,7 +197,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }}},
         .buffer = input_tensor_b.buffer(),
     });
-    // out: final output shard (buffer-backed, base cores only).
     desc.cbs.push_back(CBDescriptor{
         .total_size = block_num_tiles * out_tile_size,
         .core_ranges = output_core_range_set,
@@ -242,7 +208,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }}},
         .buffer = output_tensor.buffer(),
     });
-    // full_in0: gathered full A (multicast destination).
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * K_tiles * in0_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -253,7 +218,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .tile = in0_tile_desc,
         }}},
     });
-    // partial: this core's matmul partial product (compute -> writer).
     desc.cbs.push_back(CBDescriptor{
         .total_size = block_num_tiles * out_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -264,9 +228,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .tile = out_tile_desc,
         }}},
     });
-    // reduce: gathered K_blocks partials on the base core (writer -> compute). Allocated
-    // identically on every core so each sender can use its local write pointer as the
-    // (matching) destination L1 address on the base core.
+    // reduce_cb is at the same L1 offset on every core (writers use local write ptr as remote dst).
     desc.cbs.push_back(CBDescriptor{
         .total_size = K_blocks * block_num_tiles * out_tile_size,
         .core_ranges = all_compute_cores_with_bbox,
@@ -278,17 +240,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }}},
     });
 
-    // ---- Semaphores ----
-    // Two semaphores drive the two-hub gather-then-broadcast of A:
-    //   - `stage`: every sender atomically increments it on its owning hub after
-    //     writing its A slice into that hub's full_in0_cb. Each hub waits for it
-    //     to reach the number of senders in its half.
-    //   - `done`: each hub increments it on every core once it has broadcast its
-    //     half; every core waits for it to reach 2 (both hubs finished).
+    // stage/done: two-hub A gather (see reader). reduce_sem: partial count on base core.
     const uint32_t num_senders = inputA_core_range_set.num_cores();
-    constexpr uint32_t stage_sem_id = 0;   // senders -> owning hub (A gather)
-    constexpr uint32_t done_sem_id = 1;    // hubs -> all (A gathered)
-    constexpr uint32_t reduce_sem_id = 2;  // partial-producers -> base core (reduction)
+    constexpr uint32_t stage_sem_id = 0;
+    constexpr uint32_t done_sem_id = 1;
+    constexpr uint32_t reduce_sem_id = 2;
     desc.semaphores.push_back(
         SemaphoreDescriptor{.id = stage_sem_id, .core_ranges = all_compute_cores_with_bbox, .initial_value = 0});
     desc.semaphores.push_back(
@@ -296,23 +252,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     desc.semaphores.push_back(
         SemaphoreDescriptor{.id = reduce_sem_id, .core_ranges = all_compute_cores_with_bbox, .initial_value = 0});
 
-    // ---- Reader kernel (A gather) : two-hub gather-then-broadcast ----
-    //
-    // Two "hub" cores sit at opposite corners of the compute rectangle: hub 0 at
-    // the start corner (NOC0) and hub 1 at the end corner (NOC1). The K-slices are
-    // split into two contiguous halves, one per hub. Each sender writes its slice
-    // into its owning hub's full_in0_cb (on the hub's NOC) and bumps that hub's
-    // `stage` semaphore; each hub then multicasts its assembled half to all cores
-    // and bumps the `done` semaphore so every core knows A is fully gathered.
     const CoreRange mcast_bbox = all_compute_cores_with_bbox.bounding_box();
-    const CoreCoord hub0_logical = mcast_bbox.start_coord;  // start corner -> NOC0
-    const CoreCoord hub1_logical = mcast_bbox.end_coord;    // end corner   -> NOC1
+    const CoreCoord hub0_logical = mcast_bbox.start_coord;
+    const CoreCoord hub1_logical = mcast_bbox.end_coord;
     const CoreCoord mcast_start_phys = device->worker_core_from_logical_core(hub0_logical);
     const CoreCoord mcast_end_phys = device->worker_core_from_logical_core(hub1_logical);
     const uint32_t num_receivers = all_compute_cores_with_bbox.num_cores();
     const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
-    // Hub 0 owns the first split_H slices (contiguous region [0, split_H)),
-    // hub 1 owns the remaining slices.
     const uint32_t split_H = num_senders / 2;
 
     TT_FATAL(
@@ -332,7 +278,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         static_cast<uint32_t>(mcast_end_phys.y),
         stage_sem_id,
         done_sem_id,
-        // Hub 0 == rectangle start corner, hub 1 == rectangle end corner.
         static_cast<uint32_t>(mcast_start_phys.x),
         static_cast<uint32_t>(mcast_start_phys.y),
         static_cast<uint32_t>(mcast_end_phys.x),
@@ -389,39 +334,27 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         return reader_kernel_desc;
     };
 
-    // Group cores by the NOC they must run on, picking the NOC whose traffic
-    // direction points the right way for each core's role.  NOC0 flows toward
-    // increasing coords (down/right); NOC1 flows toward decreasing coords
-    // (up/left).
-    //   - Hub 0 (top-left start corner) broadcasts down/right -> NOC0.
-    //   - Hub 1 (bottom-right end corner) broadcasts up/left -> NOC1.
-    //   - A sender feeding hub 0 must write up/left to reach the top-left corner
-    //     -> NOC1.
-    //   - A sender feeding hub 1 must write down/right to reach the bottom-right
-    //     corner -> NOC0.
-    //   - Pure receiver cores use the default NoC.
-    // Hub assignment takes precedence over slice ownership in the rare case a hub
-    // core is also a sender owned by the other hub.
+    // Pick NOC by traffic direction (same rules as full-width reader).
     std::vector<CoreCoord> noc0_cores;
     std::vector<CoreCoord> noc1_cores;
     std::vector<CoreCoord> default_noc_cores;
     for (const auto& core : all_reader_cores) {
         const HubRole role = role_of(core);
         if (role == HubRole::Hub0) {
-            noc0_cores.push_back(core);  // hub 0 broadcasts down/right
+            noc0_cores.push_back(core);
             continue;
         }
         if (role == HubRole::Hub1) {
-            noc1_cores.push_back(core);  // hub 1 broadcasts up/left
+            noc1_cores.push_back(core);
             continue;
         }
         const auto it = sender_id_by_core.find(core);
         if (it == sender_id_by_core.end()) {
             default_noc_cores.push_back(core);
         } else if (it->second < split_H) {
-            noc1_cores.push_back(core);  // sender -> hub 0 (top-left): write up/left
+            noc1_cores.push_back(core);
         } else {
-            noc0_cores.push_back(core);  // sender -> hub 1 (bottom-right): write down/right
+            noc0_cores.push_back(core);
         }
     }
     if (!noc0_cores.empty()) {
@@ -434,8 +367,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         desc.kernels.push_back(build_reader_kernel(default_noc_cores, NOC::RISCV_1_default));
     }
 
-    // Record the NOC each core's reader (RISCV_1) uses so the writer (RISCV_0) on the same
-    // core can be assigned the opposite NOC -- two RISC cores can't share a NOC.
+    // Writer uses the NOC opposite the reader on the same core.
     std::map<CoreCoord, NOC> reader_noc_by_core;
     for (const auto& core : noc0_cores) {
         reader_noc_by_core[core] = NOC::NOC_0;
@@ -447,11 +379,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         reader_noc_by_core[core] = NOC::RISCV_1_default;
     }
 
-    // ---- Writer kernel (cross-core K-reduction) ----
-    //
-    // Runs on every B core. Each core ships its partial to slot `k_idx` of the base
-    // core's reduce CB and bumps that core's reduce semaphore. Base cores additionally
-    // wait for all K_blocks partials and publish the reduce CB to the compute kernel.
     const std::vector<CoreCoord> b_cores = corerange_to_cores(inputB_core_range_set, std::nullopt, true);
     log_debug(tt::LogOp, "b_cores: {}", b_cores);
     log_debug(tt::LogOp, "output_core_range_set: {}", output_core_range_set);
@@ -491,7 +418,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         for (const uint32_t idx : core_indices) {
             const uint32_t k_idx = idx / N_blocks;
             const uint32_t n_idx = idx % N_blocks;
-            const CoreCoord base_logical = b_cores[n_idx];  // k_idx == 0 core for this n_idx
+            const CoreCoord base_logical = b_cores[n_idx];
             const CoreCoord base_phys = device->worker_core_from_logical_core(base_logical);
             const bool is_base = (k_idx == 0);
             log_trace(
@@ -515,10 +442,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         return writer_kernel_desc;
     };
 
-    // Assign each writer (RISCV_0) the NOC opposite to its core's reader (RISCV_1).
-    // NOC_0 == RISCV_0_default == 0 and NOC_1 == RISCV_1_default == 1, so a reader on
-    // NOC_0 pairs with a writer on NOC_1 and vice versa. Cores with no recorded reader
-    // NOC fall back to RISCV_1_default (NOC_1) readers, i.e. writers on NOC_0.
     std::vector<uint32_t> writer_noc0_indices;
     std::vector<uint32_t> writer_noc1_indices;
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
@@ -541,7 +464,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         desc.kernels.push_back(build_writer_kernel(writer_noc1_indices, NOC::NOC_1));
     }
 
-    // ---- Compute kernel (partial matmul + base-core reduction) ----
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/compute_partial_width_sharded.cpp";
@@ -553,7 +475,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Kc_tiles,
         Nc_tiles,
         K_blocks,
-        inA_K_tiles_per_core,  // needed to translate global K-tile -> sender-major full_in0 slot (M_tiles>1)
+        inA_K_tiles_per_core,
     };
     log_debug(
         tt::LogOp,
