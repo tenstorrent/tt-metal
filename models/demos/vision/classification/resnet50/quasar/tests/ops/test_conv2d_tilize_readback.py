@@ -185,6 +185,19 @@ def test_quasar_conv2d_tilize_readback(mesh_device):
     pcc_khkwc = _pcc(tt_A, golden_khkwc)
     pcc_ckhkw = _pcc(tt_A, golden_ckhkw)
     row_match = torch.isclose(torch.sort(tt_A, dim=1)[0], golden_sorted, atol=0.05).all(dim=1)
+
+    # per-M-region exact PCC: the e2e conv shows M-tiles alternating good/bad every 4 tiles (128 rows) per core.
+    # If the TILIZE alone reproduces that, the bug is in Program A (tilize/reader); if tilize is uniformly ~1
+    # here, Program A is fine and the e2e's partial failure is Program B (matmul M-blocking).
+    for frac, lbl in [(4, "quarter"), (8, "eighth")]:
+        step = m_total // frac
+        if step == 0:
+            continue
+        segs = " ".join(
+            f"[{i*step}:{(i+1)*step}]={_pcc(tt_A[i*step:(i+1)*step], golden_khkwc[i*step:(i+1)*step]):.3f}"
+            for i in range(frac)
+        )
+        print(f"  DIAG tilize PCC[kh,kw,c] by M-{lbl}: {segs}")
     print(
         f"TILIZE ISOLATION RESULTS:\n"
         f"  sorted-row PCC (rows preserved / no cross-row scramble) = {sorted_pcc:.4f}\n"
