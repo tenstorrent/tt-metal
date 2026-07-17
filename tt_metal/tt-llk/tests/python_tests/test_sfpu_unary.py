@@ -94,14 +94,18 @@ FORMATS = input_output_formats(
     ]
 )
 
-FORMATS_INCLUDE_BFP4_B = input_output_formats(
-    [
+# Bfp4_b is only exercised as an input format. The original sweep built the full 4x4
+# matrix and skipped every combo whose input was not Bfp4_b, so pin the input to Bfp4_b
+# directly here: same coverage, without generating (and skipping) the other 12 combos.
+FORMATS_BFP4_B = [
+    InputOutputFormat(DataFormat.Bfp4_b, output_format)
+    for output_format in [
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
         DataFormat.Float16,
         DataFormat.Bfp4_b,
     ]
-)
+]
 
 MATHOPS_INCLUDE_BFP4_B = [
     MathOperation.Abs,
@@ -132,29 +136,77 @@ MATHOPS_INCLUDE_BFP4_B = [
     MathOperation.ReluMin,
 ]
 
-FLOAT_TEST_PARAMS = list(
-    chain(
-        (
-            (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                SUPPORTED_FAST_MODE_OPS,
-                [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-        (
-            (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [op for op in ALL_MATHOPS if op not in SUPPORTED_FAST_MODE_OPS],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
+# Ops whose `#pragma GCC unroll X` loops miscompile to invalid assembly under coverage
+# instrumentation (tt-metal#33268), so they are skipped only when WITH_COVERAGE is set.
+COVERAGE_UNROLL_SKIP_OPS = [
+    MathOperation.Acosh,
+    MathOperation.Log,
+    MathOperation.Log1p,
+    MathOperation.Reciprocal,
+    MathOperation.Sin,
+    MathOperation.Sqrt,
+    MathOperation.Rsqrt,
+    MathOperation.Square,
+    MathOperation.Celu,
+    MathOperation.Silu,
+    MathOperation.Neg,
+    MathOperation.Exp2,
+    MathOperation.Hardsigmoid,
+    MathOperation.Threshold,
+    MathOperation.ReluMax,
+    MathOperation.ReluMin,
+    MathOperation.Tanh,
+]
+
+
+def _float_sweep_params(formats, mathops):
+    """Build (formats, approx_mode, mathop, fast_mode, dest_acc) combinations.
+
+    Fast-mode-capable ops are swept with FastMode.No and FastMode.Yes; every other op
+    runs with FastMode.No only. approx_mode and dest_acc always sweep both values.
+    """
+    approx_modes = [ApproximationMode.No, ApproximationMode.Yes]
+    dest_accs = [DestAccumulation.No, DestAccumulation.Yes]
+    fast_ops = [op for op in mathops if op in SUPPORTED_FAST_MODE_OPS]
+    non_fast_ops = [op for op in mathops if op not in SUPPORTED_FAST_MODE_OPS]
+    return list(
+        chain(
+            product(
+                formats, approx_modes, fast_ops, [FastMode.No, FastMode.Yes], dest_accs
+            ),
+            product(formats, approx_modes, non_fast_ops, [FastMode.No], dest_accs),
+        )
     )
+
+
+# Standard float formats sweep every op; the Bfp4_b input formats sweep only the subset
+# of ops validated for Bfp4_b. Both share the same driver, skip logic and test below.
+FLOAT_TEST_PARAMS = _float_sweep_params(FORMATS, ALL_MATHOPS) + _float_sweep_params(
+    FORMATS_BFP4_B, MATHOPS_INCLUDE_BFP4_B
 )
+
+
+def _skip_bh_unsupported_float_combo(formats, dest_acc):
+    """Blackhole with dest_acc=No supports neither Float16 input nor Float32->Float16."""
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and (
+            formats.input_format == DataFormat.Float16
+            or formats == InputOutputFormat(DataFormat.Float32, DataFormat.Float16)
+        )
+    ):
+        pytest.skip(reason="This combination is not supported on BH architecture")
+
+
+def _skip_bh_unless_fp32(formats, dest_acc):
+    """Blackhole with dest_acc=No only supports the Float32->Float32 combination."""
+    if (
+        dest_acc == DestAccumulation.No
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    ):
+        pytest.skip(reason="This combination is not supported on BH architecture")
 
 
 # Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
@@ -176,25 +228,7 @@ def test_eltwise_unary_sfpu_float(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if TestConfig.WITH_COVERAGE and mathop in [
-        MathOperation.Acosh,
-        MathOperation.Log,
-        MathOperation.Log1p,
-        MathOperation.Reciprocal,
-        MathOperation.Sin,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        MathOperation.Square,
-        MathOperation.Celu,
-        MathOperation.Silu,
-        MathOperation.Neg,
-        MathOperation.Exp2,
-        MathOperation.Hardsigmoid,
-        MathOperation.Threshold,
-        MathOperation.ReluMax,
-        MathOperation.ReluMin,
-        MathOperation.Tanh,
-    ]:
+    if TestConfig.WITH_COVERAGE and mathop in COVERAGE_UNROLL_SKIP_OPS:
         # SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
         pytest.skip(
             reason="When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
@@ -212,18 +246,14 @@ def test_eltwise_unary_sfpu_float(
             reason="Compilation error when this mathop gets compiled with coverage"
         )
 
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
-            DataFormat.Float32, DataFormat.Float16
-        ):
-            pytest.skip(reason="This combination is not supported on BH architecture")
+    _skip_bh_unsupported_float_combo(formats, dest_acc)
 
+    # Exp-family ops in approx mode can't run against bf8_b. Bfp4_b inputs are exempt:
+    # that combination is validated by the Bfp4_b sweep, so only guard non-Bfp4_b inputs.
     if (
         approx_mode == ApproximationMode.Yes
         and mathop in [MathOperation.Exp, MathOperation.Exp2, MathOperation.Elu]
+        and formats.input_format != DataFormat.Bfp4_b
         and (
             formats.input_format == DataFormat.Bfp8_b
             or formats.output_format == DataFormat.Bfp8_b
@@ -232,116 +262,6 @@ def test_eltwise_unary_sfpu_float(
         pytest.skip(
             reason="Exp-related operations are not supported for bf8_b format in approximation mode."
         )
-
-    eltwise_unary_sfpu(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        dest_acc,
-        approx_mode,
-        mathop,
-        fast_mode,
-        input_dimensions,
-    )
-
-
-FLOAT_TEST_PARAMS_BFP4_B = list(
-    chain(
-        (
-            (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [op for op in SUPPORTED_FAST_MODE_OPS if op in MATHOPS_INCLUDE_BFP4_B],
-                [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-        (
-            (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [
-                    op
-                    for op in MATHOPS_INCLUDE_BFP4_B
-                    if op not in SUPPORTED_FAST_MODE_OPS
-                ],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-    )
-)
-
-
-# Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
-@skip_for_coverage
-@pytest.mark.nightly
-@pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
-    FLOAT_TEST_PARAMS_BFP4_B,
-)
-@pytest.mark.parametrize(
-    "input_dimensions",
-    [[64, 64], [128, 256]],
-)
-def test_eltwise_unary_sfpu_float_bfp4_b(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
-    mathop: MathOperation,
-    fast_mode: FastMode,
-    dest_acc: DestAccumulation,
-    input_dimensions: list[int],
-):
-    if TestConfig.WITH_COVERAGE and mathop in [
-        MathOperation.Acosh,
-        MathOperation.Log,
-        MathOperation.Log1p,
-        MathOperation.Reciprocal,
-        MathOperation.Sin,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
-        MathOperation.Square,
-        MathOperation.Celu,
-        MathOperation.Silu,
-        MathOperation.Neg,
-        MathOperation.Exp2,
-        MathOperation.Hardsigmoid,
-        MathOperation.Threshold,
-        MathOperation.ReluMax,
-        MathOperation.ReluMin,
-        MathOperation.Tanh,
-    ]:
-        # SFPI Issue link: https://github.com/tenstorrent/tt-metal/issues/33268
-        pytest.skip(
-            reason="When these SFPU ops get compiled with coverage, `#pragma GCC unroll X` marked loops get compiled to invalid assembly"
-        )
-
-    if (
-        formats.input_format != DataFormat.Bfp4_b
-        and formats.input_format_B != DataFormat.Bfp4_b
-    ):
-        pytest.skip(reason="Not a Bfp4_b test")
-
-    if mathop == MathOperation.ReluMin:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
-
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
-    if TestConfig.WITH_COVERAGE and mathop == MathOperation.Gelu:
-        # Issue link: https://github.com/tenstorrent/tt-llk/issues/883
-        pytest.skip(
-            reason="Compilation error when this mathop gets compiled with coverage"
-        )
-
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        if formats.input_format == DataFormat.Float16 or formats == InputOutputFormat(
-            DataFormat.Float32, DataFormat.Float16
-        ):
-            pytest.skip(reason="This combination is not supported on BH architecture")
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -509,13 +429,7 @@ def test_eltwise_unary_sfpu_domain(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
-        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
-            pytest.skip(reason="This combination is not supported on BH architecture")
+    _skip_bh_unless_fp32(formats, dest_acc)
 
     if TestConfig.WITH_COVERAGE and mathop in [
         MathOperation.GeluDerivative,
@@ -561,13 +475,7 @@ def test_eltwise_unary_sfpu_signbit(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
-        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
-            pytest.skip(reason="This combination is not supported on BH architecture")
+    _skip_bh_unless_fp32(formats, dest_acc)
 
     # Sample both signs, avoiding 0 to sidestep -0.0 / rounding ambiguity.
     spec_A = StimuliSpec.uniform(intervals=[(-100.0, -0.5), (0.5, 100.0)])
@@ -623,13 +531,7 @@ def test_eltwise_unary_sfpu_isinf_isnan(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
-        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
-            pytest.skip(reason="This combination is not supported on BH architecture")
+    _skip_bh_unless_fp32(formats, dest_acc)
 
     # bf16->fp32 dest unpack (non-32-bit input + dest_acc=Yes) doesn't preserve
     # -inf/nan, mangling is_neg/is_nan; skip — covered by the other input cases.
@@ -693,13 +595,7 @@ def test_eltwise_unary_sfpu_threshold(
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    if (
-        dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    ):
-        # Only Float32->Float32 is supported on BH with dest_acc=No; skip the rest.
-        if formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32):
-            pytest.skip(reason="This combination is not supported on BH architecture")
+    _skip_bh_unless_fp32(formats, dest_acc)
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
