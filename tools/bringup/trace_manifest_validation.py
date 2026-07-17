@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Op-specific validation logic for Phase-1 tracer manifests.
+"""Manifest-level validation for Phase-1 tracer manifests.
 
 This module holds the reusable validation core used by the CLI entry point
-(``validate_trace_manifest.py``). It performs the fail-fast checks that keep
+(``validate_trace_manifest.py``). It performs fail-fast checks that keep
 malformed manifests from surfacing as noisy ``pytest`` errors deep inside a
 device run:
 
   1. Top-level structure (``records`` list; consistent ``num_records`` /
      ``input_shape`` when present).
-  2. Per-record required keys and types; ``idx`` matches position.
-  3. Supported ``kind`` values and per-kind required ``params`` (sourced from
-     ``tracer_op_specs`` so the validator and the runtime harness agree).
-  4. ``in_shape`` / ``out_shape`` are length-4 lists of positive ints.
-  5. Artifact existence (``in_path`` / ``out_path`` / ``w_path`` / ``b_path``),
+  2. Per-record structural checks: required keys, JSON types, ``idx`` matches
+     position (``tracer_op_specs.validate_record_mapping``).
+  3. Per-record semantic checks shared with the runtime harness: supported
+     ``kind``, well-formed 4D shapes, required ``params``
+     (``tracer_op_specs.shared_validate_record``).
+  4. Artifact existence (``in_path`` / ``out_path`` / ``w_path`` / ``b_path``),
      resolved manifest-relative the same way the runtime harness resolves them.
-  6. Shape consistency: the on-disk tensor shape matches the recorded shape.
+  5. Shape consistency: the on-disk tensor shape matches the recorded shape.
 
+The record schema and the op knowledge live in ``tracer_op_specs`` so this
+validator and the ``tracer_test_harness`` replay path apply the same rules.
 ``torch`` is imported lazily and only for the optional shape-consistency check.
 """
 
@@ -27,32 +30,15 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
-from tracer_op_specs import SUPPORTED_KINDS, is_supported, required_params
-
-
-# Required per-record keys and their expected JSON types.
-REQUIRED_RECORD_KEYS = {
-    "idx": int,
-    "name": str,
-    "kind": str,
-    "params": dict,
-    "in_shape": list,
-    "out_shape": list,
-    "in_path": str,
-    "out_path": str,
-}
+from tracer_op_specs import (
+    is_int,
+    is_valid_shape,
+    record_from_mapping,
+    shared_validate_record,
+    validate_record_mapping,
+)
 
 ShapeLoader = Callable[[Path], Tuple[int, ...]]
-
-_MISSING = object()
-
-
-def _is_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-def _is_positive_int(value: Any) -> bool:
-    return _is_int(value) and value > 0
 
 
 class Report:
@@ -100,20 +86,6 @@ def _default_shape_loader(path: Path) -> Tuple[int, ...]:
     raise TypeError(f"unsupported tensor payload type: {type(obj).__name__}")
 
 
-def _validate_shape_field(record: dict, key: str, context: str, report: Report) -> Optional[list]:
-    """Validate a shape field is a length-4 list of positive ints. Returns it if list-of-ints."""
-    shape = record.get(key)
-    if not isinstance(shape, list):
-        # Type error already reported by required-key validation.
-        return None
-    if len(shape) != 4:
-        report.error(context, f"'{key}' must have 4 dimensions (NCHW), got {shape!r}")
-    if not all(_is_positive_int(d) for d in shape):
-        report.error(context, f"'{key}' must contain positive ints, got {shape!r}")
-        return None
-    return shape
-
-
 def _validate_artifact(
     manifest_path: Path,
     record: dict,
@@ -158,61 +130,36 @@ def _validate_artifact(
 def _validate_record(
     manifest_path: Path,
     position: int,
-    record: Any,
+    raw: Any,
     report: Report,
     shape_loader: Optional[ShapeLoader],
 ) -> None:
     context = f"record[{position}]"
-    if not isinstance(record, dict):
-        report.error(context, f"must be an object, got {type(record).__name__}")
+
+    # 2) Structural checks (keys / types / idx-position) via the shared contract.
+    structural_errors = validate_record_mapping(raw, position=position)
+    for message in structural_errors:
+        report.error(context, message)
+    if not isinstance(raw, dict):
         return
     report.records += 1
+    if structural_errors:
+        # Structure is unsound; parsing into a Record for semantic/artifact
+        # checks would only produce misleading cascade errors.
+        return
 
-    # 2) Required keys and types.
-    for key, expected_type in REQUIRED_RECORD_KEYS.items():
-        value = record.get(key, _MISSING)
-        if value is _MISSING:
-            report.error(context, f"missing required key '{key}'")
-            continue
-        if expected_type is int:
-            if not _is_int(value):
-                report.error(context, f"'{key}' must be an int, got {type(value).__name__}")
-        elif not isinstance(value, expected_type):
-            report.error(context, f"'{key}' must be a {expected_type.__name__}, got {type(value).__name__}")
+    # 3) Semantic checks shared with the runtime harness (kind / shapes / params).
+    record = record_from_mapping(raw, position)
+    for message in shared_validate_record(record):
+        report.error(context, message)
 
-    # idx should match the record's position in the list.
-    idx = record.get("idx")
-    if _is_int(idx) and idx != position:
-        report.error(context, f"'idx' ({idx}) does not match record position ({position})")
-
-    # w_path / b_path are optional but must be string-or-null when present.
-    for key in ("w_path", "b_path"):
-        value = record.get(key, _MISSING)
-        if value is not _MISSING and value is not None and not isinstance(value, str):
-            report.error(context, f"'{key}' must be a string path or null, got {type(value).__name__}")
-
-    # 3) Supported kind + per-kind required params (shared with the harness).
-    kind = record.get("kind")
-    if isinstance(kind, str):
-        if not is_supported(kind):
-            report.error(context, f"unsupported 'kind' {kind!r}; expected one of {sorted(SUPPORTED_KINDS)}")
-        needed = required_params(kind)
-        if needed:
-            params = record.get("params")
-            if isinstance(params, dict):
-                missing = [p for p in needed if p not in params]
-                if missing:
-                    report.error(context, f"{kind} 'params' missing {missing}")
-
-    # 4) Shape well-formedness.
-    in_shape = _validate_shape_field(record, "in_shape", context, report)
-    out_shape = _validate_shape_field(record, "out_shape", context, report)
-
-    # 5/6) Artifact existence + shape consistency.
-    _validate_artifact(manifest_path, record, "in_path", context, report, in_shape, shape_loader)
-    _validate_artifact(manifest_path, record, "out_path", context, report, out_shape, shape_loader)
-    _validate_artifact(manifest_path, record, "w_path", context, report, None, shape_loader)
-    _validate_artifact(manifest_path, record, "b_path", context, report, None, shape_loader)
+    # 4/5) Artifact existence + shape consistency. Only compare shapes we trust.
+    in_shape = record.in_shape if is_valid_shape(record.in_shape) else None
+    out_shape = record.out_shape if is_valid_shape(record.out_shape) else None
+    _validate_artifact(manifest_path, raw, "in_path", context, report, in_shape, shape_loader)
+    _validate_artifact(manifest_path, raw, "out_path", context, report, out_shape, shape_loader)
+    _validate_artifact(manifest_path, raw, "w_path", context, report, None, shape_loader)
+    _validate_artifact(manifest_path, raw, "b_path", context, report, None, shape_loader)
 
 
 def validate_manifest(
@@ -251,11 +198,11 @@ def validate_manifest(
 
     # 1) Top-level metadata consistency.
     num_records = data.get("num_records")
-    if num_records is not None and (not _is_int(num_records) or num_records != len(records)):
+    if num_records is not None and (not is_int(num_records) or num_records != len(records)):
         report.error("manifest", f"'num_records' ({num_records!r}) does not match len(records) ({len(records)})")
     input_shape = data.get("input_shape")
     if input_shape is not None and not (
-        isinstance(input_shape, list) and len(input_shape) == 4 and all(_is_int(d) for d in input_shape)
+        isinstance(input_shape, list) and len(input_shape) == 4 and all(is_int(d) for d in input_shape)
     ):
         report.error("manifest", f"'input_shape' must be a list of 4 ints, got {input_shape!r}")
 

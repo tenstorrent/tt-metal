@@ -17,50 +17,16 @@
 
 from __future__ import annotations
 
-import json
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import pytest
 import torch
 import ttnn
 
 import tracer_op_specs
-
-
-@dataclass(frozen=True)
-class Record:
-    idx: int
-    kind: str
-    in_shape: List[int]
-    out_shape: List[int]
-    params: Dict[str, Any]
-    in_path: str
-    out_path: str
-    w_path: Optional[str] = None
-    b_path: Optional[str] = None
-
-
-def load_manifest(manifest_path: Path) -> List[Record]:
-    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-    recs: List[Record] = []
-    for i, r in enumerate(data.get("records", [])):
-        recs.append(
-            Record(
-                idx=i,
-                kind=str(r.get("kind")),
-                in_shape=list(r.get("in_shape", [])),
-                out_shape=list(r.get("out_shape", [])),
-                params=dict(r.get("params", {}) or {}),
-                in_path=str(r.get("in_path")),
-                out_path=str(r.get("out_path")),
-                w_path=r.get("w_path"),
-                b_path=r.get("b_path"),
-            )
-        )
-    return recs
+from tracer_op_specs import Record, load_manifest
 
 
 def _resolve_artifact_path(manifest_path: Path, artifact_path: str) -> Path:
@@ -236,23 +202,27 @@ def run_record(
     allow_crop: bool = False,
 ) -> float:
     kind = record.kind
-    in_shape = record.in_shape
-    out_shape = record.out_shape
     params = record.params
 
-    if len(in_shape) != 4:
-        raise ValueError(f"Expected 4D in_shape for rec_id={record.idx}, got {in_shape}")
-    if len(out_shape) != 4:
-        raise ValueError(f"Expected 4D out_shape for rec_id={record.idx}, got {out_shape}")
+    # Record-level validation shared with the manifest validator: supported
+    # kind, well-formed 4D shapes, and the op's required params. Enforcing it
+    # here too keeps the replay path from diverging from the preflight checks.
+    problems = tracer_op_specs.shared_validate_record(record)
+    if problems:
+        raise ValueError(f"Invalid record rec_id={record.idx}: " + "; ".join(problems))
 
-    n, c, h, w = map(int, in_shape)
-    on, oc, oh, ow = map(int, out_shape)
+    # Only a subset of supported kinds can actually be replayed on device.
+    if not tracer_op_specs.is_runnable(kind):
+        pytest.skip(f"Unsupported op kind in harness: {kind}")
+
+    n, c, h, w = map(int, record.in_shape)
+    on, oc, oh, ow = map(int, record.out_shape)
 
     # Load artifacts
     x = _load_torch_tensor(_resolve_artifact_path(manifest_path, record.in_path))
     y_ref = _load_torch_tensor(_resolve_artifact_path(manifest_path, record.out_path))
 
-    # Shape sanity checks (strict)
+    # Shape sanity checks (strict): on-disk tensors must match the recorded shape.
     if tuple(x.shape) != (n, c, h, w):
         raise ValueError(
             f"Input tensor shape mismatch for rec_id={record.idx}: expected {(n, c, h, w)} got {tuple(x.shape)}"
@@ -261,15 +231,6 @@ def run_record(
         raise ValueError(
             f"Reference tensor shape mismatch for rec_id={record.idx}: expected {(on, oc, oh, ow)} got {tuple(y_ref.shape)}"
         )
-
-    # Gate replay on the shared op registry so the harness and the manifest
-    # validator agree on which kinds are runnable and what params they need.
-    if not tracer_op_specs.is_runnable(kind):
-        pytest.skip(f"Unsupported op kind in harness: {kind}")
-
-    missing_params = [p for p in tracer_op_specs.required_params(kind) if p not in params]
-    if missing_params:
-        raise KeyError(f"Missing required params for rec_id={record.idx} kind={kind}: {missing_params}")
 
     if kind == "Conv2d":
         w_t = _load_torch_tensor(_resolve_artifact_path(manifest_path, record.w_path)) if record.w_path else None
