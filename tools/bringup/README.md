@@ -13,9 +13,17 @@ from a PyTorch model and replaying them against TTNN to check parity (PCC).
   artifacts.
 - **Phase 2** (`phase2_generate_tests.py` + `tracer_test_harness.py`): read the
   manifest, replay each op on a TT device, and compare against the recorded
-  golden tensors.
+  golden tensors. The generated pytest file imports the harness from this
+  directory (via `sys.path`) rather than copying it, so there is a single
+  source of truth for the harness.
+- `tracer_op_specs.py`: a dependency-light (stdlib-only) registry of the op
+  kinds the tracer records, their required `params`, and which kinds the harness
+  can replay. Both the validator and the harness import it so they agree on op
+  metadata.
 - `validate_trace_manifest.py`: a fail-fast preflight that validates a manifest
   (schema, artifact existence, shape consistency) before launching a test run.
+  The CLI is a thin wrapper; the validation core lives in
+  `trace_manifest_validation.py`.
 
 ## Artifact path contract
 
@@ -135,9 +143,9 @@ python tools/bringup/phase1_record_ops.py --input-shape 1 3 32 32 --out bringup/
 python tools/bringup/validate_trace_manifest.py --manifest bringup/artifacts/phase1/manifest.json
 python tools/bringup/validate_trace_manifest.py --manifest bringup/artifacts/phase1/manifest.json --print-resolved 5
 
-# Phase 2: generate a pytest file (and the harness) from the manifest
+# Phase 2: generate a pytest file from the manifest. The generated test imports
+# tracer_test_harness from tools/bringup via sys.path (no files are copied).
 python tools/bringup/phase2_generate_tests.py \
     --manifest bringup/artifacts/phase1/manifest.json \
-    --out-test bringup/artifacts/phase1/test_op_pcc.py \
-    --write-harness
+    --out-test bringup/artifacts/phase1/test_op_pcc.py
 ```

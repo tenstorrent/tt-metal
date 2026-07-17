@@ -27,6 +27,8 @@ import pytest
 import torch
 import ttnn
 
+import tracer_op_specs
+
 
 @dataclass(frozen=True)
 class Record:
@@ -260,6 +262,15 @@ def run_record(
             f"Reference tensor shape mismatch for rec_id={record.idx}: expected {(on, oc, oh, ow)} got {tuple(y_ref.shape)}"
         )
 
+    # Gate replay on the shared op registry so the harness and the manifest
+    # validator agree on which kinds are runnable and what params they need.
+    if not tracer_op_specs.is_runnable(kind):
+        pytest.skip(f"Unsupported op kind in harness: {kind}")
+
+    missing_params = [p for p in tracer_op_specs.required_params(kind) if p not in params]
+    if missing_params:
+        raise KeyError(f"Missing required params for rec_id={record.idx} kind={kind}: {missing_params}")
+
     if kind == "Conv2d":
         w_t = _load_torch_tensor(_resolve_artifact_path(manifest_path, record.w_path)) if record.w_path else None
         b_t = _load_torch_tensor(_resolve_artifact_path(manifest_path, record.b_path)) if record.b_path else None
@@ -293,8 +304,8 @@ def run_record(
 
         y_nchw = _hw_c_to_nchw(y, h=h, w=w)
 
-    else:
-        pytest.skip(f"Unsupported op kind in harness: {kind}")
+    else:  # pragma: no cover - guarded by tracer_op_specs.is_runnable above
+        raise AssertionError(f"Runnable kind {kind!r} has no replay implementation in the harness")
 
     # Strict shape match by default
     if y_nchw.shape != y_ref.shape:
