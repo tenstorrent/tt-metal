@@ -894,7 +894,17 @@ void RealtimeProfilerManager::boot_x280_drainer(
             // and then spun on reserve-stalls waiting for the host to free space, throttling its ring
             // drain and back-pressuring the compute cores. Size it to buffer the X280<->host round-trip
             // (1 MB = 16384 markers) so the X280 pipelines ahead instead of stalling.
-            constexpr uint32_t kX280Fifo = 1u << 20;  // 1 MiB
+            // Sweep knob (Way 2, no rebuild): TT_X280_FIFO_MB overrides the D2H FIFO size in MiB, to
+            // test whether growing downstream buffering moves the stall-onset op (steady deficit) or
+            // not (upstream/hard threshold). Default 1 MiB; clamped to [1, 64].
+            uint32_t kX280FifoMb = 1;
+            if (const char* e = std::getenv("TT_X280_FIFO_MB")) {
+                uint32_t v = static_cast<uint32_t>(std::strtoul(e, nullptr, 10));
+                if (v >= 1 && v <= 64) {
+                    kX280FifoMb = v;
+                }
+            }
+            const uint32_t kX280Fifo = kX280FifoMb << 20;
             constexpr uint32_t kX280PageSize = 64;
 
             std::ifstream f(x280_fw, std::ios::binary);
@@ -2051,6 +2061,85 @@ void RealtimeProfilerManager::shutdown() {
                         (uint64_t)(other / 1e6),
                         pct(other),
                         mwait_spins);
+                }
+                // Fill-trajectory dump (profzone TRAJ ring @ 0x0801D000, count @ 0x0801C100):
+                // reconstruct queue-fill-vs-time to see WHICH queue ramps to capacity and WHEN (does one
+                // climb monotonically until the ~op-90 stall?). CSV to $HOME/x280_traj_dev<N>.csv; peaks
+                // (with the µs at which each peaked) logged inline.
+                try {
+                    constexpr uint64_t kTrajCount = 0x0801C100ull;
+                    constexpr uint64_t kTrajBase = 0x0801D000ull;
+                    constexpr uint32_t kTrajCap = 4096, kTrajStride = 32;
+                    uint64_t cnt = dev_state.x280_driver->lim_rd_u64(kTrajCount);
+                    uint32_t n = cnt < kTrajCap ? static_cast<uint32_t>(cnt) : kTrajCap;
+                    if (n > 0) {
+                        std::vector<uint8_t> raw(static_cast<size_t>(n) * kTrajStride, 0);
+                        dev_state.x280_driver->read_block(raw.data(), static_cast<uint32_t>(raw.size()), kTrajBase);
+                        const char* home = std::getenv("HOME");
+                        std::string path = std::string(home && *home ? home : "/tmp") + "/x280_traj_dev" +
+                                           std::to_string(dev_state.chip_id) + ".csv";
+                        std::ofstream csv(path);
+                        csv << "t_us,l1_0,l1_1,mirror,single,d2h\n";
+                        uint64_t t0 = 0;
+                        uint32_t pl1 = 0, pmir = 0, psin = 0, pd2h = 0;
+                        uint64_t tl1 = 0, tmir = 0, tsin = 0, td2h = 0;
+                        for (uint32_t k = 0; k < n; k++) {
+                            uint32_t idx = (cnt <= kTrajCap) ? k : static_cast<uint32_t>((cnt + k) % kTrajCap);
+                            const uint8_t* s = raw.data() + static_cast<size_t>(idx) * kTrajStride;
+                            uint64_t t = 0;
+                            uint32_t l1a = 0, l1b = 0, mir = 0, sin = 0, d2h = 0;
+                            std::memcpy(&t, s + 0, 8);
+                            std::memcpy(&l1a, s + 8, 4);
+                            std::memcpy(&l1b, s + 12, 4);
+                            std::memcpy(&mir, s + 16, 4);
+                            std::memcpy(&sin, s + 20, 4);
+                            std::memcpy(&d2h, s + 24, 4);
+                            if (k == 0) {
+                                t0 = t;
+                            }
+                            uint64_t tus = (t - t0) / 1000;  // X280 ~1 GHz: cycles -> ns, /1000 -> us
+                            csv << tus << "," << l1a << "," << l1b << "," << mir << "," << sin << "," << d2h << "\n";
+                            uint32_t l1 = l1a > l1b ? l1a : l1b;
+                            if (l1 > pl1) {
+                                pl1 = l1;
+                                tl1 = tus;
+                            }
+                            if (mir > pmir) {
+                                pmir = mir;
+                                tmir = tus;
+                            }
+                            if (sin > psin) {
+                                psin = sin;
+                                tsin = tus;
+                            }
+                            if (d2h > pd2h) {
+                                pd2h = d2h;
+                                td2h = tus;
+                            }
+                        }
+                        csv.close();
+                        log_info(
+                            tt::LogMetal,
+                            "[Real-time profiler] Device {}: fill-trajectory ({} samples) -> {}; peaks: "
+                            "L1={}/512 @{}us, mirror={}/512 @{}us, single={}/4096 @{}us, D2H={}B @{}us",
+                            dev_state.chip_id,
+                            n,
+                            path,
+                            pl1,
+                            tl1,
+                            pmir,
+                            tmir,
+                            psin,
+                            tsin,
+                            pd2h,
+                            td2h);
+                    }
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: fill-trajectory dump failed: {}",
+                        dev_state.chip_id,
+                        e.what());
                 }
                 // Do NOT assert_reset: the drainer, on P_STOP, jumps back to the resident idle FW
                 // (which stays up for the next run). Wait for that return instead of parking via

@@ -120,6 +120,25 @@
 #define SCRATCH_STRIDE 0x1000UL
 #define SCRATCH(h) (SCRATCH_BASE + (uint64_t)(h) * SCRATCH_STRIDE)
 
+/* Live queue-fill gauges: each stage writes its input-queue CURRENT fill so the host can sample
+ * them over time and reconstruct the fill-vs-time trajectory (which queue climbs to capacity, and
+ * when). Fixed LIM slots in the free gap between the boot mailboxes (0x08016000) and MIRRORCTL. */
+#define GAUGE_BASE 0x08016400UL
+#define G_L1(h) (GAUGE_BASE + (uint64_t)(h) * 8) /* max L1 ring fill (words, /RING_CAP=512) this pass */
+#define G_MIRROR (GAUGE_BASE + 0x20)             /* max LIM mirror fill (words, /MIRROR_DEPTH) this loop */
+#define G_SINGLE (GAUGE_BASE + 0x28)             /* single-SPSC fill (pages, /SINGLE_NREC) */
+#define G_D2H (GAUGE_BASE + 0x30)                /* D2H FIFO fill (bytes, /fifo_total) */
+
+/* Fill-trajectory ring: the relay (idle-ish) appends a time-stamped snapshot of all four gauges
+ * every TRAJ_PERIOD_CYC, so the host can reconstruct fill-vs-time (which queue climbs to capacity,
+ * and when -- e.g. does a queue ramp monotonically until ~op 90?). Fixed region between SINGLECTL
+ * and the mirrors (0x08040000), so placement is independent of num_cores. 32 B/sample. */
+#define TRAJ_BASE 0x0801D000UL
+#define TRAJ_CAP 4096u /* 4096 * 32 B = 128 KiB, ends 0x0803D000 < MIRROR_BASE (0x08040000) */
+#define TRAJ_STRIDE 32u
+#define TRAJ_COUNT (SINGLECTL + 0x100) /* total samples written (host reads count, then the ring) */
+#define TRAJ_PERIOD_CYC 200000u        /* ~200 us @ 1 GHz -> 4096 samples covers ~0.8 s (ring wraps) */
+
 static inline uint32_t r32(uint64_t a) { return *(volatile uint32_t*)a; }
 static inline void w32(uint64_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
 static inline uint64_t r64(uint64_t a) { return *(volatile uint64_t*)a; }
@@ -268,6 +287,7 @@ int main(uint64_t hartid) {
         for (;;) {
             uint64_t progressed = 0;
             passes++;
+            uint32_t pass_l1max = 0; /* fullest L1 ring (words) seen this pass -> G_L1 gauge */
             for (uint64_t c = lo; c < hi; c++) {
                 uint64_t cbase = NOC_2M_WINDOW_BASE + c * NOC_2M_WINDOW_STRIDE + ctrl_off;
                 uint64_t rbufs = cbase + 128;
@@ -288,6 +308,10 @@ int main(uint64_t hartid) {
                 for (uint32_t r = 0; r < NRISC; r++) {
                     uint32_t tail = tl[r];
                     uint32_t head = hd[r];
+                    uint32_t l1fill = tail - head; /* gauge: how full is this producer's L1 ring */
+                    if (l1fill > pass_l1max) {
+                        pass_l1max = l1fill;
+                    }
                     if (head == tail) {
                         continue;
                     }
@@ -338,6 +362,7 @@ int main(uint64_t hartid) {
                     }
                 }
             }
+            w64(G_L1(hartid), pass_l1max); /* publish fullest L1 ring this pass (host samples over time) */
             if (!progressed) {
                 if (r64(P_STOP)) {
                     break;
@@ -400,10 +425,15 @@ int main(uint64_t hartid) {
         for (;;) {
             uint64_t progressed = 0;
             loops++;
+            uint32_t loop_mirror_max = 0; /* fullest mirror (words) this loop -> G_MIRROR gauge */
             for (uint64_t i = 0; i < nmirror; i++) {
                 uint32_t mtail = r32(MTAIL(i));
                 uint32_t mh = chead[i];
                 scanned++; /* round-robin visit (most are empty during idle) */
+                uint32_t mfill = mtail - mh;
+                if (mfill > loop_mirror_max) {
+                    loop_mirror_max = mfill;
+                }
                 if (mh == mtail) {
                     continue;
                 }
@@ -469,6 +499,7 @@ int main(uint64_t hartid) {
                     progressed = 1;
                 }
             }
+            w64(G_MIRROR, loop_mirror_max); /* publish fullest mirror this loop (host samples over time) */
             w64(COLLECT_STATS + 0, moved);
             w64(COLLECT_STATS + 8, loops);
             if (!progressed) {
@@ -563,6 +594,9 @@ int main(uint64_t hartid) {
     uint64_t total = 0, loops = 0, stalls = 0;
     uint64_t cyc_reserve = 0, cyc_copy = 0;
     uint64_t t_start = rdcycle_();
+    uint64_t traj_next = t_start; /* fill-trajectory sampler cadence */
+    uint64_t traj_n = 0;
+    w64(TRAJ_COUNT, 0);
     for (;;) {
         uint64_t progressed = 0;
         uint32_t pr = r32(S_PROD);
@@ -614,6 +648,24 @@ int main(uint64_t hartid) {
         loops++;
         w64(RES(0x00), total);
         w64(RES(0x08), loops);
+        w64(G_SINGLE, (uint64_t)(uint32_t)(r32(S_PROD) - cn));           /* single-SPSC pages in flight */
+        w64(G_D2H, (uint64_t)(uint32_t)(bytes_sent - r32(backed_addr))); /* D2H FIFO bytes in flight */
+        {
+            uint64_t now = rdcycle_();
+            if (now >= traj_next) { /* time-gated snapshot of all 4 gauges -> trajectory ring */
+                uint64_t slot = TRAJ_BASE + (traj_n % TRAJ_CAP) * TRAJ_STRIDE;
+                w64(slot + 0, now);
+                w32(slot + 8, (uint32_t)r64(G_L1(0)));
+                w32(slot + 12, (uint32_t)r64(G_L1(1)));
+                w32(slot + 16, (uint32_t)r64(G_MIRROR));
+                w32(slot + 20, (uint32_t)(r32(S_PROD) - cn));
+                w32(slot + 24, (uint32_t)(bytes_sent - r32(backed_addr)));
+                w32(slot + 28, 0);
+                traj_n++;
+                w64(TRAJ_COUNT, traj_n);
+                traj_next = now + TRAJ_PERIOD_CYC;
+            }
+        }
         if (!progressed) {
             if (r64(COLLECT_DONE) && cn == r32(S_PROD)) {
                 break;
