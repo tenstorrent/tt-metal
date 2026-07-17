@@ -82,8 +82,20 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.uint16, ttnn.int32],
     "output_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.uint32, ttnn.uint16, ttnn.int32],
     "use_multicore": [False, True],
-    "shard_api": ["none"],
-    "out_scheme": ["interleaved"],
+    # Sharded I/O (Refinement 2): "legacy_2d" (HEIGHT/WIDTH/BLOCK ShardSpec) and
+    # "nd" (NdShardSpec). The supported sharded path is same-spec, zero-copy:
+    # RM-sharded L1 input -> TILE-sharded L1 output on the IDENTICAL shard spec,
+    # each core tilizing its own resident block straight into the output shard
+    # (no DRAM/NoC). Cross-spec / interleaved<->sharded crossovers are refused in
+    # validate() (see _SHARDED_REFUSE); they are a follow-up (Refinement 2b).
+    "shard_api": ["none", "legacy_2d", "nd"],
+    "out_scheme": [
+        "interleaved",
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "nd",
+    ],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_dram", "l1_to_l1"],
     "rank": [2, 3, 4],
 }
@@ -108,9 +120,16 @@ _INT_DTYPES = (ttnn.uint32, ttnn.uint16, ttnn.int32)
 _FLOAT_IN_DTYPES = (ttnn.bfloat16, ttnn.float32)  # bf8b is not an RM input
 _FLOAT_OUT_DTYPES = (ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b)
 
-EXCLUSIONS = [{"dtype": i, "output_dtype": f} for i in _INT_DTYPES for f in _FLOAT_OUT_DTYPES] + [
-    {"dtype": f, "output_dtype": i} for f in _FLOAT_IN_DTYPES for i in _INT_DTYPES
-]
+EXCLUSIONS = (
+    [{"dtype": i, "output_dtype": f} for i in _INT_DTYPES for f in _FLOAT_OUT_DTYPES]
+    + [{"dtype": f, "output_dtype": i} for f in _FLOAT_IN_DTYPES for i in _INT_DTYPES]
+    # Sharding is inherently multi-core: each core owns and tilizes its own shard.
+    # Single-core + sharded is structurally impossible for this op.
+    + [
+        {"use_multicore": False, "shard_api": "legacy_2d"},
+        {"use_multicore": False, "shard_api": "nd"},
+    ]
+)
 
 
 PROPERTIES = {
@@ -127,15 +146,50 @@ def _scheme_of(mem_config):
     if not mem_config.is_sharded():
         return "interleaved"
     layout = mem_config.memory_layout
-    return "nd" if layout == ttnn.TensorMemoryLayout.INTERLEAVED else layout
+    return "nd" if layout == ttnn.TensorMemoryLayout.ND_SHARDED else layout
 
 
 def _shard_api_of(in_mc, out_mc):
     if not in_mc.is_sharded() and not out_mc.is_sharded():
         return "none"
-    # Only interleaved is supported for now; anything sharded is refused via
-    # the out_scheme / shard_api axes below.
-    return "legacy_2d"
+    # nd (NdShardSpec) carries memory_layout == INTERLEAVED; legacy 2D carries a
+    # HEIGHT/WIDTH/BLOCK layout. Read from whichever side is sharded.
+    ref = out_mc if out_mc.is_sharded() else in_mc
+    return "nd" if ref.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED else "legacy_2d"
+
+
+def _folded_shard_shape(mem_config):
+    """(shard_h_folded, shard_w) — leading shard dims folded into height."""
+    if mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED:
+        shape = list(mem_config.nd_shard_spec.shard_shape)
+    else:
+        shape = list(mem_config.shard_spec.shape)
+    shard_w = shape[-1]
+    shard_h = 1
+    for d in shape[:-1]:
+        shard_h *= d
+    return shard_h, shard_w
+
+
+def _shard_spec_of(mc):
+    return mc.nd_shard_spec if mc.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED else mc.shard_spec
+
+
+def _shard_props(mc):
+    """PHYSICAL shard placement, invariant to the nd<->legacy normalization ttnn
+    applies (an nd spec expressible as legacy BLOCK/HEIGHT/WIDTH is stored under
+    that legacy layout, so the memory_layout enum alone is not comparable).
+    Two tensors with identical (buffer_type, folded shard shape, orientation,
+    grid) occupy the same L1 regions on the same cores — the per-core zero-copy
+    tilize then preserves identity."""
+    spec = _shard_spec_of(mc)
+    return (mc.buffer_type, _folded_shard_shape(mc), spec.orientation, spec.grid)
+
+
+def _same_shard_spec(in_mc, out_mc):
+    """True iff input and output describe the same physical shard placement, so
+    each core tilizes its own resident block and global identity is preserved."""
+    return _shard_props(in_mc) == _shard_props(out_mc)
 
 
 def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True):
@@ -174,6 +228,27 @@ def validate(input_tensor, *, memory_config=None, dtype=None, use_multicore=True
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"tilize: unsupported combination (refinement candidate): {exc}")
+
+    # 3. Sharded sub-case gating (Refinement 2). The implemented sharded path is
+    #    same-spec, zero-copy: both sides L1-sharded on the IDENTICAL shard spec.
+    #    Cross-spec resharding and interleaved<->sharded crossovers are not yet
+    #    wired (Refinement 2b) — refuse them cleanly (never hang).
+    if in_mc.is_sharded() or out_mc.is_sharded():
+        if not (in_mc.is_sharded() and out_mc.is_sharded()):
+            raise UnsupportedAxisValue(
+                "tilize: sharded path requires BOTH input and output sharded "
+                "(interleaved<->sharded crossover not yet supported)"
+            )
+        if in_mc.buffer_type != ttnn.BufferType.L1 or out_mc.buffer_type != ttnn.BufferType.L1:
+            raise UnsupportedAxisValue("tilize: sharded path requires L1 buffers")
+        if not _same_shard_spec(in_mc, out_mc):
+            raise UnsupportedAxisValue(
+                "tilize: sharded path requires identical input/output shard spec "
+                "(cross-spec resharding not yet supported)"
+            )
+        shard_h, shard_w = _folded_shard_shape(in_mc)
+        if shard_h % TILE != 0 or shard_w % TILE != 0:
+            raise UnsupportedAxisValue(f"tilize: sharded shard dims must be tile-aligned, got ({shard_h}, {shard_w})")
 
 
 # ---------------------------------------------------------------------------

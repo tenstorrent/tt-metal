@@ -63,11 +63,112 @@ def _assign_tile_rows(nt_h: int, num_cores: int):
     return ranges
 
 
+# ---------------------------------------------------------------------------
+# Sharded (zero-copy) path
+# ---------------------------------------------------------------------------
+def _shard_dims(mem_config):
+    """(shard_h_folded, shard_w, grid) for a sharded mem config.
+
+    Leading shard dims fold into height (rank-agnostic), so the local shard is a
+    contiguous `shard_h_folded x shard_w` row-major block. nd specs live under
+    `nd_shard_spec` (memory_layout == INTERLEAVED); legacy specs under
+    `shard_spec` (memory_layout in {HEIGHT,WIDTH,BLOCK}).
+    """
+    if mem_config.memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED:
+        nd = mem_config.nd_shard_spec
+        shape = list(nd.shard_shape)
+        grid = nd.grid
+    else:
+        ss = mem_config.shard_spec
+        shape = list(ss.shape)
+        grid = ss.grid
+    shard_w = shape[-1]
+    shard_h = 1
+    for d in shape[:-1]:
+        shard_h *= d
+    return shard_h, shard_w, grid
+
+
+def _enumerate_cores(core_ranges: "ttnn.CoreRangeSet"):
+    cores = []
+    for cr in core_ranges.ranges():
+        for y in range(cr.start.y, cr.end.y + 1):
+            for x in range(cr.start.x, cr.end.x + 1):
+                cores.append(ttnn.CoreCoord(x, y))
+    return cores
+
+
+def _create_sharded_program_descriptor(
+    input_tensor: ttnn.Tensor,
+    output_tensor: ttnn.Tensor,
+) -> ttnn.ProgramDescriptor:
+    """Same-spec sharded I/O: zero-copy, compute-only.
+
+    Both CBs alias the local L1 shard buffers; the compute kernel tilizes each
+    core's resident RM shard straight into its resident TILE shard. No reader,
+    no writer, no DRAM/NoC traffic. Requires identical input/output shard spec
+    (validated in tilize.validate()).
+    """
+    in_dtype = input_tensor.dtype
+    out_dtype = output_tensor.dtype
+    in_tile_size = ttnn.tile_size(in_dtype)
+    out_tile_size = ttnn.tile_size(out_dtype)
+
+    shard_h, shard_w, grid = _shard_dims(input_tensor.memory_config())
+    wt = shard_w // TILE_W
+    num_blocks = shard_h // TILE_H
+    core_ranges = grid
+
+    # Input CB aliased onto the RM input shard. cb_descriptor_from_sharded_tensor
+    # inherits the tensor's page size (one-row-per-page for ROW_MAJOR); override
+    # it to a whole tile so the tilize helper accounts in tiles while the
+    # row-major bytes sit in the same L1 (established sharded-tilize aliasing —
+    # see examples/compute_block_size._tile_paged_backed_cb).
+    cb_rm_in_desc = ttnn.cb_descriptor_from_sharded_tensor(CB_RM_IN, input_tensor)
+    in_fds = cb_rm_in_desc.format_descriptors
+    in_fds[0].page_size = in_tile_size
+    cb_rm_in_desc.format_descriptors = in_fds
+
+    # Output CB aliased onto the TILE output shard (already tile-paged).
+    cb_tiled_out_desc = ttnn.cb_descriptor_from_sharded_tensor(CB_TILED_OUT, output_tensor)
+    out_fds = cb_tiled_out_desc.format_descriptors
+    out_fds[0].page_size = out_tile_size
+    cb_tiled_out_desc.format_descriptors = out_fds
+
+    is_fp32_in = 1 if in_dtype == ttnn.float32 else 0
+    compute_ct_args = [wt, num_blocks, is_fp32_in]
+
+    fp32_dest = in_dtype == ttnn.float32 or out_dtype == ttnn.float32
+    compute_config = ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest)
+    if is_fp32_in:
+        unpack_modes = [ttnn.UnpackToDestMode.Default] * 32
+        unpack_modes[CB_RM_IN] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        compute_config.unpack_to_dest_mode = unpack_modes
+
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "tilize_compute_sharded.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=compute_ct_args,
+        runtime_args=ttnn.RuntimeArgs(),
+        config=compute_config,
+    )
+
+    return ttnn.ProgramDescriptor(
+        kernels=[compute_kernel],
+        semaphores=[],
+        cbs=[cb_rm_in_desc, cb_tiled_out_desc],
+    )
+
+
 def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     use_multicore: bool,
 ) -> ttnn.ProgramDescriptor:
+    # Same-spec sharded I/O -> zero-copy compute-only path.
+    if input_tensor.memory_config().is_sharded() and output_tensor.memory_config().is_sharded():
+        return _create_sharded_program_descriptor(input_tensor, output_tensor)
+
     device = input_tensor.device()
 
     in_dtype = input_tensor.dtype
