@@ -14,6 +14,7 @@ entrypoints are compiled by the normal device-kernel JIT on first use.
 
 from __future__ import annotations
 
+import os
 import struct
 from dataclasses import dataclass
 
@@ -32,7 +33,13 @@ COMPUTE_KERNEL = f"{KERNEL_ROOT}/compute.cpp"
 # so those headers resolve from the model-local copies.
 _SDPA_KERNEL_DIR = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels"
 DATAFLOW_INCLUDE_PATHS = [f"{_SDPA_KERNEL_DIR}/dataflow"]
-COMPUTE_INCLUDE_PATHS = [f"{_SDPA_KERNEL_DIR}/compute"]
+# KERNEL_ROOT is prepended so the LOCAL compute_common.hpp / compute_streaming.hpp
+# copies (which carry the F4 aliased-K/V handshake hooks) win over the production
+# headers of the same name. Falls back to production for all other includes.
+COMPUTE_INCLUDE_PATHS = [
+    "models/demos/wormhole/bge_m3/tt/custom_ops/encoder_sdpa/kernels",
+    f"{_SDPA_KERNEL_DIR}/compute",
+]
 
 # Exact contiguous CB assignment for the unmasked, non-causal, FP32-dest path.
 CB_Q = 0
@@ -51,14 +58,15 @@ CB_EXP_MAX_DIFF = 12
 CB_OUT = 13
 CB_RECIP_SCRATCH = 14  # streaming-only: 1-tile recip scratch for normalize_row_streaming
 
-# F4 (kv_alias) NOTE: the originally-specified compute->reader K_CONSUMED/
-# V_CONSUMED semaphore handshake is NOT implementable — compute (TRISC) kernels
-# cannot issue NOC semaphore ops (dataflow-only). See .auto/guidance.md "F4
-# ARCHITECTURAL OBSTACLE". The 2-format K/V CBDescriptor below and the kv_alias
-# config/asserts are retained as reviewable host-side scaffolding, but the kernel
-# ring cannot be built as specified; a reader-side reserve-ahead variant (no
-# compute signal) is the only remaining avenue and awaits reviewer sign-off.
-# Therefore bge_encoder_sdpa_experimental() refuses to LAUNCH kv_alias builds.
+# F4 (kv_alias) compute->reader handshake token CB. TRISC cannot use NOC
+# semaphores, but it CAN push tokens on a small sync CB that the reader waits on
+# (precedent: tests/.../11_remote_cb_sync_matmul_single_core — compute does
+# cb_reserve_back/cb_push_back(sync_cb); dataflow does wait_front/pop_front).
+# Compute pushes one token after popping K and one after popping V; the reader
+# pops one before writing V (into the shared bytes) and one before writing the
+# next K. 32-byte allocation (one token page).
+CB_KV_SYNC = 15
+KV_SYNC_BYTES = 32
 
 
 @dataclass(frozen=True)
@@ -206,6 +214,8 @@ def _reader_compile_args(
     for _ in range(4):  # mask, page table, attention sink, chunk-start tensor
         args.extend(_accessor_args(q))
     args.extend([CB_Q, CB_K, CB_V, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB, INACTIVE_CB])
+    # F4 handshake (constexpr-off unless kv_alias): sync-token CB id + flag.
+    args.extend([int(plan.config.kv_alias), CB_KV_SYNC if plan.config.kv_alias else INACTIVE_CB])
     return args
 
 
@@ -301,6 +311,9 @@ def _compute_compile_args(output: ttnn.Tensor, plan: EncoderSDPAPlan) -> list[in
         CB_SUM_A,
         CB_SUM_B,
         CB_EXP_MAX_DIFF,
+        # F4 handshake (constexpr-off unless kv_alias): flag + sync-token CB id.
+        int(plan.config.kv_alias),
+        CB_KV_SYNC if plan.config.kv_alias else INACTIVE_CB,
     ]
     args.extend(_accessor_args(output))
     return args
@@ -473,6 +486,23 @@ def build_encoder_sdpa_descriptor(
     if plan.config.use_streaming:
         # Streaming-only 1-tile recip scratch (im_df = Float16_b in the factory).
         cbs.append(_cb_descriptor(CB_RECIP_SCRATCH, 1, ttnn.bfloat16, core_grid))
+    if plan.config.kv_alias:
+        # F4 compute->reader token CB (32B). Depth 2 so compute can push both the
+        # post-K and post-V tokens without blocking on the reader draining the
+        # first; the reader pops each exactly once per phase.
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=2 * KV_SYNC_BYTES,
+                core_ranges=core_grid,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_KV_SYNC,
+                        data_format=ttnn.uint32,
+                        page_size=KV_SYNC_BYTES,
+                    )
+                ],
+            )
+        )
 
     reader_rt, writer_rt, compute_rt = _runtime_args(q, k, v, output, plan)
     defines = _compile_defines(plan)
@@ -536,16 +566,19 @@ def bge_encoder_sdpa_experimental(
     Use only from a dedicated parity probe until PCC, device time, repeat-cache,
     and trace replay all match production SDPA.
     """
-    if config.kv_alias:
-        # Safety: the kv_alias kernel ring is NOT implemented (compute cannot
-        # signal the reader; see op.py header note + guidance). Launching a
-        # descriptor whose kernels lack the K/V ordering handshake would clobber
-        # shared L1 and wedge Tensix cores. Refuse until a verified reader-side
-        # reserve-ahead variant exists and is cleared for coordinated board time.
+    if config.kv_alias and os.environ.get("BGE_F4_ALLOW_LAUNCH", "0") != "1":
+        # Safety gate (reviewer point #5/#6): the kv_alias CB-token ring IS now
+        # implemented (compute pushes sync tokens on CB_KV_SYNC; reader waits/
+        # pops before overwriting shared bytes), but it is UNVALIDATED on silicon
+        # and margin-fragile (~11.8KB). A handshake/cadence bug clobbers the
+        # shared L1 and wedges cores. Launching stays BLOCKED until: (a) the
+        # descriptor is compiled and its per-core L1 allocation inspected (fits),
+        # and (b) coordinated board access is arranged. Set BGE_F4_ALLOW_LAUNCH=1
+        # ONLY under those conditions.
         raise NotImplementedError(
-            "kv_alias (F4) is host-side scaffolding only; the aliased-CB kernel "
-            "ring is not implemented (compute->reader signalling is impossible on "
-            "TRISC). See .auto/guidance.md 'F4 ARCHITECTURAL OBSTACLE'."
+            "kv_alias (F4) launch is gated. The CB-token handshake kernels are "
+            "implemented but UNVALIDATED; compile+inspect L1 and secure board "
+            "time, then set BGE_F4_ALLOW_LAUNCH=1."
         )
     build = build_encoder_sdpa_descriptor(
         q,

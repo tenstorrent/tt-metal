@@ -198,6 +198,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t cb_id_chunk_start_idx_compute = get_compile_time_arg_val(cb_arg_offset + 6);
     constexpr uint32_t cb_id_chunk_start_idx_writer = get_compile_time_arg_val(cb_arg_offset + 7);
+    // F4 aliased-K/V handshake: kv_alias flag + compute->reader sync-token CB.
+    constexpr bool kv_alias = get_compile_time_arg_val(cb_arg_offset + 8) == 1;
+    constexpr uint32_t cb_kv_sync = get_compile_time_arg_val(cb_arg_offset + 9);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -236,6 +239,14 @@ void kernel_main() {
 
     CircularBuffer cb_k(cb_k_in);
     CircularBuffer cb_v(cb_v_in);
+    // F4 aliased-K/V: shared single-slot ring capacities in TILES. K bf4 576B, V
+    // bf8 1088B, shared alloc 146,880B => K 255, V 135. Full-capacity push/pop
+    // wraps each ring to base every k iteration. cb_kv_sync carries the compute->
+    // reader consumed tokens.
+    constexpr uint32_t kv_shared_bytes = 146880;
+    constexpr uint32_t kv_k_capacity_tiles = kv_alias ? (kv_shared_bytes / 576) : 0;
+    constexpr uint32_t kv_v_capacity_tiles = kv_alias ? (kv_shared_bytes / 1088) : 0;
+    CircularBuffer cb_kv_sync_obj(cb_kv_sync);
     CircularBuffer cb_mask(cb_mask_in);
     CircularBuffer cb_attn_sink(cb_attention_sink);
     CircularBuffer cb_page_table(cb_id_page_table);
@@ -467,6 +478,18 @@ void kernel_main() {
                     }
                 }
 
+                // F4: read_chunk_with_padding pushed the 128 real K tiles. Advance
+                // the aliased single-slot ring the rest of the way to capacity
+                // (reserve+push the residual padding pages, no read) so the write
+                // pointer wraps back to base. Compute pops the same capacity.
+                if constexpr (kv_alias) {
+                    constexpr uint32_t k_residual = kv_k_capacity_tiles - k_chunk_tiles;
+                    if constexpr (k_residual > 0) {
+                        cb_k.reserve_back(k_residual);
+                        cb_k.push_back(k_residual);
+                    }
+                }
+
                 // Forward K chunk to next core(s): initiate async write (NOC write channel)
                 // For mcast: send linked data + companion semaphore back-to-back.
                 // The companion must be issued immediately after the linked write —
@@ -599,6 +622,14 @@ void kernel_main() {
                     }
                 }
 
+                // F4: before overwriting the shared K/V bytes with V, wait for the
+                // compute->reader token proving QK has fully consumed K. Without
+                // this the V write would clobber K while QK is still reading it.
+                if constexpr (kv_alias) {
+                    cb_kv_sync_obj.wait_front(1);
+                    cb_kv_sync_obj.pop_front(1);
+                }
+
                 // V: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_v_start_address = 0;
 
@@ -707,6 +738,21 @@ void kernel_main() {
                     if (!should_receive) {
                         cb_v.push_back(v_chunk_tiles);
                     }
+                }
+
+                // F4: read_chunk_with_padding pushed the 128 real V tiles; advance
+                // the aliased ring to capacity so the write pointer wraps to base.
+                // Then wait for the compute->reader token proving PV has fully
+                // consumed V before the NEXT k iteration overwrites the shared
+                // bytes with the next K.
+                if constexpr (kv_alias) {
+                    constexpr uint32_t v_residual = kv_v_capacity_tiles - v_chunk_tiles;
+                    if constexpr (v_residual > 0) {
+                        cb_v.reserve_back(v_residual);
+                        cb_v.push_back(v_residual);
+                    }
+                    cb_kv_sync_obj.wait_front(1);
+                    cb_kv_sync_obj.pop_front(1);
                 }
             }  // close k_chunk
         }  // close global_q_iter

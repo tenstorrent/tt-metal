@@ -94,6 +94,14 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 15);
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 16);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 17);
+    // F4 aliased-K/V handshake args (constexpr-off unless kv_alias).
+    constexpr bool kv_alias = get_compile_time_arg_val(cb_arg_offset + 18) == 1;
+    constexpr uint32_t cb_kv_sync = get_compile_time_arg_val(cb_arg_offset + 19);
+    // Aliased single-slot ring capacities in TILES: shared alloc / tile bytes.
+    // K bf4 = 576B, V bf8 = 1088B. Shared alloc = 146,880B => K 255, V 135.
+    constexpr uint32_t kv_shared_bytes = 146880;
+    constexpr uint32_t kv_k_capacity_tiles = kv_alias ? (kv_shared_bytes / 576) : 0;
+    constexpr uint32_t kv_v_capacity_tiles = kv_alias ? (kv_shared_bytes / 1088) : 0;
     uint32_t chunked_q_chunk_offset = 0;
     CircularBuffer cb_chunk_start_idx_obj(cb_chunk_start_idx);
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
@@ -235,7 +243,11 @@ void kernel_main() {
                 is_chunked,
                 scale_fp32,
                 sliding_window_size,
-                use_lightweight_causal_mask>(
+                use_lightweight_causal_mask,
+                kv_alias,
+                cb_kv_sync,
+                kv_k_capacity_tiles,
+                kv_v_capacity_tiles>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,

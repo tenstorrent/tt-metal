@@ -10,9 +10,15 @@ launch:
     wraps each ring pointer back to base every iteration.
 
   * The CB machinery does NOT know K and V overlap in bytes. Safety is enforced
-    ONLY by explicit K_CONSUMED / V_CONSUMED handshakes:
-        fill K -> QK reads K -> K_CONSUMED -> fill V -> PV reads V -> V_CONSUMED
-        -> (next) fill K ...
+    by an explicit CB-TOKEN handshake on a dedicated 32-byte sync CB (CB_KV_SYNC):
+        fill K -> QK pops K -> compute pushes token -> reader pops token -> fill
+        V -> PV pops V -> compute pushes token -> reader pops token -> (next)
+        fill K ...
+    Precedent: tests/.../11_remote_cb_sync_matmul_single_core (compute does
+    cb_reserve_back(sync)/cb_push_back(sync); dataflow does wait_front/pop_front).
+    TRISC cannot use NOC semaphores, but CB-token push/pop IS a valid compute->
+    dataflow signal using only stock CB primitives. k_consumed/v_consumed below
+    model the two sync-CB token streams (compute pushes, reader pops).
 
 This simulator models reader + compute as interleaved steppers over the shared
 byte region, tracks which bytes are LIVE (written, not yet consumed) for each
@@ -103,9 +109,11 @@ def simulate(break_handshake=None):
     k_ring = Ring("K", K_PAGE, K_CAP_PAGES)
     v_ring = Ring("V", V_PAGE, V_CAP_PAGES)
 
-    # semaphores: reader waits on these before overwriting the shared region
-    k_consumed = 0  # up'd by compute after QK reads K
-    v_consumed = 0  # up'd by compute after PV reads V
+    # CB_KV_SYNC token streams: compute PUSHES a token (cb_push_back) after it
+    # pops K / pops V; reader POPS the token (wait_front/pop_front) before
+    # overwriting the shared region. Modeled as counters (token availability).
+    k_consumed = 0  # sync tokens pushed by compute after QK pops K
+    v_consumed = 0  # sync tokens pushed by compute after PV pops V
     errs = []
 
     total_iters = N_Q_CHUNKS * N_K_CHUNKS
