@@ -1376,7 +1376,7 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
              CommandQueueDeviceAddrType::DISPATCH_TELEMETRY_CONTROL, /*cq_id=*/0))},
         {"DISPATCH_TELEMETRY_DISABLED", "1"},
         {"FIRST_STREAM_USED", std::to_string(memmap.get_dispatch_stream_index(0))},
-        {"COMPLETION_COUNTER_BASE", "0"},
+        {"COMPLETION_COUNTER_OFFSET", "0"},
         {"VIRTUALIZE_UNICAST_CORES", "0"},
         {"NUM_VIRTUAL_UNICAST_CORES", "0"},
         {"NUM_PHYSICAL_UNICAST_CORES", "0"},

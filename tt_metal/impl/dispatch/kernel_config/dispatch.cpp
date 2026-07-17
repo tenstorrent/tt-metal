@@ -156,7 +156,7 @@ void DispatchKernel::GenerateStaticConfigs() {
                 : 0;
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
-        static_config_.completion_counter_base = my_dispatch_constants.get_completion_counter_offset(cq_id_);
+        static_config_.completion_counter_offset = my_dispatch_constants.get_completion_counter_offset(cq_id_);
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -203,7 +203,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.unicast_go_signal_addr = 0;              // Unused
         static_config_.distributed_dispatcher = 0;              // Unused
         static_config_.first_stream_used = 0;                   // Unused
-        static_config_.completion_counter_base = 0;             // Unused
+        static_config_.completion_counter_offset = 0;           // Unused
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -242,7 +242,7 @@ void DispatchKernel::GenerateStaticConfigs() {
                 : 0;
         static_config_.distributed_dispatcher = get_dispatch_query_manager_ref().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
-        static_config_.completion_counter_base = my_dispatch_constants.get_completion_counter_offset(cq_id_);
+        static_config_.completion_counter_offset = my_dispatch_constants.get_completion_counter_offset(cq_id_);
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -533,7 +533,7 @@ void DispatchKernel::CreateKernel() {
         {"DEV_COMPLETION_Q_RD_PTR", std::to_string(static_config_.dev_completion_q_rd_ptr.value())},
         {"DEV_DISPATCH_PROGRESS_PTR", std::to_string(static_config_.dev_dispatch_progress_ptr.value())},
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
-        {"COMPLETION_COUNTER_BASE", std::to_string(static_config_.completion_counter_base.value())},
+        {"COMPLETION_COUNTER_OFFSET", std::to_string(static_config_.completion_counter_offset.value())},
         {"VIRTUALIZE_UNICAST_CORES", std::to_string(virtualize_num_eth_cores)},
         {"NUM_VIRTUAL_UNICAST_CORES", std::to_string(num_virtual_active_eth_cores)},
         {"NUM_PHYSICAL_UNICAST_CORES", std::to_string(num_physical_active_eth_cores)},
