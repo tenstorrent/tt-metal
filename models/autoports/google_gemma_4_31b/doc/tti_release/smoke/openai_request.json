@@ -1,0 +1,7 @@
+{
+  "model": "google/gemma-4-31B",
+  "prompt": "The capital of France is",
+  "max_tokens": 16,
+  "temperature": 0.0,
+  "stream": false
+}

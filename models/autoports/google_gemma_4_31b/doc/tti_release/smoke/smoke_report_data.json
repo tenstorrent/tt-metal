@@ -1,0 +1,85 @@
+{
+    "metadata": {
+        "model_name": "google/gemma-4-31B",
+        "device": "P150X4",
+        "generated_at": "2026-07-16T10:01:15+00:00",
+        "report_id": "google__gemma-4-31B_2026-07-16T100115+0000",
+        "workflow": "benchmarks",
+        "server_mode": "API",
+        "run_command": "python run.py --model gemma-4-31B-it --runtime-model-spec-json ../autoport_smoke_spec.json --tt-device p150x4 --workflow benchmarks --service-port 8000 --server-url http://127.0.0.1 --no-auth --skip-system-sw-validation --disable-trace-capture --limit-samples-mode smoke-test",
+        "runtime_model_spec_json": "/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/smoke_cache_pass/workflow_logs/runtime_model_specs/runtime_model_spec_2026-07-16_10-01-01_id_autoport_google_gemma_4_31b_p150x4_smoke_STEunLYf.json",
+        "model_id": "id_autoport_google_gemma_4_31b_p150x4_smoke",
+        "model_repo": "google/gemma-4-31B",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "2be0f245e20",
+        "vllm_commit": "44b7853",
+        "model_impl": "autoport-google-gemma-4-31b"
+    },
+    "sections": [
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 7,
+                "output_sequence_length": 8.0,
+                "mean_ttft_ms": 903.165,
+                "p50_ttft": 903.165,
+                "p99_ttft": 903.165,
+                "mean_tpot_ms": 180.0377,
+                "mean_e2el_ms": 2163.4292,
+                "tps_decode_throughput": 3.697,
+                "request_throughput": 0.4621,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 10:01:15"
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Spec Tests",
+                "status": "NA",
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: `NA` (no blocks present)\n- Evals: `NA` (no blocks present)\n- Spec Tests: `NA` (no blocks present)\n- All acceptance criteria passed."
+}

@@ -1,0 +1,140 @@
+{
+  "model_id": "id_autoport_google_gemma_4_31b_p150x4_smoke",
+  "impl": {
+    "impl_id": "autoport_google_gemma_4_31b",
+    "impl_name": "autoport-google-gemma-4-31b",
+    "repo_url": "https://github.com/tenstorrent/tt-metal",
+    "code_path": "models/autoports/google_gemma_4_31b"
+  },
+  "hf_model_repo": "google/gemma-4-31B",
+  "model_name": "gemma-4-31B",
+  "inference_engine": "vLLM",
+  "device_type": "P150X4",
+  "device_model_spec": {
+    "device": "P150X4",
+    "max_concurrency": 32,
+    "max_context": 113280,
+    "perf_targets_map": {},
+    "default_impl": true,
+    "perf_reference": [
+      {
+        "isl": 8,
+        "osl": 8,
+        "max_concurrency": 1,
+        "num_prompts": 1,
+        "task_type": "text",
+        "targets": {
+          "smoke": {
+            "ttft_ms": 60000.0,
+            "tput_user": 0.1,
+            "tput": null,
+            "tolerance": 0.0
+          }
+        }
+      }
+    ],
+    "vllm_args": {
+      "model": "google/gemma-4-31B",
+      "block_size": "64",
+      "max_model_len": "113280",
+      "max_num_seqs": "32",
+      "max_num_batched_tokens": "113280",
+      "max-log-len": "32",
+      "seed": "9472",
+      "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456, \"sample_on_device_mode\": \"all\", \"trace_mode\": \"all\", \"enable_model_warmup\": true}}"
+    },
+    "override_tt_config": {
+      "fabric_config": "FABRIC_1D",
+      "trace_region_size": 268435456,
+      "sample_on_device_mode": "all",
+      "trace_mode": "all",
+      "enable_model_warmup": true
+    },
+    "env_vars": {
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "TT_GEMMA4_TEXT_VER": "gemma4_31b_autoport",
+      "GEMMA4_PAGE_BLOCK_SIZE": "64",
+      "GEMMA4_31B_VLLM_HOST_SAMPLING_COMPAT": "1"
+    },
+    "tensor_cache_timeout": 3600.0,
+    "system_requirements": null,
+    "known_issues": [
+      {
+        "workflow_type": "EVALS",
+        "task_name": "meta_ifeval",
+        "reason": "No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base IFEval prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed."
+      },
+      {
+        "workflow_type": "EVALS",
+        "task_name": "meta_gpqa_cot",
+        "reason": "No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base GPQA-CoT prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed."
+      }
+    ],
+    "eval_max_retries": 1
+  },
+  "system_requirements": null,
+  "env_vars": {
+    "VLLM_CONFIGURE_LOGGING": "1",
+    "VLLM_RPC_TIMEOUT": "900000",
+    "VLLM_TARGET_DEVICE": "tt",
+    "TORCHDYNAMO_DISABLE": "1",
+    "VLLM_ALLOW_LONG_MAX_MODEL_LEN": 1,
+    "MESH_DEVICE": "P150x4",
+    "ARCH_NAME": "blackhole",
+    "TT_GEMMA4_TEXT_VER": "gemma4_31b_autoport",
+    "GEMMA4_PAGE_BLOCK_SIZE": "64",
+    "GEMMA4_31B_VLLM_HOST_SAMPLING_COMPAT": "1"
+  },
+  "tt_metal_commit": "2be0f245e20",
+  "vllm_commit": "44b7853",
+  "hf_weights_repo": "google/gemma-4-31B",
+  "param_count": 31,
+  "min_disk_gb": 82,
+  "min_ram_gb": 77.5,
+  "model_type": "LLM",
+  "repacked": 0,
+  "version": "0.18.0",
+  "docker_image": "ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-release-ubuntu-22.04-amd64:0.18.0-c49bb76-6b4a3a7",
+  "status": "EXPERIMENTAL",
+  "code_link": "https://github.com/tenstorrent/tt-metal/tree/2be0f245e20/models/autoports/google_gemma_4_31b",
+  "override_tt_config": {
+    "fabric_config": "FABRIC_1D",
+    "trace_region_size": 268435456,
+    "sample_on_device_mode": "all",
+    "trace_mode": "all",
+    "enable_model_warmup": true
+  },
+  "supported_modalities": [
+    "text"
+  ],
+  "subdevice_type": null,
+  "uses_tensor_model_cache": true,
+  "has_builtin_warmup": true,
+  "metadata": {
+    "autoport_code_path": "models/autoports/google_gemma_4_31b",
+    "autoport_generator": "models/autoports/google_gemma_4_31b/tt/generator_vllm.py",
+    "context_contract": "models/autoports/google_gemma_4_31b/doc/context_contract.json",
+    "prompt_mode": "completion",
+    "chat_template_present": false,
+    "server_mode": "external-autoport-no-docker"
+  },
+  "cli_args": {
+    "model": "gemma-4-31B-it",
+    "workflow": "benchmarks",
+    "device": "p150x4",
+    "tt_device": "p150x4",
+    "docker_server": false,
+    "local_server": false,
+    "service_port": 8000,
+    "server_url": "http://127.0.0.1",
+    "disable_trace_capture": true,
+    "runtime_model_spec_json": "/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/autoport_smoke_spec.json",
+    "skip_system_sw_validation": true,
+    "no_auth": true,
+    "limit_samples_mode": "smoke-test",
+    "streaming": "false",
+    "preprocessing": "false",
+    "tools": "vllm"
+  }
+}

@@ -1,0 +1,777 @@
+{
+    "metadata": {
+        "model_name": "google/gemma-4-31B",
+        "device": "P150X4",
+        "generated_at": "2026-07-16T21:52:26+00:00",
+        "report_id": "id_autoport_google_gemma_4_31b_p150x4_release_2026-07-16_23-53-05",
+        "workflow": "release",
+        "server_mode": "API",
+        "run_command": "python run.py --model gemma-4-31B-it --runtime-model-spec-json ../autoport_release_spec.json --tt-device p150x4 --workflow release --service-port 8000 --server-url http://127.0.0.1 --no-auth --skip-system-sw-validation",
+        "runtime_model_spec_json": "/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/release_cache_final6/workflow_logs/runtime_model_specs/runtime_model_spec_2026-07-16_20-46-55_id_autoport_google_gemma_4_31b_p150x4_release_XoOYIVRt.json",
+        "model_id": "id_autoport_google_gemma_4_31b_p150x4_release",
+        "model_repo": "google/gemma-4-31B",
+        "inference_engine": "vLLM",
+        "tt_metal_commit": "2be0f245e20",
+        "vllm_commit": "44b7853",
+        "model_impl": "autoport-google-gemma-4-31b"
+    },
+    "sections": [
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "meta_ifeval",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": "https://huggingface.co/google/gemma-4-31B",
+                "gpu_reference_score": null,
+                "score": 25.181850822484343,
+                "ratio_to_published": "N/A",
+                "ratio_to_reference": "N/A",
+                "accuracy_check": 1
+            },
+            "title": "LLM Eval \u2014 meta_ifeval",
+            "task_type": "llm",
+            "id": "gemma-4-31B_P150X4",
+            "targets": {
+                "task_name": "meta_ifeval",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": "https://huggingface.co/google/gemma-4-31B"
+            }
+        },
+        {
+            "kind": "evals",
+            "data": {
+                "task_name": "meta_gpqa_cot",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": "https://huggingface.co/google/gemma-4-31B",
+                "gpu_reference_score": null,
+                "score": 20.982142857142858,
+                "ratio_to_published": "N/A",
+                "ratio_to_reference": "N/A",
+                "accuracy_check": 1
+            },
+            "title": "LLM Eval \u2014 meta_gpqa_cot",
+            "task_type": "llm",
+            "id": "gemma-4-31B_P150X4",
+            "targets": {
+                "task_name": "meta_gpqa_cot",
+                "tolerance": 0.05,
+                "published_score": null,
+                "published_score_ref": "https://huggingface.co/google/gemma-4-31B"
+            }
+        },
+        {
+            "kind": "benchmarks",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 8,
+                "input_sequence_length": 127,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 197.2689,
+                "p50_ttft": 191.1852,
+                "p99_ttft": 228.4839,
+                "mean_tpot_ms": 38.158,
+                "mean_e2el_ms": 5043.3375,
+                "tps_decode_throughput": 25.3786,
+                "request_throughput": 0.1983,
+                "error_request_count": null,
+                "target_checks": {
+                    "customer_functional": {
+                        "ttft": 1000.0,
+                        "ttft_ratio": 0.1972689,
+                        "ttft_check": 2,
+                        "tput_user": 20.0,
+                        "tput_user_ratio": 1.26893,
+                        "tput_user_check": 2,
+                        "tput_check": 1
+                    },
+                    "customer_complete": {
+                        "ttft": 700.0,
+                        "ttft_ratio": 0.2818127142857143,
+                        "ttft_check": 2,
+                        "tput_user": 24.0,
+                        "tput_user_ratio": 1.0574416666666666,
+                        "tput_user_check": 2,
+                        "tput_check": 1
+                    },
+                    "customer_sellable": {
+                        "ttft": 600.0,
+                        "ttft_ratio": 0.3287815,
+                        "ttft_check": 2,
+                        "tput_user": 25.0,
+                        "tput_user_ratio": 1.015144,
+                        "tput_user_check": 2,
+                        "tput_check": 1
+                    }
+                }
+            },
+            "title": "vllm Benchmark Targets",
+            "task_type": "text",
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 21:53:18",
+                "performance_targets": {
+                    "customer_functional": {
+                        "ttft_ms": 1000.0,
+                        "tput_user": 20.0,
+                        "tput": null,
+                        "tolerance": 0.05
+                    },
+                    "customer_complete": {
+                        "ttft_ms": 700.0,
+                        "tput_user": 24.0,
+                        "tput": null,
+                        "tolerance": 0.05
+                    },
+                    "customer_sellable": {
+                        "ttft_ms": 600.0,
+                        "tput_user": 25.0,
+                        "tput": null,
+                        "tolerance": 0.05
+                    }
+                },
+                "reference_point": {
+                    "isl": 128,
+                    "osl": 128,
+                    "max_concurrency": 1,
+                    "num_prompts": 8
+                }
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 256,
+                "input_sequence_length": 127,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 4950.8932,
+                "p50_ttft": 5109.3875,
+                "p99_ttft": 5390.1797,
+                "mean_tpot_ms": 72.7876,
+                "mean_e2el_ms": 14194.9148,
+                "tps_decode_throughput": 288.5118,
+                "request_throughput": 2.254,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 21:55:25"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 127,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 205.8251,
+                "p50_ttft": 207.4751,
+                "p99_ttft": 220.2763,
+                "mean_tpot_ms": 31.0858,
+                "mean_e2el_ms": 32006.6114,
+                "tps_decode_throughput": 31.9931,
+                "request_throughput": 0.0312,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 21:57:47"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 127,
+                "output_sequence_length": 1024.0,
+                "mean_ttft_ms": 4944.457,
+                "p50_ttft": 4908.2857,
+                "p99_ttft": 5366.3087,
+                "mean_tpot_ms": 62.8463,
+                "mean_e2el_ms": 69236.2504,
+                "tps_decode_throughput": 473.2598,
+                "request_throughput": 0.4622,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:02:38"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 1023,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 323.9551,
+                "p50_ttft": 318.3501,
+                "p99_ttft": 342.2247,
+                "mean_tpot_ms": 39.2486,
+                "mean_e2el_ms": 5308.5292,
+                "tps_decode_throughput": 24.1107,
+                "request_throughput": 0.1884,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:03:13"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 1023,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 8652.7045,
+                "p50_ttft": 8879.6257,
+                "p99_ttft": 8978.8614,
+                "mean_tpot_ms": 81.7711,
+                "mean_e2el_ms": 19037.6349,
+                "tps_decode_throughput": 215.1183,
+                "request_throughput": 1.6806,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:04:44"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 2047,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 527.3413,
+                "p50_ttft": 520.1077,
+                "p99_ttft": 549.5341,
+                "mean_tpot_ms": 39.3772,
+                "mean_e2el_ms": 5528.2448,
+                "tps_decode_throughput": 23.1524,
+                "request_throughput": 0.1809,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:05:19"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 32,
+                "num_requests": 128,
+                "input_sequence_length": 2047,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 14830.7842,
+                "p50_ttft": 15329.0872,
+                "p99_ttft": 15487.8215,
+                "mean_tpot_ms": 84.8227,
+                "mean_e2el_ms": 25603.2725,
+                "tps_decode_throughput": 159.9576,
+                "request_throughput": 1.2497,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:07:17"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 4,
+                "input_sequence_length": 4095,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 953.8078,
+                "p50_ttft": 952.2017,
+                "p99_ttft": 959.1425,
+                "mean_tpot_ms": 39.5399,
+                "mean_e2el_ms": 5975.3755,
+                "tps_decode_throughput": 21.4201,
+                "request_throughput": 0.1673,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:07:55"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 26,
+                "num_requests": 104,
+                "input_sequence_length": 4095,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 22905.6401,
+                "p50_ttft": 23838.8617,
+                "p99_ttft": 23849.3273,
+                "mean_tpot_ms": 84.9049,
+                "mean_e2el_ms": 33688.5625,
+                "tps_decode_throughput": 98.7771,
+                "request_throughput": 0.7717,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:10:26"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 8191,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 1989.2669,
+                "p50_ttft": 1989.2669,
+                "p99_ttft": 1994.9633,
+                "mean_tpot_ms": 39.6089,
+                "mean_e2el_ms": 7019.5969,
+                "tps_decode_throughput": 18.2337,
+                "request_throughput": 0.1425,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:10:54"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 13,
+                "num_requests": 26,
+                "input_sequence_length": 8191,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 23450.8764,
+                "p50_ttft": 25212.895,
+                "p99_ttft": 25223.779,
+                "mean_tpot_ms": 78.4969,
+                "mean_e2el_ms": 33419.985,
+                "tps_decode_throughput": 49.786,
+                "request_throughput": 0.389,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:12:16"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 2,
+                "input_sequence_length": 16383,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 4239.8011,
+                "p50_ttft": 4239.8011,
+                "p99_ttft": 4240.5025,
+                "mean_tpot_ms": 39.7063,
+                "mean_e2el_ms": 9282.5064,
+                "tps_decode_throughput": 13.7888,
+                "request_throughput": 0.1077,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:12:49"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 6,
+                "num_requests": 12,
+                "input_sequence_length": 16383,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 21742.0972,
+                "p50_ttft": 25186.9094,
+                "p99_ttft": 25204.5677,
+                "mean_tpot_ms": 83.7091,
+                "mean_e2el_ms": 32373.1495,
+                "tps_decode_throughput": 23.7218,
+                "request_throughput": 0.1853,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:14:08"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 32767,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 10602.401,
+                "p50_ttft": 10602.401,
+                "p99_ttft": 10602.401,
+                "mean_tpot_ms": 40.7916,
+                "mean_e2el_ms": 15782.94,
+                "tps_decode_throughput": 8.1098,
+                "request_throughput": 0.0634,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:14:38"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 3,
+                "num_requests": 3,
+                "input_sequence_length": 32767,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 24841.4794,
+                "p50_ttft": 31842.3205,
+                "p99_ttft": 31844.1909,
+                "mean_tpot_ms": 108.9965,
+                "mean_e2el_ms": 38684.0332,
+                "tps_decode_throughput": 9.9261,
+                "request_throughput": 0.0775,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:15:31"
+            }
+        },
+        {
+            "kind": "vllm",
+            "data": {
+                "concurrency": 1,
+                "num_requests": 1,
+                "input_sequence_length": 65535,
+                "output_sequence_length": 128.0,
+                "mean_ttft_ms": 26812.2524,
+                "p50_ttft": 26812.2524,
+                "p99_ttft": 26812.2524,
+                "mean_tpot_ms": 41.6853,
+                "mean_e2el_ms": 32106.2827,
+                "tps_decode_throughput": 3.9867,
+                "request_throughput": 0.0311,
+                "error_request_count": null
+            },
+            "id": "google__gemma-4-31B_P150X4",
+            "targets": {
+                "model": "google/gemma-4-31B",
+                "device": "P150X4",
+                "timestamp": "2026-07-16 22:16:17"
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "success": true,
+                "child_result": "OK",
+                "status": "pass",
+                "attempts": 1,
+                "logs": [],
+                "elapsed_seconds": 0.010467709973454475,
+                "test_name": "LoggerForkSafetyTest",
+                "description": "Test for logging fork safety to prevent deadlocks"
+            },
+            "title": "Logger Fork Safety",
+            "task_type": "unit",
+            "id": "gemma-4-31B_P150X4",
+            "targets": {
+                "num_of_devices": 4
+            }
+        },
+        {
+            "kind": "spec_tests",
+            "data": {
+                "endpoint_url": "http://127.0.0.1:8000/v1/chat/completions",
+                "model_name": "google/gemma-4-31B",
+                "task_name": "vllm_chat_completions",
+                "parameter_conformance_summary": [
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "status": "\u2705 PASS",
+                        "summary": "3/3 passed"
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_n",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "status": "\u2705 PASS",
+                        "summary": "9/9 passed"
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "status": "\u2705 PASS",
+                        "summary": "1/1 passed"
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "status": "\u2705 PASS",
+                        "summary": "2/2 passed"
+                    }
+                ],
+                "detailed_test_results": [
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[temperature-0.0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_k-1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_determinism_parameters",
+                        "parametrization": "test_determinism_parameters[top_p-0.01]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_logprobs",
+                        "parametrization": "test_logprobs",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[10]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_max_tokens",
+                        "parametrization": "test_max_tokens[5]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_n",
+                        "parametrization": "test_n[3]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_non_uniform_seeding",
+                        "parametrization": "test_non_uniform_seeding",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[frequency_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[presence_penalty-1.2-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-natural_repetition-messages1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-repeat_trap-messages0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_penalties",
+                        "parametrization": "test_penalties[repetition_penalty-1.5-semantic_repetition-messages2]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_seed_reproducibility",
+                        "parametrization": "test_seed_reproducibility",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq0]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    },
+                    {
+                        "test_case": "test_stop",
+                        "parametrization": "test_stop[stop_seq1]",
+                        "status": "\u2705 PASSED",
+                        "message": ""
+                    }
+                ],
+                "success": true,
+                "status": "pass",
+                "attempts": 1,
+                "logs": [
+                    "/localdev/odjuricic/tt-metal/.exp_run/tti-release/gemma4-31b-20260716/tt-inference-server/.workflow_venvs/.venv_v2_run_script/lib/python3.10/site-packages/pytest_asyncio/plugin.py:247: PytestDeprecationWarning: The configuration option \"asyncio_default_fixture_loop_scope\" is unset.",
+                    "The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: \"function\", \"class\", \"module\", \"package\", \"session\"",
+                    "",
+                    "  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))",
+                    ".....................                                                    [100%]",
+                    "21 passed in 5802.38s (1:36:42)"
+                ],
+                "elapsed_seconds": 5807.420322868973,
+                "test_name": "VLLMParamConformanceTest",
+                "description": "vLLM chat/completions parameter conformance"
+            },
+            "title": "Vllm Chat Completions",
+            "task_type": "functional",
+            "id": "gemma-4-31B_P150X4",
+            "targets": {
+                "num_of_devices": 4,
+                "num_concurrent_requests": 4
+            }
+        }
+    ],
+    "acceptance_criteria": true,
+    "acceptance_blockers": {},
+    "acceptance_criteria_metadata": {
+        "enforcement_result": "PASS",
+        "model_status": "EXPERIMENTAL",
+        "categories": [
+            {
+                "name": "Benchmarks",
+                "status": "PASS",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            },
+            {
+                "name": "Evals",
+                "status": "PASS",
+                "total": 2,
+                "passed": 0,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {
+                    "evals:LLM Eval \u2014 meta_ifeval": "Mandatory eval has no published or GPU reference for this exact task/prompt contract. (waived: No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base IFEval prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed.)",
+                    "evals:LLM Eval \u2014 meta_gpqa_cot": "Mandatory eval has no published or GPU reference for this exact task/prompt contract. (waived: No published or GPU reference exists for google/gemma-4-31B on this exact reconstructed raw-base GPQA-CoT prompt contract; the full measured row is retained and no unrelated -it threshold is borrowed.)"
+                }
+            },
+            {
+                "name": "Spec Tests",
+                "status": "PASS",
+                "total": 1,
+                "passed": 1,
+                "failed": 0,
+                "na": 0,
+                "skipped": 0,
+                "blockers": {},
+                "waived": {}
+            }
+        ]
+    },
+    "acceptance_summary_markdown": "### Acceptance Criteria\n\n- Acceptance status: `PASS`\n- Model status: `EXPERIMENTAL`\n- Benchmarks: `PASS` (1/1 passed)\n- Evals: `PASS` (0/2 passed, 2 waived)\n- Spec Tests: `PASS` (1/1 passed)\n- All acceptance criteria passed."
+}

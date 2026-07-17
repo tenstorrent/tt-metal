@@ -1,0 +1,134 @@
+{
+  "results": {
+    "meta_gpqa_cot": {
+      "alias": "meta_gpqa_cot",
+      "exact_match,strict-match": 0.20982142857142858,
+      "exact_match_stderr,strict-match": 0.019259002176655816
+    }
+  },
+  "group_subtasks": {
+    "meta_gpqa_cot": []
+  },
+  "configs": {
+    "meta_gpqa_cot": {
+      "task": "meta_gpqa_cot",
+      "dataset_path": "parquet",
+      "dataset_kwargs": {
+        "data_files": "./work_dir/joined_gpqa_cot.parquet"
+      },
+      "test_split": "train",
+      "doc_to_text": "raw_prompt",
+      "doc_to_target": "gold",
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "num_fewshot": 0,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "until": [],
+        "do_sample": false,
+        "temperature": 0.0,
+        "max_gen_toks": 2048,
+        "stream": false,
+        "seed": 42
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict-match",
+          "filter": [
+            {
+              "function": "regex",
+              "group_select": -1,
+              "regex_pattern": "best answer is ([A-Z])"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "metadata": {
+        "version": 1.0
+      }
+    }
+  },
+  "versions": {
+    "meta_gpqa_cot": 1.0
+  },
+  "n-shot": {
+    "meta_gpqa_cot": 0
+  },
+  "higher_is_better": {
+    "meta_gpqa_cot": {
+      "exact_match": true
+    }
+  },
+  "n-samples": {
+    "meta_gpqa_cot": {
+      "original": 448,
+      "effective": 448
+    }
+  },
+  "config": {
+    "model": "local-completions",
+    "model_args": "model=google/gemma-4-31B,base_url=http://127.0.0.1:8000/v1/completions,tokenizer_backend=huggingface,add_bos_token=True,max_length=113280",
+    "batch_size": "32",
+    "batch_sizes": [],
+    "device": null,
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": {
+      "stream": false,
+      "seed": 42
+    },
+    "random_seed": 42,
+    "numpy_seed": 42,
+    "torch_seed": 42,
+    "fewshot_seed": 42
+  },
+  "git_hash": "v0.6.0-1345-gfdc353375",
+  "date": 1784236561.398275,
+  "pretty_env_info": "PyTorch version: 2.11.0+cpu\nIs debug build: False\nCUDA used to build PyTorch: None\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 22.04.5 LTS (x86_64)\nGCC version: (Ubuntu 12.3.0-1ubuntu1~22.04.3) 12.3.0\nClang version: 20.1.8 (++20250708082409+6fb913d3e2ec-1~exp1~20250708202428.132)\nCMake version: version 4.2.3\nLibc version: glibc-2.35\n\nPython version: 3.10.20 (main, Jun 23 2026, 15:20:26) [Clang 22.1.3 ] (64-bit runtime)\nPython platform: Linux-5.15.0-179-generic-x86_64-with-glibc2.35\nIs CUDA available: False\nCUDA runtime version: No CUDA\nCUDA_MODULE_LOADING set to: N/A\nGPU models and configuration: No CUDA\nNvidia driver version: No CUDA\ncuDNN version: No CUDA\nIs XPU available: False\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: True\nCaching allocator config: N/A\n\nCPU:\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           52 bits physical, 57 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  32\nOn-line CPU(s) list:                     0-31\nVendor ID:                               AuthenticAMD\nModel name:                              AMD EPYC 8124P 16-Core Processor\nCPU family:                              25\nModel:                                   160\nThread(s) per core:                      2\nCore(s) per socket:                      16\nSocket(s):                               1\nStepping:                                2\nFrequency boost:                         enabled\nCPU max MHz:                             3003.9109\nCPU min MHz:                             1500.0000\nBogoMIPS:                                4900.56\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 invpcid_single hw_pstate ssbd mba ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd amd_ppin cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq la57 rdpid overflow_recov succor smca fsrm flush_l1d ibpb_exit_to_user\nVirtualization:                          AMD-V\nL1d cache:                               512 KiB (16 instances)\nL1i cache:                               512 KiB (16 instances)\nL2 cache:                                16 MiB (16 instances)\nL3 cache:                                64 MiB (4 instances)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-31\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; safe RET\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl and seccomp\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Vulnerable: Clear CPU buffers attempted, no microcode\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace\n\nVersions of relevant libraries:\n[pip3] mypy_extensions==1.1.0\n[pip3] numpy==2.2.6\n[pip3] nvidia-cublas==13.1.1.3\n[pip3] nvidia-cublas-cu12==12.9.2.10\n[pip3] nvidia-cuda-cupti==13.0.85\n[pip3] nvidia-cuda-nvrtc==13.0.88\n[pip3] nvidia-cuda-nvrtc-cu12==12.9.86\n[pip3] nvidia-cuda-runtime==13.3.29\n[pip3] nvidia-cuda-runtime-cu12==12.9.79\n[pip3] nvidia-cudnn-cu13==9.20.0.48\n[pip3] nvidia-cudnn-frontend==1.26.0\n[pip3] nvidia-cufft==12.0.0.61\n[pip3] nvidia-curand==10.4.0.35\n[pip3] nvidia-curand-cu12==10.3.10.19\n[pip3] nvidia-cusolver==12.0.4.66\n[pip3] nvidia-cusparse==12.6.3.3\n[pip3] nvidia-cusparselt-cu13==0.8.1\n[pip3] nvidia-nccl-cu13==2.29.7\n[pip3] nvidia-nvjitlink==13.3.33\n[pip3] nvidia-nvtx==13.0.85\n[pip3] nvtx==0.2.15\n[pip3] onnx==1.22.0\n[pip3] onnxruntime==1.23.2\n[pip3] tokenspeed-triton==3.8.10.post20260709\n[pip3] torch==2.11.0+cpu\n[pip3] torch_c_dlpack_ext==0.1.5\n[pip3] torchaudio==2.11.0+cpu\n[pip3] torchcodec==0.15.0+cpu\n[pip3] torchvision==0.26.0+cpu\n[pip3] triton==3.7.1\n[conda] Could not collect",
+  "transformers_version": "5.14.1",
+  "upper_git_hash": null,
+  "tokenizer_pad_token": [
+    "<pad>",
+    "0"
+  ],
+  "tokenizer_eos_token": [
+    "<eos>",
+    "1"
+  ],
+  "tokenizer_bos_token": [
+    "<bos>",
+    "2"
+  ],
+  "eot_token_id": 1,
+  "max_length": 113279,
+  "task_hashes": {
+    "meta_gpqa_cot": "1f5aa35550062281ce33f429d94b29cd069183e433e523a6e92e4628d265241e"
+  },
+  "model_source": "local-completions",
+  "model_name": "google/gemma-4-31B",
+  "model_name_sanitized": "google__gemma-4-31B",
+  "system_instruction": null,
+  "system_instruction_sha": null,
+  "fewshot_as_multiturn": false,
+  "chat_template": null,
+  "chat_template_sha": null,
+  "start_time": 4277903.881450457,
+  "end_time": 4280093.464187826,
+  "total_evaluation_time_seconds": "2189.582737369463"
+}
