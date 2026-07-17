@@ -209,6 +209,52 @@ void kernel_main() {
     }
 #endif
     noc_async_write_barrier();
+#elif defined(IN0_CHUNK)
+    // Finer-grained ring streaming (diagnostic): publish C-block bundles instead of the whole W-block shard
+    // (C=1 is K-block-granular). Preserves ring order, physical placement, PARETO order, CB0 layout (each
+    // chunk lives at its existing shard offset), K traversal, and the in0/in1 pairing -- only the read/
+    // forward/publish GRANULARITY changes. For local step 0 each chunk is read + barriered + published
+    // SEPARATELY (to actually expose the read/compute overlap). Forward writes the chunk to the next core's
+    // slot (step+1) at the same chunk offset, payload-then-signal (same-NoC ordered, like the whole-shard
+    // ring; no flush). Cumulative per-chunk fwd credit = (step-1)*chunks + chunk + 1. Final write barrier
+    // retained (CB0 stays resident until the end). C=W would be byte-identical to the baseline below.
+    constexpr uint32_t Cw = (IN0_CHUNK < W) ? IN0_CHUNK : W;  // min(C, W); partial final bundle handled by cnt
+    constexpr uint32_t chunks = (W + Cw - 1u) / Cw;           // ceil(W / C)
+    for (uint32_t step = 0; step < G; ++step) {
+        for (uint32_t ch = 0; ch < chunks; ++ch) {
+            const uint32_t cstart = ch * Cw;
+            const uint32_t cnt = ((W - cstart) < Cw) ? (W - cstart) : Cw;  // min(C, W - cstart)
+            const uint32_t coff = step * shard_bytes + cstart * in0_blk_bytes;
+            const uint32_t cslot = base0 + coff;
+            if (step == 0) {
+                uint32_t p = cslot;
+                for (uint32_t wb = cstart; wb < cstart + cnt; ++wb) {
+                    const uint32_t sb = ring_pos * W + wb;  // capacity-local block index of own shard
+                    for (uint32_t m = 0; m < M_block; ++m) {
+                        for (uint32_t k = 0; k < K_block; ++k) {
+                            const uint32_t l = sb * K_block + k;
+                            if (m < valid_m && l < valid_k) {
+                                noc_async_read_page((m_start + m) * Kt + (k_start + l), in0, p);
+                            } else {
+                                zero_tile(p);  // pad M row / K tail -> exact 0.0
+                            }
+                            p += tile_bytes;
+                        }
+                    }
+                }
+                noc_async_read_barrier();  // per-chunk barrier: publish this bundle before reading the next
+            } else {
+                noc_semaphore_wait_min(fwd_ptr, (step - 1u) * chunks + ch + 1u);  // cumulative chunk arrivals
+            }
+            if (step + 1u < G) {  // forward this chunk to next core's slot (step+1), same chunk offset
+                noc_async_write(
+                    cslot, get_noc_addr(fwd_next_x, fwd_next_y, base0 + coff + shard_bytes), cnt * in0_blk_bytes);
+                noc_semaphore_inc(get_noc_addr(fwd_next_x, fwd_next_y, fwd_addr), 1);  // payload-then-signal
+            }
+            cb_push_back(in0_cb, cnt * in0_blk);  // compute consumes this bundle (cnt blocks) in K order
+        }
+    }
+    noc_async_write_barrier();  // all ring forwards landed (CB0 resident until end)
 #else
     for (uint32_t step = 0; step < G; ++step) {
         uint32_t slot = base0 + step * shard_bytes;

@@ -112,9 +112,12 @@ TEST_F(RegimeADiagFixture, Run) {
     // preserving; verify any combination (a fwd-order/source-lifetime bug would deliver stale in1 ->
     // output != K, caught here).
     constexpr uint32_t kIn1Preserve = (1u << 22) | (1u << 25);
+    // in0-ring chunk-streaming diagnostics (C=4/2/1 = 1<<26/27/28) preserve the K-order/pairing, so
+    // constant-input out must still equal K (a chunk mispairing/stale-publish/missed-forward -> out != K).
+    const bool chunk_mode = (mask == (1u << 26)) || (mask == (1u << 27)) || (mask == (1u << 28));
     if (mask == 0 || mask == 32 || mask == 64 || mask == 128 || mask == 256 || mask == 512 || mask == 1024 ||
         mask == 2048 || mask == 4096 || mask == 16384 || mask == 65536 || mask == 262144 || mask == 524288 ||
-        mask == 1048576 || mask == 2097152 || (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
+        mask == 1048576 || mask == 2097152 || chunk_mode || (mask != 0u && (mask & ~kIn1Preserve) == 0u)) {
         const std::vector<float> host = out.to_vector<float>();
         double maxrel = 0.0;
         for (float v : host) {
@@ -194,6 +197,74 @@ TEST_F(RegimeADiagFixture, Correctness) {
             EXPECT_GT(p, 0.99) << "variant mask=" << mask << " pass=" << pass << " PCC too low (" << p << ")";
         }
     }
+}
+
+// in0-ring CHUNK STREAMING correctness (C=4/2/1 = mask 1<<26/27/28) vs C=W (mask 0). Random bf16 operands
+// vs a CPU f32 golden. The chunk modes preserve the K traversal + in0/in1 pairing exactly (only the
+// read/forward/publish granularity changes), so each mode must be **bit-identical** to C=W AND PCC>=0.999.
+// Env-parametrized (like Run) so an external driver sweeps W=1/2/3/5, Pk/Sm, both NoCs, Ns>1/N_bpc>1, tails,
+// fresh+cached. Default env = 128x15360x768 (W=5, the highest-forwarding class).
+TEST_F(RegimeADiagFixture, ChunkCorrectness) {
+    const uint32_t M = envu("RA_M", 128), K = envu("RA_K", 15360), N = envu("RA_N", 768);
+    const uint32_t Ns = envu("RA_NS", 1), Pk = envu("RA_PK", 6), Sm = envu("RA_SM", 1);
+    const uint32_t kb = envu("RA_KB", 2), nsb = envu("RA_NSB", 3);
+    auto* device = device_;
+
+    std::mt19937 rng(321);
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    std::vector<bfloat16> a(static_cast<size_t>(M) * K), b(static_cast<size_t>(K) * N);
+    std::vector<float> af(a.size()), bf(b.size());
+    for (size_t i = 0; i < a.size(); ++i) {
+        a[i] = bfloat16(dist(rng));
+        af[i] = static_cast<float>(a[i]);
+    }
+    for (size_t i = 0; i < b.size(); ++i) {
+        b[i] = bfloat16(dist(rng));
+        bf[i] = static_cast<float>(b[i]);
+    }
+    std::vector<float> golden(static_cast<size_t>(M) * N, 0.0f);
+    for (uint32_t i = 0; i < M; ++i) {
+        for (uint32_t k = 0; k < K; ++k) {
+            const float aik = af[static_cast<size_t>(i) * K + k];
+            const float* br = &bf[static_cast<size_t>(k) * N];
+            float* cr = &golden[static_cast<size_t>(i) * N];
+            for (uint32_t j = 0; j < N; ++j) {
+                cr[j] += aik * br[j];
+            }
+        }
+    }
+
+    const MemoryConfig il{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    const TensorLayout lay(DataType::BFLOAT16, PageConfig(Layout::TILE), il);
+    Tensor in0 = Tensor::from_vector(a, TensorSpec(ttnn::Shape({M, K}), lay)).to_device(device, il);
+    const MemoryConfig wcfg =
+        ttnn::experimental::prim::create_regime_a_weight_memory_config(ttnn::Shape({K, N}), DataType::BFLOAT16, device);
+    Tensor in1 = Tensor::from_vector(b, TensorSpec(ttnn::Shape({K, N}), lay)).to_device(device, wcfg);
+    const ttnn::experimental::prim::RegimeAMatmulConfig cfg{
+        .k_slices = Pk, .n_slices = Ns, .m_slices = Sm, .k_block_tiles = kb, .n_subblock_tiles = nsb};
+
+    std::vector<float> base;
+    for (uint32_t mask : {0u, (1u << 26), (1u << 27), (1u << 28)}) {  // C=W, C=4, C=2, C=1
+        for (int pass = 0; pass < 2; ++pass) {                        // fresh then cached-program
+            Tensor out =
+                ttnn::prim::regime_a_matmul_diag(in0, in1, cfg, std::nullopt, std::nullopt, std::nullopt, mask);
+            const std::vector<float> got = out.to_vector<float>();
+            const double p = pcc(got, golden);
+            fmt::print("DIAGCHUNK mask={} pass={} pcc={:.5f}\n", mask, pass, p);
+            EXPECT_GT(p, 0.99) << "chunk mask=" << mask << " pass=" << pass << " PCC too low (" << p << ")";
+            if (mask == 0u && pass == 0) {
+                base = got;  // C=W reference
+            } else {
+                double md = 0.0;
+                for (size_t i = 0; i < got.size(); ++i) {
+                    md = std::max(md, static_cast<double>(std::abs(got[i] - base[i])));
+                }
+                fmt::print("DIAGCHUNK_BITID mask={} pass={} maxdiff={:.6f}\n", mask, pass, md);
+                EXPECT_EQ(md, 0.0) << "chunk mask=" << mask << " pass=" << pass << " not bit-identical to C=W";
+            }
+        }
+    }
+    fmt::print("DIAGDONE mask=chunkcorr\n");
 }
 
 // Progressive-cumulative-wait (default, mask 0) vs old full-slice startup barrier (DIAG_FULL_IN0_WAIT,
