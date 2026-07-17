@@ -1,6 +1,6 @@
 # PI0.5 (`pi0_5`) — Tenstorrent
 
-End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and a real-weights trace+2CQ perf on a 1×8 Blackhole mesh — measured against the upstream `pi05_libero` checkpoint (10-action chunks, 5 denoise steps, 2/3 cameras).
+End-to-end TTNN implementation of the **π₀.₅** (PI0.5) vision-language-action policy on Blackhole, with a PyTorch reference, LIBERO simulator integration, and real-weights trace+2CQ perf on **both** a single Blackhole chip (the base `pi05_base` checkpoint, action_horizon 50) and a 1×8 Blackhole mesh (the upstream `pi05_libero` checkpoint, 10-action chunks, 5 denoise steps, 2/3 cameras). Task-success (LIBERO) requires a fine-tuned checkpoint (`pi05_libero`); `pi05_base` is used for the single-chip PCC/perf bring-up.
 
 The supported multi-chip path is the **1×8 single-mesh pipeline** (`pipeline_1x8.py`):
 SigLIP DP + prefill TP=8 + denoise on one 1×8 Blackhole mesh.
@@ -275,8 +275,8 @@ TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
 
 | Denoise steps | 2 cameras | 3 cameras |
 |---|---|---|
-| **5 steps** | 35.96 ms | 41.76 ms |
-| **10 steps** | 49.90 ms | 56.07 ms |
+| **5 steps** | 35.76 ms | 41.11 ms |
+| **10 steps** | 50.13 ms | 56.93 ms |
 
 **PCC — TTNN vs torch (device 0).** The full-model e2e needs `PI0_UPSTREAM_MASKS=1`
 (correct prefix-offset suffix RoPE positions for the base checkpoint; the default
@@ -296,10 +296,11 @@ TT_VISIBLE_DEVICES=0 python_env/bin/pytest -sq \
   models/experimental/pi0_5/tests/pcc/test_pcc_paligemma_vs_torch.py
 ```
 
-Component PCC clears 0.99 (siglip 0.9950, prefix 0.99998, suffix 0.9992, paligemma
-0.9994). Full-model e2e is ~0.93 at horizon 50 — bf16/bf8 compute precision propagated
-through the 50-token bidirectional suffix (uniform, no tile-seam artifact), a lower
-ceiling than the horizon-10 `pi05_libero` path the 0.99 gate was tuned for.
+Component PCC clears 0.99 (siglip 0.9950, prefix 0.99998, suffix 0.99987, paligemma
+0.9994). Full-model e2e is **0.9259** (10 steps, gated at 0.92) — bf16/bf8 compute precision
+propagated through the 50-token bidirectional suffix and the Euler loop (uniform, no
+tile-seam artifact), a lower ceiling than the horizon-10 `pi05_libero` path the 0.99 gate
+was tuned for. `PI0_WEIGHTS_BF16=1` lifts it to ~0.978 (5 steps) at a ~60% latency cost.
 
 ---
 

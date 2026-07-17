@@ -159,9 +159,12 @@ def main():
         # TTNN
         print("\n4. Running TTNN forward...")
         model_ttnn = SigLIPVisionTowerTTNN(config, vision_weights, device)
+        # forward() consumes a device tensor (BCHW); production callers (e2e /
+        # LIBERO / perf) upload bf16 TILE before the call. Match that convention.
+        pixel_values_ttnn = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         t0 = time.time()
         with torch.no_grad():
-            out_ttnn = model_ttnn.forward(pixel_values)
+            out_ttnn = model_ttnn.forward(pixel_values_ttnn)
         ttnn.synchronize_device(device)
         ttnn_time = (time.time() - t0) * 1000
 

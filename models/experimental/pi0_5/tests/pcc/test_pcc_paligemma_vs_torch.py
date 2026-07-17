@@ -223,7 +223,10 @@ def main():
         out_torch = model_torch.embed_image(pixel_values)
 
         model_ttnn = PaliGemmaBackboneTTNN(config, weights, device)
-        out_ttnn = model_ttnn.embed_image(pixel_values)
+        # embed_image() consumes a device tensor (BCHW); production callers upload
+        # bf16 TILE before the call. Match that convention.
+        pixel_values_ttnn = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        out_ttnn = model_ttnn.embed_image(pixel_values_ttnn)
 
         if isinstance(out_ttnn, ttnn.Tensor):
             out_ttnn = ttnn.to_torch(out_ttnn)
