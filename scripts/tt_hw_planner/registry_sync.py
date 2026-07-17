@@ -18,9 +18,46 @@ of the registry ("generate later") builds on the same path model.
 
 from __future__ import annotations
 
+import ast
+import json
+import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+
+
+UPSTREAM_URL = "https://github.com/tenstorrent/tt-metal.git"
+UPSTREAM_BRANCH = "main"
+
+_SYNCED_SUBTREES = (
+    "models/tt_transformers",
+    "models/tt_dit",
+    "models/tt_cnn",
+    "models/common",
+)
+_PROVIDES_MARKERS = ("TT_HW_PLANNER_PROVIDES", "TT_HW_PLANNER_FAMILY")
+
+
+def _cache_root() -> Path:
+    base = os.environ.get("TT_HW_PLANNER_CACHE") or (Path.home() / ".cache" / "tt_hw_planner")
+    return Path(base)
+
+
+@dataclass
+class UpstreamTree:
+    """The tree ``refresh_registry`` / drift-check run against for one run.
+
+    ``source`` is ``'remote'`` when a pinned upstream snapshot was fetched, or
+    ``'local'`` when we fell back to the checkout (offline / no network / fetch
+    failure). ``stale`` is True whenever ``source == 'local'`` — the caller
+    prints a loud warning so an air-gapped run never silently claims freshness.
+    """
+
+    root: Path
+    sha: str
+    source: str
+    stale: bool
 
 
 @dataclass
@@ -81,13 +118,16 @@ def _registered_paths() -> List[tuple]:
     return out
 
 
-def check_registry_drift(repo_root, include_unmapped: bool = True) -> List[DriftIssue]:
+def check_registry_drift(repo_root, include_unmapped: bool = True, unmapped_root=None) -> List[DriftIssue]:
     """Return every registry/tree mismatch under ``repo_root``.
 
-    Hard drift (``missing_path``) is a registered path that no longer exists.
-    Soft drift (``unmapped``) is a ``models/tt_transformers/tt/*.py`` reusable
-    module that no registry entry references — a hint that a new building block
-    may need mapping. Never raises; a missing tree just yields no unmapped hints.
+    Hard drift (``missing_path``) is a registered path that no longer exists in
+    the local checkout (the paths the tool will actually load). Soft drift
+    (``unmapped``) is a reusable module that no registry entry references — a
+    hint a new building block needs mapping. When ``unmapped_root`` is given
+    (e.g. a fetched upstream snapshot from :func:`fetch_upstream_models`), the
+    unmapped scan runs against IT so new upstream modules surface even when the
+    local checkout is stale. Never raises; a missing tree yields no hints.
     """
     root = Path(repo_root)
     issues: List[DriftIssue] = []
@@ -99,19 +139,20 @@ def check_registry_drift(repo_root, include_unmapped: bool = True) -> List[Drift
             issues.append(DriftIssue("missing_path", where, rel, "registered path does not exist in the checkout"))
 
     if include_unmapped:
+        scan_root = Path(unmapped_root) if unmapped_root else root
         for base, recursive in (
             ("models/tt_transformers/tt", False),
             ("models/tt_dit", True),
             ("models/tt_cnn", True),
         ):
-            d = root / base
+            d = scan_root / base
             if not d.is_dir():
                 continue
             files = d.rglob("*.py") if recursive else d.glob("*.py")
             for f in sorted(files):
                 if f.name.startswith("_") or f.name == "__init__.py":
                     continue
-                rel = str(f.relative_to(root))
+                rel = str(f.relative_to(scan_root))
                 if "/tests/" in rel or "/test/" in rel:
                     continue
                 if not any(rel == r or rel.startswith(r + "/") or r.startswith(rel) for r in referenced):
@@ -157,3 +198,160 @@ def format_drift(issues: List[DriftIssue]) -> str:
 def has_hard_drift(issues: List[DriftIssue]) -> bool:
     """True if any registered path is missing (the loud-failure condition)."""
     return any(i.kind == "missing_path" for i in issues)
+
+
+def _git(args: List[str], cwd: Optional[Path] = None, timeout: int = 60) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def resolve_upstream_sha(timeout: int = 20) -> Optional[str]:
+    """Resolve ``tenstorrent/tt-metal`` ``main`` to a concrete commit sha.
+
+    A single cheap ``git ls-remote`` — this is the per-run pin that reconciles
+    "always latest" with "deterministic" (same sha -> same registry). Returns
+    None on any network/timeout failure so the caller falls back to local.
+    """
+    try:
+        cp = _git(["ls-remote", UPSTREAM_URL, f"refs/heads/{UPSTREAM_BRANCH}"], timeout=timeout)
+    except Exception:
+        return None
+    if cp.returncode != 0 or not cp.stdout.strip():
+        return None
+    return cp.stdout.split()[0].strip() or None
+
+
+def _local_head_sha(repo_root: Path) -> str:
+    try:
+        cp = _git(["rev-parse", "HEAD"], cwd=repo_root, timeout=10)
+        if cp.returncode == 0:
+            return cp.stdout.strip()[:40] or "LOCAL"
+    except Exception:
+        pass
+    return "LOCAL"
+
+
+def fetch_upstream_models(repo_root, offline: bool = False, timeout: int = 90) -> UpstreamTree:
+    """Fetch a pinned snapshot of upstream's reusable-module subtrees.
+
+    Remote-first (fixes-plan Point 2a): resolve ``main`` to a sha, then
+    sha-cached shallow+sparse fetch of the subtrees the registry actually reads
+    (``tt_transformers``/``tt_dit``/``tt_cnn``/``common``). A sha already cached
+    is reused with no network. ``offline=True`` (or ``TT_HW_PLANNER_OFFLINE``),
+    no network, or any git failure falls back to the local checkout with
+    ``stale=True``. NEVER raises — bring-up must not be blocked by a fetch.
+    """
+    repo_root = Path(repo_root)
+    if offline or os.environ.get("TT_HW_PLANNER_OFFLINE"):
+        return UpstreamTree(repo_root, _local_head_sha(repo_root), "local", True)
+
+    sha = resolve_upstream_sha()
+    if not sha:
+        return UpstreamTree(repo_root, _local_head_sha(repo_root), "local", True)
+
+    dest = _cache_root() / "upstream" / sha
+    marker = dest / ".fetch_ok"
+    if marker.exists():
+        return UpstreamTree(dest, sha, "remote", False)
+
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        if not (dest / ".git").is_dir():
+            if _git(["init", "-q"], cwd=dest, timeout=20).returncode != 0:
+                raise RuntimeError("git init failed")
+            _git(["remote", "add", "origin", UPSTREAM_URL], cwd=dest, timeout=20)
+        _git(["config", "core.sparseCheckout", "true"], cwd=dest, timeout=20)
+        sparse = dest / ".git" / "info" / "sparse-checkout"
+        sparse.parent.mkdir(parents=True, exist_ok=True)
+        sparse.write_text("\n".join(f"{s}/*" for s in _SYNCED_SUBTREES) + "\n")
+        if _git(["fetch", "--depth", "1", "origin", sha], cwd=dest, timeout=timeout).returncode != 0:
+            raise RuntimeError("git fetch failed")
+        if _git(["checkout", "-q", "FETCH_HEAD"], cwd=dest, timeout=timeout).returncode != 0:
+            raise RuntimeError("git checkout failed")
+        marker.write_text(sha)
+        return UpstreamTree(dest, sha, "remote", False)
+    except Exception:
+        return UpstreamTree(repo_root, _local_head_sha(repo_root), "local", True)
+
+
+def _read_provides(py: Path) -> List[dict]:
+    """AST-read module-level ``TT_HW_PLANNER_PROVIDES`` / ``_FAMILY`` dict literals.
+
+    Reusable modules / demo families self-declare their concept, category,
+    HF class patterns and pipeline tags in one of these markers; ``refresh_registry``
+    collects them into the generated overlay. AST-only — no import, no code exec.
+    """
+    out: List[dict] = []
+    try:
+        tree = ast.parse(py.read_text(errors="replace"))
+    except Exception:
+        return out
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if isinstance(tgt, ast.Name) and tgt.id in _PROVIDES_MARKERS:
+                try:
+                    val = ast.literal_eval(node.value)
+                except Exception:
+                    continue
+                if isinstance(val, dict):
+                    out.append(val)
+                elif isinstance(val, (list, tuple)):
+                    out.extend(d for d in val if isinstance(d, dict))
+    return out
+
+
+def _overlay_path() -> Path:
+    return _cache_root() / "registry_overlay.json"
+
+
+def refresh_registry(tree_root, sha: str = "LOCAL") -> dict:
+    """Regenerate the overlay registry by walking the (fetched) tree.
+
+    Collects self-declared ``TT_HW_PLANNER_PROVIDES``/``_FAMILY`` manifests from
+    the synced subtrees and writes ``registry_overlay.json``. The overlay is a
+    pure SUPPLEMENT — loaders add only entries a static list doesn't already
+    cover, so an empty overlay (today: no module declares a marker yet) is a
+    no-op. Records the pinned ``sha`` so a run is reproducible. Never raises.
+    """
+    root = Path(tree_root)
+    families: List[dict] = []
+    concepts: List[dict] = []
+    try:
+        for sub in _SYNCED_SUBTREES:
+            d = root / sub
+            if not d.is_dir():
+                continue
+            for py in sorted(d.rglob("*.py")):
+                rel = str(py.relative_to(root))
+                if "/tests/" in rel or "/test/" in rel:
+                    continue
+                for m in _read_provides(py):
+                    m = dict(m)
+                    m.setdefault("tt_path", rel)
+                    (families if m.get("kind") == "family" else concepts).append(m)
+    except Exception:
+        pass
+
+    overlay = {"sha": sha, "families": families, "concepts": concepts}
+    try:
+        p = _overlay_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(overlay, indent=2, sort_keys=True))
+    except Exception:
+        pass
+    return overlay
+
+
+def load_generated_overlay() -> dict:
+    """Read the last-written overlay (supplement layer). ``{}`` if none/unreadable."""
+    try:
+        return json.loads(_overlay_path().read_text())
+    except Exception:
+        return {}

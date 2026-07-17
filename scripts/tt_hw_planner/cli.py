@@ -7990,18 +7990,39 @@ def _quiet_framework_logging() -> None:
         pass
 
 
-def _warn_on_registry_drift() -> None:
-    """Non-fatal pre-plan registry drift check (fixes-plan Point 2a).
+def _warn_on_registry_drift(args=None) -> None:
+    """Remote-first registry sync + non-fatal drift check (fixes-plan Point 2a).
 
-    Prints a one-line hint when a mapped registry path is missing from the
-    checkout, with full detail only under TT_HW_PLANNER_VERBOSE. Never raises:
-    a failing drift check must not block bring-up.
+    Resolves ``tenstorrent/tt-metal`` ``main`` to a pinned sha, sha-cached
+    shallow/sparse-fetches the reusable-module subtrees, regenerates the
+    overlay registry from that snapshot, then drift-checks (missing paths vs
+    the local checkout; unmapped modules vs the fetched tree). ``--offline`` or
+    ``TT_HW_PLANNER_OFFLINE`` (or no network) falls back to the local checkout
+    with a loud stale warning. Records the resolved sha for the run report.
+    Never raises: neither a fetch nor a drift check may block bring-up.
     """
     try:
         from .discovery import REPO_ROOT
-        from .registry_sync import check_registry_drift, format_drift, has_hard_drift
+        from .registry_sync import (
+            check_registry_drift,
+            fetch_upstream_models,
+            format_drift,
+            has_hard_drift,
+            refresh_registry,
+        )
 
-        issues = check_registry_drift(REPO_ROOT, include_unmapped=False)
+        offline = bool(getattr(args, "offline", False) or getattr(args, "no_registry_sync", False))
+        tree = fetch_upstream_models(REPO_ROOT, offline=offline)
+        refresh_registry(tree.root, sha=tree.sha)
+        os.environ["TT_HW_PLANNER_REGISTRY_SHA"] = f"{tree.source}:{tree.sha}"
+        if tree.stale:
+            print(
+                f"[registry] using LOCAL tree (may be stale) — upstream not fetched (offline/no-network); sha={tree.sha[:12]}"
+            )
+        elif os.environ.get("TT_HW_PLANNER_VERBOSE"):
+            print(f"[registry] synced to tenstorrent/tt-metal@{tree.sha[:12]}")
+
+        issues = check_registry_drift(REPO_ROOT, include_unmapped=False, unmapped_root=tree.root)
         if has_hard_drift(issues):
             n = sum(1 for i in issues if i.kind == "missing_path")
             print(
@@ -8015,7 +8036,7 @@ def _warn_on_registry_drift() -> None:
 
 def cmd_up(args) -> int:
     _quiet_framework_logging()
-    _warn_on_registry_drift()
+    _warn_on_registry_drift(args)
     # Resolve local-weights handling BEFORE any subprocess is spawned.
     # Sets HF_HOME / HF_HUB_OFFLINE in os.environ when the user passed
     # --local-dir or --offline-hf; prints an info line when cached
@@ -9824,6 +9845,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             "main so the single command works for any HF model, including "
             "very new ones (e.g. sam2_video) the shipped transformers "
             "doesn't yet recognize. Use this flag in CI or sealed envs."
+        ),
+    )
+    pup.add_argument(
+        "--offline",
+        dest="offline",
+        action="store_true",
+        help=(
+            "Do NOT fetch the tenstorrent/tt-metal registry from the network; "
+            "use the local checkout tree (may be stale). Default: remote-first "
+            "sha-pinned sync so the mapping registry tracks upstream without a "
+            "manual git pull (fixes-plan Point 2a). Also honored via "
+            "TT_HW_PLANNER_OFFLINE=1."
         ),
     )
     pup.add_argument(
