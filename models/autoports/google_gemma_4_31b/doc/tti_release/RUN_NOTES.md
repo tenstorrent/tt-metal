@@ -27,6 +27,7 @@
   - `fdc353375` Bound vLLM determinism conformance samples.
 - No commit was pushed.
 - tt-metal Stage 11 model-fix commit: `97a16e1c982a27fbc2f4e27b65dbd6b077f9e34f` (`Fix Gemma 4 dynamic decode head grids`).
+- tt-metal Stage 11 release-evidence commit: `56340a0e2a0` (`Record Gemma 4 TTI release handoff`).
 
 ## Commands and environment
 

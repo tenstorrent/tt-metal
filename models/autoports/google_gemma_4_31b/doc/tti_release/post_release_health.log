@@ -1,0 +1,18 @@
+2026-07-16T23:59:18Z reservation-container post-release health check
+host=spawner-exp-d-gemma31
+tt-smi -ls --local: PASS; four Blackhole p150b boards listed as UMD chips 0,1,2,3
+initial 1x4 mesh smoke: RECOVERABLE INFRA FAILURE
+failure=Device 0 active Ethernet core 31-25 heartbeat static; timed out returning to base firmware
+holder audit: PASS; no vLLM API server, EngineCore, readiness runner, or mesh-smoke process remained
+bounded recovery=tt-smi list -> tt-smi reset all PCI devices [0,1,2,3] -> tt-smi list
+bounded recovery result: PASS; reset completed and all four boards relisted
+2026-07-17T00:00:41Z repeated 1x4 mesh open/close smoke
+fabric=FABRIC_1D initialized on devices 0,1,2,3
+MESH_SMOKE_OPEN grid=11-10
+MESH_SMOKE_CLOSE PASS
+final tt-smi -ls --local: PASS; four Blackhole p150b boards listed
+final Stage 11 process audit: PASS; no client, vLLM API server, EngineCore, or readiness runner
+final port 8000 audit: PASS; health connection refused after server shutdown
+final Docker audit: PASS; no running container
+tmux audit: PASS; only unrelated pre-existing multigoal session retained
+firmware note=installed bundle 19.9.0 is newer than latest fully tested 19.5.0; this warning is unchanged
