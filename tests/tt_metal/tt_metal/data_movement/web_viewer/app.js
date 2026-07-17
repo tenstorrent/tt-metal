@@ -142,8 +142,6 @@ const TEST_GROUPS = [
         tags: ["read", "write", "unicast", "DRAM", "single_core"],
         tests: [
             { name: "Packet Sizes", csv: "DRAM Packet Sizes 2.0.csv" },
-            { name: "Channels", csv: "DRAM Channels 2.0.csv" },
-            { name: "Core Locations", csv: "DRAM Core Locations 2.0.csv" },
         ],
     },
     {
@@ -348,6 +346,32 @@ function renderFAQ(group) {
         div.appendChild(answer);
         list.appendChild(div);
     }
+}
+
+function renderDiagram(group) {
+    const section = document.getElementById("diagram-section");
+    const img = document.getElementById("diagram-img");
+    const item = document.getElementById("diagram-item");
+
+    const yamlEntry = state.groupsYaml && state.groupsYaml[group.directory];
+    const imagePath = yamlEntry && yamlEntry.image;
+
+    if (!imagePath) {
+        section.style.display = "none";
+        return;
+    }
+
+    img.src = `${DATA_BASE_PATH}/${imagePath}`;
+    img.alt = group.group + " pattern diagram";
+    section.style.display = "";
+    item.classList.remove("open");
+
+    const toggle = item.querySelector(".diagram-toggle");
+    const newToggle = toggle.cloneNode(true);
+    toggle.parentNode.replaceChild(newToggle, toggle);
+    newToggle.addEventListener("click", () => {
+        item.classList.toggle("open");
+    });
 }
 
 // ── Column Analysis ────────────────────────────────────────────────
@@ -860,6 +884,7 @@ async function selectTest(group, test) {
         `${GITHUB_BASE}/${group.directory}/README.md`;
 
     renderTestList();
+    renderDiagram(group);
     renderFAQ(group);
 
     state.availableArchs = await probeArchitectures(test);

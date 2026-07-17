@@ -1,5 +1,6 @@
 one_from_one:
   name: One from One
+  image: web_images/bad-one-from-one.svg
   faq:
     - q: What does the One from One test measure?
       a: >
