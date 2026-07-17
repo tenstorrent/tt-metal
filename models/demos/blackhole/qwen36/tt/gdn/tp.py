@@ -714,6 +714,92 @@ class TPGatedDeltaNet:
         for t in conv_new_list:
             ttnn.deallocate(t)
 
+    # ------------------------------------------------------------------ #
+    # Per-slot state edits for vLLM continuous batching.
+    # ------------------------------------------------------------------ #
+    # The demo prefills all B users up front and assembles the whole batch at
+    # once (assemble_batched_state). vLLM instead prefills ONE user at a time
+    # into its decode slot while the other rows are mid-decode, and condenses
+    # the batch when a request finishes. GDN's recurrent+conv state is a fixed
+    # [B,...] buffer indexed by physical slot (not paged), so both events need a
+    # single-row edit that preserves the other (live) rows. ttnn has no in-place
+    # row write, so — exactly like assemble_batched_state — these rebuild the
+    # buffer by slice+concat and ttnn.copy the result back (the copy preserves
+    # the decode trace's baked buffer address).
+    def _slice_along(self, buf, dim, lo, hi):
+        """ttnn.slice of buf along `dim` for indices [lo, hi), other dims kept full."""
+        start = [0] * len(buf.shape)
+        end = list(buf.shape)
+        start[dim] = lo
+        end[dim] = hi
+        return ttnn.slice(buf, tuple(start), tuple(end))
+
+    def _write_index(self, buf, src, idx, dim):
+        """Replace slice `idx` of `buf` along `dim` with `src` (extent 1 along `dim`), preserving
+        the other slices, via an in-place copy into `buf`. Consumes `src` (and the temporary
+        slices). `src` must already match `buf`'s dtype."""
+        n = buf.shape[dim]
+        if n == 1:
+            ttnn.copy(src, buf)
+            ttnn.deallocate(src)
+            return
+        parts = []
+        if idx > 0:
+            parts.append(self._slice_along(buf, dim, 0, idx))
+        parts.append(src)
+        if idx < n - 1:
+            parts.append(self._slice_along(buf, dim, idx + 1, n))
+        new = ttnn.concat(parts, dim=dim)
+        ttnn.copy(new, buf)
+        ttnn.deallocate(new)
+        for p in parts:
+            ttnn.deallocate(p)
+
+    def write_slot(self, slot, rec, convs):
+        """Write one user's B=1 prefill state into decode `slot`, preserving every other (live)
+        row. The per-slot analogue of assemble_batched_state for vLLM continuous batching.
+
+        rec:   [1, Nv, Dk, Dv] the user's recurrent state.
+        convs: list of K [1, 1, qkv_dim_tp] the user's conv taps (conv_states[m] column). Unlike
+               assemble_batched_state (which zeroes tap 0), every tap is written straight from the
+               user's B=1 prefill state, so decode continues from exactly the produced shift register.
+        Consumes rec and convs. Requires the batched buffers (allocate_kv_caches(batch_size=B))."""
+        assert self.rec_state is not None and self.conv_states is not None, "batched GDN state not allocated"
+        assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
+        rec_src = rec if rec.dtype == self.rec_state.dtype else ttnn.typecast(rec, self.rec_state.dtype)
+        if rec_src is not rec:
+            ttnn.deallocate(rec)
+        self._write_index(self.rec_state, rec_src, slot, dim=0)
+        for m in range(self.K):
+            c = convs[m]
+            c_src = c if c.dtype == self.conv_states[m].dtype else ttnn.typecast(c, self.conv_states[m].dtype)
+            if c_src is not c:
+                ttnn.deallocate(c)
+            self._write_index(self.conv_states[m], c_src, slot, dim=1)
+
+    def remap_slots(self, remap):
+        """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
+        previously at slot remap[i] (identity entries are no-ops). Mirrors
+        seed_manager.apply_slot_remap for GDN's per-slot recurrent+conv state, which the plugin's
+        slot_remap does not itself move. In-place copy into the fixed buffers (preserves the decode
+        trace's baked addresses)."""
+        idx = [int(remap[i]) for i in range(self.B)]
+        if all(idx[i] == i for i in range(self.B)):
+            return
+        self._gather_indices(self.rec_state, idx, dim=0)
+        for m in range(self.K):
+            self._gather_indices(self.conv_states[m], idx, dim=1)
+
+    def _gather_indices(self, buf, idx, dim):
+        """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
+        `new` is fully materialized before the copy, so gathering from `buf` into itself is safe."""
+        rows = [self._slice_along(buf, dim, idx[i], idx[i] + 1) for i in range(len(idx))]
+        new = ttnn.concat(rows, dim=dim)
+        ttnn.copy(new, buf)
+        ttnn.deallocate(new)
+        for r in rows:
+            ttnn.deallocate(r)
+
     def forward_prefill_batched(self, x, chunk_size=128, valid_lens=None, carry=False):
         """Batched prefill: all B users in one pass (no per-user Python loop).
 

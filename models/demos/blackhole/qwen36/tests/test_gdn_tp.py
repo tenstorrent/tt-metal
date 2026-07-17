@@ -176,6 +176,83 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
+@parametrize_batch(batches=(8,))
+def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, request):
+    """Per-slot GDN state edits for vLLM continuous batching: write_slot + remap_slots.
+
+    write_slot writes ONE user's B=1 prefill state into a single decode row without disturbing the
+    others — the incremental analogue of assemble_batched_state (which builds the whole batch at
+    once). remap_slots reindexes the rows on a vLLM batch condense. Validates:
+      (a) writing B users one slot at a time (in reverse order, so each write must preserve the
+          rows written before it) then ONE batched decode matches B independent B=1 runs, row by row;
+      (b) remap_slots(reverse) makes decode row i carry user (B-1-i)'s state, and the permuted state
+          is exactly the pre-remap rows reindexed (no cross-row contamination).
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
+    args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} B={B}")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    comp = tp_composer(mesh_device)
+    T = 128
+
+    xp = [torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16) for _ in range(B)]
+    xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]
+
+    # ---- reference: B independent B=1 prefill(capture_state) + decode ----
+    ref_rows = []
+    for u in range(B):
+        g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
+        g.reset_state()
+        g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
+        out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
+        ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+
+    # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
+    gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    gb.reset_state()
+    for u in reversed(range(B)):  # reverse order: every write must preserve the already-written rows
+        gu = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
+        gu.reset_state()
+        gu.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
+        gb.write_slot(u, gu.rec_state, list(gu.conv_states))  # consumes gu's rec/conv buffers
+        gu.rec_state, gu.conv_states = None, None
+
+    x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
+    out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
+    out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
+    thr = get_pcc_threshold(request)
+    pccs = [compute_pcc(ref_rows[u], out_t[0, 0, u].float()) for u in range(B)]
+    bad = [(u, p) for u, p in enumerate(pccs) if p < thr]
+    assert not bad, f"write_slot users below PCC {thr}: {bad} (min={min(pccs):.5f})"
+    logger.info(f"write_slot (B={B}) worst PCC = {min(pccs):.5f}")
+
+    # ---- remap_slots(reverse): row i must become the exact pre-remap row (B-1-i) ----
+    remap = [B - 1 - i for i in range(B)]
+    pre = ttnn.to_torch(gb.rec_state, mesh_composer=comp).float()  # [nd*B?, ...] mesh dim 0 = devices
+    gb.remap_slots(remap)
+    post = ttnn.to_torch(gb.rec_state, mesh_composer=comp).float()
+    # rec_state per device is [B, Nv, Dk, Dv]; mesh-concat stacks devices on dim 0 -> [nd*B, ...].
+    # Compare row i to pre row remap[i] within each device block.
+    ndev = pre.shape[0] // B
+    max_diff = 0.0
+    for d in range(ndev):
+        for i in range(B):
+            max_diff = max(max_diff, (post[d * B + i] - pre[d * B + remap[i]]).abs().max().item())
+    assert max_diff < 1e-3, f"remap_slots rec mismatch: max_diff={max_diff}"
+    logger.info(f"remap_slots (B={B}) exact-permutation max_diff = {max_diff:.2e}")
+    logger.info(f"PASSED: write_slot + remap_slots (B={B})")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
 # Batches capped at (2, 4): the gated_delta_attn_seq kernel maps one BH = B*Nv_tp row per
 # core and is L1-bound, so BH must stay <= ~32 (at TP=4/Nv_tp=8, B=4 -> BH=32 fits; B>=8
 # clashes/trips the BH <= compute_grid assert). Batched prefill itself is bit-exact (PCC 1.0);
