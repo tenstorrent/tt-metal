@@ -10,7 +10,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
 #include "dataflow_common.hpp"         // fill_vertical_tile_bf16 (causal partial-column mask tile)
-#include "block_cyclic_remap.hpp"      // logical_to_chunked_physical (block-cyclic cache, BC_ENABLE)
+#include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
@@ -44,8 +44,16 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(21);  // tokens per block (for p%bs, p/bs)
     constexpr uint32_t cb_vmask = get_compile_time_arg_val(22);    // per-token partial-column mask tile
 
+    // Block-cyclic ("slab") cache remap in BLOCK units: baked compile-time so a natural-order cache folds to
+    // identity (block_cyclic false). Kept in lockstep with the writer's block remap.
+    constexpr bool block_cyclic = get_compile_time_arg_val(23) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(24);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(25);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(26);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(27);
+
     // K/V use RuntimeTensorShape so T can vary without recompilation.
-    constexpr auto q_args = TensorAccessorArgs<23, 0>();
+    constexpr auto q_args = TensorAccessorArgs<28, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto v_args =
@@ -180,11 +188,10 @@ void kernel_main() {
             // Reader reserves the whole block; writer fills the lower half, reader fills the upper half.
             // Block-cyclic cache: remap the logical block id to its physical block before addressing (invP).
             // Addressing only — the sentinel search and the diagonal-block causal match stay on the logical id.
-            uint32_t phys_block = block_id;
-#ifdef BC_ENABLE
-            phys_block = tt::block_cyclic::logical_to_chunked_physical(
-                block_id, BC_CHUNK_LOCAL, BC_SP, BC_SHARD_STRIDE_GAP, BC_SLAB_STRIDE_GAP);
-#endif
+            // Identity for a natural-order cache (block_cyclic false).
+            const uint32_t phys_block = tt::block_cyclic::
+                logical_to_physical_page<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(
+                    block_id);
             uint32_t k_tile0 = k_batch_tile_offset + phys_block * k_tiles_per_block;
             uint32_t v_tile0 = v_batch_tile_offset + phys_block * v_tiles_per_block;
             if constexpr (n_kv > 1) {

@@ -9,31 +9,13 @@
 
 #include <stdint.h>
 
-#include "block_cyclic_remap.hpp"
+#include "block_cyclic_remap.hpp"  // tt::block_cyclic::logical_to_physical_page (invP remap, rows)
 
 namespace sparse_sdpa {
 
 // Per-NoC trid-ring depth for each gather half (swept: 4 is the sweet spot — with the split halving each
 // NoC's load, a shallow ring beats both the plain burst and the old deep single-NoC ring).
 constexpr uint32_t K_TRID_RING = 4;
-
-// Maps a natural KV index to its physical page in a shard-major, block-cyclic cache.
-template <uint32_t ChunkLocal, uint32_t Sp, uint32_t ShardStrideGap, uint32_t SlabStrideGap>
-FORCE_INLINE uint32_t logical_to_chunked_physical(uint32_t n) {
-    const uint32_t block_idx = n / ChunkLocal;
-    const uint32_t slab = block_idx / Sp;
-    const uint32_t shard = block_idx - slab * Sp;
-    return n + shard * ShardStrideGap - slab * SlabStrideGap;
-}
-
-template <bool BlockCyclic, uint32_t ChunkLocal, uint32_t Sp, uint32_t ShardStrideGap, uint32_t SlabStrideGap>
-FORCE_INLINE uint32_t logical_to_physical_page(uint32_t page) {
-    if constexpr (BlockCyclic) {
-        return logical_to_chunked_physical<ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(page);
-    } else {
-        return page;
-    }
-}
 
 template <
     bool BlockCyclic,
@@ -62,7 +44,8 @@ FORCE_INLINE void trid_ring_gather(
         }
         experimental::set_read_trid(noc, trid);
         const uint32_t page =
-            logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(idx_ptr[base + p]);
+            tt::block_cyclic::logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(
+                idx_ptr[base + p]);
         noc.async_read(kv, k_cb, k_row_bytes, {.page_id = page_offset + page}, {.offset_bytes = p * k_row_bytes});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;

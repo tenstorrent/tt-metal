@@ -152,7 +152,7 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
     TT_FATAL((v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
 
     // Block-cyclic ("slab") cache: the invP block remap bakes T/sp and chunk_local (in blocks) as compile-time
-    // defines, so the layout must divide cleanly. Miss-only — the constants are hashed.
+    // arguments, so the layout must divide cleanly. Miss-only — the constants are hashed.
     if (attrs.has_block_cyclic()) {
         const uint32_t sp = attrs.block_cyclic->sp;
         const uint32_t chunk_local = attrs.block_cyclic->chunk_local;
@@ -203,8 +203,8 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     // Hash compile-time choices. Interleaved K/V T and cache_batch_idx are patched at dispatch.
     // Sharded K/V shapes stay hashed because accessor strides depend on them. The block-cyclic path also
-    // hashes T: BC_SHARD_STRIDE_GAP (= (T/sp - chunk_local)/block_size, in blocks) is baked as a compile-time
-    // define, so a different cache size must be a distinct program.
+    // hashes T: the shard stride gap (= (T/sp - chunk_local)/block_size, in blocks) is baked as a compile-time
+    // argument, so a different cache size must be a distinct program.
     return tt::tt_metal::operation::hash_operation<SparseSDPAMsaOperation>(
         std::bit_cast<uint32_t>(attrs.scale),
         attrs.block_size,

@@ -11,19 +11,6 @@
 
 namespace ttnn::prim {
 
-// Block-cyclic KV layout. When set, the gathered `indices` are NATURAL token positions, but the kv cache is
-// stored block-cyclic across `sp` SP shards with per-shard chunk `chunk_local` (the DeepSeek chunked-prefill
-// KVPE cache, written by update_padded_kv_cache). The gather kernels remap each natural index -> physical page
-// id on the fly (invP, the inverse of the cache writer's blockcyclic_positions), so the host does NOT have to
-// reorder the kv buffer back to natural order before the op.
-//
-// `sp` is resolved from the cache's mesh axis and `chunk_local` is cross-checked against q's local sequence length
-// at the ttnn entry. Both are compile-time kernel arguments, so `sp` is the resolved shard count, not a mesh axis.
-struct BlockCyclicLayout {
-    uint32_t sp;           // SP shard count the cache was written across (resolved from the mesh)
-    uint32_t chunk_local;  // per-shard chunk length (chunk_size_global / sp == per-chip seq_len_local)
-};
-
 // Sparse MLA prefill (DeepSeek DSA).
 struct SparseSDPAParams {
     float scale = 1.0f;  // compile-time (folded into the program hash)

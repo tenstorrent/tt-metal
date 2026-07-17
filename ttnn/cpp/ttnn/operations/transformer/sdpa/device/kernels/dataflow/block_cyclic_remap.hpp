@@ -7,21 +7,32 @@
 // then yields a shard-major buffer, while the ops index in natural (logical) token order. This maps a
 // logical index to its physical position so the gather reads the block-cyclic buffer in place — no host
 // reorder. Unit-agnostic (pure index math): each op works in its own granularity — sparse_sdpa in rows,
-// sparse_sdpa_msa in blocks, indexer_score in tiles — and passes n / chunk_local / both stride gaps in it.
+// sparse_sdpa_msa in blocks, indexer_score in tiles — and bakes chunk_local / both stride gaps as template args.
 #pragma once
 
 #include <stdint.h>
 
 namespace tt::block_cyclic {
 
-// invP of the (slab, shard) transpose (see file header). Args are compile-time constants at every call
-// site, so this folds to one divide (mul+shift) + shift/mask.
-FORCE_INLINE uint32_t logical_to_chunked_physical(
-    uint32_t n, uint32_t chunk_local, uint32_t sp, uint32_t shard_stride_gap, uint32_t slab_stride_gap) {
-    const uint32_t block_idx = n / chunk_local;  // = slab*sp + shard
-    const uint32_t slab = block_idx / sp;
-    const uint32_t shard = block_idx - slab * sp;
-    return n + shard * shard_stride_gap - slab * slab_stride_gap;
+// invP of the (slab, shard) transpose (see file header). The divisors are template (compile-time) args, so
+// this folds to one divide (mul+shift) + shift/mask.
+template <uint32_t ChunkLocal, uint32_t Sp, uint32_t ShardStrideGap, uint32_t SlabStrideGap>
+FORCE_INLINE uint32_t logical_to_chunked_physical(uint32_t n) {
+    const uint32_t block_idx = n / ChunkLocal;  // = slab*Sp + shard
+    const uint32_t slab = block_idx / Sp;
+    const uint32_t shard = block_idx - slab * Sp;
+    return n + shard * ShardStrideGap - slab * SlabStrideGap;
+}
+
+// Natural -> physical dispatch. BlockCyclic == false (a contiguous, natural-order cache) folds to the
+// identity, so a natural-order cache emits no remap arithmetic.
+template <bool BlockCyclic, uint32_t ChunkLocal, uint32_t Sp, uint32_t ShardStrideGap, uint32_t SlabStrideGap>
+FORCE_INLINE uint32_t logical_to_physical_page(uint32_t page) {
+    if constexpr (BlockCyclic) {
+        return logical_to_chunked_physical<ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(page);
+    } else {
+        return page;
+    }
 }
 
 }  // namespace tt::block_cyclic

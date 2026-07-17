@@ -12,7 +12,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
 #include "dataflow_common.hpp"         // fill_neginf_tile (persistent causal -inf mask tile)
-#include "block_cyclic_remap.hpp"      // logical_to_chunked_physical (block-cyclic cache, BC_ENABLE)
+#include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 
@@ -40,7 +40,14 @@ void kernel_main() {
     constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(17);
     constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(18) != 0;
     constexpr uint32_t cb_neginf = get_compile_time_arg_val(19);
-    constexpr auto out_args = TensorAccessorArgs<20, 0>();
+
+    // Block-cyclic ("slab") cache remap in BLOCK units; same constants as the reader (see its comment).
+    constexpr bool block_cyclic = get_compile_time_arg_val(20) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(21);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(22);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(23);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(24);
+    constexpr auto out_args = TensorAccessorArgs<25, 0>();
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
@@ -102,11 +109,10 @@ void kernel_main() {
             }
             kreq_cb.pop_front(1);
             // Block-cyclic cache: remap the logical block id (from the reader) to its physical block (invP).
-            uint32_t phys_block = block_id;
-#ifdef BC_ENABLE
-            phys_block = tt::block_cyclic::logical_to_chunked_physical(
-                block_id, BC_CHUNK_LOCAL, BC_SP, BC_SHARD_STRIDE_GAP, BC_SLAB_STRIDE_GAP);
-#endif
+            // Identity for a natural-order cache (block_cyclic false).
+            const uint32_t phys_block = tt::block_cyclic::
+                logical_to_physical_page<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(
+                    block_id);
             uint32_t k_tile0 = k_batch_tile_offset + phys_block * k_tiles_per_block;
             uint32_t v_tile0 = v_batch_tile_offset + phys_block * v_tiles_per_block;
             if constexpr (n_kv > 1) {
