@@ -166,7 +166,14 @@ The warm per-chunk win is what matters for the long (13k/64k) prefills.
   forward *slower*: 52.0 → 58.3 ms** — the InterleavedToSharded reshards (3/layer × 28 + dispatch) eat the
   ~4.4 ms/forward device saving. Also fails for M<256 (S=32 PCC test: can't split 1 M-tile over 8 rows).
   Capturing the isolated win needs a **full L1-sharded transformer chain** (rms_norm→qkv→…→down→residual all
-  sharded, no reshards) — a large, numerically-revalidated rewrite, out of the current envelope.
+  sharded, no reshards). **Attempted the best slice of that** — down-only, with the block-shard reshard *fused
+  into the `gate*up` mul's output* (cheapest possible, no separate reshard op): still **+3 ms slower
+  (52.3→55.5)**, bit-exact. Root cause is a **layout conflict inside the FFN**: gate/up (wide N=8960) are
+  fastest writing *interleaved*, down is fastest reading *block-sharded* — so a reshard between them is
+  unavoidable and costs ~what down saves. A truly reshard-free full chain would force gate/up to block
+  (−32 µs each, slower) and require sharded variants of the delicate fp32 attention (softmax/GQA matmuls) —
+  net-negative and high-risk. Conclusion: **sharding is a real per-matmul win but not capturable end-to-end
+  in this model** without a ground-up sharded rewrite that the conflicting-layout shapes make net-negative.
   Earlier DRAM-input 2D/width configs (`matmul_prefill_sweep.py`) all lost to auto; DRAM-sharded is the
   M=1-decode BW specialist and won't help M=256 (bf8 proved it's not BW-bound).
 - **Larger prefill chunk_size** (the real fix for skinny-M — 1024-tok prefill 219.8→123.1 ms at chunk 512):
