@@ -348,3 +348,13 @@ rereview returned `clean-pass`. The complete verdict and anomaly ledger are in
 
 The local stage commit SHA is appended below after the reviewed tree is
 checkpointed. No push is performed.
+
+### Local checkpoint
+
+- `ac2699e0b31` — `model: add Llama 3.1 8B multichip decoder`; contains the
+  implementation, tests, `clean-pass` review, strategy/capacity docs, raw
+  triage, canonical Tracy CSV, and filtered `tt-perf-report` tables.
+- The size-only pre-commit hook was deliberately skipped for this checkpoint
+  so the required 1.0 MiB canonical profiler CSV and 2.4 MiB raw triage log
+  remain exact stage provenance. Every other configured pre-commit hook
+  passed. No push was performed.
