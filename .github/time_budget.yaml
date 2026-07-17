@@ -84,8 +84,7 @@ ttnn:
     wh_n300_civ2: 545
     bh_p100: 545
     bh_p150b_civ2: 545
-    bh_quietbox_2: 35
-    bh_quietbox_2_iommu: 30 # sdpa nightly (20) + ring sdpa PERF (10); both need IOMMU for the RT profiler (IOMMU-enabled QB2)
+    bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox: 25
     sim_wormhole_b0: 680
@@ -198,11 +197,11 @@ scaleout:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
-    bh_spsg: 20 # single galaxy
-    bh_sp1: 90
-    bh_sp1-blitz: 90 #blitz specific mgd sku
-    bh_sp1-mgd: 90 #general mgd sku
-    bh_sp4: 150
+    bh_sc1: 20 # single galaxy
+    bh_sc4: 90
+    bh_sc4-blitz: 90 #blitz specific mgd sku
+    bh_sc4-mgd: 90 #general mgd sku
+    bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
@@ -293,7 +292,7 @@ models:
     bh_p300: 20
     bh_loudbox: 190
     bh_quietbox_2: 80
-    bh_spsg: 20 # single galaxy MLA chunked prefill
+    bh_sc1: 20 # single galaxy MLA chunked prefill
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
   e2e_tier1:
@@ -323,10 +322,10 @@ models:
   unit_tier1:
     wh_llmbox: 61
     wh_n150: 110
-    wh_galaxy: 45
+    wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 250  # GPT-OSS-120B 15->22 (host-variance headroom)
+    bh_quietbox_2: 260
     bh_galaxy: 70
   unit_tier2:
     wh_llmbox: 114
@@ -357,8 +356,8 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 150
     bh_galaxy: 470
-    # blaze_models_prefill_tests.yaml sum of bh_spsg job timeouts (tightened from 840)
-    bh_spsg: 480
+    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
+    bh_sc1: 480
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
