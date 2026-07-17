@@ -732,10 +732,10 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(L_inv_4d)
 
     _out_l1 = ttnn.L1_MEMORY_CONFIG
+    # No memory_config: kernel output is already TILE, so it'd be a no-op that warns; the reshape below places it in L1.
     out_4d = ttnn.to_layout(
         ttnn.typecast(out_4d, ttnn.float32, memory_config=_out_l1) if out_4d.dtype != ttnn.float32 else out_4d,
         ttnn.TILE_LAYOUT,
-        memory_config=_out_l1,
     )
     o = ttnn.reshape(out_4d, [BH, L, V], memory_config=_out_l1)
 
