@@ -67,9 +67,10 @@ M-split/lower-Pk winners the reduction ablation is now minor:
 Also confirmed high-value on the new winners: **in1_near placement** (`place_current` +5…+16% = reverting
 costs that much) and **PARETO ring** (`bank_ring` +5…+17%) — keep both.
 
-## Still outstanding (pinned M-split follow-ups)
-write→signal→flush vs write→flush→signal A/B; a proper bounded Sm>1 search for 256×2048×1024; stale-comment
-cleanup. Not addressed here.
+## Pinned M-split follow-ups — all CLOSED
+The write→signal→flush vs write→flush→signal A/B, the bounded Sm>1 search for 256×2048×1024, and the
+stale-comment + rejected-diagnostic cleanup are all done — see the "Follow-up experiment" section below and
+commits `2106e6fd6ee` (source-lifetime fix) and `f392b62ee71` (bounded search + cleanup).
 
 ## Follow-up experiment — in1 delivery (acted on the "next optimization"), committed c0d5257e21e
 
@@ -101,5 +102,7 @@ flush-ordering. **CB1 depth is decisively not a lever** — in1 backpressure is 
 come from moving the per-block flush off the slave-release critical path and from coalescing the
 physically-contiguous block read. The unsafe exit-barrier variant measured a larger ~4% fwd gain; the honest
 per-block-flush cost brings that down to the ~1–2% above. Old behaviour retained as A/B diagnostics
-(`DIAG_FWD_FLUSH_FIRST`, `DIAG_NO_COALESCE`, `DIAG_CB1_D2/D8`). This closes the pinned M-split forwarding-order
-follow-up. Remaining: bounded Sm>1 search for 256×2048×1024; stale-comment + rejected-CB-depth cleanup.
+(`DIAG_FWD_FLUSH_FIRST`, `DIAG_NO_COALESCE`); the rejected CB1-depth diagnostic (`DIAG_CB1_D2/D8`) was
+**removed** from the enum/factory/gtest/diag-suite after the experiment (commit `f392b62ee71`). The bounded
+Sm>1 search for 256×2048×1024 on the final kernel confirmed the current `[1,4,2,2,4]` is best (0.0%;
+runner-up `[1,4,3,2,4]` +0.3%, tied) — no picker change. All three pinned M-split follow-ups are now closed.
