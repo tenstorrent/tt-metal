@@ -775,19 +775,25 @@ Result conv2d_L1(
                 // and pick a valid out_subblock_w divisor (<=8, DEST limit).
                 const uint32_t n_ntiles_mm =
                     tt::round_up(out_channels, tt::constants::TILE_WIDTH) / tt::constants::TILE_WIDTH;
-                // Cap out_block_w to a divisor <= 4 of per_core_N. The Quasar FUSED-bias matmul stalls at
-                // program completion when out_block_w is large in a single N-block (N=8 tiles / out_channels=256
-                // + bias HANGS; N<=4 passes, pure N=8 passes). out_block_w<=4 splits large N into multiple 4-wide
-                // blocks (num_blocks_x>1) == the working N=4 geometry, sidestepping the wide-N fused-bias epilogue
-                // stall (the pack_untilize_dest<obw,obw> + bias path). out_subblock_w = out_block_w (1 x obw <= 8).
-                uint32_t obw_mm = n_ntiles_mm;
-                while (obw_mm > 4 || (n_ntiles_mm % obw_mm) != 0) {
-                    obw_mm--;
+                // out_block_w MUST equal per_core_N (matmul asserts out_block_w==per_core_N || out_block_h==1).
+                // pick out_subblock_w as the largest divisor of per_core_N that's <= 4 (1 x osw subblock <= 8 DEST).
+                uint32_t osw_mm = n_ntiles_mm;
+                while (osw_mm > 4 || (n_ntiles_mm % osw_mm) != 0) {
+                    osw_mm--;
                 }
                 mm1d_cfg->per_core_N = n_ntiles_mm;
-                mm1d_cfg->out_block_w = obw_mm;
-                mm1d_cfg->out_subblock_w = obw_mm;
-                mm1d_cfg->out_subblock_h = 1;  // 1 x obw_mm subblock is always valid (<=8) and correct
+                mm1d_cfg->out_block_w = n_ntiles_mm;  // == per_core_N (assert clause 1)
+                mm1d_cfg->out_subblock_w = osw_mm;
+                mm1d_cfg->out_subblock_h = 1;
+                // Wide-N FUSED-bias epilogue stall: N=8 tiles (out_channels=256) + bias HANGS at program
+                // completion; N<=4 + bias and pure N=8 both pass. The stall scales with the M x N out_block
+                // (out_block_h * out_block_w) the bias epilogue processes. Shrink the M block to a single
+                // tile-row (out_block_h=1) for large N so the epilogue is 1 x per_core_N instead of
+                // per_core_M x per_core_N. out_block_w == per_core_N still holds (assert OK); the 1D matmul
+                // allows out_block_h < per_core_M (num_blocks_h = per_core_M).
+                if (n_ntiles_mm > 4) {
+                    mm1d_cfg->out_block_h = 1;
+                }
 
                 // Build the matching [M, N] output memory config: same grid/orientation as Program A's [M, K]
                 // output, but shard WIDTH = N (out_channels padded), not K. Reusing conv_out_memory_config (the
