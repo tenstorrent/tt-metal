@@ -6,7 +6,6 @@ import torch
 
 import ttnn
 from models.common.tensor_utils import (
-    align_shape_to_tile,
     get_rot_transformation_mat,
     pad_dim_to_size,
     pad_to_shape,
@@ -18,30 +17,7 @@ from models.common.tensor_utils import (
 )
 
 
-def test_align_shape_to_tile():
-    """Test align_shape_to_tile (replacement for deprecated ttnn.pad_to_tile_shape)."""
-
-    assert align_shape_to_tile([1, 2, 3, 4]) == [1, 2, 32, 32]
-    assert align_shape_to_tile([1, 1, 32, 32]) == [1, 1, 32, 32]
-    assert align_shape_to_tile([1, 1, 33, 65]) == [1, 1, 64, 96]
-    assert align_shape_to_tile([1, 1, 1, 1]) == [1, 1, 32, 32]
-    assert align_shape_to_tile([1, 384, 49, 96]) == [1, 384, 64, 96]
-    assert align_shape_to_tile([1, 9, 49, 768]) == [1, 9, 64, 768]
-    assert align_shape_to_tile([2, 4, 64, 128]) == [2, 4, 64, 128]
-    assert align_shape_to_tile((1, 1, 10, 10)) == [1, 1, 32, 32]
-    assert align_shape_to_tile([7]) == [32]
-    assert align_shape_to_tile([7, 50]) == [32, 64]
-    assert align_shape_to_tile([2, 3, 4, 5, 6, 7]) == [2, 3, 4, 5, 32, 32]
-    assert align_shape_to_tile([1, 1, 10, 10], tile_size=16) == [1, 1, 16, 16]
-    assert align_shape_to_tile([1, 1, 17, 33], tile_size=16) == [1, 1, 32, 48]
-
-    original = [1, 1, 10, 10]
-    align_shape_to_tile(original)
-    # ensure input is not mutated
-    assert original == [1, 1, 10, 10]
-
-
-def test_pad_dim_to_size(expect_error):
+def test_pad_dim_to_size():
     """Test the pad_dim_to_size utility function."""
 
     # Test padding on last dimension
@@ -66,7 +42,7 @@ def test_pad_dim_to_size(expect_error):
     assert padded3.shape == (1, 1, 32, 128)
 
     # Test error when target size is smaller
-    with expect_error(ValueError, "smaller than current size"):
+    with pytest.raises(ValueError, match="smaller than current size"):
         pad_dim_to_size(x, dim=-1, size=50)
 
 
@@ -120,11 +96,11 @@ def test_pad_to_shape_single_dim():
     assert torch.equal(padded[:, :, :, :5], x)
 
 
-def test_pad_to_shape_error_on_smaller_target(expect_error):
+def test_pad_to_shape_error_on_smaller_target():
     """Test pad_to_shape raises error when target is smaller than source."""
 
     x = torch.randn(2, 3, 4, 5)
-    with expect_error(ValueError, "smaller than current size"):
+    with pytest.raises(ValueError, match="smaller than current size"):
         pad_to_shape(x, (2, 3, 4, 3))
 
 
@@ -321,19 +297,7 @@ def test_program_config_to_str():
 
 
 if __name__ == "__main__":
-    import contextlib
-
-    @contextlib.contextmanager
-    def _expect_error(error, message):
-        # Standalone stand-in for the `expect_error` pytest fixture when running this
-        # file directly (outside of pytest).
-        with pytest.raises(error, match=message):  # allow-pytest.raises: no fixtures outside pytest
-            yield
-
-    test_align_shape_to_tile()
-    print("  ✓ test_align_shape_to_tile")
-
-    test_pad_dim_to_size(_expect_error)
+    test_pad_dim_to_size()
     print("  ✓ test_pad_dim_to_size")
 
     test_pad_dim_to_size_positive_dim()
@@ -348,7 +312,7 @@ if __name__ == "__main__":
     test_pad_to_shape_single_dim()
     print("  ✓ test_pad_to_shape_single_dim")
 
-    test_pad_to_shape_error_on_smaller_target(_expect_error)
+    test_pad_to_shape_error_on_smaller_target()
     print("  ✓ test_pad_to_shape_error_on_smaller_target")
 
     test_parse_shard_dims_from_mesh_mapper_config()
