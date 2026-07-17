@@ -6,8 +6,15 @@
 
 #include <algorithm>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
+
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/repeat/codegen/repeat_codegen_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::repeat_codegen {
 
@@ -28,17 +35,53 @@ namespace {
 // Repeating N or C never touches this math -- the same tile page (padding
 // included) is just duplicated, which is correct regardless of whether H/W
 // happen to be sub-tile.
-bool single_dim_ok(
-    const tt::tt_metal::Shape& shape, tt::tt_metal::DataType dtype, Layout layout, uint32_t d, uint32_t reps) {
+//
+// RM last-dim (d == ndim-1) has an extra hardware constraint beyond
+// correctness: RepeatCodegenProgramFactory's last-dim-RM branch sizes its
+// output CB as kRepeatCbDepth pages of dst_buffer->aligned_page_size(), and
+// that page IS the output stick -- `reps` copies of the input stick -- so the
+// CB allocation grows linearly with reps and input width with no cap
+// (mirrors ops/repeat/spec.py's "_CB_DEPTH ... repeat has no L1 clamp").
+// Reject upfront any case whose projected CB wouldn't fit in one core's L1,
+// so an oversized repeat cleanly routes to native (which streams the same
+// output without a repeat-scaled CB) instead of TT_THROWing out of circular
+// buffer allocation at program-compile time.
+bool last_dim_rm_fits_in_l1(const Tensor& input, uint32_t reps) {
+    if (input.storage_type() != tt::tt_metal::StorageType::DEVICE) {
+        // Not yet on device (e.g. host-side probing); nothing to bound against.
+        // Tensor::device() throws for a non-device tensor, so check first.
+        return true;
+    }
+    const uint64_t out_stick_bytes =
+        static_cast<uint64_t>(input.logical_shape()[-1]) * static_cast<uint64_t>(reps) * input.element_size();
+    // The eventual output buffer type (DRAM vs L1) isn't known at this
+    // routing-time check, so round up to the stricter (larger) of the two
+    // alignments for a conservative (never-too-small) estimate.
+    const auto& allocator = input.device()->allocator();
+    const uint32_t dram_alignment = allocator->get_alignment(tt::tt_metal::BufferType::DRAM);
+    const uint32_t l1_alignment = allocator->get_alignment(tt::tt_metal::BufferType::L1);
+    const uint32_t alignment = std::max(dram_alignment, l1_alignment);
+    const uint64_t out_aligned = tt::round_up(out_stick_bytes, static_cast<uint64_t>(alignment));
+    const uint64_t projected_cb_bytes = out_aligned * ttnn::prim::kRepeatCbDepth;
+    return projected_cb_bytes <= static_cast<uint64_t>(get_max_l1_space(input));
+}
+
+bool single_dim_ok(const Tensor& input, uint32_t d, uint32_t reps) {
     if (reps <= 1) {
         return true;
     }
+    const auto& shape = input.logical_shape();
+    const auto dtype = input.dtype();
+    const auto layout = input.layout();
     const uint32_t ndim = shape.rank();
     if (layout == ttnn::ROW_MAJOR_LAYOUT) {
         if (dtype == tt::tt_metal::DataType::BFLOAT8_B) {
             return false;
         }
         if (dtype == tt::tt_metal::DataType::BFLOAT16 && shape[-1] < 2) {
+            return false;
+        }
+        if (d == ndim - 1 && !last_dim_rm_fits_in_l1(input, reps)) {
             return false;
         }
         return true;
@@ -81,7 +124,7 @@ bool supported_by_codegen(const Tensor& input, uint32_t rep_dim, uint32_t num_re
     if (shape.rank() != 4 || rep_dim >= 4) {
         return false;
     }
-    return single_dim_ok(shape, input.dtype(), input.layout(), rep_dim, num_repeats);
+    return single_dim_ok(input, rep_dim, num_repeats);
 }
 
 bool supported_by_codegen(const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims) {
@@ -99,10 +142,8 @@ bool supported_by_codegen(const Tensor& input, const ttsl::SmallVector<uint32_t>
     if (!any_repeated) {
         return false;
     }
-    const auto dtype = input.dtype();
-    const auto layout = input.layout();
     for (uint32_t d = 0; d < ndim; ++d) {
-        if (!single_dim_ok(shape, dtype, layout, d, repeat_dims[d])) {
+        if (!single_dim_ok(input, d, repeat_dims[d])) {
             return false;
         }
     }

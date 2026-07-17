@@ -25,10 +25,11 @@ namespace ttnn::prim {
 
 namespace {
 
-// Matches ops/repeat/spec.py's READ_BATCH / WRITE_BATCH / _CB_DEPTH.
+// Matches ops/repeat/spec.py's READ_BATCH / WRITE_BATCH. kCbDepth lives in
+// the header as kRepeatCbDepth since repeat_codegen_supported.cpp's
+// L1-capacity gate needs the same value.
 constexpr uint32_t kReadBatch = 4;
 constexpr uint32_t kWriteBatch = 4;
-constexpr uint32_t kCbDepth = 8;
 
 // SEQ_REPEAT, see codegen/kernels/sequencers.h.
 constexpr uint32_t kSeqRepeat = 1;
@@ -101,7 +102,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         const uint32_t page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
         desc.cbs.push_back(CBDescriptor{
-            .total_size = kCbDepth * page_size,
+            .total_size = kRepeatCbDepth * page_size,
             .core_ranges = split.all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = 0,
@@ -166,7 +167,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         const uint32_t out_aligned = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
         desc.cbs.push_back(CBDescriptor{
-            .total_size = kCbDepth * out_aligned,
+            .total_size = kRepeatCbDepth * out_aligned,
             .core_ranges = split.all_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = 0,
@@ -220,7 +221,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     const uint32_t aligned_page_size = static_cast<uint32_t>(src_buffer->aligned_page_size());
 
     desc.cbs.push_back(CBDescriptor{
-        .total_size = kCbDepth * aligned_page_size,
+        .total_size = kRepeatCbDepth * aligned_page_size,
         .core_ranges = split.all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = 0,
