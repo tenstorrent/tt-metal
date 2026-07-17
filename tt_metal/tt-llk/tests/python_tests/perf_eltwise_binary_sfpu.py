@@ -122,6 +122,10 @@ def test_perf_eltwise_binary_sfpu_float(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        # call_binary_sfpu_operation() takes the math format as the non-type template
+        # parameter MATH_FORMAT (needed for constexpr dispatch of ADD_TOP_ROW and the
+        # Int32-vs-fp32 comparison ops), so formats.math must be a compile-time constant.
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -208,6 +212,10 @@ def test_perf_eltwise_binary_sfpu_int(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        # call_binary_sfpu_operation() takes the math format as the non-type template
+        # parameter MATH_FORMAT (needed for constexpr dispatch of ADD_TOP_ROW and the
+        # Int32-vs-fp32 comparison ops), so formats.math must be a compile-time constant.
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
@@ -304,6 +312,10 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
         ),
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
+        # call_binary_sfpu_operation() takes the math format as the non-type template
+        # parameter MATH_FORMAT (needed for constexpr dispatch of ADD_TOP_ROW and the
+        # Int32-vs-fp32 comparison ops), so formats.math must be a compile-time constant.
+        compile_time_formats=True,
     )
 
     configuration.run(perf_report)
