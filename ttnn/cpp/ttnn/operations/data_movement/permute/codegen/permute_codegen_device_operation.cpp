@@ -129,9 +129,10 @@ ttnn::operations::data_movement::PermuteCodegenDeviceOperation::tensor_return_va
         output_shape_vec[i] = input_shape[dims[i]];
     }
 
-    // get_row_strides(output_shape) (ops/permute/builder.py): row-unit strides over all but the
-    // last (W) dim. The last two slots are both stride 1 — W is intra-row, and rank-2 is the
-    // innermost row-counted dim — matched exactly by both writers' addressing math.
+    // Row-unit strides over all but the last (W) dim, ported from an internal reference
+    // implementation's get_row_strides(output_shape). The last two slots are both stride 1 — W
+    // is intra-row, and rank-2 is the innermost row-counted dim — matched exactly by both
+    // writers' addressing math.
     std::array<uint32_t, kMaxDims> output_strides{};
     if (rank == 1) {
         output_strides[0] = 1;

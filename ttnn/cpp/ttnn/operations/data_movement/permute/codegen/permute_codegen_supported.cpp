@@ -19,16 +19,18 @@ constexpr uint32_t kTileW = 32;
 constexpr uint32_t kFusedMinNc = 6;
 constexpr uint64_t kFusedMaxL1Bytes = 1024 * 1024;
 
-// Transcribed from ops/permute/permute.py's _fused_wh_ok. Only evaluated when dims[-1] ==
-// rank - 2; a match means the op orchestration delegates the WHOLE dispatch to
-// TransposeCodegen's fused WH kernel (transpose port scope, not this port's — see the
-// manifest's "left-out-for-now" case), so supported_by_codegen() must reject it.
+// Transcribed from an internal reference implementation's _fused_wh_ok. Only evaluated when
+// dims[-1] == rank - 2; a match means the op orchestration delegates the WHOLE dispatch to
+// TransposeCodegen's fused WH kernel (transpose port scope, not this port's), so
+// supported_by_codegen() must reject it.
 bool fused_wh_ok(const Tensor& input_tensor, ttsl::Span<const uint32_t> dims) {
     const auto& shape = input_tensor.logical_shape();
     const uint32_t rank = static_cast<uint32_t>(dims.size());
     const auto dtype = input_tensor.dtype();
     const uint32_t elem_size = input_tensor.element_size();
-    if (!(elem_size == 2 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 || dtype == DataType::UINT32)) {
+    // dtype is already narrowed to BFLOAT16/FLOAT32/INT32 by supported_by_codegen() before this
+    // runs, so only elem_size == 2 (BFLOAT16) needs a dtype-independent check here.
+    if (!(elem_size == 2 || dtype == DataType::INT32 || dtype == DataType::FLOAT32)) {
         return false;
     }
     const uint32_t h = shape[rank - 2];
@@ -67,6 +69,7 @@ const std::vector<DemotedEntry>& demoted_entries() {
         {{1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::BFLOAT16},
         {{1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::FLOAT32},
         {{1, 2, 3, 64, 96}, {2, 3, 1, 4, 0}, DataType::INT32},
+        {{1, 2, 3, 64, 96}, {2, 3, 4, 0, 1}, DataType::BFLOAT16},
         {{1, 2, 3, 64, 96}, {2, 3, 4, 0, 1}, DataType::FLOAT32},
         {{1, 2, 3, 64, 96}, {2, 3, 4, 0, 1}, DataType::INT32},
         {{1, 2, 3, 64, 96}, {4, 0, 2, 3, 1}, DataType::BFLOAT16},
@@ -137,18 +140,19 @@ bool supported_by_codegen(const Tensor& input_tensor, ttsl::Span<const uint32_t>
     if (rank < 2 || rank > ttnn::operations::data_movement::PermuteCodegenDeviceOperation::MAX_DIMS) {
         return false;
     }
-    // TILE is entirely out of scope for this port (see manifest sweep_suite note).
+    // TILE is entirely out of scope for this port.
     if (input_tensor.layout() != Layout::ROW_MAJOR) {
         return false;
     }
     // Sharded and non-DRAM-interleaved input are out of scope: the two kernel sets this port
     // wires (build_permute_rm / build_permute_rm_blocked) both assume a plain DRAM-interleaved
-    // TensorAccessor, and codegen_permute.py's invalidate_vector rejects L1-interleaved input.
+    // TensorAccessor, and the reference implementation's invalidate_vector rejects L1-interleaved
+    // input.
     if (input_tensor.memory_config().is_sharded() || input_tensor.memory_config().buffer_type() != BufferType::DRAM) {
         return false;
     }
     // bfloat8_b requires TILE (shared-exponent block-float has no row-major representation);
-    // any other non-covered dtype is likewise out of scope (manifest coverage.dtypes).
+    // any other non-covered dtype is likewise out of scope.
     const auto dtype = input_tensor.dtype();
     if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32) {
         return false;
@@ -160,7 +164,7 @@ bool supported_by_codegen(const Tensor& input_tensor, ttsl::Span<const uint32_t>
     }
     if (dims[rank - 1] == rank - 2 && fused_wh_ok(input_tensor, dims)) {
         // Left-out-for-now: delegates to TransposeCodegen's fused WH kernel, not a
-        // permute-owned path (manifest case dims=[0,3,1,2] on [2,3,64,96]).
+        // permute-owned path (e.g. dims=[0,3,1,2] on [2,3,64,96]).
         return false;
     }
     // W-changing: build_permute_rm_blocked.

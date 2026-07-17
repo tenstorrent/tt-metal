@@ -38,8 +38,8 @@ const char* kWriterBlockedSrc =
     "ttnn/cpp/ttnn/operations/data_movement/permute/codegen/kernels/writer_permute_rm_blocked.cpp";
 }  // namespace
 
-// Byte-identical port of ops/permute/spec.py's build_permute_rm host section: stick reader
-// (SEQ_IDENTITY, MODE_SEQUENCED) with no compute + the inverse-permutation RM writer.
+// Byte-identical port of an internal reference implementation's row-invariant host section:
+// stick reader (SEQ_IDENTITY, MODE_SEQUENCED) with no compute + the inverse-permutation RM writer.
 tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::RowInvariant::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -153,7 +153,7 @@ tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::RowInvariant::cre
     return desc;
 }
 
-// Byte-identical port of ops/permute/spec.py's build_permute_rm_blocked host section: 32x32
+// Byte-identical port of an internal reference implementation's W-changing host section: 32x32
 // block reader -> tilize/transpose_tile/pack_untilize compute -> permuted-page scatter writer.
 tt::tt_metal::ProgramDescriptor PermuteCodegenDeviceOperation::BlockedGeneric::create_descriptor(
     const operation_attributes_t& operation_attributes,

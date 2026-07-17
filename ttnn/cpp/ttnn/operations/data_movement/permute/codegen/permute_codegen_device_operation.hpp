@@ -20,7 +20,7 @@ namespace ttnn::operations::data_movement {
 
 // ROW_MAJOR-only codegen port of permute. Branches on whether the permutation moves the last
 // (contiguous) dim: dims[-1] == rank - 1 selects the row-invariant no-compute path, otherwise the
-// W-changing tilize/transpose/pack_untilize path (see manifest layout_split).
+// W-changing tilize/transpose/pack_untilize path.
 struct PermuteCodegenDeviceOperation {
     static constexpr uint32_t MAX_DIMS = 8;
 
