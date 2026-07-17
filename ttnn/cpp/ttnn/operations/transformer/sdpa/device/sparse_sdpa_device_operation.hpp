@@ -17,18 +17,6 @@
 
 namespace ttnn::prim {
 
-// Reader/writer runtime-arg layout — single source of truth shared by the program factory (which EMITS the
-// args in create_descriptor) and get_dynamic_runtime_args (which RE-APPLIES the indexed-cache page offset to
-// the cached program). kv_batch_page_offset sits at the fixed index below and is the only re-applied arg. If
-// the order before kv_batch_page_offset changes in the factory, update these indices here, or the dynamic
-// re-apply silently writes the wrong slot. Block-cyclic remap configuration is compile-time.
-namespace sparse_sdpa_rt {
-inline constexpr uint32_t kReaderKernelIdx = 0;
-inline constexpr uint32_t kWriterKernelIdx = 1;
-inline constexpr uint32_t kReaderBatchOffsetArg = 5;  // {q, kv, idx, tok_start, tok_count, [kv_batch_page_offset]}
-inline constexpr uint32_t kWriterBatchOffsetArg = 4;  // {out, tok_start, tok_count, kv, [kv_batch_page_offset]}
-}  // namespace sparse_sdpa_rt
-
 struct SparseSDPAOperation {
     using operation_attributes_t = SparseSDPAParams;
     using tensor_args_t = SparseSDPAInputs;
@@ -51,13 +39,13 @@ struct SparseSDPAOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
-    // cache_batch_idx is excluded from the program hash, so it must be re-applied to the cached program on
-    // every dispatch (the non-Buffer analog of buffer-address patching). Returns the per-core gather page
-    // offset (cache_batch_idx * T) for the reader/writer when indexed; empty otherwise.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& attrs,
+    // Cache-hit re-apply of ALL per-dispatch state (per-core args + tensor-backed CB/buffer addresses), since
+    // the hash excludes the kv length T and cache_batch_idx (kv_batch_page_offset). See the program factory.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
-        tensor_return_value_t& output,
+        tensor_return_value_t& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
