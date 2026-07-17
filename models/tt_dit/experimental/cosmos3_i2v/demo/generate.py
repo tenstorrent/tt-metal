@@ -168,7 +168,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--device-proj-in",
         action="store_true",
-        help="Move proj_in (192→5120 vision entry projection) onto the device. Reduces gen-seq upload bandwidth 26×.",
+        help=(
+            "EXPERIMENTAL — produces noisy output. Move proj_in (192→5120) onto the device to "
+            "reduce gen-seq upload bandwidth 26×. Device tree-reduction over K=192 disagrees "
+            "with the CPU sequential-reduction reference by RMSE≈0.0017, which amplifies ~61× "
+            "through 64 layers and corrupts the denoised video. Do not use in production."
+        ),
     )
     p.add_argument(
         "--guidance-scale",

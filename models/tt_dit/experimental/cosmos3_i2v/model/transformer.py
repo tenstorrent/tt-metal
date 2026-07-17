@@ -127,9 +127,12 @@ class Cosmos3OmniTransformer(Module):
         if (enable_proj_in or enable_proj_out) and patch_latent_dim is None:
             msg = "patch_latent_dim is required when enable_proj_in or enable_proj_out is True"
             raise ValueError(msg)
-        # proj_in uses float32 weights. The host-side reference accumulates 192 bf16 products
-        # in float32 — matching that requires float32 on device. bf16 weights with HiFi4 still
-        # carry ~5.9% quantization error (sqrt(192) × bf16_eps) that compounds over 64 layers.
+        # proj_in: float32 weights + HiFi4 are necessary but not sufficient for correctness.
+        # The host reference (PyTorch CPU bf16 matmul) accumulates K=192 products sequentially
+        # in float32; the device uses tree-reduction, which differs due to fp non-associativity.
+        # Measured: RMSE≈0.0017 after proj_in → amplifies ~61× over 64 layers → ~9% gen_out
+        # error → visible noise in the generated video. This flag is EXPERIMENTAL and produces
+        # noisy output until the summation-order mismatch is resolved.
         self.proj_in = (
             Linear(patch_latent_dim, hidden_size, bias=True, mesh_device=mesh_device, dtype=ttnn.float32)
             if enable_proj_in
@@ -211,9 +214,9 @@ class Cosmos3OmniTransformer(Module):
         # multiply by 0, noisy rows by 1. Uses matmul (K=1) instead of ttnn.multiply because
         # ttnn.multiply's 2D broadcast ([1,1,1,H] × [1,1,N,1]) corrupts tile boundaries.
         if self.proj_in is not None:
-            # Cast input to float32 to match the host-side reference: without this the
-            # bf16 input quantization adds sqrt(192) × bf16_eps ≈ 5.9% error per output
-            # element, which compounds visibly over 64 layers at large sequence lengths.
+            # float32 input + HiFi4 minimize quantization error, but the device still uses
+            # tree-reduction while the CPU reference reduces sequentially over K=192; the
+            # resulting RMSE≈0.0017 amplifies to ~9% after 64 layers (see __init__ comment).
             gen_seq_fp32 = ttnn.typecast(gen_seq, ttnn.float32)
             # default_block_size=4: float32 tiles are 2× larger than bf16, halving the block
             # size keeps circular buffers within BH's 1.5 MB L1 limit.
