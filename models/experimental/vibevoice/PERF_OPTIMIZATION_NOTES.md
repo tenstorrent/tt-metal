@@ -158,9 +158,17 @@ The warm per-chunk win is what matters for the long (13k/64k) prefills.
   so these matmuls are **not weight-BW-bound at M=256**; they're latency/occupancy-bound (both FLOPs and
   BW ~50 %, the skinny-matmul signature: M=256 = 8 tiles across ~100 cores). bf8 only saves footprint and
   costs a little PCC (0.99999→0.99997). Not worth it.
-- **Sharding (width/height/block/DRAM-sharded):** auto config beats all hand-tuned 2D/width/block configs
-  (up to 10× slower) — see `matmul_prefill_sweep.py`. More cores makes the latency-bound case worse.
-  DRAM-sharded is the M=1-decode BW specialist and won't help M=256 (bf8 proved it's not BW-bound).
+- **Sharding — BLOCK-sharded *input* helps the matmul in isolation but is negated by reshard in-model.**
+  A dedicated sharded-INPUT sweep (`matmul_shardin_sweep.py`, activation block/width/height-sharded to L1
+  on 8×8) found **block-sharded input is a real per-op win** (bit-exact, PCC 1.0): down 255→132 µs (−48%),
+  o_proj 55→37 (−33%), qkv 57→41 (−28%); gate/up (N=8960) and lm_head (N=151936) keep the auto width-mcast.
+  BUT integrating it (reshard DRAM→block-sharded L1 before qkv/o_proj/down, output DRAM) made the **full
+  forward *slower*: 52.0 → 58.3 ms** — the InterleavedToSharded reshards (3/layer × 28 + dispatch) eat the
+  ~4.4 ms/forward device saving. Also fails for M<256 (S=32 PCC test: can't split 1 M-tile over 8 rows).
+  Capturing the isolated win needs a **full L1-sharded transformer chain** (rms_norm→qkv→…→down→residual all
+  sharded, no reshards) — a large, numerically-revalidated rewrite, out of the current envelope.
+  Earlier DRAM-input 2D/width configs (`matmul_prefill_sweep.py`) all lost to auto; DRAM-sharded is the
+  M=1-decode BW specialist and won't help M=256 (bf8 proved it's not BW-bound).
 - **Larger prefill chunk_size** (the real fix for skinny-M — 1024-tok prefill 219.8→123.1 ms at chunk 512):
   **fails the PCC gate** — overall prefill PCC 0.99536→0.98723 (S=512) / 0.99363→0.98588 (S=1024). The fp32
   attention error compounds over the larger score matrix; this is exactly why chunk_size is pinned at 256.
