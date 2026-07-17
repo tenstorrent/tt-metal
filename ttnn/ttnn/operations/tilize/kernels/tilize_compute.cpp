@@ -20,12 +20,30 @@ void kernel_main() {
     constexpr uint32_t cb_tiled_out = 16;
     constexpr uint32_t Wt_chunk = get_compile_time_arg_val(0);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(1);
+    constexpr uint32_t is_fp32_in = get_compile_time_arg_val(2);
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);  // per-core tile-row count
 
     compute_kernel_hw_startup(cb_rm_in, cb_tiled_out);
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
-        compute_kernel_lib::tilize<Wt_chunk, cb_rm_in, cb_tiled_out>(num_blocks);
+        if constexpr (is_fp32_in) {
+            // fp32 tilize is a TERMINAL op here — the tiled output goes straight
+            // to DRAM/L1 with no downstream FPU consumer, so tf32 truncation is a
+            // real precision loss (fails the exact fp32 identity oracle). Force
+            // the bit-exact path: Fp32Mode::Lossless + UnpackToDestFp32 (set on
+            // cb_rm_in in the descriptor) + fp32_dest_acc_en.
+            compute_kernel_lib::tilize<
+                Wt_chunk,
+                cb_rm_in,
+                cb_tiled_out,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+                compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(num_blocks);
+        } else {
+            // bf16 input: default Fast path; pack reconfigure drives the dtype= cast.
+            compute_kernel_lib::tilize<Wt_chunk, cb_rm_in, cb_tiled_out>(num_blocks);
+        }
     }
 }

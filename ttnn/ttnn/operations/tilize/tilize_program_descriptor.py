@@ -140,7 +140,8 @@ def create_program_descriptor(
     writer_rt_args = ttnn.RuntimeArgs()
 
     # Compute (TRISC)
-    compute_ct_args = [wt_chunk, num_chunks]
+    is_fp32_in = 1 if in_dtype == ttnn.float32 else 0
+    compute_ct_args = [wt_chunk, num_chunks, is_fp32_in]
     compute_rt_args = ttnn.RuntimeArgs()
 
     for core, (start_tile_row, count) in zip(cores, assignment):
@@ -164,12 +165,20 @@ def create_program_descriptor(
     )
 
     fp32_dest = in_dtype == ttnn.float32 or out_dtype == ttnn.float32
+    compute_config = ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest)
+    if is_fp32_in:
+        # Bit-exact fp32 tilize: the input CB must keep fp32 through the unpacker
+        # into Dest (default mode downgrades fp32 -> tf32). Pairs with
+        # Fp32Mode::Lossless in the compute kernel.
+        unpack_modes = [ttnn.UnpackToDestMode.Default] * 32
+        unpack_modes[CB_RM_IN] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        compute_config.unpack_to_dest_mode = unpack_modes
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_compute.cpp"),
         core_ranges=core_ranges,
         compile_time_args=compute_ct_args,
         runtime_args=compute_rt_args,
-        config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
+        config=compute_config,
     )
 
     return ttnn.ProgramDescriptor(
