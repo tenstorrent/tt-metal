@@ -89,26 +89,33 @@ public:
     // CALL SITE, so `line` is the caller's line. DPRINT before/after each *_impl: on a watcher-off dprint run,
     // the last "IN" with no matching "OUT" on a stuck RISC = the blocking call (op + cb_id + caller line). The
     // caller FILE is the kernel named in that RISC's dprint-output section (or an included helper at that line).
-    // Remove this instrumentation after the stall is found.
+    // GATED behind DFB_TRACE (default OFF): the per-op prints are extremely high-volume; on slow-dispatch runs a
+    // hung program stops draining DPRINT, the FIFO fills, and the RISC blocks IN the print (DPW) -> a FALSE stall
+    // that starves downstream ops (Quasar reader -> tilize starvation). Build with -DDFB_TRACE to re-enable.
+#ifdef DFB_TRACE
+#define DFB_TRACE_PRINT(...) DPRINT(__VA_ARGS__)
+#else
+#define DFB_TRACE_PRINT(...) ((void)0)
+#endif
     void reserve_back(uint16_t num_entries, uint32_t line = __builtin_LINE()) {
-        DPRINT("DFB RB IN  cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
+        DFB_TRACE_PRINT("DFB RB IN  cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
         reserve_back_impl(num_entries);
-        DPRINT("DFB RB OUT cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
+        DFB_TRACE_PRINT("DFB RB OUT cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
     }
     void push_back(uint16_t num_entries, uint32_t line = __builtin_LINE()) {
-        DPRINT("DFB PB IN  cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
+        DFB_TRACE_PRINT("DFB PB IN  cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
         push_back_impl(num_entries);
-        DPRINT("DFB PB OUT cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
+        DFB_TRACE_PRINT("DFB PB OUT cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
     }
     void wait_front(uint16_t num_entries, uint32_t line = __builtin_LINE()) {
-        DPRINT("DFB WF IN  cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
+        DFB_TRACE_PRINT("DFB WF IN  cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
         wait_front_impl(num_entries);
-        DPRINT("DFB WF OUT cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
+        DFB_TRACE_PRINT("DFB WF OUT cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
     }
     void pop_front(uint16_t num_entries, uint32_t line = __builtin_LINE()) {
-        DPRINT("DFB PF IN  cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
+        DFB_TRACE_PRINT("DFB PF IN  cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
         pop_front_impl(num_entries);
-        DPRINT("DFB PF OUT cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
+        DFB_TRACE_PRINT("DFB PF OUT cb={} n={} L={}\n", (uint32_t)get_id(), (uint32_t)num_entries, line);
     }
     // Explicit sync APIs end
 
