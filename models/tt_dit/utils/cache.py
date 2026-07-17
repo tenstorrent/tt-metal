@@ -106,6 +106,14 @@ def _walk_parameters(module: Module, prefix: str = ""):
         yield f"{prefix}{name}", parameter
 
 
+def _kernel_capture_only() -> bool:
+    """True during a kernel-prewarm capture pass, which records compile recipes with dispatch off.
+
+    Matches the C++ flag's semantics (kernel_prewarm.cpp): any non-empty value enables it.
+    """
+    return os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY", "") != ""
+
+
 def load_model(
     tt_model: Module,
     *,
@@ -206,7 +214,14 @@ def load_model(
     # before any rank might proceed to create that dir to save.
     ttnn.distributed_context_barrier()
 
-    if create_cache:
+    if create_cache and _kernel_capture_only():
+        # Weight prep runs on device, and this pass has dispatch disabled, so the tensors above hold
+        # whatever the skipped ops left behind. Publishing them poisons the cache for every later run:
+        # a content key would at least refuse the artifact, but the legacy content-blind entries have
+        # no manifest to check it against, so the garbage is served silently. Re-prepping costs one
+        # weight load; a bad cache costs every run until someone deletes it by hand.
+        logger.warning(f"kernel capture-only pass: NOT writing weight cache to '{cache_dir}'")
+    elif create_cache:
         if key is not None:
             _reclaim_superseded(model_cache_dir(**key_args, content=None, required=False))
         logger.info(f"Writing cache to '{cache_dir}'.")
