@@ -1,0 +1,72 @@
+# Picker v3 — fallback improvement + M-scaling table (Mt≤8), and the next kernel optimization
+
+Acts on the Mt≤8 re-baseline campaign (see `REGIME_A_MT8_CAMPAIGN_REPORT.md`). **Production change**,
+committed after a strict no-regression gate. Commits `e270726f52c` (picker) / `7950fcae84b` (tooling).
+
+## What changed (regime_a_matmul_config.cpp `auto_select_config`)
+
+**1. Lookup table — 23 measured M-scaling winners (+3…+32%).** The M-scaling shapes use the cost-model
+fallback, not the 20-shape production table; the campaign measured their true winners. Added them directly
+(stability / exhaustive-expand / validate confirmed). Also updated the existing `{8,64,32}` (256×2048×1024)
+entry nsb2→nsb4 (+5%). Highlights: 256×15360×1536 −24%, 256×2048×512 −20%, 32×15360×768 −19%,
+256×2304×6144 −18%, 128×15360×1536 −17%.
+
+**2. Fallback cost model — Sm>1 enumeration + reduction cost + narrow-N hysteresis.** The old fallback
+enumerated Sm=1 only and had no reduction/forwarding term. New:
+- Enumerate Sm>1 candidates.
+- `pick_cost_v3` = deployed cost + split-K reduction penalty `rk·(Pk−1)·(Mblk·Nown)` (kRk=0.8).
+- **Narrow-N-guarded hysteresis**: anchor on the deployed Sm=1 pick; switch to the best Sm>1 candidate
+  only when (a) the shape is narrow-N (`Nband=cdiv(Nt,8) ≤ 2`, where N-split cannot supply parallelism so
+  M-split is the lever) and (b) its reduction-aware cost beats the anchor by `margin=0.03`.
+- Because the anchor is the unchanged deployed Sm=1 pick, the Sm=1 ranking is **byte-identical** and the
+  fallback is **zero-regression by construction**; Sm>1 fires only for very-narrow-N (N≤512) unseen shapes.
+
+**Why not a pure global cost model?** A global analytic model **cannot** capture the Sm>1 win condition
+without regressions — its Sm>1 cost predictions are *anti-correlated* with reality (it fires on wide-N
+losers like 128×2304×6144 −18% and misses the narrow-N winners). Trained on the campaign with a 1/3
+validation holdout and a lexicographic (min-regressions → max-wins) objective, the only zero-regression
+configuration is the narrow-N guard. The clean physical discriminator is **N-width**: narrow-N → M-split is
+the only parallelism lever; wide-N → N-split (Ns) handles it and M-split only adds forwarding. Trainer:
+`tools/mm_sweep/picker_v3.py`.
+
+## Gated validation (all correctness/perf gates passed)
+
+Full 60-shape corpus re-run through the rebuilt picker (`regime_a_campaign.py rerun`, fresh product path,
+diffed vs the deployed baseline):
+
+- **21 shapes improved >3%** (up to −24.3%), **0 regressions >3%**, **0 PCC < 0.999** (all ≥0.99999).
+- Corpus total 4811→4650 µs (**−3.3%**; concentrated in the low-AI Mt≥4 shapes, −8 to −24%).
+- Public suite **20/20** pass; **6/6** diag gtests (placement/ring/pipelined/progressive) pass.
+- Pre-finalize validation: 256×15360×1536 nsb6 **+30.4%**, 256×2048×1024 nsb4 **+4.7%** (relaunch A/B, PCC
+  exact); 256×2048×512 confirmed exhaustively over all 371 feasible configs.
+
+## The next kernel optimization (re-ablation of the new winners)
+
+Re-ran the causal ablations on the bottom shapes' **new** winning configs (`regime_a_campaign.py reablate`).
+The picker fix **relieved the reduction bottleneck** (was the dominant cost under deep split-K); on the new
+M-split/lower-Pk winners the reduction ablation is now minor:
+
+| shape (new cfg) | full µs | skip in1 | skip in0 | skip fwd | no reduce | place_current | bank_ring |
+|---|--|--|--|--|--|--|--|
+| 256×2048×512 [1,4,3,2,2] | 17.2 | −14% | −3% | −18% | −9% | +5% | +15% |
+| 128×2048×512 [1,4,2,2,2] | 11.7 | −26% | −6% | −10% | −10% | +12% | +5% |
+| 256×2048×1536 [1,4,3,2,3] | 30.4 | −21% | −3% | −4% | −8% | +16% | +7% |
+| 64×2048×512 [2,4,1,2,1] | 8.8 | −18% | −5% | −7% | −13% | — | +14% |
+| 32×15360×768 [1,6,1,2,3] | 51.6 | **−70%** | −3% | −1% | −3% | — | +2% |
+| 256×2304×6144 [4,3,1,1,3] | 88.1 | −10% | −9% | −8% | +1% | — | +17% |
+
+**Conclusion — next lever is in1 delivery / read.** `skip_in1_read` is now the largest ablation everywhere
+(−14 to −26% on the low-AI Mt shapes, −70% on deep-K 32×15360×768). Two sub-levers:
+1. **in1 read-volume/bandwidth** for deep-K read-bound shapes (32×15360×768 is intrinsically read-bound;
+   burst-size / dedicated-reader work applies — CB depth won't help a shape whose critical path *is* the read).
+2. **Revisit CB1-depth for the M-split low-AI shapes.** In the pre-fix ablations CB1-depth was *not*
+   warranted because reduction dominated; now that reduction is relieved and in1 delivery is exposed *with
+   compute present* (128×2048×512, 256×2048×1536), a diagnostic CB1-depth (2/4/8 blocks) may hide the in1
+   read behind compute+forward. Worth a compile-gated diagnostic-only experiment (not a production default).
+
+Also confirmed high-value on the new winners: **in1_near placement** (`place_current` +5…+16% = reverting
+costs that much) and **PARETO ring** (`bank_ring` +5…+17%) — keep both.
+
+## Still outstanding (pinned M-split follow-ups)
+write→signal→flush vs write→flush→signal A/B; a proper bounded Sm>1 search for 256×2048×1024; stale-comment
+cleanup. Not addressed here.

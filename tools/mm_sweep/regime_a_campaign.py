@@ -936,6 +936,48 @@ def rerun(deadline=None):
     return out
 
 
+def reablate(deadline=None):
+    """Re-run the causal ablations on the bottom shapes' NEW winning configs (post picker-correction), to
+    identify which kernel optimisation is genuinely next now that config-level wins are captured."""
+    sel = json.load(open(S3))["selected"]
+    out = []
+    for r in sel:
+        M, K, N = r["M"], r["K"], r["N"]
+        cfg = tuple(rb.auto_config(M, K, N))  # NEW picker pick
+        Sm = cfg[2]
+        masks = [("full", 0)] + [(n, m) for n, m in ABLATE if not (n == "place_current" and Sm == 1)]
+        res = {}
+        for name, mask in masks:
+            if deadline and time.time() > deadline:
+                break
+            runs = [ds.run_one(M, K, N, cfg, mask) for _ in range(2)]
+            oks = [x for x in runs if x.get("ok") and x["wall_us"]]
+            med = statistics.median([x["wall_us"] for x in oks]) if oks else None
+            res[name] = {"mask": mask, "med_us": med, "risc": (oks[0]["risc"] if oks else None), "n_ok": len(oks)}
+        full = res.get("full", {}).get("med_us")
+        deltas = {n: ((v["med_us"] / full - 1) * 100 if (full and v.get("med_us")) else None) for n, v in res.items()}
+        rec = {
+            "M": M,
+            "K": K,
+            "N": N,
+            "Mt": r["Mt"],
+            "cfg": list(cfg),
+            "old_cfg": r["auto_cfg"],
+            "full_us": full,
+            "abl": res,
+            "deltas_pct": deltas,
+        }
+        out.append(rec)
+        json.dump(out, open(f"{HERE}/regime_a_campaign_reablate.json", "w"), indent=2)
+        print(
+            f"[reablate] {M}x{K}x{N} new_cfg={list(cfg)} full={full and round(full,1)}us "
+            + " ".join(f"{n}={deltas[n] and round(deltas[n],0)}%" for n in deltas if n != "full"),
+            flush=True,
+        )
+    print("REABLATE DONE", flush=True)
+    return out
+
+
 def state_start():
     st = {"start": time.time()}
     if os.path.exists(STATE):
@@ -969,6 +1011,8 @@ if __name__ == "__main__":
         stability(deadline=start + LAUNCH_DEADLINE_S)
     elif mode == "rerun":
         rerun()
+    elif mode == "reablate":
+        reablate()
     elif mode == "validate":
         validate()
     elif mode == "finalize":  # pre-training: validate specific candidates + expand the largest gaps
