@@ -115,6 +115,17 @@ inline void llk_unpack_setup_dest_dvalid() {
 }
 
 /**
+ * @brief Restores UNPACK_TO_DEST_DVALID_CTRL to the no-wait default (0) — the inverse of
+ *        llk_unpack_setup_dest_dvalid(). Call when the unpack-to-dest tilize is done so a FOLLOWING op in the
+ *        same kernel (e.g. the fused conv's matmul, whose DEST producer is FPU and which syncs via the
+ *        MATH<->PACK semaphore, NOT dvalid) is not left gated on the tilize's stale UNPACK dvalid bit.
+ */
+inline void llk_unpack_teardown_dest_dvalid() {
+    auto cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
+    cfg[UNPACK_TO_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+}
+
+/**
  * Reprograms unpacker THCON OUT_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
  */
 template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, [[maybe_unused]] bool to_from_int8 = false>

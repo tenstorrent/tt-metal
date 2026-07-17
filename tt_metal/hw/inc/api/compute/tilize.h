@@ -429,6 +429,15 @@ ALWI void unpack_tilizeA_B_block(uint32_t icb0, uint32_t icb1, uint32_t block, u
 
 ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(icb)));
+#if defined(ARCH_QUASAR) && defined(QSR_TILIZE_UNPACK_TO_DEST)
+    // Restore the DEST-dvalid CTRL registers to the no-wait default that tilize_init armed for the unpack-to-dest
+    // handshake. Without this, a FOLLOWING op in the same kernel (the fused conv's matmul: DEST producer = FPU,
+    // synced by the MATH<->PACK semaphore, NOT dvalid) inherits PACK_DEST_DVALID_CTRL still waiting on the
+    // tilize's UNPACK dvalid bit -> the first matmul PACR hangs (tilize->matmul transition deadlock, dprint_utd4).
+    // Harmless in the tilize-only path (nothing follows). Paired with llk_{unpack,pack}_setup_dest_dvalid().
+    UNPACK((llk_unpack_teardown_dest_dvalid()));
+    PACK((llk_pack_teardown_dest_dvalid()));
+#endif
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init<PackMode::Default>(ocb)));
 #endif

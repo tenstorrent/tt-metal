@@ -111,6 +111,17 @@ inline void llk_pack_setup_dest_dvalid() {
 }
 
 /**
+ * @brief Restores PACK_DEST_DVALID_CTRL to the no-wait default (0) — the inverse of llk_pack_setup_dest_dvalid().
+ *        Call when the unpack-to-dest tilize is done so a FOLLOWING matmul's PACR (which is gated by the
+ *        MATH<->PACK semaphore, not dvalid) is not left waiting on the tilize's stale UNPACK dvalid bit
+ *        (root cause of the fused-conv tilize->matmul hang: PACK stuck at the first matmul pack).
+ */
+inline void llk_pack_teardown_dest_dvalid() {
+    auto cfg = reinterpret_cast<volatile std::uint32_t*>(TENSIX_CFG_BASE);
+    cfg[PACK_DEST_DVALID_CTRL_wait_mask_ADDR32] = 0;
+}
+
+/**
  * All the following functions are added to enable Math <-> Pack synchronization
  * on the destination register using semaphores.
  *
