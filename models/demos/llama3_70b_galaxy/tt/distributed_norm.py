@@ -23,40 +23,34 @@ class DistributedNorm(LightweightModule):
         )
         num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
         hidden_size_per_device_distributed_ln = args.dim // 4
-        # decode_shard_height (and thus gather_in_mem_cfg / ln_prg_cfg.block_h below) is only consumed
-        # by the sharded-decode path (tt_sharded_distributed_rmsnorm), which runs when
-        # use_sharded_decode=True. On that path decode_shard_height is always 32; the non-32 values
-        # derived below are inert (the no-prefetcher decode uses the distributed, non-sharded norm).
-        if not args.blackhole_no_prefetcher:
-            # Wormhole / prefetcher path keeps main's fixed decode shard height (32 -> block_h 1).
-            decode_shard_height = 32
-        elif norm.output_mem_config is not None and norm.output_mem_config.shard_spec is not None:
-            decode_shard_height = norm.output_mem_config.shard_spec.shape[0]
+        # gather_in_mem_cfg / ln_prg_cfg are consumed only by the sharded-decode path
+        # (tt_sharded_distributed_rmsnorm in forward), which runs iff use_sharded_decode=True. On that
+        # path the decode shard height is always 32 (block_h=1), exactly as on main. The no-prefetcher
+        # decode uses the non-sharded distributed norm and never reads these, so only build them when
+        # they can actually be used (avoids computing an unused, misleading shard height).
+        if self.use_sharded_decode:
+            decode_shard_height = 32  # fixed on the sharded path; block_h = 1
+            self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(1, 1, decode_shard_height, hidden_size_per_device_distributed_ln // num_cores_ln),
+                core_grid=ttnn.CoreRangeSet(
+                    {
+                        core_range,
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
+                subblock_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+                block_h=decode_shard_height // 32,
+                block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+                inplace=False,
+            )
         else:
-            decode_residual_memcfg = args.get_model_config().get("DECODE_RESIDUAL_MEMCFG", None)
-            if decode_residual_memcfg is not None and decode_residual_memcfg.shard_spec is not None:
-                decode_shard_height = decode_residual_memcfg.shard_spec.shape[0]
-            else:
-                decode_shard_height = 128 if args.is_blackhole else 32
-        # block_h = decode_shard_height // 32 truncates silently otherwise.
-        assert decode_shard_height % 32 == 0, f"decode_shard_height must be a multiple of 32, got {decode_shard_height}"
-        self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
-            shape=(1, 1, decode_shard_height, hidden_size_per_device_distributed_ln // num_cores_ln),
-            core_grid=ttnn.CoreRangeSet(
-                {
-                    core_range,
-                }
-            ),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            use_height_and_width_as_shard_shape=True,
-        )
-        self.ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
-            subblock_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
-            block_h=decode_shard_height // 32,
-            block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
-            inplace=False,
-        )
+            # No-prefetcher decode uses tt_distributed_rmsnorm; these are never consumed.
+            self.gather_in_mem_cfg = None
+            self.ln_prg_cfg = None
         self.ln_sharded_stats_memcfg = None
         # self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
         #     shape=[1, 1, 32, 32 * 4],
