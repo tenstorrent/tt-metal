@@ -777,3 +777,82 @@
   (`test_scaled_dot_product_attention_r5a_ab.py`) for the independent ceiling re-measurement and the
   R3 guard set (`test_scaled_dot_product_attention_perf.py::test_sdpa_guard_set`) for the
   regression net.
+
+## Perf 1 — Generic perf pass on the flagged shape: classify the bound, spend one lever (null result, op unchanged)
+- Date: 2026-07-17
+- Scope: generic trailing perf pass (NOT from op_requirements.md; adds nothing to SUPPORTED).
+  Mandatory focus = the `attention`-flagged `LOOSE_CASES` shape **1×10×9472×128**, bf16, MHA
+  self-attn, non-causal, tile-aligned, `fp32_dest_acc_en=False`, HiFi2, auto scale.
+- Outcome: **all levers measured and correctly reverted — the shipped op is byte-identical to R5b**
+  (empty `git diff` on `kernels/` + the program descriptor). Legitimate "op unchanged" null pass.
+- Perf measured (Blackhole p150b, 110 cores, 1.35 GHz; device FW kernel-duration ns via `--profile`,
+  warm median of 5, fresh kernel cache; the flagged-shape harness
+  `test_scaled_dot_product_attention_perf.py::test_sdpa_perf_flagged_shape` looped 6×):
+
+  **Bottleneck classification (the decisive new evidence).** Prior R3a/R5a/R5b concluded
+  "compute-bound / SFPU-softmax" but every prior ablation only ever stubbed *compute* — the
+  reader/DRAM half was never directly tested, and it was a live alternative: FlashAttention-2
+  re-reads all of K/V once per q-chunk, so the flagged shape moves ≈ n_q_chunks(37) × 2 × 24 MB ≈
+  **1.8 GB of DRAM reads**, which at a plausible ~340 GB/s would itself explain ~5 ms. So this pass
+  first *directly* ablated the reader (a measurement-only reader NoC stub — CB reserve/push kept,
+  `noc_async_read` skipped) to settle DRAM-bound vs SFPU-bound:
+    * baseline (shipped):                     **5,450,079 ns**  (100%)
+    * reader NoC stubbed (zero DRAM bytes):   **5,334,826 ns**  → reader/DM = **115 k ns = 2.1%**,
+      i.e. the reads are **fully hidden** behind compute. **DRAM is NOT the bottleneck** — the
+      DM-lever class (read batching, deeper input CB, mcast the shared K/V) is capped at ≤2.1% and
+      cannot move this shape. This is the experiment the prior refinements were missing; it
+      *confirms* their compute-bound verdict with first-hand evidence and *rules out* the whole
+      data-movement lever family.
+    * matmuls + O-accumulate stubbed (`SDPA_ABLATE_PV=3`): **5,056,899 ns** → matmuls+accum =
+      **393 k ns = 7.2%** (reproduces R5a's 7.46% within noise; measured dead-end per R5/R5a).
+    * ⇒ residual **≈ 92.8% is the serialized SFPU softmax + per-KV-chunk phase overhead**
+      (the ~8 sequential helper phases per KV chunk, each owning all 3 TRISCs → fill/drain + init +
+      reconfig, cannot pipeline — the design's serial-on-MATH CB model).
+
+  **Lever 1 — compute-block granularity (`compute_block_size`, master.md), the only lever with real
+  headroom.** The overhead is dominant: halving the Q chunk (measurement-only env override)
+  Sq_chunk_t 8→**4** measured **9,112,205 ns = +67%** despite *better* load balance (740 wu → crit
+  path 7×4=28 q-tile-rows vs 8's 4×8=32) — proving per-KV-chunk overhead, not exp work, dominates,
+  so **coarser** is the winning direction. But coarser is blocked, both walls re-verified for the
+  current fused-rowsum L1 layout:
+    * Sq_chunk_t=**16** overflows L1 — needs ≈ 2.1 MB (cb_scores+cb_exp 512 KB + fp32 cb_pv/
+      cb_out_accum 512 KB + out/q_scaled/stats/inputs) vs the ~1.4 MB budget (~1.5 MB physical);
+      even trimming KV_DEPTH/OUT_DEPTH→1 lands ~1.86 MB. And 296's divisors jump **8 → 37** (no
+      12/16 divisor), so any chunk > 8 reintroduces the R3a partial-chunk cross-work-unit
+      cb_scores/cb_exp ring-straddle (needs a pad-partial-to-full rewrite — out of scope, high blast
+      radius on the 1685-cell suite).
+    * Skv_chunk_t is DEST-capped at 8 (the R3e fused-exp dual-pack needs skv_valid ≤ dest_limit=8
+      in the throughput regime) AND divisor-capped at 8 (296's next divisor is 37).
+    ⇒ Sq=8/Skv=8 is already "the coarsest that fits" (R3a). Lever blocked; **reverted byte-for-byte**.
+  **Lever 2 — deeper input double-buffer (`double_buffer`), the one safe keepable lever.** Bounded
+  above by the 2.1% reader ceiling, so measured only for completeness: KV_DEPTH 2→**3** =
+  **5,429,898 ns = −0.37%** (warm std 7.8 k ns; within the ~40 k ns run-to-run spread) — a **null**
+  (deeper buffering can only touch the already-hidden reader; the un-hideable initial CB fill is not
+  reclaimable by depth). **Reverted.**
+  **Levers NOT spent (aimed at the wrong bound / out of scope):** matmul subblock/K-batch (7.2%
+  total, R5/R5a measured dead-end); O-rescale+accumulate phase fusion (helper `packer_l1_acc` is
+  K-block accumulation, NOT online-O accumulate → would be raw-LLK pack-onto-existing, high risk,
+  the R5b "dedicated raw-LLK budget" class); reconfig-elision (the bf16↔fp32 boundaries around the
+  interleaved matmuls are genuine transitions, not needless MMIO); FA-3 FPU∥SFPU overlap (R5b, out
+  of scope). Load rebalancing: 370 wu / 110 cores → ceil=4 is unavoidable at Sq=8 granularity; finer
+  granularity improves balance but overhead dominates (Lever 1, +67%).
+- Accuracy achieved: unchanged — byte-identical to R5b. Flagged-shape soft PCC≥0.997 held
+  (`test_sdpa_perf_flagged_shape` green on a plain run); golden `TOLERANCES` met across the suite.
+- Golden test progress: **1685 passed / 584 xfailed / 0 failed** (`test_golden.py`, 113 s) — identical
+  to R4/R5/R5a/R5b; no SUPPORTED change. Flagged loose case `Q1x10x9472x128` passed. R3 guard set
+  **9/9** (flagged-shape PCC + mask none/custom × small/medium × DRAM/L1).
+- Issues encountered: none. All three ablation knobs (reader stub, chunk-target sweep, KV_DEPTH
+  sweep) were measurement-only env gates, byte-identical at their defaults, and were reverted after
+  measurement — no hang, no corruption, no code left behind.
+- Net: the flagged shape is at its **measured structural ceiling** (compute-bound; residual 92.8% is
+  serialized SFPU softmax + per-phase overhead; every accessible lever is L1/divisor-blocked, a
+  measured dead-end, or an out-of-scope raw-LLK restructure). This pass's contribution is the
+  **first-hand reader-stub verification** that closes the DRAM-bound question the prior refinements
+  left untested — 2.1% hidden, DM-lever class ruled out — reinforcing (not merely restating) the
+  R5b close. The residual ~11× gap to `expected_math_util=0.35` remains reachable only via FA-3
+  FPU∥SFPU warp-specialization (R5b, dedicated raw-LLK budget).
+- Tests added: none — reused `test_scaled_dot_product_attention_perf.py` (flagged-shape harness +
+  R3 guard set) and `test_golden.py` (the golden gate). The reader-stub / chunk-target / KV_DEPTH
+  ablations were transient env-gated instruments, reverted (methodology recorded here for repro:
+  reader stub = skip `noc_async_read_tile`+barrier in `read_tiles`, keep CB reserve/push; chunk
+  sweep = override `_chunk_size` target; KV_DEPTH sweep = override the `_fit_l1` depth).
