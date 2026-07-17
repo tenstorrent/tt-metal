@@ -109,6 +109,7 @@ private:
         // `socket` and pushes START/END to Tracy per lane. Null when no X280 / not eligible / fw
         // not built.
         std::unique_ptr<D2HSocket> x280_socket;
+        std::unique_ptr<D2HSocket> x280_socket2;  // 2nd D2H FIFO: relay-1 drains reader-1's SPSC here
         std::unique_ptr<profiler::X280Driver> x280_driver;
         uint64_t x280_params_addr = 0;  // MBOX_PARAMS in the X280 LIM (for the P_STOP write at shutdown)
         bool x280_active = false;

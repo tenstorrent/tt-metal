@@ -158,44 +158,68 @@ inline __attribute__((always_inline)) uint32_t get_id(uint32_t id, PacketTypes t
 // a real Hash16_CT zone id in practice, and the host special-cases it to the name "X280-STALL".
 constexpr uint32_t PROFILER_STALL_ZONE_ID = 0x7FFF;
 
-// Block until the X280 consumer has drained enough that `nwords` more fit. If the ring is FULL (this
-// RISC is about to block on the X280), bracket the wait with a self-contained {START,END} zone so the
-// back-pressure is directly measurable: START = the instant the buffer filled and the stall began,
-// END = when the X280 drained enough and the pressure lifted. The stall happens during the caller's
-// open zone, so this stall zone nests right inside the elongated zone, showing exactly why it stretched.
-inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
-    // Fast path: room already available (outstanding = wIndex - head) -> no stall, no stall zone.
-    if ((wIndex - profiler_control_buffer[HEAD_INDEX]) <= (RING_CAPACITY - nwords)) {
-        return;
+// 4-word (16B) SPSC marker, self-describing so the X280 drain needs NO collect hart and NO sticky
+// context packet (identity is in every marker; the host reads core/risc straight from it):
+//   word0 = valid(bit31) | core_x(6, bits 12-17) | core_y(6, bits 6-11) | risc(6, bits 0-5)
+//   word1 = (timer_id & 0x7FFFF)<<12 | time_hi(12)   -- bit31 FREE (reserved for a future packet type)
+//   word2 = time_lo(32)
+//   word3 = 0 (pad -> 16B tiles the 64B D2H page exactly, 4 markers/page)
+// SPSC_MARKER_WORDS drives the ring room-checks + writes here (the shared PROFILER_L1_MARKER_UINT32_SIZE
+// stays 2 so the L1 buffer SIZE -- part of the L1-size-bounded mailboxes_t -- is unchanged; the ring
+// then holds 128 4-word markers). NOTE: this branch drops DRAM-profiler marker-format parity.
+static constexpr uint32_t SPSC_MARKER_WORDS = 4;
+// Cached per-RISC identity word. Coords come from profiler_control_buffer[NOC_X/NOC_Y] (BRISC stamps
+// them in init_profiler, before any RISC emits markers) -- my_x/my_y are only linked on BRISC/DM, not
+// TRISC, so reading the control buffer is the all-RISC-safe source. bit31 is always set, so a 0 cache
+// means "not computed yet"; the value is constant per core so we compute it once.
+[[maybe_unused]] static uint32_t g_spsc_ident = 0;
+// NOT inlined: computed once per RISC and called from the (also out-of-line) marker paths, so the
+// identity code isn't duplicated at every zone scope (NCRISC's code region is tiny -- inlining the
+// 4-word marker everywhere overflowed it).
+__attribute__((noinline)) uint32_t spsc_marker_ident() {
+    if (g_spsc_ident == 0) {
+        g_spsc_ident = 0x80000000u | ((profiler_control_buffer[NOC_X] & 0x3Fu) << 12) |
+                       ((profiler_control_buffer[NOC_Y] & 0x3Fu) << 6) | (myRiscID & 0x3Fu);
     }
-    // The ring is full -> record when the stall begins, then block until there's room for the caller's
-    // marker AND the 2-marker stall zone we are about to append.
+    return g_spsc_ident;
+}
+
+// Slow path of ring_ensure_room (out-of-line: ONE copy, not inlined at every zone scope). The ring is
+// FULL -> record when the stall begins, block until there's room for the caller's marker AND the
+// 2-marker stall zone, then emit the {START,END} back-pressure zone (two 4-word self-describing markers)
+// so the stall nests inside the caller's elongated zone.
+__attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     const uint32_t stall_start_hi = p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF;
     const uint32_t stall_start_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    const uint32_t need = nwords + 2 * PROFILER_L1_MARKER_UINT32_SIZE;  // caller marker + {START,END}
+    const uint32_t need = nwords + 2 * SPSC_MARKER_WORDS;  // caller marker + {START,END} stall zone
     while ((wIndex - profiler_control_buffer[HEAD_INDEX]) > (RING_CAPACITY - need)) {
         invalidate_l1_cache();  // re-read the X280-updated head (and the terminate flag)
-        // Terminate phase (device teardown / X280 consumer stopping): stop blocking so this RISC can
-        // reach "done". Drop the marker (and skip the stall zone) instead of stalling on a dead ring.
         if (profiler_control_buffer[PROFILER_TERMINATE]) {
-            return;
+            return;  // teardown: drop the marker + skip the stall zone rather than stall on a dead ring
         }
     }
-    // Pressure lifted. Emit the stall zone {START @ stall_start, END @ now} on this RISC's lane.
-    // (Written inline with the same word layout as ring_write_word, which is defined below.)
     const uint32_t stall_end_hi = p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF;
     const uint32_t stall_end_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] =
-        0x80000000 | ((get_const_id(PROFILER_STALL_ZONE_ID, ZONE_START) & 0x7FFFF) << 12) | stall_start_hi;
-    wIndex++;
-    profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = stall_start_lo;
-    wIndex++;
-    profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] =
-        0x80000000 | ((get_const_id(PROFILER_STALL_ZONE_ID, ZONE_END) & 0x7FFFF) << 12) | stall_end_hi;
-    wIndex++;
-    profiler_data_buffer[myRiscID].data[wIndex % RING_CAPACITY] = stall_end_lo;
-    wIndex++;
+    const uint32_t ident = spsc_marker_ident();
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ident;  // START (4 words)
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] =
+        ((get_const_id(PROFILER_STALL_ZONE_ID, ZONE_START) & 0x7FFFF) << 12) | stall_start_hi;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = stall_start_lo;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = 0;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = ident;  // END (4 words)
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] =
+        ((get_const_id(PROFILER_STALL_ZONE_ID, ZONE_END) & 0x7FFFF) << 12) | stall_end_hi;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = stall_end_lo;
+    profiler_data_buffer[myRiscID].data[wIndex++ % RING_CAPACITY] = 0;
+}
+
+// Fast path stays inline (just the room check); the full-ring path is out-of-line above.
+inline __attribute__((always_inline)) void ring_ensure_room(uint32_t nwords) {
+    if ((wIndex - profiler_control_buffer[HEAD_INDEX]) <= (RING_CAPACITY - nwords)) {
+        return;
+    }
+    ring_ensure_room_slow(nwords);
 }
 
 inline __attribute__((always_inline)) void ring_write_word(uint32_t v) {
@@ -220,10 +244,12 @@ inline __attribute__((always_inline)) void publish_tail() {
 
 // Append one 2-word timing marker (timer_id + wall clock), blocking if full.
 inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
-    ring_ensure_room(PROFILER_L1_MARKER_UINT32_SIZE);
+    ring_ensure_room(SPSC_MARKER_WORDS);
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    ring_write_word(0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF));
-    ring_write_word(p_reg[WALL_CLOCK_LOW_INDEX]);
+    ring_write_word(spsc_marker_ident());  // word0: valid | core_x | core_y | risc
+    ring_write_word(((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF));  // word1 (bit31 free)
+    ring_write_word(p_reg[WALL_CLOCK_LOW_INDEX]);                                            // word2: time_lo
+    ring_write_word(0);                                                                      // word3: pad (reserved)
     publish_tail();
 }
 
@@ -238,43 +264,10 @@ inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
 // later). init_profiler() has already zeroed the rings this launch. For sibling rings the sticky lands
 // first; only BRISC's own ring has its FW ZONE_START ahead of the sticky (fine -- FW zone carries no ID).
 inline __attribute__((always_inline)) void mark_sticky_meta() {
-    if (!zoneValid) {
-        return;  // idle launch: no markers follow on any ring, so skip the context packets
-    }
-    const uint32_t cx = my_x[0] & 0x3F;  // 6-bit coords: Blackhole NoC coords exceed 15, so 4 bits
-    const uint32_t cy = my_y[0] & 0x3F;  // truncated -> host virt->noc0 miss -> uncalibrated ctx -> crash
-    // The sibling-ring writes below are the ONLY producer writes that bypass ring_ensure_room's block.
-    // Refresh the X280-updated consumer heads once so the per-sibling room check reads a current value.
-    invalidate_l1_cache();
-    for (uint32_t r = 0; r < PROCESSOR_COUNT; r++) {
-        // w0: [31]=valid [30:28]=type(STICKY_META) [27:22]=core_x(6) [21:16]=core_y(6) [15:10]=risc(6) [9:0]=unused
-        const uint32_t w0 = 0x80000000u | ((STICKY_META & 0x7u) << 28) | (cx << 22) | (cy << 16) | ((r & 0x3F) << 10);
-        if (r == myRiscID) {
-            // Own ring: go through the normal tail so wIndex stays in sync for this RISC's later markers.
-            ring_ensure_room(PROFILER_L1_MARKER_UINT32_SIZE);
-            ring_write_word(w0);
-            ring_write_word(hostZoneId);
-            publish_tail();
-        } else {
-            // Sibling ring (that RISC has not started emitting): BRISC writes at its producer tail directly.
-            // This is the one write that skips ring_ensure_room, so it MUST honor the ring capacity itself:
-            // if the sibling ring is near-full (the round-robin X280 reader hasn't revisited it yet, so its
-            // head lags), the unchecked +2 would push tail past head+RING_CAPACITY, overwrite the oldest
-            // unread slot (a FW ZONE_START) and trip the reader's lap guard -> dropped START -> orphan END.
-            // Gate on >=2 words free; skip this sibling's sticky otherwise (a stale/too-old head only
-            // over-estimates fullness => we skip conservatively, never over-run). Skipping is cheap: the
-            // host drops STICKY_META today, and forward-fills the prior op-ID on a missed sticky.
-            const uint32_t head = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + r];
-            const uint32_t t = profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + r];
-            if ((uint32_t)(t - head) > (RING_CAPACITY - PROFILER_L1_MARKER_UINT32_SIZE)) {
-                continue;  // sibling ring full -> skip rather than over-run it
-            }
-            profiler_data_buffer[r].data[t % RING_CAPACITY] = w0;
-            profiler_data_buffer[r].data[(t + 1) % RING_CAPACITY] = hostZoneId;
-            asm volatile("fence" ::: "memory");  // marker words visible before the tail advance
-            profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + r] = t + 2;
-        }
-    }
+    // Retired: identity (core_x, core_y, risc) is now stamped into EVERY marker's word0
+    // (spsc_marker_ident), so the host reads it directly and needs no sticky context packet /
+    // forward-fill. Kept as a no-op so the set_host_counter call site still compiles.
+    return;
 }
 
 // Fixed-index write retained only for the trace-only build mode (writes directly
@@ -366,9 +359,11 @@ __attribute__((noinline)) void init_profiler(
 inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
-            ring_ensure_room(PROFILER_L1_MARKER_UINT32_SIZE);
-            ring_write_word(0x80000000 | ((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12));
-            ring_write_word(sums[i]);
+            ring_ensure_room(SPSC_MARKER_WORDS);
+            ring_write_word(spsc_marker_ident());                              // word0: identity
+            ring_write_word((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12);  // word1: ZONE_TOTAL id
+            ring_write_word(sums[i]);                                          // word2: accumulated sum
+            ring_write_word(0);                                                // word3: pad
         }
     }
     publish_tail();
@@ -474,7 +469,7 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args..
         "Number of arguments does not match expected size for this PacketType");
 
     // 1 timing marker (2 words) + 2 words per 64-bit datum.
-    ring_ensure_room(PROFILER_L1_MARKER_UINT32_SIZE + 2 * total_data_count);
+    ring_ensure_room(SPSC_MARKER_WORDS + 2 * total_data_count);
 
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t marker_id = get_const_id(data_id, packet_type);

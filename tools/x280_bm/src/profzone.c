@@ -46,7 +46,8 @@
 #define MBOX_PARAMS 0x08011000UL
 #define MBOX_RESULTS 0x08011040UL
 #define MBOX_COORDS 0x08011200UL
-#define P_CONFIG_ADDR (MBOX_PARAMS + 0x00)
+#define P_CONFIG_ADDR (MBOX_PARAMS + 0x00) /* relay r reads its socket md at P_CONFIG_ADDR + r*X280_CONFIG_STRIDE */
+#define X280_CONFIG_STRIDE 0x1000UL        /* per-relay D2H socket-md stride in LIM (2 relays, 2 FIFOs) */
 #define P_PCIE_X (MBOX_PARAMS + 0x08)
 #define P_PCIE_Y (MBOX_PARAMS + 0x10)
 #define P_PROF_L1 (MBOX_PARAMS + 0x18)
@@ -65,7 +66,7 @@
 #define HART_STAGE(h) RES(0x100 + (uint64_t)(h) * 8)
 
 #define NRISC 5
-#define RING_CAP 512u /* producer L1 ring depth (words) */
+#define RING_CAP 512u /* producer L1 ring depth (words) == PROFILER_L1_VECTOR_SIZE (128 4-word markers) */
 /* Idle poll backoff: after a whole pass drains nothing, spin ~this many cycles (X280 ~1 GHz => ~ns)
  * before re-polling. A PRODUCTIVE pass skips it, so real bursts still poll at full rate.
  * RETUNED 500000 (~500 us) -> 5000 (~5 us): the reader-wall breakdown (FINDINGS §23) showed the reader
@@ -89,31 +90,24 @@
 #define C_BSENT_HI 12
 #define C_FIFO_HI 13
 
-/* Per-(core,risc) LIM mirror SPSC. Depth = producer ring (512 words = 2 KiB) so a reader never
- * blocks mid-segment. Index i = core_idx*NRISC + risc; storage is dense over the drained core set. */
-#define MIRROR_DEPTH 512u /* words per mirror (== RING_CAP) */
-#define MIRROR_BASE 0x08040000UL
-#define MIRROR_STRIDE (MIRROR_DEPTH * 4u) /* 2048 B */
-#define MSTORE(i) (MIRROR_BASE + (uint64_t)(i) * MIRROR_STRIDE)
-#define MIRRORCTL 0x08018000UL
-#define MHEAD(i) (MIRRORCTL + (uint64_t)(i) * 16 + 0) /* collect advances (consumer) */
-#define MTAIL(i) (MIRRORCTL + (uint64_t)(i) * 16 + 8) /* reader advances (producer) */
-#define MAX_CORES 140u                                /* LIM cap: mirrors + single must fit < LIM end */
-#define LIM_END 0x081E0000UL                          /* 0x08000000 + 1.875 MiB */
+#define MAX_CORES 140u       /* LIM cap: the per-reader SPSCs must fit < LIM end */
+#define LIM_END 0x081E0000UL /* 0x08000000 + 1.875 MiB */
 
-/* Single SPSC (collect -> relay), raw markers packed 8/64 B page so the relay stays a page-copy.
- * Base is placed right after the USED mirrors (dynamic in num_cores); ctrl is fixed. */
-#define SINGLE_NREC 4096u
-#define SINGLECTL 0x0801C000UL
-#define S_PROD (SINGLECTL + 0x00)
-#define S_CONS (SINGLECTL + 0x08)
-#define COLLECT_DONE (SINGLECTL + 0x10)
-#define READER_DONE(h) (SINGLECTL + 0x20 + (uint64_t)(h) * 8)
-/* Collect-hart stats handed to the relay (coherent X280-internal LIM). The collect hart wfi's right
- * after writing, so its own RES cache line may never write back to the SRAM the host NoC-reads (and
- * the relay shares that line) -> the collect telemetry read back as 0. Fix: collect writes here, the
- * relay (whose RES writes ARE host-visible) copies these into RES 0xC8..0xE8 before DONE_MAGIC. */
-#define COLLECT_STATS (SINGLECTL + 0x40) /* +0 moved +8 loops +16 wall +24 empty +32 copy (u64) */
+/* Per-READER SPSC (reader -> relay). No collect hart, no mirror: since every marker is now self-
+ * describing (kernel_profiler stamps core/risc in word0), each reader just bulk-copies its cores' raw
+ * 4-word markers into its OWN SPSC ring, and the relay round-robins the two SPSCs to the D2H FIFO.
+ * 16 B markers tile the 64 B page exactly (4/page); prod/cons count PAGES. Small fixed rings in the
+ * freed old-mirror region (0x08040000); reader h owns RSPSC_STORE(h). */
+#define NRDR 2u           /* readers (relay is hart nread; 4th hart idle) */
+#define RSPSC_NPAGE 4096u /* 64B pages per reader SPSC = 256 KiB, 16384 markers of buffer */
+#define RSPSC_BASE 0x08040000UL
+#define RSPSC_STORE(h) (RSPSC_BASE + (uint64_t)(h) * RSPSC_NPAGE * PAGE)
+#define RSPSCCTL 0x0801C000UL
+#define RS_PROD(h) (RSPSCCTL + (uint64_t)(h) * 16 + 0) /* reader advances (producer), page count */
+#define RS_CONS(h) (RSPSCCTL + (uint64_t)(h) * 16 + 8) /* relay advances (consumer), page count */
+#define READER_DONE(h) (RSPSCCTL + 0x40 + (uint64_t)(h) * 8)
+#define RELAY_DONE(r) (RSPSCCTL + 0x60 + (uint64_t)(r) * 8) /* relay r finished draining its SPSC */
+#define RSPSC_WCAP (RSPSC_NPAGE * 16u)                      /* reader SPSC capacity in WORDS (16 words/64B page) */
 
 /* per-reader ILP bulk-read scratch in LIM (for the 16-word ctrl poll). 4 KiB stride. */
 #define SCRATCH_BASE 0x08012000UL
@@ -124,38 +118,28 @@
  * them over time and reconstruct the fill-vs-time trajectory (which queue climbs to capacity, and
  * when). Fixed LIM slots in the free gap between the boot mailboxes (0x08016000) and MIRRORCTL. */
 #define GAUGE_BASE 0x08016400UL
-#define G_L1(h) (GAUGE_BASE + (uint64_t)(h) * 8) /* max L1 ring fill (words, /RING_CAP=512) this pass */
-#define G_MIRROR (GAUGE_BASE + 0x20)             /* max LIM mirror fill (words, /MIRROR_DEPTH) this loop */
-#define G_SINGLE (GAUGE_BASE + 0x28)             /* single-SPSC fill (pages, /SINGLE_NREC) */
-#define G_D2H (GAUGE_BASE + 0x30)                /* D2H FIFO fill (bytes, /fifo_total) */
-/* Service-rate gauges: the per-loop/per-pass time (us). ~40us when buffers are empty (pure scan),
- * but balloons under load (scan + reshape/bulk of the active streams) -> far fewer sweeps happen
- * during a burst than the empty rate implies. Sampled next to the fills to catch the collapse. */
-#define G_CLOOP (GAUGE_BASE + 0x38)                        /* collect: last full-loop time (us) */
+#define G_L1(h) (GAUGE_BASE + (uint64_t)(h) * 8)           /* reader h: max L1 ring fill (words, /512) this pass */
+#define G_SPSC(h) (GAUGE_BASE + 0x20 + (uint64_t)(h) * 8)  /* reader h: SPSC pages in flight (RS_PROD-cn) */
+#define G_D2H (GAUGE_BASE + 0x30)                          /* D2H FIFO fill (bytes, /fifo_total) */
 #define G_RPASS(h) (GAUGE_BASE + 0x40 + (uint64_t)(h) * 8) /* reader h: last full-pass time (us) */
 
-/* Live cumulative cycle-breakdown, published every pass/loop so the relay can snapshot the split
- * DURING the burst (the terminal RES/COLLECT_STATS totals are ~96% idle and useless for that).
- * The relay latches all of these at burst-onset (idle->active edge) and at stall (freeze); the host
- * diffs the two snapshots to get the reader/collect time distribution over just the burst window. */
+/* Live cumulative reader cycle-breakdown, published every pass so the relay can snapshot the split
+ * DURING the burst (the terminal totals are ~96% idle and useless for that). The relay latches these
+ * at burst-onset (idle->active edge) and at the fall-behind (sustained L1 stall); the host diffs the
+ * two snapshots to get each reader's time distribution over just the burst window. */
 #define LIVE_RDR(h) (GAUGE_BASE + 0x80 + (uint64_t)(h) * 0x28) /* 5 u64: poll,bulk,mwait,backoff,wall */
-#define LIVE_COL (GAUGE_BASE + 0x140)   /* 9 u64: cwall,copy,swait,scanned,productive,rd,pack,pub,moved */
-#define SNAP_ONSET (GAUGE_BASE + 0x300) /* rdr0[5] rdr1[5] col[9] = 19 u64 (152 B) */
-#define SNAP_STALL (GAUGE_BASE + 0x400) /* rdr0[5] rdr1[5] col[9] = 19 u64 (152 B) */
-#define SNAP_FLAGS (GAUGE_BASE + 0x500) /* +0 onset_valid, +8 stall_valid */
+#define SNAP_ONSET (GAUGE_BASE + 0x300)                        /* rdr0[5] rdr1[5] = 10 u64 */
+#define SNAP_STALL (GAUGE_BASE + 0x400)                        /* rdr0[5] rdr1[5] = 10 u64 */
+#define SNAP_FLAGS (GAUGE_BASE + 0x500)                        /* +0 onset_valid, +8 stall_valid */
 
-/* Fill-trajectory ring: the relay (idle-ish) appends a time-stamped snapshot of all four gauges
- * every TRAJ_PERIOD_CYC, so the host can reconstruct fill-vs-time (which queue climbs to capacity,
- * and when -- e.g. does a queue ramp monotonically until ~op 90?). Fixed region between SINGLECTL
- * and the mirrors (0x08040000), so placement is independent of num_cores. 32 B/sample. */
+/* Fill-trajectory ring: the relay appends a time-stamped snapshot of the fills + reader pass-times
+ * every TRAJ_PERIOD_CYC, so the host can reconstruct fill-vs-time and see WHICH queue climbs to
+ * capacity and WHEN. Slot = t(8) l1_0(4) l1_1(4) spsc0(4) spsc1(4) d2h(4) rp0(4) rp1(4) pad(8) = 40B. */
 #define TRAJ_BASE 0x0801D000UL
-#define TRAJ_CAP 2048u /* 2048 * 48 B = 96 KiB, ends 0x08035000 < MIRROR_BASE (0x08040000) */
+#define TRAJ_CAP 2048u
 #define TRAJ_STRIDE 48u
-#define TRAJ_COUNT (SINGLECTL + 0x100) /* total samples written (host reads count, then the ring) */
-#define TRAJ_PERIOD_CYC                                                               \
-    10000u /* ~10 us @ 1 GHz. Only ACTIVE samples are recorded (idle skipped), so the \
-            * 4096-sample ring keeps the most-recent ~active window across replays -- \
-            * i.e. the LAST/real stall, not the first transient blip. */
+#define TRAJ_COUNT (RSPSCCTL + 0x100) /* total samples written (host reads count, then the ring) */
+#define TRAJ_PERIOD_CYC 10000u        /* ~10 us; only ACTIVE samples recorded (idle skipped) */
 
 static inline uint32_t r32(uint64_t a) { return *(volatile uint32_t*)a; }
 static inline void w32(uint64_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
@@ -167,15 +151,12 @@ static inline uint64_t rdcycle_(void) {
     __asm__ volatile("rdcycle %0" : "=r"(c));
     return c;
 }
-/* Latch the live reader/collect cycle-breakdown into a snapshot region (rdr0[5] rdr1[5] col[5]),
- * so the host can diff burst-onset vs stall and get the time distribution over just the burst. */
-static inline void snapshot_breakdown(uint64_t dst) {
+/* Latch both readers' live cycle-breakdown (5 u64 each) into a snapshot region, so the host can diff
+ * burst-onset vs stall and get each reader's time distribution over just the burst window. */
+static inline void snapshot_readers(uint64_t dst) {
     for (int i = 0; i < 5; i++) {
-        *(volatile uint64_t*)(dst + 0 + i * 8) = *(volatile uint64_t*)(LIVE_RDR(0) + i * 8);  /* rdr0 */
-        *(volatile uint64_t*)(dst + 40 + i * 8) = *(volatile uint64_t*)(LIVE_RDR(1) + i * 8); /* rdr1 */
-    }
-    for (int i = 0; i < 9; i++) {
-        *(volatile uint64_t*)(dst + 80 + i * 8) = *(volatile uint64_t*)(LIVE_COL + i * 8); /* col */
+        *(volatile uint64_t*)(dst + 0 + i * 8) = *(volatile uint64_t*)(LIVE_RDR(0) + i * 8);
+        *(volatile uint64_t*)(dst + 40 + i * 8) = *(volatile uint64_t*)(LIVE_RDR(1) + i * 8);
     }
 }
 /* copy one 64 B page as a single wide vector load+store (LIM->FIFO or LIM->LIM) */
@@ -283,15 +264,11 @@ int main(uint64_t hartid) {
     uint64_t ctrl_off = prof_l1 & (NOC_2M_WINDOW_STRIDE - 1ULL);
     volatile uint32_t* coords = (volatile uint32_t*)MBOX_COORDS;
 
-    /* Single SPSC storage lives right after the USED mirrors (dense over the drained core set). */
-    uint64_t nmirror = num_cores * NRISC;
-    uint64_t single_store = MIRROR_BASE + nmirror * MIRROR_STRIDE;
-
     if (hartid >= nharts) {
         helper_to_idle_fw(); /* not used this run (hartid>=1 here) -- return to idle */
     }
-    /* LIM overflow guard: too many cores would run the mirrors + single ring past LIM end. */
-    if (num_cores > MAX_CORES || single_store + (uint64_t)SINGLE_NREC * PAGE > LIM_END) {
+    /* LIM overflow guard: the two per-reader SPSC rings must fit below LIM end. */
+    if (num_cores > MAX_CORES || RSPSC_STORE(NRDR - 1u) + (uint64_t)RSPSC_NPAGE * PAGE > LIM_END) {
         if (hartid == 0) {
             w64(RES(0x40), 0xBAD00000ULL | num_cores); /* signal misconfig; host sees no DONE_MAGIC */
             return_to_idle_fw();                       /* re-arm idle so the host isn't stuck (no pipeline ran) */
@@ -328,6 +305,8 @@ int main(uint64_t hartid) {
          * mwait_spins is a dilution-immune COUNT: high => reader blocked on a FULL mirror => collect
          * (the reshape hart) is the burst wall, not the reader itself. */
         uint64_t cyc_poll = 0, cyc_bulk = 0, cyc_mwait = 0, cyc_backoff = 0, mwait_spins = 0;
+        uint64_t wprod = 0;    /* monotonic WORD producer into this reader's OWN SPSC */
+        uint64_t last_pub = 0; /* last page count published to RS_PROD(hartid) */
         uint64_t t_start = rdcycle_();
         for (;;) {
             uint64_t progressed = 0;
@@ -367,8 +346,6 @@ int main(uint64_t hartid) {
                         head = tail - RING_CAP;
                     }
                     uint64_t ring_base = rbufs + (uint64_t)r * 2048;
-                    uint32_t gi = (uint32_t)(c * NRISC + r); /* mirror index: identity by location */
-                    uint32_t mtail = r32(MTAIL(gi));         /* this reader is the sole producer of gi */
                     uint32_t h = head;
                     while (h != tail) {
                         uint32_t hidx = h % RING_CAP;
@@ -377,34 +354,43 @@ int main(uint64_t hartid) {
                         if (seg > rem) {
                             seg = rem;
                         }
-                        /* reserve `seg` words in the mirror; block on the collect hart (consumer). */
+                        /* Reserve `seg` words in THIS reader's OWN SPSC; block only if the relay (the
+                         * sole consumer) hasn't drained enough pages. Markers are self-describing, so
+                         * all this reader's (core,risc) streams share one SPSC -- no per-(core,risc) ring. */
+                        uint64_t needpg = (wprod + seg - 1u) / 16u;
                         uint64_t tmw = rdcycle_();
-                        while ((uint32_t)(mtail + seg - r32(MHEAD(gi))) > MIRROR_DEPTH) {
-                            mwait_spins++; /* reader blocked on a FULL mirror => collect is the wall */
+                        while ((uint32_t)((uint32_t)needpg + 1u - r32(RS_CONS(hartid))) > RSPSC_NPAGE) {
+                            mwait_spins++; /* reader blocked on a FULL SPSC => the relay is the wall */
                             if (r64(P_STOP)) {
                                 cyc_mwait += rdcycle_() - tmw;
                                 goto reader_done;
                             }
                         }
                         cyc_mwait += rdcycle_() - tmw;
-                        uint32_t midx = mtail % MIRROR_DEPTH;
-                        uint32_t mfit = MIRROR_DEPTH - midx; /* words until mirror wraps */
+                        /* Bulk-copy the raw 4-word markers L1 -> SPSC at wprod (handle SPSC ring wrap). */
                         uint64_t l1src = ring_base + (uint64_t)hidx * 4;
+                        uint32_t woff = (uint32_t)(wprod % RSPSC_WCAP);
+                        uint32_t to_end = RSPSC_WCAP - woff;
                         uint64_t tb = rdcycle_();
-                        if (seg <= mfit) {
-                            bulk_copy_words(MSTORE(gi) + (uint64_t)midx * 4, l1src, seg);
+                        if (seg <= to_end) {
+                            bulk_copy_words(RSPSC_STORE(hartid) + (uint64_t)woff * 4, l1src, seg);
                         } else {
-                            bulk_copy_words(MSTORE(gi) + (uint64_t)midx * 4, l1src, mfit);
-                            bulk_copy_words(MSTORE(gi), l1src + (uint64_t)mfit * 4, seg - mfit);
+                            bulk_copy_words(RSPSC_STORE(hartid) + (uint64_t)woff * 4, l1src, to_end);
+                            bulk_copy_words(RSPSC_STORE(hartid), l1src + (uint64_t)to_end * 4, seg - to_end);
                         }
                         cyc_bulk += rdcycle_() - tb;
-                        mtail += seg;
-                        fence_();              /* mirror bytes visible before the tail bump */
-                        w32(MTAIL(gi), mtail); /* publish to collect */
+                        wprod += seg;
                         bulk_words += seg;
                         segs++;
                         h += seg;
                         w32(cbase + CTRL_HEAD(r) * 4, h); /* advance L1 head -> producer unblocks */
+                        /* Publish complete pages to the relay (a partial page waits for the next append). */
+                        uint64_t donepg = wprod / 16u;
+                        if (donepg != last_pub) {
+                            fence_(); /* marker words visible before the producer-page bump */
+                            w32(RS_PROD(hartid), (uint32_t)donepg);
+                            last_pub = donepg;
+                        }
                     }
                 }
             }
@@ -432,6 +418,20 @@ int main(uint64_t hartid) {
             }
         }
     reader_done:
+        /* Flush a partial SPSC page: zero word0 of the unused 4-word marker slots (host skips them on
+         * a clear valid bit) up to the next page boundary, then publish it so the tail markers aren't
+         * stranded on an unpublished page. */
+        if (wprod % 16u != 0) {
+            uint64_t page_end = (wprod / 16u + 1u) * 16u;
+            for (uint64_t w = wprod; w < page_end; w += 4u) {
+                uint32_t woff = (uint32_t)(w % RSPSC_WCAP);
+                w32(RSPSC_STORE(hartid) + (uint64_t)woff * 4, 0); /* word0=0 -> invalid marker slot */
+            }
+            wprod = page_end;
+            fence_();
+            w32(RS_PROD(hartid), (uint32_t)(wprod / 16u));
+            last_pub = wprod / 16u;
+        }
         fence_();
         w64(RES(0x50 + hartid * 8), dropped);
         w64(RES(0x60 + hartid * 8), bulk_words);
@@ -458,181 +458,14 @@ int main(uint64_t hartid) {
         helper_to_idle_fw();
     }
 
-    if (hartid == nread) {
-        /* ==== COLLECT (Tier 2): round-robin mirrors; per productive mirror write ONE sticky (core,risc)
-         * HEADER slot then BULK-COPY its raw 2-word markers verbatim into the single SPSC. No per-marker
-         * loop / reshape -- the host reconstructs identity from the last header and timer_id/timestamp
-         * from each raw marker. This removes the per-marker cost that made collect the pipeline wall. ==== */
-        w64(HART_STAGE(hartid), 3); /* collect: entering drain loop */
-        fence_();
-        /* per-mirror consumer head (collect owns MHEAD). Local cache avoids re-reading LIM. */
-        static uint32_t chead[MAX_CORES * NRISC];
-        for (uint64_t i = 0; i < nmirror; i++) {
-            chead[i] = 0;
-        }
-        uint64_t wprod = 0;            /* monotonic WORD producer into the single ring */
-        uint64_t last_pub = 0;         /* last page count published to S_PROD */
-        uint64_t moved = 0, loops = 0; /* moved = raw marker slots shipped (host filters non-zone) */
-        uint64_t cyc_copy = 0;         /* time in the header-write + bulk-copy path */
-        /* collect breakdown: swait_spins = blocked on a FULL single-SPSC (relay back-pressure; expect ~0).
-         * scanned/productive = round-robin volume: how much of the ~550-mirror sweep is empty vs found data. */
-        uint64_t cyc_swait = 0, swait_spins = 0, scanned = 0, productive = 0;
-        uint64_t cyc_rd = 0, cyc_pack = 0, cyc_pub = 0; /* unused in Tier 2 (kept for the LIVE_COL layout) */
-        uint64_t t_start = rdcycle_();
-#define SINGLE_WCAP (SINGLE_NREC * 16u) /* single ring capacity in WORDS (SINGLE_NREC 64B pages) */
-/* Block until pages spanning [wprod, wprod+NW) are relay-consumed (free); goto on P_STOP. */
-#define RESERVE(NW)                                                    \
-    do {                                                               \
-        uint32_t _lastpg = (uint32_t)((wprod + (NW) - 1u) / 16u);      \
-        while ((uint32_t)(_lastpg + 1u - r32(S_CONS)) > SINGLE_NREC) { \
-            swait_spins++;                                             \
-            if (r64(P_STOP)) {                                         \
-                goto collect_done;                                     \
-            }                                                          \
-        }                                                              \
-    } while (0)
-        for (;;) {
-            uint64_t progressed = 0;
-            loops++;
-            uint32_t loop_mirror_max = 0; /* fullest mirror (words) this loop -> G_MIRROR gauge */
-            uint64_t clt = rdcycle_();
-            for (uint64_t i = 0; i < nmirror; i++) {
-                uint32_t mtail = r32(MTAIL(i));
-                uint32_t mh = chead[i];
-                scanned++; /* round-robin visit (most are empty during idle) */
-                uint32_t mfill = mtail - mh;
-                if (mfill > loop_mirror_max) {
-                    loop_mirror_max = mfill;
-                }
-                if (mh == mtail) {
-                    continue;
-                }
-                productive++; /* this mirror had data */
-                /* STRUCTURAL identity: mirror i IS (core_idx, risc). Emitted ONCE as a sticky header. */
-                uint32_t core_idx = (uint32_t)(i / NRISC);
-                uint32_t risc = (uint32_t)(i % NRISC);
-                uint32_t cx = coords[core_idx * 2 + 0];
-                uint32_t cy = coords[core_idx * 2 + 1];
-                uint32_t ident = PACK_IDENT(cx, cy, risc);
-                uint64_t tcp = rdcycle_();
-                /* Sticky header slot: [0x40000000|ident, 0]. bit31 clear + bit30 set => header; the host
-                 * latches (core,risc) for every following raw-marker slot until the next header. */
-                RESERVE(2u);
-                {
-                    uint32_t woff = (uint32_t)(wprod % SINGLE_WCAP);
-                    uint64_t hd = single_store + (uint64_t)woff * 4;
-                    w32(hd + 0, 0x40000000u | (ident & 0x3FFFFFFFu));
-                    w32(hd + 4, 0);
-                    wprod += 2;
-                }
-                /* Bulk-copy the raw 2-word markers VERBATIM (vectorized, no per-marker loop). Up to 2
-                 * contiguous segments if the mirror wraps; the ring dest may itself wrap -> split. */
-                while (mh != mtail) {
-                    uint32_t midx = mh % MIRROR_DEPTH;
-                    uint32_t seg = MIRROR_DEPTH - midx; /* contiguous mirror words until wrap */
-                    uint32_t rem = mtail - mh;
-                    if (seg > rem) {
-                        seg = rem;
-                    }
-                    uint64_t src = MSTORE(i) + (uint64_t)midx * 4;
-                    RESERVE(seg);
-                    uint32_t woff = (uint32_t)(wprod % SINGLE_WCAP);
-                    uint32_t to_end = SINGLE_WCAP - woff; /* words until the ring wraps */
-                    if (seg <= to_end) {
-                        bulk_copy_words(single_store + (uint64_t)woff * 4, src, seg);
-                    } else {
-                        bulk_copy_words(single_store + (uint64_t)woff * 4, src, to_end);
-                        bulk_copy_words(single_store, src + (uint64_t)to_end * 4, seg - to_end);
-                    }
-                    wprod += seg;
-                    moved += seg / 2u;
-                    mh += seg;
-                    w32(MHEAD(i), mh); /* free mirror -> reader unblocks */
-                    chead[i] = mh;
-                    progressed = 1;
-                }
-                cyc_copy += rdcycle_() - tcp;
-                /* Publish complete pages (batched, once per mirror drain). A partial tail page waits
-                 * (its unwritten slots would read as stale); collect_done zero-pads + flushes it. */
-                uint64_t done_pages = wprod / 16u;
-                if (done_pages != last_pub) {
-                    fence_();
-                    w32(S_PROD, (uint32_t)done_pages);
-                    last_pub = done_pages;
-                }
-            }
-            w64(G_MIRROR, loop_mirror_max); /* publish fullest mirror this loop (host samples over time) */
-            w64(G_CLOOP, (uint64_t)((rdcycle_() - clt) / 1000u)); /* last full collect-loop time (us) */
-            w64(COLLECT_STATS + 0, moved);
-            w64(COLLECT_STATS + 8, loops);
-            w64(LIVE_COL + 0, rdcycle_() - t_start); /* live cumulative breakdown for relay snapshots */
-            w64(LIVE_COL + 8, cyc_copy);
-            w64(LIVE_COL + 16, cyc_swait);
-            w64(LIVE_COL + 24, scanned);
-            w64(LIVE_COL + 32, productive);
-            w64(LIVE_COL + 40, cyc_rd);   /* reshape sub-breakdown: marker LIM reads */
-            w64(LIVE_COL + 48, cyc_pack); /* w_wzw stores */
-            w64(LIVE_COL + 56, cyc_pub);  /* fence + publish per page */
-            w64(LIVE_COL + 64, moved);    /* records emitted (for per-marker cost) */
-            if (!progressed) {
-                /* done when stopping AND every reader finished AND all mirrors drained. */
-                if (r64(P_STOP)) {
-                    uint64_t all = 1;
-                    for (uint64_t h = 0; h < nread; h++) {
-                        if (!r64(READER_DONE(h))) {
-                            all = 0;
-                        }
-                    }
-                    if (all) {
-                        uint64_t empty = 1;
-                        for (uint64_t i = 0; i < nmirror; i++) {
-                            if (chead[i] != r32(MTAIL(i))) {
-                                empty = 0;
-                                break;
-                            }
-                        }
-                        if (empty) {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    collect_done:;
-        /* Flush a partial tail page: zero the remaining slots up to the next page boundary (w0=0 ->
-         * host skips them) and publish, so the last <8 slots aren't stranded on a stale/partial page. */
-        if (wprod % 16u != 0) {
-            uint64_t page_end = (wprod / 16u + 1u) * 16u;
-            for (uint64_t w = wprod; w < page_end; w += 2u) {
-                uint32_t woff = (uint32_t)(w % SINGLE_WCAP);
-                w32(single_store + (uint64_t)woff * 4, 0); /* zero w0 -> invalid slot -> skipped */
-            }
-            wprod = page_end;
-            fence_();
-            w32(S_PROD, (uint32_t)(wprod / 16u));
-            last_pub = wprod / 16u;
-        }
-#undef RESERVE
-#undef SINGLE_WCAP
-        const uint64_t cwall = rdcycle_() - t_start;
-        w64(COLLECT_STATS + 0, moved);
-        w64(COLLECT_STATS + 8, loops);
-        w64(COLLECT_STATS + 16, cwall);            /* collect wall */
-        w64(COLLECT_STATS + 24, cwall - cyc_copy); /* empty-spin (round-robin over idle mirrors) */
-        w64(COLLECT_STATS + 32, cyc_copy);         /* copy time (reshape + swait) */
-        w64(COLLECT_STATS + 40, cyc_swait);        /* subset of copy: blocked on relay (single-SPSC full) */
-        w64(COLLECT_STATS + 48, swait_spins);
-        w64(COLLECT_STATS + 56, scanned);    /* total mirror-visits (round-robin volume) */
-        w64(COLLECT_STATS + 64, productive); /* mirror-visits that found data */
-        fence_();                            /* stats visible to the relay before the done flag */
-        w64(COLLECT_DONE, 1);
-        helper_to_idle_fw(); /* collect done -- return to the resident idle FW */
-    }
-
-    /* ================= RELAY: single SPSC -> ONE D2H socket FIFO (NOC1) ========================= */
-    w64(HART_STAGE(hartid), 3); /* relay: entering drain loop */
+    /* ===== RELAY r (= hartid - nread): drain reader-r's OWN SPSC -> its OWN D2H FIFO (socket-md at
+     * P_CONFIG_ADDR + r*X280_CONFIG_STRIDE). Two relays (one per reader) double the D2H drain to match
+     * the 16B self-describing marker's 2x volume. relay-0 also owns the fill-trajectory sampler and the
+     * DONE_MAGIC handshake (published only after relay-1 has also finished). ===== */
+    w64(HART_STAGE(hartid), 3);
     fence_();
-    uint64_t cfg = r64(P_CONFIG_ADDR);
+    uint32_t relay_idx = (uint32_t)(hartid - nread); /* 0 or 1 */
+    uint64_t cfg = r64(P_CONFIG_ADDR) + (uint64_t)relay_idx * X280_CONFIG_STRIDE;
     uint64_t pcie_x = r64(P_PCIE_X), pcie_y = r64(P_PCIE_Y);
     volatile uint32_t* c = (volatile uint32_t*)cfg;
     uint32_t write_ptr = c[C_WRITE_PTR];
@@ -642,6 +475,8 @@ int main(uint64_t hartid) {
     uint64_t backed_addr = cfg + (uint64_t)C_BACKED * 4;
     uint32_t bytes_sent = c[C_BYTES_SENT];
 
+    /* Each relay uses its OWN pair of write TLB windows so the two relays don't clobber each other. */
+    uint32_t win = WRITE_WIN + relay_idx * 2u;
     noc_tlb_2m_t wt;
     wt.data[0] = 0;
     wt.data[1] = 0;
@@ -654,48 +489,43 @@ int main(uint64_t hartid) {
     wt.y_start = (uint32_t)pcie_y;
     wt.posted = 1;
     wt.noc_selector = 1; /* NOC1: relay writes split off the readers' NOC0 reads */
-    (void)noc_configure_tlb_2m_ext(WRITE_WIN, &wt, 0);
-    uint64_t wbase = NOC_2M_WINDOW_BASE + (uint64_t)WRITE_WIN * NOC_2M_WINDOW_STRIDE;
+    (void)noc_configure_tlb_2m_ext(win, &wt, 0);
+    uint64_t wbase = NOC_2M_WINDOW_BASE + (uint64_t)win * NOC_2M_WINDOW_STRIDE;
     uint64_t fifo_off = fifo_addr & (NOC_2M_WINDOW_STRIDE - 1ULL);
     uint64_t bsent_off = bsent_addr & (NOC_2M_WINDOW_STRIDE - 1ULL);
     wt.addr = bsent_addr >> 21;
     wt.posted = 0; /* NON-POSTED bytes_sent so it lands promptly (host frees FIFO room) */
-    (void)noc_configure_tlb_2m_ext(WRITE_WIN + 1u, &wt, 0);
-    uint64_t wbase_bsent = NOC_2M_WINDOW_BASE + (uint64_t)(WRITE_WIN + 1u) * NOC_2M_WINDOW_STRIDE;
+    (void)noc_configure_tlb_2m_ext(win + 1u, &wt, 0);
+    uint64_t wbase_bsent = NOC_2M_WINDOW_BASE + (uint64_t)(win + 1u) * NOC_2M_WINDOW_STRIDE;
     fence_();
 
     uint32_t sig_ctr = 0;
-    uint32_t cn = 0; /* single-SPSC consumer page index */
+    uint32_t cn = 0; /* this relay's SPSC consumer page index */
     uint64_t total = 0, loops = 0, stalls = 0;
     uint64_t cyc_reserve = 0, cyc_copy = 0;
     uint64_t t_start = rdcycle_();
-    uint64_t traj_next = t_start; /* fill-trajectory sampler cadence */
-    uint64_t traj_n = 0;
-    uint64_t traj_post = 0; /* freeze countdown once a SUSTAINED producer stall is detected */
-    uint32_t traj_hi = 0;   /* consecutive ticks with L1 >= 500 */
-    int traj_frozen = 0;
-    int prev_active = 0;    /* for the idle->active edge that latches the burst-onset breakdown snapshot */
-    w64(SNAP_FLAGS + 0, 0); /* LIM persists across FW handoffs -> clear stale snapshot-valid flags */
-    w64(SNAP_FLAGS + 8, 0);
-    w64(TRAJ_COUNT, 0);
+    uint64_t traj_next = t_start, traj_n = 0, traj_post = 0; /* trajectory sampler is relay-0 only */
+    uint32_t traj_hi = 0;
+    int traj_frozen = 0, prev_active = 0;
+    if (relay_idx == 0) {
+        w64(SNAP_FLAGS + 0, 0); /* LIM persists across handoffs -> clear stale snapshot-valid flags */
+        w64(SNAP_FLAGS + 8, 0);
+        w64(TRAJ_COUNT, 0);
+    }
     for (;;) {
         uint64_t progressed = 0;
-        uint32_t pr = r32(S_PROD);
+        uint32_t pr = r32(RS_PROD(relay_idx));
         while (cn != pr) {
             int stopped = 0;
             uint64_t rs = 0;
             uint64_t trs = rdcycle_();
-            for (;;) { /* reserve one page of FIFO space (bytes in flight = bytes_sent - acked) */
+            for (;;) { /* reserve one page of D2H FIFO space (bytes in flight = bytes_sent - acked) */
                 fence_();
                 uint32_t acked = r32(backed_addr);
                 if (fifo_total - (bytes_sent - acked) >= PAGE) {
                     break;
                 }
                 stalls++;
-                if ((stalls & 0xFFFFF) == 0) {
-                    w64(RES(0x10), bytes_sent);
-                    w64(RES(0x20), stalls);
-                }
                 if (r64(P_STOP) && ++rs > 50000000ull) {
                     stopped = 1;
                     break;
@@ -706,7 +536,7 @@ int main(uint64_t hartid) {
                 goto relay_done;
             }
             uint64_t tcp = rdcycle_();
-            page_copy(single_store + (uint64_t)(cn % SINGLE_NREC) * PAGE, wbase + fifo_off + write_ptr);
+            page_copy(RSPSC_STORE(relay_idx) + (uint64_t)(cn % RSPSC_NPAGE) * PAGE, wbase + fifo_off + write_ptr);
             write_ptr += PAGE;
             if (write_ptr >= fifo_total) {
                 write_ptr -= fifo_total;
@@ -725,47 +555,37 @@ int main(uint64_t hartid) {
             w32(wbase_bsent + bsent_off, bytes_sent); /* flush the tail (non-posted) */
             sig_ctr = 0;
         }
-        w32(S_CONS, cn);
+        w32(RS_CONS(relay_idx), cn); /* free SPSC pages -> reader unblocks */
         loops++;
-        w64(RES(0x00), total);
-        w64(RES(0x08), loops);
-        w64(G_SINGLE, (uint64_t)(uint32_t)(r32(S_PROD) - cn));           /* single-SPSC pages in flight */
-        w64(G_D2H, (uint64_t)(uint32_t)(bytes_sent - r32(backed_addr))); /* D2H FIFO bytes in flight */
-        {
+        w64(G_SPSC(relay_idx), (uint64_t)(uint32_t)(pr - cn)); /* this reader's SPSC pages in flight */
+        if (relay_idx == 0) {
+            w64(G_D2H, (uint64_t)(uint32_t)(bytes_sent - r32(backed_addr)));
             uint64_t now = rdcycle_();
             if (!traj_frozen && now >= traj_next) {
                 traj_next = now + TRAJ_PERIOD_CYC;
-                uint32_t mir = (uint32_t)r64(G_MIRROR);
                 uint32_t l1a = (uint32_t)r64(G_L1(0));
                 uint32_t l1b = (uint32_t)r64(G_L1(1));
-                int active = (mir >= 8u || l1a >= 32u || l1b >= 32u);
-                /* Latch the reader/collect breakdown at the idle->active edge (burst onset). The LAST
-                 * such edge before the freeze is the sustained burst; overwriting is intended. */
+                uint32_t s0 = (uint32_t)r64(G_SPSC(0));
+                uint32_t s1 = (uint32_t)r64(G_SPSC(1));
+                int active = (l1a >= 32u || l1b >= 32u || s0 >= 8u || s1 >= 8u);
                 if (active && !prev_active) {
-                    snapshot_breakdown(SNAP_ONSET);
+                    snapshot_readers(SNAP_ONSET);
                     w64(SNAP_FLAGS + 0, 1);
                 }
                 prev_active = active;
-                /* Record only ACTIVE samples (skip the ~96% idle) so the ring is dense with burst data. */
                 if (active) {
                     uint64_t slot = TRAJ_BASE + (traj_n % TRAJ_CAP) * TRAJ_STRIDE;
                     w64(slot + 0, now);
                     w32(slot + 8, l1a);
                     w32(slot + 12, l1b);
-                    w32(slot + 16, mir);
-                    w32(slot + 20, (uint32_t)(r32(S_PROD) - cn));
-                    w32(slot + 24, (uint32_t)(bytes_sent - r32(backed_addr)));
-                    w32(slot + 28, (uint32_t)r64(G_CLOOP));    /* collect loop time (us) */
-                    w32(slot + 32, (uint32_t)r64(G_RPASS(0))); /* reader-0 pass time (us) */
-                    w32(slot + 36, (uint32_t)r64(G_RPASS(1))); /* reader-1 pass time (us) */
-                    w32(slot + 40, 0);
-                    w32(slot + 44, 0);
+                    w32(slot + 16, s0);
+                    w32(slot + 20, s1);
+                    w32(slot + 24, (uint32_t)r64(G_D2H));
+                    w32(slot + 28, (uint32_t)r64(G_RPASS(0)));
+                    w32(slot + 32, (uint32_t)r64(G_RPASS(1)));
                     traj_n++;
                     w64(TRAJ_COUNT, traj_n);
                 }
-                /* Freeze 256 ticks (~2.56 ms) after a SUSTAINED producer stall (L1 >= 500 for >= 8
-                 * consecutive ticks ~= 80 us), so the ring keeps the lead-up to the REAL sustained stall
-                 * (op ~106) and ignores brief mirror-only transients (op ~94). */
                 uint32_t l1 = l1a > l1b ? l1a : l1b;
                 if (traj_post > 0) {
                     if (--traj_post == 0) {
@@ -774,10 +594,7 @@ int main(uint64_t hartid) {
                 } else if (l1 >= 500u) {
                     if (++traj_hi >= 8u) {
                         traj_post = 256;
-                        /* Latch the breakdown at the moment we fall behind (sustained stall detected),
-                         * so SNAP_STALL - SNAP_ONSET covers the onset->fall-behind window, not the
-                         * post-stall aftermath (producers blocked, readers draining full rings). */
-                        snapshot_breakdown(SNAP_STALL);
+                        snapshot_readers(SNAP_STALL);
                         w64(SNAP_FLAGS + 8, 1);
                     }
                 } else {
@@ -786,33 +603,30 @@ int main(uint64_t hartid) {
             }
         }
         if (!progressed) {
-            if (r64(COLLECT_DONE) && cn == r32(S_PROD)) {
+            if (r64(READER_DONE(relay_idx)) && cn == r32(RS_PROD(relay_idx))) {
                 break;
             }
         }
     }
 relay_done:
     fence_();
-    w32(S_CONS, cn);
-    w64(RES(0x00), total);
-    w64(RES(0x20), stalls);
-    w64(RES(0xB0), rdcycle_() - t_start);
-    w64(RES(0xB8), cyc_reserve);
-    w64(RES(0xC0), cyc_copy);
-    /* Copy the collect hart's stats into RES (the relay is the sole writer of this cache line, and its
-     * RES writes ARE host-visible; the collect hart's own RES writes were not -- see COLLECT_STATS). */
-    w64(RES(0xC8), r64(COLLECT_STATS + 0));   /* collect moved (markers) */
-    w64(RES(0xD0), r64(COLLECT_STATS + 8));   /* collect loops */
-    w64(RES(0xD8), r64(COLLECT_STATS + 16));  /* collect wall */
-    w64(RES(0xE0), r64(COLLECT_STATS + 24));  /* collect empty-spin */
-    w64(RES(0xE8), r64(COLLECT_STATS + 32));  /* collect copy */
-    /* collect breakdown (relay-copied so it's host-visible): swait/swait_spins/scanned/productive
-     * -> RES 0x28/0x48/0xF0/0xF8 (host reads at params+0x68/0x88/0x130/0x138). */
-    w64(RES(0x28), r64(COLLECT_STATS + 40));  /* collect swait (blocked on relay) */
-    w64(RES(0x48), r64(COLLECT_STATS + 48));  /* collect swait_spins */
-    w64(RES(0xF0), r64(COLLECT_STATS + 56));  /* collect scanned (mirror-visits) */
-    w64(RES(0xF8), r64(COLLECT_STATS + 64));  /* collect productive (visits with data) */
-    w64(RES(0x18), DONE_MAGIC);               /* written LAST: host waits on it before reading results */
-    helper_to_idle_fw();                      /* relay done -- return to the resident idle FW */
-    return 0;                                 /* unreachable (helper_to_idle_fw is noreturn) */
+    w32(RS_CONS(relay_idx), cn);
+    {
+        uint64_t base = relay_idx == 0 ? 0xB0u : 0xD8u; /* per-relay wall/reserve/copy/total/stalls (5 u64) */
+        w64(RES(base + 0), rdcycle_() - t_start);
+        w64(RES(base + 8), cyc_reserve);
+        w64(RES(base + 16), cyc_copy);
+        w64(RES(base + 24), total);
+        w64(RES(base + 32), stalls);
+    }
+    w64(RELAY_DONE(relay_idx), 1);
+    if (relay_idx == 0) {
+        /* coordinator: wait for relay-1 to flush too, then publish DONE_MAGIC (host waits on it). */
+        while (!r64(RELAY_DONE(1))) {
+            cpu_pause();
+        }
+        w64(RES(0x18), DONE_MAGIC); /* written LAST: host waits on it before reading results */
+    }
+    helper_to_idle_fw(); /* relay done -- return to the resident idle FW */
+    return 0;            /* unreachable (helper_to_idle_fw is noreturn) */
 }
