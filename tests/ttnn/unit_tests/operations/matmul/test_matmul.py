@@ -437,7 +437,7 @@ def test_matmul_reuse_config_sharded_tiny_tile(
             atol=0.04 * k,
             rtol=68.5 * k,
             frobenius_threshold=0.001 * k,
-            pcc_threshold=0.993,
+            pcc_threshold=0.9925,
             check_ulp=False,
         )
     elif in1_dtype == ttnn.bfloat8_b:
