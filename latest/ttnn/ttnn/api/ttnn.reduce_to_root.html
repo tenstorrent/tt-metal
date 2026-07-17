@@ -195,76 +195,119 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.reduce_to_root">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">reduce_to_root</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span> <span class="pre">output_tensor_l</span></span></span><a class="headerlink" href="#ttnn.reduce_to_root" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">reduce_to_root</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_l</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_s</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_m</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">root_coord</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MeshCoordinate</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale_fp32</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">topology</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Topology</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">ttnn.Topology.Linear</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor_l</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor_s</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor_m</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">intermediate_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_mux_cores</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.CoreCoord</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.reduce_to_root" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<blockquote>
-<div>
 <p>Reduce-to-root operation. Performs sdpa tree reduction across 4 devices and stores the output on the root device only.</p>
-<dl class="simple">
-<dt>Args:</dt>
-<dd>
-<p>input_tensor_l: the input tensor is a vector of values l of SDPA.
-input_tensor_s: the input tensor is a vector of state s of SDPA.
-input_tensor_m: the input tensor is a vector of state m of SDPA.
-root_coord (ttnn.MeshCoordinate): Coordinate of the root device. Should be (1,0) for 4 devices setup.</p>
-</dd>
-<dt>Keyword Args:</dt>
-<dd>
-<p>topology (ttnn.Topology): Fabric topology.
-output_tensor (ttnn.Tensor,optional): Optional output tensor.
-intermediate_tensor (ttnn.Tensor,optional): Optional intermediate tensor.</p>
-</dd>
-</dl>
-</div>
-</blockquote>
 <dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input_tensor_l</strong> (<em>ttnn.Tensor</em>) – the SDPA values (l) state tensor, sharded across the 4 devices.</p></li>
+<li><p><strong>input_tensor_s</strong> (<em>ttnn.Tensor</em>) – the SDPA running-sum (s) state tensor, sharded across the 4 devices.</p></li>
+<li><p><strong>input_tensor_m</strong> (<em>ttnn.Tensor</em>) – the SDPA running-max (m) state tensor, sharded across the 4 devices.</p></li>
+<li><p><strong>root_coord</strong> (<em>ttnn.MeshCoordinate</em>) – Coordinate of the root device. Should be (1, 0) for the 4-device setup.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>scale_fp32</strong> (<em>float</em><em>, </em><em>optional</em>) – scale applied during the reduction. Defaults to <cite>1.0</cite>.</p></li>
+<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – Fabric topology. Defaults to <cite>ttnn.Topology.Linear</cite>.</p></li>
+<li><p><strong>output_tensor_l</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for values. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor_s</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for sum. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>output_tensor_m</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor for max. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>intermediate_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated intermediate tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>input_mux_cores</strong> (<em>List</em><em>[</em><em>ttnn.CoreCoord</em><em>]</em><em>, </em><em>optional</em>) – the 4 mux core coordinates used for the reduction. Defaults to <cite>None</cite>.</p></li>
+</ul>
+</dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p></p>
-<p><em>ttnn.Tensor output_tensor_l</em> –</p>
+<p><em>List[ttnn.Tensor]</em> – the reduced (l, s, m) tensors, each with the same spec as the corresponding input. The results are valid only on the root device.</p>
+</dd>
+</dl>
+<p>Supported dtypes and layouts:</p>
 <blockquote>
 <div>
-<dl class="simple">
-<dt>the output tensor for values.</dt>
-<dd>
-<p>ttnn.Tensor output_tensor_s: the output tensor for sum.
-ttnn.Tensor output_tensor_m: the output tensor for max.</p>
-</dd>
-</dl>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Tensor</p></th>
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input_tensor_l / _s / _m</p></td>
+<td><p>BFLOAT16</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p>reduce_to_root operates on a fixed 4-device line topology with the root at (1, 0). All three input tensors must be sharded; each output preserves the spec of its corresponding input.</p>
 </div>
 </blockquote>
-<p>Example:</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_torch_l</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">8</span><span class="p">,</span><span class="mi">128</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_torch_s</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">8</span><span class="p">,</span><span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_torch_m</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">8</span><span class="p">,</span><span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
-</pre></div>
-</div>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_l</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-<span class="gp">&gt;&gt;&gt; </span>    <span class="n">input_tensor_torch_l</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardTensorToMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_s</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-<span class="gp">&gt;&gt;&gt; </span>    <span class="n">input_tensor_torch_s</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardTensorToMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor_m</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-<span class="gp">&gt;&gt;&gt; </span>    <span class="n">input_tensor_torch_m</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardTensorToMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">root_coord</span><span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MeshCoordinate</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output_tensor_l</span><span class="p">,</span> <span class="n">output_tensor_s</span><span class="p">,</span> <span class="n">output_tensor_m</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reduce_to_root</span><span class="p">(</span>
-<span class="go">        input_tensor_l,</span>
-<span class="go">        input_tensor_s,</span>
-<span class="go">        input_tensor_m,</span>
-<span class="go">        root_coord,</span>
-<span class="go">        scale_fp32=1.0,</span>
-<span class="go">        topology=ttnn.Topology.Linear)</span>
-</pre></div>
-</div>
-
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Sharded: required (L1)</p></li>
+</ul>
 </dd>
 </dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># reduce_to_root runs an SDPA tree-reduction across a fixed 4-device line and stores the</span>
+<span class="c1"># result on the root device only. The three state tensors (values l, running-sum s,</span>
+<span class="c1"># running-max m) must be TILE-laid-out, WIDTH_SHARDED, and resident in L1.</span>
+<span class="n">num_devices</span> <span class="o">=</span> <span class="mi">4</span>
+<span class="n">num_cores</span> <span class="o">=</span> <span class="mi">8</span>
+<span class="n">tile</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Tile</span><span class="p">((</span><span class="mi">8</span><span class="p">,</span> <span class="mi">32</span><span class="p">))</span>
+
+<span class="c1"># 8 shard cores laid out as two rows of four.</span>
+<span class="n">shard_grid</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreRangeSet</span><span class="p">(</span>
+    <span class="p">{</span>
+        <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreRange</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreCoord</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreCoord</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">)),</span>
+        <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreRange</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreCoord</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">CoreCoord</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">)),</span>
+    <span class="p">}</span>
+<span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">make_state</span><span class="p">(</span><span class="n">width_per_core</span><span class="p">):</span>
+    <span class="c1"># Per-device tensor is [8, width_per_core * num_cores]; stack one per device and shard</span>
+    <span class="c1"># dim 0 across the 4-device line so each device holds its own [8, width] slice.</span>
+    <span class="n">shard_spec</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ShardSpec</span><span class="p">(</span><span class="n">shard_grid</span><span class="p">,</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="n">width_per_core</span><span class="p">],</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ShardOrientation</span><span class="o">.</span><span class="n">ROW_MAJOR</span><span class="p">)</span>
+    <span class="n">mem_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MemoryConfig</span><span class="p">(</span>
+        <span class="n">ttnn</span><span class="o">.</span><span class="n">types</span><span class="o">.</span><span class="n">TensorMemoryLayout</span><span class="o">.</span><span class="n">WIDTH_SHARDED</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">types</span><span class="o">.</span><span class="n">BufferType</span><span class="o">.</span><span class="n">L1</span><span class="p">,</span> <span class="n">shard_spec</span>
+    <span class="p">)</span>
+    <span class="n">per_device</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span>
+        <span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">([</span><span class="mi">8</span><span class="p">,</span> <span class="n">width_per_core</span> <span class="o">*</span> <span class="n">num_cores</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_devices</span><span class="p">)],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+        <span class="n">per_device</span><span class="p">,</span>
+        <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span>
+        <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+        <span class="n">tile</span><span class="o">=</span><span class="n">tile</span><span class="p">,</span>
+        <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
+        <span class="n">memory_config</span><span class="o">=</span><span class="n">mem_config</span><span class="p">,</span>
+        <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardTensorToMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+    <span class="p">)</span>
+
+<span class="n">l</span> <span class="o">=</span> <span class="n">make_state</span><span class="p">(</span><span class="mi">128</span><span class="p">)</span>
+<span class="n">s</span> <span class="o">=</span> <span class="n">make_state</span><span class="p">(</span><span class="mi">32</span><span class="p">)</span>
+<span class="n">m</span> <span class="o">=</span> <span class="n">make_state</span><span class="p">(</span><span class="mi">32</span><span class="p">)</span>
+
+<span class="c1"># Reduce the three states along the line to the root coordinate; outputs match the input specs.</span>
+<span class="n">root_coord</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MeshCoordinate</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">out_l</span><span class="p">,</span> <span class="n">out_s</span><span class="p">,</span> <span class="n">out_m</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reduce_to_root</span><span class="p">(</span><span class="n">l</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">m</span><span class="p">,</span> <span class="n">root_coord</span><span class="p">,</span> <span class="n">scale_fp32</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">topology</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Topology</span><span class="o">.</span><span class="n">Linear</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">out_l</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">out_s</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">out_m</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 

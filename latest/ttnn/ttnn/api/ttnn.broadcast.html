@@ -195,7 +195,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.broadcast">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">broadcast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sender_coord:</span> <span class="pre">MeshCoordinate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mesh_device:</span> <span class="pre">MeshDevice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_links:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">maximum</span> <span class="pre">available</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">input</span> <span class="pre">tensor</span> <span class="pre">memory</span> <span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">topology:</span> <span class="pre">ttnn.Topology</span> <span class="pre">=</span> <span class="pre">ttnn.Topology.Ring</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span> <span class="pre">of</span> <span class="pre">the</span> <span class="pre">output</span> <span class="pre">on</span> <span class="pre">the</span> <span class="pre">mesh</span> <span class="pre">device.</span></span></span><a class="headerlink" href="#ttnn.broadcast" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">broadcast</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sender_coord:</span> <span class="pre">ttnn.MeshCoordinate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_links:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">the</span> <span class="pre">input</span> <span class="pre">tensor</span> <span class="pre">memory</span> <span class="pre">config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">topology:</span> <span class="pre">ttnn.Topology</span> <span class="pre">=</span> <span class="pre">ttnn.Topology.Linear</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subdevice_id:</span> <span class="pre">ttnn.SubDeviceId</span> <span class="pre">|</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.broadcast" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Performs a broadcast operation from a sender device to all other mesh devices across a cluster axis.</p>
@@ -204,10 +204,8 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – </p></li>
-<li><p><strong>sender_coord</strong> (<em>MeshCoordinate</em>) – Coordinate of the sender device in the mesh.</p></li>
-<li><p><strong>cluster_axis</strong> (<em>int</em>) – Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on.</p></li>
-<li><p><strong>mesh_device</strong> (<em>MeshDevice</em>) – Device mesh to perform the operation on.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor. The data residing on <code class="docutils literal notranslate"><span class="pre">sender_coord</span></code> is the data that gets broadcast.</p></li>
+<li><p><strong>sender_coord</strong> (<em>ttnn.MeshCoordinate</em>) – Coordinate of the sender device in the mesh.</p></li>
 </ul>
 </dd>
 </dl>
@@ -217,42 +215,63 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>num_links</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of links to use for the broadcast operation. Defaults to the maximum available.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>input tensor memory config</cite>.</p></li>
-<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to <cite>ttnn.Topology.Ring</cite>.</p></li>
+<li><p><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – The mesh axis to broadcast across. Defaults to <cite>None</cite>, in which case the tensor must have a line (1D) topology.</p></li>
+<li><p><strong>num_links</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of links to use for the broadcast operation. Defaults to <cite>None</cite>, for which the number of links is determined automatically.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory configuration. Defaults to the input tensor memory config.</p></li>
+<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – Fabric topology. Valid options are Ring and Linear. Defaults to <cite>ttnn.Topology.Linear</cite>.</p></li>
+<li><p><strong>subdevice_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – Subdevice id for worker cores.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p>ttnn.Tensor of the output on the mesh device.</p>
+<p><em>ttnn.Tensor</em> – The output tensor, same shape as the input, holding the sender device’s data on every device along the cluster axis.</p>
+</dd>
+</dl>
+<p>Supported dtypes and layouts:</p>
+<blockquote>
+<div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16, BFLOAT8_B, FLOAT32</p></td>
+<td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p>Broadcast is a data-movement collective and does not restrict the input dtype; the output preserves the input dtype.</p>
+</div>
+</blockquote>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded: WIDTH_SHARDED, HEIGHT_SHARDED, BLOCK_SHARDED (each may reside in DRAM or L1; the op places no buffer-type restriction)</p></li>
+</ul>
 </dd>
 </dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">sender_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">256</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">num_devices</span> <span class="o">=</span> <span class="mi">4</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">device_tensors</span> <span class="o">=</span> <span class="p">[]</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="k">for</span> <span class="n">device_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_devices</span><span class="p">):</span>
-<span class="go">        if device_idx == sender_coord_tuple[cluster_axis]:</span>
-<span class="go">            device_tensors.append(sender_tensor)</span>
-<span class="go">        else:</span>
-<span class="go">            device_tensors.append(torch.zeros_like(sender_tensor))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">mesh_tensor_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">(</span><span class="n">device_tensors</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">mesh_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_mesh_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MeshShape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">sender_coord</span> <span class="o">=</span> <span class="n">MeshCoordinate</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">mesh_mapper_config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MeshMapperConfig</span><span class="p">(</span>
-<span class="go">        [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)</span>
-<span class="go">    )</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-<span class="go">                mesh_tensor_torch,</span>
-<span class="go">                dtype=input_dtype,</span>
-<span class="go">                device=mesh_device,</span>
-<span class="go">                layout=layout,</span>
-<span class="go">                memory_config=mem_config,</span>
-<span class="go">                mesh_mapper=ttnn.create_mesh_mapper(mesh_device,mesh_mapper_config))</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">ttnn_tensor</span><span class="p">,</span> <span class="n">sender_coord</span><span class="p">)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch_input</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">256</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">tt_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch_input</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span>
+    <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ReplicateTensorToMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">),</span>
+<span class="p">)</span>
+
+<span class="c1"># Copy the data on the sender coordinate to every device along the cluster axis.</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">broadcast</span><span class="p">(</span><span class="n">tt_input</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MeshCoordinate</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">cluster_axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>  <span class="c1"># [1, 1, 32, 256]</span>
 </pre></div>
 </div>
 </div>

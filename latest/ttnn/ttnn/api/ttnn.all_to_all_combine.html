@@ -238,19 +238,95 @@ T = total number of tokens = B * S</p>
 <p><em>ttnn.Tensor</em> – The combined tokens tensor. The tensor is expected to be [K, B, S, H] sharded along the output_shard_dim dimension across the number of devices along the cluster axis if it was set, or all devices if it was not set, (e.g. [K, B/D[A], S, H] per device if output_shard_dim is 1 or [K, B, S/D[A], H] per device if output_shard_dim is 2). The tensor is expected to be in Row Major, Interleaved format. The rows are sparsely populated such that each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device.</p>
 </dd>
 </dl>
+<p>Supported dtypes and layouts:</p>
+<blockquote>
+<div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Tensor</p></th>
+<th class="head"><p>Dtypes</p></th>
+<th class="head"><p>Layouts</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input_tensor</p></td>
+<td><p>BFLOAT16</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>expert_metadata_tensor</p></td>
+<td><p>UINT16</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+<tr class="row-even">
+<td><p>expert_mapping_tensor</p></td>
+<td><p>UINT16</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+<p>All input tensors must be rank 4 and <code class="docutils literal notranslate"><span class="pre">cluster_axis</span></code> is required. <code class="docutils literal notranslate"><span class="pre">expert_mapping_tensor</span></code> must be fully replicated across the mesh. Additional input-spec constraints enforced by the op:</p>
+<ul class="simple">
+<li><p>The number of experts must be evenly divisible by the number of devices.</p></li>
+<li><p>Unless <code class="docutils literal notranslate"><span class="pre">local_reduce</span></code> is set, <code class="docutils literal notranslate"><span class="pre">input_tensor</span></code>’s leading (expert) dimension must equal <code class="docutils literal notranslate"><span class="pre">experts</span> <span class="pre">/</span> <span class="pre">num_devices</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">output_shard_dim</span></code> must be 1 or 2. When it is 1, the metadata batch dimension must be divisible by the cluster-axis device count; when it is 2, the metadata sequence dimension must be divisible by the cluster-axis device count.</p></li>
+</ul>
+<p>The output preserves the input dtype (BFLOAT16) and is ROW_MAJOR.</p>
+</div>
+</blockquote>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded: not supported (output memory config must not be sharded)</p></li>
+</ul>
+</dd>
+</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">all_to_all_combine</span><span class="p">(</span>
-<span class="go">                        input_tensor,</span>
-<span class="go">                        expert_metadata_tensor,</span>
-<span class="go">                        expert_mapping_tensor,</span>
-<span class="go">                        num_links=num_links,</span>
-<span class="go">                        topology=topology,</span>
-<span class="go">                        memory_config=output_memory_config,</span>
-<span class="go">                        local_reduce=local_reduce,</span>
-<span class="go">                        cluster_axis=cluster_axis,</span>
-<span class="go">                        output_shard_dim=output_shard_dim)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">devices</span> <span class="o">=</span> <span class="mi">8</span>
+<span class="n">experts</span> <span class="o">=</span> <span class="mi">8</span>  <span class="c1"># must be divisible by the number of devices</span>
+<span class="n">select_experts_k</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">hidden_size</span> <span class="o">=</span> <span class="mi">128</span>
+<span class="n">batch</span><span class="p">,</span> <span class="n">seq</span> <span class="o">=</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">2</span>
+
+<span class="c1"># Expert contributions to combine: [experts, batch, seq, hidden], bfloat16, row-major,</span>
+<span class="c1"># sharded on dim 0 so each device holds its experts // devices slice.</span>
+<span class="n">contributions</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">([</span><span class="n">experts</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">seq</span><span class="p">,</span> <span class="n">hidden_size</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span>
+    <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardTensorToMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="c1"># Expert metadata (indices per token), replicated per device: [devices, batch, seq, k],</span>
+<span class="c1"># uint16, sharded on dim 0 so each device receives a full [1, batch, seq, k] copy.</span>
+<span class="n">expert_metadata</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">experts</span><span class="p">,</span> <span class="p">[</span><span class="n">devices</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">seq</span><span class="p">,</span> <span class="n">select_experts_k</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">),</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span>
+    <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardTensorToMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="c1"># Expert-to-device mapping: [1, 1, experts, devices], uint16, fully replicated.</span>
+<span class="n">mapping_torch</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">experts</span><span class="p">,</span> <span class="n">devices</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int16</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">e</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">experts</span><span class="p">):</span>
+    <span class="n">mapping_torch</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">e</span><span class="p">,</span> <span class="n">e</span> <span class="o">%</span> <span class="n">devices</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">expert_mapping</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">mapping_torch</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint16</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">mesh_device</span><span class="p">,</span>
+    <span class="n">mesh_mapper</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ShardTensor2dMesh</span><span class="p">(</span><span class="n">mesh_device</span><span class="p">,</span> <span class="n">mesh_shape</span><span class="o">=</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">dims</span><span class="o">=</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">)),</span>
+<span class="p">)</span>
+
+<span class="c1"># cluster_axis is required for all_to_all_combine.</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">all_to_all_combine</span><span class="p">(</span><span class="n">contributions</span><span class="p">,</span> <span class="n">expert_metadata</span><span class="p">,</span> <span class="n">expert_mapping</span><span class="p">,</span> <span class="n">cluster_axis</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_links</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

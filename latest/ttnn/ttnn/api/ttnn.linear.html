@@ -267,7 +267,10 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias tensor to be added. If specified, needs to be on the device. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>bias</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – the bias tensor to be added. If specified, needs to be on the device. Defaults to <cite>None</cite>.
+Most program configs take a row-vector bias of shape <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">N]</span></code> (or <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">1,</span> <span class="pre">1,</span> <span class="pre">N]</span></code>), broadcast across the output rows.
+The batched <code class="docutils literal notranslate"><span class="pre">MatmulMultiCoreReuseProgramConfig</span></code> path additionally supports a full-tile bias of shape <code class="docutils literal notranslate"><span class="pre">[M,</span> <span class="pre">N]</span></code>,
+added to the output and broadcast over the batch dimension.</p></li>
 <li><p><strong>transpose_a</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_a. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>transpose_b</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose input_tensor_b. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
