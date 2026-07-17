@@ -250,6 +250,9 @@ controlled anomaly ledger and residual full-model follow-ups are preserved in
 ## Commit record
 
 - optimized single-chip baseline: `35ccb90250c`
-- stage implementation/evidence commit: appended after clean independent review
+- multichip implementation, tests, exact evidence, docs, and clean review:
+  `1087041f65f`
+- this SHA-ledger update is the immediate local successor to the stage commit
+  and is reported in the final handoff.
 
 Nothing is pushed.
