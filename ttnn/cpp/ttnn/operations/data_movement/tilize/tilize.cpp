@@ -60,6 +60,7 @@ ttnn::Tensor tilize(
     uint32_t input_tile_height = tile.get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
+    uint32_t num_tiles_per_col = input_tensor.padded_shape()[-2] / input_tile_height;
 
     // Fold in the block factory's c_1 staging CB so routing does not pick "fits" when only c_0+c_16 fit.
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
