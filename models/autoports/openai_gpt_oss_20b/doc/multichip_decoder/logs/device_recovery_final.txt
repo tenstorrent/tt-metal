@@ -1,0 +1,57 @@
+GPT-OSS-20B multichip decoder final recovery control
+UTC date: 2026-07-17
+
+1. Final device list
+
+Command:
+  COLUMNS=240 tt-smi -ls --local
+Exit status: 0
+
+All available boards on host (UMD):
+  UMD 0 | 0000:03:00.0 | /dev/tenstorrent/2 | Blackhole | p300c | 000004613193100c
+  UMD 1 | 0000:04:00.0 | /dev/tenstorrent/3 | Blackhole | p300c | 000004613193100c
+Boards that can be reset: UMD 0 and UMD 1, same BDF/device mapping.
+
+2. Bounded target-mesh smoke
+
+Command:
+  RUN_MULTICHIP_RECOVERY_SMOKE=1 timeout 300 pytest -q -s models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py::test_multichip_recovery_mesh_open_close_smoke --junitxml=models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/device_recovery_mesh_open_close.junit.xml
+Result: 1 passed in 2.38 s, exit 0.
+Control: target MeshShape(1,2) opened, reported two devices and shape (1,2),
+closed, reopened, reported the same contract, and closed again.
+
+3. Post-smoke telemetry
+
+Command:
+  timeout 60 tt-smi -f models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/device_recovery_tt_smi_snapshot.json --snapshot_no_tty
+Exit status: 0
+Snapshot: device_recovery_tt_smi_snapshot.json
+Both devices: board_type p300c, dram_status true, firmware 19.8.0.0,
+GDDR corrected counters all 0x0, GDDR uncorrected counter 0x0, telemetry
+heartbeat 12180 on both devices at the final post-watcher capture.
+
+4. Historical Ethernet retrain classification
+
+The failure-time triage artifact records Device 1 Ethernet e0,4 retrain_count=2
+during the ACTIVE_ETH watcher/fabric teardown incident.  It is classified as a
+historical recovery-triggering firmware/watcher anomaly, not an active decoder
+failure: after `tt-smi -r 0 1`, the final worker/dataflow watcher suite passed
+9/9, subsequent real PCC, full-context, performance, and profiler jobs repeatedly
+initialized and closed FABRIC_1D_RING, the explicit mesh smoke opened/closed the
+1x2 mesh twice, and the final snapshot shows healthy DRAM, zero GDDR errors, and
+advancing/equal device heartbeats.
+
+The current `check_eth_status.py` control cannot reread the retrain register in
+this checkout because tt-triage calls the installed tt-umd `noc_read` with an
+ABI-incompatible memoryview signature.  Its command exits 0 while reporting the
+per-device checks as skipped.  Therefore the retrain counter itself is not
+claimed to have reset to zero; it is controlled by the successful post-recovery
+fabric/mesh/watcher workloads and final telemetry above.  Ethernet watcher
+inspection remains disabled only for the known firmware-19.8.0 teardown path.
+
+5. Framework teardown noise
+
+The retained pytest logs emit nanobind reference-leak diagnostics after test
+success and clean `Closing devices in cluster completed` messages.  They are
+classified as Python binding teardown noise: they neither prevent mesh closure
+nor reproduce as a device, fabric, cache, or decoder correctness failure.

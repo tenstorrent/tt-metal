@@ -1,0 +1,32 @@
+Final selected-hybrid worker/dataflow watcher evidence
+UTC: 2026-07-17 10:10:24 through 10:11:50
+
+Command:
+TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 RUN_MULTICHIP_CONTEXT=1 timeout 1800 pytest -q -s models/autoports/openai_gpt_oss_20b/tests/test_multichip_decoder.py -k 'runtime_contract_and_fallback_audit or active_prefill_uses_four_token_specific_sparse_entries or synthetic_non_aligned_prefill_matches_optimized_and_cache_is_head_local or real_weight_prefill_decode_matches_single_chip_optimized or near_tied_router_isolated_to_tp_attention_rounding or warmed_trace_replay_updates_hidden_position_and_paged_cache or full_context_cache_allocation_and_last_page_update' --junitxml=models/autoports/openai_gpt_oss_20b/doc/multichip_decoder/logs/watcher_clean_workers_final.junit.xml
+
+Result: exit 0; 9 passed, 14 deselected in 82.50 s.
+Watcher attached devices 0 and 1 for every hardware fixture.
+Watcher server reported only the scoped disabled feature: ETH.
+Worker/dataflow checks ran on both devices without error, assert, timeout, NoC
+failure, device hang, cache mismatch, or PCC regression.
+
+Final selected-hybrid PCC highlights:
+- synthetic non-aligned S=17 / S=33: 0.9999996505 / 0.9999997012
+- sliding S=128 prefill: 0.9993659138
+- full S=128 prefill: 0.9993852903
+- sliding minimum final decode PCC: 0.9990992990
+- full minimum final decode PCC: 0.9988705302
+- sliding/full trace positions 128-130: 1.0
+- maximum cache position 131071: pass
+
+Final teardown:
+Watcher thread stopped watching.
+Watcher detached device 0.
+Watcher detached device 1.
+Closing devices in cluster completed.
+Cluster destructor completed.
+
+Pytest then emitted the known nanobind reference-leak diagnostic.  This is
+classified as binding teardown noise because it follows test success, watcher
+detach, and clean device/cluster closure.  The full structured case list and
+durations are retained in watcher_clean_workers_final.junit.xml.

@@ -1,0 +1,7 @@
+
+dump_fast_dispatch.py:
+Dev,Loc,RiscV,Loc,Proc,Kernel Name,worker_type,cq_id,servicing_device_id
+0,"16-2 (11,0)",brisc,"16-2 (11,0)",brisc,cq_prefetch,PREFETCH_HD,0,0
+0,"16-3 (11,1)",brisc,"16-3 (11,1)",brisc,cq_dispatch,DISPATCH_HD,0,0
+1,"16-2 (11,0)",brisc,"16-2 (11,0)",brisc,cq_prefetch,PREFETCH_HD,0,1
+1,"16-3 (11,1)",brisc,"16-3 (11,1)",brisc,cq_dispatch,DISPATCH_HD,0,1

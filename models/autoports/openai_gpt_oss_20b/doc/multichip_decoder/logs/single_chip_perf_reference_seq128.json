@@ -1,0 +1,11 @@
+{
+  "mesh": [
+    1,
+    1
+  ],
+  "prefill_ms": 13.453845167532563,
+  "prefill_repeats": 10,
+  "seq_len": 128,
+  "trace_replays": 100,
+  "traced_decode_ms": 0.9756335010752082
+}

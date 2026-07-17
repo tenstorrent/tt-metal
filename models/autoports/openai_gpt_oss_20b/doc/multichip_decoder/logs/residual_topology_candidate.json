@@ -1,0 +1,13 @@
+{
+  "boundary": "attention O projection -> residual add -> post-attention RMSNorm -> router -> sparse-expert input",
+  "candidate_next_consumer": "distributed RMSNorm, row-sharded router plus 32-logit all-reduce, then required full-hidden gather for sparse gate/up",
+  "candidate_stack_contract": "width-sharded residual [1,1,1,1440] per device",
+  "mesh": [
+    1,
+    2
+  ],
+  "repeats": 20,
+  "replicated_all_reduce_ms": 0.52983108907938,
+  "replicated_over_sharded_speedup": 1.3835385122704833,
+  "sharded_reduce_scatter_distributed_norm_gather_ms": 0.7330417167395353
+}

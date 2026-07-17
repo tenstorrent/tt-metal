@@ -1,0 +1,142 @@
+[New LWP 1019265]
+[New LWP 1019264]
+[New LWP 1019263]
+[New LWP 1019262]
+[New LWP 1019261]
+[New LWP 1019260]
+[New LWP 1019259]
+[New LWP 1019258]
+[New LWP 1019257]
+[New LWP 1019256]
+[New LWP 1019255]
+[New LWP 1019254]
+[New LWP 1019253]
+[New LWP 1019248]
+[New LWP 1019247]
+[New LWP 1019246]
+[New LWP 1019245]
+[New LWP 1019244]
+[New LWP 1019240]
+[New LWP 1019239]
+[New LWP 1019238]
+[New LWP 1019237]
+[New LWP 1019236]
+[New LWP 1019235]
+[New LWP 1019234]
+[New LWP 1019233]
+[New LWP 1019232]
+[New LWP 1019231]
+[New LWP 1019230]
+[New LWP 1019229]
+[New LWP 1019228]
+[New LWP 1019227]
+[New LWP 1019226]
+[New LWP 1019225]
+[New LWP 1019224]
+[New LWP 1019223]
+[New LWP 1019221]
+[New LWP 1019220]
+[New LWP 1019219]
+[New LWP 1019218]
+[New LWP 1019217]
+[New LWP 1019216]
+[New LWP 1019215]
+[New LWP 1019214]
+[New LWP 1019213]
+[New LWP 1019212]
+[New LWP 1019211]
+[New LWP 1019210]
+[New LWP 1019209]
+[New LWP 1019208]
+[New LWP 1019207]
+[New LWP 1019205]
+[New LWP 1019204]
+[New LWP 1019203]
+[New LWP 1019202]
+[New LWP 1019201]
+[New LWP 1019200]
+[New LWP 1019199]
+[New LWP 1019198]
+[New LWP 1019197]
+[New LWP 1019196]
+[New LWP 1019195]
+[New LWP 1019194]
+[New LWP 1019193]
+[New LWP 1019192]
+[New LWP 1019191]
+[New LWP 1019190]
+[New LWP 1019189]
+[New LWP 1019188]
+[New LWP 1019187]
+
+warning: Loadable section ".dynstr" outside of ELF segments
+  in /home/mvasiljevic/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x0000796d1f9ced71 in __futex_abstimed_wait_common64 (private=32767, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x41397d44) at ./nptl/futex-internal.c:57
+
+warning: 57	./nptl/futex-internal.c: No such file or directory
+[Switching to thread 1 (Thread 0x796d1f933740 (LWP 1019158))]
+#0  0x0000796d1f9ced71 in __futex_abstimed_wait_common64 (private=32767, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x41397d44) at ./nptl/futex-internal.c:57
+57	in ./nptl/futex-internal.c
+#0  0x0000796d1f9ced71 in __futex_abstimed_wait_common64 (private=32767, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x41397d44) at ./nptl/futex-internal.c:57
+#1  __futex_abstimed_wait_common (cancel=true, private=32767, abstime=0x0, clockid=0, expected=0, futex_word=0x41397d44) at ./nptl/futex-internal.c:87
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x41397d44, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x0000796d1f9d17ed in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x41397d48, cond=0x41397d18) at ./nptl/pthread_cond_wait.c:503
+#4  ___pthread_cond_wait (cond=0x41397d18, mutex=0x41397d48) at ./nptl/pthread_cond_wait.c:627
+#5  0x0000796cd6be6016 in tt::tt_metal::distributed::FDMeshCommandQueue::finish_nolock(std::span<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> const, 18446744073709551615ul>) () from /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so
+#6  0x0000796cd6bde0f2 in tt::tt_metal::distributed::MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(tt::tt_metal::distributed::MeshBuffer const&, void const*, tt::tt_metal::distributed::MeshCoordinateRange const&, bool, std::optional<tt::tt_metal::BufferRegion>) () from /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so
+#7  0x0000796cd6bde276 in tt::tt_metal::distributed::MeshCommandQueueBase::enqueue_write_mesh_buffer(std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> const&, void const*, bool) () from /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so
+#8  0x0000796cd6a0fcb6 in tt::tt_metal::GlobalSemaphore::reset_semaphore_value(unsigned int) const () from /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so
+#9  0x0000796cd6a0f8c6 in tt::tt_metal::GlobalSemaphore::setup_buffer(std::optional<unsigned int>, tt::tt_metal::BufferType, std::optional<unsigned long>) () from /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so
+#10 0x0000796cd6a0f712 in tt::tt_metal::GlobalSemaphore::GlobalSemaphore(tt::tt_metal::IDevice*, tt::tt_metal::CoreRangeSet const&, unsigned int, tt::tt_metal::BufferType) () from /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so
+#11 0x0000796cd6f30bae in tt::tt_metal::CreateGlobalSemaphore(tt::tt_metal::IDevice*, tt::tt_metal::CoreRangeSet const&, unsigned int, tt::tt_metal::BufferType) () from /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so
+#12 0x0000796cd7cb0fbe in ttnn::global_semaphore::create_global_semaphore(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::CoreRangeSet const&, unsigned int, tt::tt_metal::BufferType) () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#13 0x0000796cd7db10bd in ttnn::operations::ccl::ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(ttnn::operations::ccl::ReduceScatterDeviceOperation::operation_attributes_t const&, tt::tt_metal::distributed::MeshCoordinateRangeSet const&, ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_args_t const&, std::vector<tt::tt_metal::Tensor, std::allocator<tt::tt_metal::Tensor> >&) () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#14 0x0000796cd7dcb06b in _ZZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_10operations3ccl28ReduceScatterDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_13program_cache6detail12ProgramCacheERKNSN_15ProgramCacheKeyEENKUlTyvE_clINS6_20ReduceScatterProgramEEEDav () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#15 0x0000796cd7dc40cb in _ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_10operations3ccl28ReduceScatterDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#16 0x0000796cd7db7f88 in _ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_10operations3ccl28ReduceScatterDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#17 0x0000796cd7daf527 in ttnn::prim::reduce_scatter(tt::tt_metal::Tensor const&, unsigned int, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, tt::tt_metal::MemoryConfig const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_metal::Tensor> const&, unsigned int, tt::tt_fabric::Topology, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<ttnn::ComputeKernelConfig> const&, bool) () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#18 0x0000796cd7daf0b7 in ttnn::reduce_scatter(tt::tt_metal::Tensor const&, int, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<unsigned int>, std::optional<ttnn::ComputeKernelConfig> const&, bool) () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#19 0x0000796cd844a037 in ttnn::experimental::all_reduce_async(tt::tt_metal::Tensor const&, std::optional<unsigned int>, tt::tt_metal::distributed::MeshDevice&, std::optional<std::vector<tt::tt_metal::GlobalSemaphore, std::allocator<tt::tt_metal::GlobalSemaphore> > > const&, std::optional<std::vector<tt::tt_metal::GlobalSemaphore, std::allocator<tt::tt_metal::GlobalSemaphore> > > const&, std::optional<std::vector<tt::tt_metal::GlobalSemaphore, std::allocator<tt::tt_metal::GlobalSemaphore> > > const&, reduction_common::ReduceType, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<tt::tt_fabric::Topology>, std::optional<unsigned long>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >) () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#20 0x0000796cd7dd4655 in ttnn::all_reduce(tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>) () from /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so
+#21 0x0000796cd9575d18 in nanobind::detail::func_create<false, false, nanobind::detail::func_create<false, true, ttnn::detail::make_method_wrapper<ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}>, tt::tt_metal::Tensor, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology> >(tt::tt_metal::Tensor (*)(tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>))::{lambda(ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}> const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>)#1}&, tt::tt_metal::Tensor, ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}> const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, 6ul, nanobind::scope, nanobind::name, nanobind::is_method, nanobind::arg, nanobind::kw_only, nanobind::arg_v, nanobind::arg_v, nanobind::arg_v, nanobind::arg_v, nanobind::arg_v, nanobind::call_guard<nanobind::gil_scoped_release> >(ttnn::detail::make_method_wrapper<ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}>, tt::tt_metal::Tensor, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology> >(tt::tt_metal::Tensor (*)(tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>))::{lambda(ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}> const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>)#1}&, tt::tt_metal::Tensor (*)(ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}> const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, 6ul>, nanobind::scope const&, nanobind::name const&, nanobind::is_method const&, nanobind::arg const&, nanobind::kw_only const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::call_guard<nanobind::gil_scoped_release> const&)::{lambda(ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}> const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>)#1}, tt::tt_metal::Tensor, ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}> const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, 6ul, nanobind::scope, nanobind::name, nanobind::is_method, nanobind::arg, nanobind::kw_only, nanobind::arg_v, nanobind::arg_v, nanobind::arg_v, nanobind::arg_v, nanobind::arg_v, nanobind::call_guard<nanobind::gil_scoped_release> >(ttnn::detail::make_method_wrapper<ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}>, tt::tt_metal::Tensor, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology> >(tt::tt_metal::Tensor (*)(tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>))::{lambda(ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}> const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>)#1}&, tt::tt_metal::Tensor (*)(ttnn::unique_wrapper_base<ttnn::unique_string<11ul>{std::array<char, 11ul>{char [11]{(char)97, (char)108, (char)108, (char)95, (char)114, (char)101, (char)100, (char)117, (char)99, (char)101}}}, ttnn::unique_string<6ul>{std::array<char, 6ul>{char [6]{(char)116, (char)116, (char)110, (char)110, (char)46}}}> const&, tt::tt_metal::Tensor const&, std::optional<unsigned int>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> > const&, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<unsigned int>, std::optional<tt::tt_fabric::Topology>), std::integer_sequence<unsigned long, 0ul, 1ul, 2ul, 3ul, 4ul, 5ul, 6ul>, nanobind::scope const&, nanobind::name const&, nanobind::is_method const&, nanobind::arg const&, nanobind::kw_only const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::arg_v const&, nanobind::call_guard<nanobind::gil_scoped_release> const&)::{lambda(void*, _object**, unsigned char*, nanobind::rv_policy, nanobind::detail::cleanup_list*)#1}::__invoke(void*, _object**, unsigned char*, nanobind::rv_policy, nanobind::detail::cleanup_list*) () from /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so
+#22 0x0000796cd9515575 in nanobind::detail::nb_func_vectorcall_complex(_object*, _object* const*, unsigned long, _object*) () from /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so
+#23 0x0000000001ac8a22 in _PyObject_Call_Prepend.warm ()
+#24 0x00000000018c68da in slot_tp_call ()
+#25 0x000000000181940b in _PyEval_EvalFrameDefault ()
+#26 0x0000000001ac8a22 in _PyObject_Call_Prepend.warm ()
+#27 0x00000000018c68da in slot_tp_call ()
+#28 0x0000000001815de8 in _PyEval_EvalFrameDefault ()
+#29 0x0000000001ac8a22 in _PyObject_Call_Prepend.warm ()
+#30 0x00000000018c68da in slot_tp_call ()
+#31 0x0000000001815de8 in _PyEval_EvalFrameDefault ()
+#32 0x0000000001ac8a22 in _PyObject_Call_Prepend.warm ()
+#33 0x00000000018c68da in slot_tp_call ()
+#34 0x000000000181940b in _PyEval_EvalFrameDefault ()
+#35 0x0000000001ac8a22 in _PyObject_Call_Prepend.warm ()
+#36 0x00000000018c68da in slot_tp_call ()
+#37 0x0000000001815de8 in _PyEval_EvalFrameDefault ()
+#38 0x0000000001ac8a22 in _PyObject_Call_Prepend.warm ()
+#39 0x00000000018c68da in slot_tp_call ()
+#40 0x0000000001815de8 in _PyEval_EvalFrameDefault ()
+#41 0x0000000001ac8a22 in _PyObject_Call_Prepend.warm ()
+#42 0x00000000018c68da in slot_tp_call ()
+#43 0x0000000001815de8 in _PyEval_EvalFrameDefault ()
+#44 0x00000000018931a0 in PyEval_EvalCode ()
+#45 0x00000000018b12c9 in run_mod.llvm ()
+#46 0x0000000001a2b145 in pyrun_file ()
+#47 0x0000000001a2af06 in _PyRun_SimpleFileObject ()
+#48 0x0000000001a2ac8a in _PyRun_AnyFileObject ()
+#49 0x0000000001a2ac10 in pymain_run_file_obj ()
+#50 0x0000000001a2ab1d in pymain_run_file ()
+#51 0x0000000001ae1fe3 in Py_RunMain.warm ()
+#52 0x000000000198c298 in pymain_main.llvm ()
+#53 0x000000000198c0ac in main ()
+[Inferior 1 (process 1019158) detached]
