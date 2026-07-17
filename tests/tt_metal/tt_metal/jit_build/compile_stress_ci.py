@@ -67,6 +67,30 @@ DEFAULT_GOLDEN_BY_ARCH = {
     "blackhole": SCRIPT_DIR / "compile_stress_blackhole_golden.json",
 }
 
+# Safelist of architectures this benchmark accepts. --arch flows into the child
+# env, so validate it against known values rather than passing it through raw.
+KNOWN_ARCHES = ("wormhole_b0", "blackhole", "quasar")
+
+# gtest arguments are fixed literals; only the (validated) binary path is dynamic.
+GTEST_ARGS = (
+    "--gtest_also_run_disabled_tests",
+    "--gtest_filter=*TensixCompileStress*",
+    "--gtest_color=no",
+)
+
+
+def _safe_child(base: Path, *parts: str) -> Path:
+    """Join ``parts`` onto ``base`` and confirm the result stays within ``base``.
+
+    Guards against path traversal: every file this script reads/writes lives under
+    the run's work dir, so a resolved child that escapes ``base`` is rejected.
+    """
+    base = base.resolve()
+    child = base.joinpath(*parts).resolve()
+    if child != base and not child.is_relative_to(base):
+        raise SystemExit(f"[jit-build-perf] refusing to use path outside {base}: {child}")
+    return child
+
 
 @dataclass
 class RepResult:
@@ -128,23 +152,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def resolve_golden(args: argparse.Namespace) -> Path:
+    # Default goldens are a hardcoded safelist next to this script. An explicit
+    # --golden override is resolved and must be an existing regular file, so only
+    # a validated path is ever opened.
     if args.golden is not None:
-        return args.golden
-    golden = DEFAULT_GOLDEN_BY_ARCH.get(args.arch)
-    if golden is None:
-        raise SystemExit(
-            f"No default golden for arch {args.arch!r}; pass --golden explicitly. "
-            f"Known arches: {sorted(DEFAULT_GOLDEN_BY_ARCH)}"
-        )
+        golden = args.golden.resolve()
+    else:
+        golden = DEFAULT_GOLDEN_BY_ARCH.get(args.arch)
+        if golden is None:
+            raise SystemExit(
+                f"No default golden for arch {args.arch!r}; pass --golden explicitly. "
+                f"Known arches: {sorted(DEFAULT_GOLDEN_BY_ARCH)}"
+            )
+        golden = golden.resolve()
+    if not golden.is_file():
+        raise SystemExit(f"[jit-build-perf] golden not found: {golden}")
     return golden
 
 
-def run_repetition(args: argparse.Namespace, work_dir: Path, rep: int) -> RepResult:
-    rep_dir = work_dir / f"rep_{rep:02d}"
-    cache_dir = rep_dir / "cache"
+def run_repetition(test_binary: Path, args: argparse.Namespace, work_dir: Path, rep: int) -> RepResult:
+    # All per-rep paths are confined to work_dir (rep index is an int, not input).
+    rep_dir = _safe_child(work_dir, f"rep_{rep:02d}")
+    cache_dir = _safe_child(rep_dir, "cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
-    result_file = rep_dir / "result.json"
-    stdout_log = rep_dir / "stdout.log"
+    result_file = _safe_child(rep_dir, "result.json")
+    stdout_log = _safe_child(rep_dir, "stdout.log")
     seed = BASE_SEED + rep
 
     env = dict(os.environ)
@@ -166,15 +198,13 @@ def run_repetition(args: argparse.Namespace, work_dir: Path, rep: int) -> RepRes
         }
     )
 
-    cmd = [
-        str(args.test_binary),
-        "--gtest_also_run_disabled_tests",
-        "--gtest_filter=*TensixCompileStress*",
-        "--gtest_color=no",
-    ]
+    # test_binary is pre-validated in main() (resolved absolute path to an existing
+    # regular file); the remaining argv entries are fixed literals and shell=False,
+    # so no untrusted string reaches a shell.
+    cmd = [str(test_binary), *GTEST_ARGS]
     print(f"[jit-build-perf] rep {rep}: seed={seed} num_kernels={args.num_kernels} arch={args.arch}")
     with open(stdout_log, "w") as log:
-        rc = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
+        rc = subprocess.run(cmd, env=env, stdout=log, stderr=subprocess.STDOUT, shell=False).returncode
     if rc != 0:
         raise SystemExit(f"[jit-build-perf] rep {rep} failed (exit {rc}). See {stdout_log}.")
     if not result_file.exists():
@@ -267,25 +297,31 @@ def gate(reps: list[RepResult], golden_path: Path, args: argparse.Namespace) -> 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    if not args.test_binary.exists():
-        raise SystemExit(f"--test-binary not found: {args.test_binary}")
+    if args.arch not in KNOWN_ARCHES:
+        raise SystemExit(f"--arch {args.arch!r} not in safelist {KNOWN_ARCHES}")
     if args.repetitions < 1:
         raise SystemExit("--repetitions must be >= 1")
     if args.num_kernels < 1:
         raise SystemExit("--num-kernels must be >= 1")
 
+    # Resolve and validate the executable up front so the only dynamic argv entry
+    # passed to subprocess is a known, existing regular file.
+    test_binary = args.test_binary.resolve()
+    if not test_binary.is_file():
+        raise SystemExit(f"--test-binary is not an existing file: {test_binary}")
+
     golden_path = resolve_golden(args)
 
     if args.output_dir is not None:
-        work_dir = args.output_dir
+        work_dir = args.output_dir.resolve()
         work_dir.mkdir(parents=True, exist_ok=True)
         cleanup = False
     else:
-        work_dir = Path(tempfile.mkdtemp(prefix="jit_build_perf_"))
+        work_dir = Path(tempfile.mkdtemp(prefix="jit_build_perf_")).resolve()
         cleanup = not args.keep_output
 
     try:
-        reps = [run_repetition(args, work_dir, rep) for rep in range(args.repetitions)]
+        reps = [run_repetition(test_binary, args, work_dir, rep) for rep in range(args.repetitions)]
         return gate(reps, golden_path, args)
     finally:
         if cleanup and work_dir.exists():
