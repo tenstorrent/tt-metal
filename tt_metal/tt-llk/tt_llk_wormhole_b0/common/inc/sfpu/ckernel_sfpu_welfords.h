@@ -284,13 +284,24 @@ sfpi_inline void _clear_previous_mean_and_m2_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
-// Experimental two-pass statistics helpers. LREG4 holds the running sum/mean and
-// LREG5 holds the centered sum of squares. The input tile has been transposed so
-// channels are rows and the 32 spatial samples remain vector lanes.
+// Experimental two-pass statistics helpers. During pass one LREG4/5 hold
+// independent partial sums, which are combined into the mean in LREG4. During
+// pass two LREG5 holds the centered sum of squares. The input tile has been
+// transposed so channels are rows and the 32 spatial samples remain vector lanes.
 template <std::uint32_t input_lreg, std::uint32_t accumulator_lreg>
 sfpi_inline void _two_pass_accumulate_sum_row_()
 {
     TTI_SFPADD(accumulator_lreg, ckernel::p_sfpu::LCONST_1, input_lreg, accumulator_lreg, 0);
+}
+
+sfpi_inline void _two_pass_accumulate_sum_block_()
+{
+    // Alternate two independent accumulators to hide SFPADD's two-cycle
+    // latency. The final NOP protects LREG5 from the following transpose.
+    TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG4, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG4, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG5, 0);
     TTI_SFPNOP;
 }
 
@@ -350,14 +361,23 @@ sfpi_inline void _two_pass_block_rows_(std::uint32_t start_row, std::uint32_t en
     }
     else
     {
+        if (first == 0 && last == 4)
+        {
+            _two_pass_accumulate_sum_block_();
+            return;
+        }
 #define TWO_PASS_SUM_ROW(N, R, A) \
     if (first <= N && last > N)   \
         _two_pass_accumulate_sum_row_<R, A>();
+        // Alternating accumulators makes consecutive rows independent. Since
+        // the selected rows are contiguous, one final NOP is sufficient even
+        // for partial blocks.
         TWO_PASS_SUM_ROW(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG4)
-        TWO_PASS_SUM_ROW(1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG4)
+        TWO_PASS_SUM_ROW(1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG5)
         TWO_PASS_SUM_ROW(2, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG4)
-        TWO_PASS_SUM_ROW(3, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG4)
+        TWO_PASS_SUM_ROW(3, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG5)
 #undef TWO_PASS_SUM_ROW
+        TTI_SFPNOP;
     }
 }
 
@@ -397,6 +417,8 @@ sfpi_inline void _two_pass_finish_mean_(std::uint32_t reciprocal_bits)
 {
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
+    TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
+    TTI_SFPNOP;
     TTI_SFPMUL(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG4, 0);
     TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
