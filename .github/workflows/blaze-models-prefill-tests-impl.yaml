@@ -18,8 +18,8 @@ on:
       sp-config:
         required: false
         type: string
-        default: "spsg"
-        description: "Single pod configuration (spsg)"
+        default: "sc1"
+        description: "Supercluster configuration (sc1)"
       test-type:
         required: false
         type: string

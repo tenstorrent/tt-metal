@@ -179,13 +179,14 @@ def parametrize_mesh_tp(max_tp=4):
     keys) are readable.
     """
     shape = _resolve_mesh_shape(max_tp)
+    # Local import to keep this test helper's module load light (see module docstring).
+    from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
     def decorator(fn):
-        # l1_small_size matches the prefill/demo device config (24576); the native conv1d prefill
-        # path needs L1_SMALL banks, and reserving them is harmless for the ops that don't.
         fn = pytest.mark.parametrize(
             "device_params",
-            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 24576}],
+            # l1_small_size required by ttnn.conv1d in the GDN prefill path
+            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}],
             indirect=True,
         )(fn)
         fn = pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(

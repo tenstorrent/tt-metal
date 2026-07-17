@@ -65,13 +65,12 @@ class MyModelAdapter(PrefillModelAdapter):
         Mirror the layout the cache-populate run wrote so the runner reads the same files."""
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
-        """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches`
-        (ordered tuple) — the single place your model's KV layout is defined. Index 0 is the primary
-        KV cache; a dense model returns `KvCaches([kvpe])`, a sparse-attention (DSA) model appends its
-        secondary cache (`KvCaches([kvpe, index])`) instead of implementing a second method. The
-        ENGINE owns the returned caches: it allocates them once, passes them into every runtime call
-        that touches them, and frees them with the mesh at shutdown. `params` carries max_seq_len /
-        mesh_shape / this rank's num_layers / num_users / ... ."""
+        """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches` — your
+        own concrete subclass (a named struct of one or more device tensors; e.g. M3's k/v/index_k, or
+        the DeepSeek family's kvpe + optional DSA index). The single place your model's KV layout is
+        defined. The engine treats it as an opaque handle: it allocates it once, passes it into every
+        runtime call that touches it, and frees it with the mesh at shutdown. `params` carries
+        max_seq_len / mesh_shape / this rank's num_layers / num_users / ... ."""
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return the runtime handle (section 2).
@@ -133,22 +132,27 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output)."""
 
-    # --- OPTIONAL hooks; only if the model supports golden-trace bring-up / cache migration. The
-    #     engine guards kv_cache_pcc_check with getattr, so a model that omits it just can't run
-    #     PREFILL_STANDALONE_PCC=1. Production serving never calls any of these. Keep the heavy PCC /
-    #     table logic in your model's own validation module (a thin forwarder on the runtime), not
-    #     inline here — see deepseek_v3_d_p/tt/runners/prefill_kv_validation.py. ---
-    def kv_cache_pcc_check(self, kv_cache, *, slot_id, n_chunks, trace_dir, first_layer_idx) -> float:
-        """PCC `kv_cache` for `slot_id` against the golden trace; return the min per-layer
-        PCC (asserting on failure). Called only when PREFILL_STANDALONE_PCC=1."""
+    # --- OPTIONAL hooks — implement only if your model supports golden-trace bring-up / cache migration;
+    #     production serving never calls them. Keep the heavy PCC / table logic in your model's own
+    #     validation module (a thin forwarder on the runtime), not inline here — see
+    #     deepseek_v3_d_p/tt/runners/prefill_kv_validation.py. ---
+    def kv_cache_pcc_check(self, kv_cache, *, slot_id, n_chunks, trace_dir=None,
+                           first_layer_idx=0, real_len=None, pt_path_override=None) -> float:
+        """PCC slot `slot_id`'s `kv_cache` against the golden trace; return the min per-layer PCC (asserting
+        on failure). The single place your model's KV layout + golden format live. `real_len` caps the
+        compared extent to real (non-pad) tokens; `pt_path_override` selects a per-slot .pt golden (raise if
+        your model has no such path)."""
+
+    def read_slot_kv(self, kv_cache, slot) -> "list[torch.Tensor]":
+        """Read one slot's KV cache from device to host: one host tensor per cache tensor, each
+        `[num_layers, heads(or 1), seq_cache, head_dim]` (replicas collapsed to 1), in the raw on-device
+        (block-cyclic) layout — NOT un-rotated to natural token order."""
 
     def build_kv_chunk_table(self, kv_cache, path: str) -> str:
-        """Build + serialize the KV-chunk address table for `kv_cache` (your model's
-        block-cyclic layout) to `path` and return it. The engine then PUBLISHES it to the
-        migration worker — this method issues no comms. Called when PREFILL_ENABLE_MIGRATION=1.
-        Use the shared `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py)
-        for the config-population + protobuf-serialize boilerplate; supply only your model's
-        table builder + chunk geometry."""
+        """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
+        to `path` and return it; issue no comms (the engine publishes it). Use the shared
+        `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py) for the config-population +
+        protobuf-serialize boilerplate; supply only your model's table builder + chunk geometry."""
 
     def set_layer_ack_channel(self, channel) -> None:
         """Register the per-layer LayerAck channel (the engine creates and owns it); the

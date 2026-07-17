@@ -983,7 +983,7 @@ def main():
             for script in script_queue:
                 progress.update(scripts_task, description=f"Running {script.name}")
                 if not all(not dep.failed for dep in script.depends):
-                    # Silently mark as skipped — the original root-cause failure already
+                    # Silently mark as skipped - the original root-cause failure already
                     # printed its own message; cascading "Cannot run due to failed dependencies"
                     # lines for every downstream script are noise.
                     script.failed = True
