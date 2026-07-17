@@ -232,11 +232,11 @@ jobs:
           BUILD_ARCHIVE="${build_archives[0]}"
           echo "Using build archive: ${BUILD_ARCHIVE}"
 
-          tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
           sudo rm -rf /home/user/tt-metal
           sudo mkdir -p /home/user
           sudo chown "$(id -u):$(id -g)" /home/user
-          cp -r /ci/tt-metal /home/user/
+          tar --zstd -xf "${BUILD_ARCHIVE}" -C /home/user/
+
           mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
