@@ -49,6 +49,12 @@ Two facts this relies on (verified on-machine):
   solve is running **cardless**: do not build/run locally, offload each arch's build+run to
   the hw_test queue instead (Step 0). Unset ⇒ build+run locally (ttsim, or a runner that
   owns a card).
+- `TT_METAL_LLK_ASSERTS` (env, opt-in; default unset/`0`) — when set to `1`, verify the fix
+  with device-side LLK asserts enabled, so a fix that passes an illegal parameter/config to
+  the LLK API is caught during verification. The gtest run additionally sets
+  `TT_METAL_WATCHER=1` so a firing assert surfaces as a readable Watcher message in the run
+  log instead of a silent `ebreak` hang until the timeout. Unset ⇒ asserts compiled out
+  (zero overhead), exactly as today. See `docs/source/tt-metalium/tools/llk_asserts.rst`.
 
 ## Mandatory Pre-Flight
 
@@ -81,6 +87,10 @@ entirely; ttsim never dispatches (it needs no card — use Steps A+B).
 # The CLI captures the worktree diff (vs origin/main), submits a kind=metal job per
 # arch (test = the gtest_filter, dispatch = slow|fast), and prints one line per arch:
 #   HW_TEST_RESULT arch=<arch> ok=<bool> ran=<bool> passed=<bool> job=<id> summary="..."
+# Opt-in LLK asserts reach the queue executor through the environment (the same channel as
+# HW_TEST_DISPATCH_CMD itself): the executor bakes TT_METAL_LLK_ASSERTS into the on-card JIT
+# build and runs Watcher. Export both so an env-forwarding executor inherits them.
+if [ "${TT_METAL_LLK_ASSERTS:-0}" = 1 ]; then export TT_METAL_LLK_ASSERTS=1 TT_METAL_WATCHER=1; fi
 ARCHES_CSV=$(echo $TARGET_ARCHES | tr ' ' ',')
 $HW_TEST_DISPATCH_CMD --kind metal --arch "$ARCHES_CSV" \
       --test "$GTEST_FILTER" --dispatch "${DISPATCH:-fast}" \
@@ -165,6 +175,9 @@ HOME_TREE="${METAL_VERIFY_HOME:-$WORKTREE_DIR}"
 FRESH_CACHE="$LOG_DIR/ttcache_${arch}"; rm -rf "$FRESH_CACHE"; mkdir -p "$FRESH_CACHE"
 env_args=( TT_METAL_HOME="$HOME_TREE" TT_METAL_CACHE="$FRESH_CACHE" )
 [ "$DISPATCH" = slow ] && env_args+=( TT_METAL_SLOW_DISPATCH_MODE=1 )
+# Opt-in: verify with device-side LLK asserts + Watcher so a firing assert prints a readable
+# message to the run log instead of ebreak-hanging the kernel until the gtest timeout.
+[ "${TT_METAL_LLK_ASSERTS:-0}" = 1 ] && env_args+=( TT_METAL_LLK_ASSERTS=1 TT_METAL_WATCHER=1 )
 
 if [ "$TEST_BACKEND" = ttsim ]; then
   # SIM_SO = TTSIM_SO_PATHS[arch]; validate file + companion soc_descriptor.yaml first.
@@ -190,10 +203,16 @@ so a stale entry would silently test the *old* header and give a false pass.
 |---|---|
 | `[  PASSED  ]`, all selected tests pass, exit 0 | `SUCCESS` |
 | build/link error in Step A | `COMPILE_FAILED` |
+| Watcher `LLK_ASSERT`/`ASSERT` message in the run log (only with `TT_METAL_LLK_ASSERTS=1`) | `TESTS_FAILED` |
 | `[  FAILED  ]` / data mismatch / assertion / timeout | `TESTS_FAILED` |
 | `UnimplementedFunctionality` / SIM ISA gap from ttsim | `SIM_ISA_GAP` |
 | missing/invalid `.so`, no `soc_descriptor.yaml`, missing binary, bad build tree | `ENV_ERROR` |
 | `metal_verification.target: none` (no metal test exists) | `UNVERIFIABLE_IN_LLK_SUITE` |
+
+When `TT_METAL_LLK_ASSERTS=1` and the failure is an LLK assert, the root cause is almost
+always the **kernel** calling the LLK API with an illegal parameter/config — not the test.
+Report the assert message as `first_evidence` so the debug loop targets the kernel code
+(see `docs/source/tt-metalium/tools/llk_asserts.rst`).
 
 Confirm the filter selected a non-zero set (`--gtest_list_tests --gtest_filter=...`) before
 counting a pass; an empty selection is `ENV_ERROR`, not `SUCCESS`. `SIM_ISA_GAP` is a
@@ -235,5 +254,6 @@ At most 4 build attempts and 20 gtest invocations per session. Prefer one tight
 ## Self-Log
 
 Write `${LOG_DIR}/agent_metal_tester.md` before returning: build strategy + wall-time, the
-exact env and `--gtest_filter`, per-arch verdicts/counts, and the first meaningful failure
-line. If `LOG_DIR` is missing, skip self-logging and say so.
+exact env and `--gtest_filter`, whether LLK asserts were enabled (`TT_METAL_LLK_ASSERTS`),
+per-arch verdicts/counts, and the first meaningful failure line. If `LOG_DIR` is missing,
+skip self-logging and say so.
