@@ -33,6 +33,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
@@ -1149,9 +1150,17 @@ def test_kimi_prefill_transformer(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
-        # FABRIC_2D variants — shared list defined in conftest.py (also used by the deepseek_v3
-        # transformer test). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
-        *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
