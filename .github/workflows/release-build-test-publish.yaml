@@ -209,10 +209,10 @@ jobs:
                 exit 0 ;;
               completed:*)
                 echo "::error::Check on $SHA: conclusion=$CONCLUSION. $URL"
-                # Per-test detail the polling agent embeds in the check output
-                # (output.summary / output.text) from failed_tests.tsv. Empty
-                # until the sim pipeline forwards it; the ticket still records
-                # the failure and links to the sim results.
+                # Per-test detail the sim polling agent embeds in the check
+                # output (output.summary / output.text). Empty until the sim
+                # pipeline forwards it; the ticket still records the failure and
+                # links to the sim results.
                 DETAIL=$(gh api "repos/tenstorrent/tt-metal/commits/$SHA/check-runs?check_name=RTL+Sim+CI+test&filter=latest" \
                   --jq '[.check_runs[0].output.summary, .check_runs[0].output.text] | map(select(. != null and . != "")) | join("\n")' 2>/dev/null || true)
                 emit_failure "$CONCLUSION" "$URL" "$DETAIL"

@@ -132,11 +132,6 @@ passed=0
 failed=0
 skipped=0
 declare -a results=()
-# Machine-readable record of failed tests, one TSV row per failure:
-#   config <TAB> group <TAB> filter <TAB> log-file
-# Emitted to $LOG_DIR/failed_tests.tsv so CI (GitLab) can forward the exact
-# failing tests into the "RTL Sim CI test" GitHub check output.
-declare -a failed_records=()
 
 # Load tests from YAML into an array (single-pass read via yq)
 VALID_CONFIGS=("1x3" "2x3" "2x3_DISPATCH")
@@ -209,7 +204,6 @@ record_gtest_result() {
         else
             failed=$((failed + 1))
             results+=("FAIL  $label  ($(fmt_duration $elapsed))")
-            failed_records+=("${config}"$'\t'"${group}"$'\t'"${filter}"$'\t'"${log_file:-}")
         fi
         return
     fi
@@ -217,7 +211,6 @@ record_gtest_result() {
     if [[ $rc -ne 0 || $gtest_failures -gt 0 ]]; then
         failed=$((failed + 1))
         results+=("FAIL  $label  ($(fmt_duration $elapsed))")
-        failed_records+=("${config}"$'\t'"${group}"$'\t'"${filter}"$'\t'"${log_file:-}")
         echo "  RESULT: FAIL"
     elif [[ $gtest_tests -eq 0 ]]; then
         skipped=$((skipped + 1))
@@ -251,18 +244,6 @@ print_summary() {
     local total_elapsed=$((SECONDS - run_start))
     echo "  ELAPSED: $(fmt_duration $total_elapsed)"
     echo "========================================="
-
-    # Emit the failed-test manifest for CI to forward into the RTL sim check.
-    # Always written (empty on success) when a log dir is configured, so CI has
-    # a deterministic path to read.
-    if [[ -n "$LOG_DIR" ]]; then
-        local manifest="$LOG_DIR/failed_tests.tsv"
-        : > "$manifest"
-        if [[ ${#failed_records[@]} -gt 0 ]]; then
-            printf '%s\n' "${failed_records[@]}" >> "$manifest"
-        fi
-        echo "  Failed-test manifest: $manifest (${#failed_records[@]} failed)"
-    fi
 }
 
 run_start=$SECONDS
