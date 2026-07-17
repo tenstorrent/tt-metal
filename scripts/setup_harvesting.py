@@ -103,6 +103,33 @@ def _github_api_json(url):
 # spelled (``v80.18.1`` in tt-system-firmware, ``v80.18.1.0`` in tt-firmware).
 _FW_BUNDLE_RE = re.compile(r"^fw_pack-((\d+)\.\d+\.\d+(?:-rc\d+)?)\.fwbundle$")
 
+# A firmware version string is strictly MAJOR.MINOR.PATCH[-rcN]. Validating it
+# before building any filesystem path is the primary defense against path
+# traversal via the (externally sourced) version value.
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-rc\d+)?$")
+
+
+def _fwbundle_filename(version):
+    """Return the bundle filename for a validated version, or exit on bad input."""
+    if not _VERSION_RE.match(version):
+        print(f"\nERROR: refusing unexpected firmware version string: {version!r}")
+        sys.exit(1)
+    return f"fw_pack-{version}.fwbundle"
+
+
+def _safe_join(base_dir, filename):
+    """Join filename into base_dir, guaranteeing the result stays inside base_dir.
+
+    Collapses filename to a bare basename and confirms the resolved absolute path
+    is contained within base_dir, so dynamic input cannot escape the directory.
+    """
+    base_abs = os.path.abspath(base_dir)
+    candidate = os.path.abspath(os.path.join(base_abs, os.path.basename(filename)))
+    if candidate != base_abs and not candidate.startswith(base_abs + os.sep):
+        print(f"\nERROR: refusing file path outside {base_abs}: {candidate}")
+        sys.exit(1)
+    return candidate
+
 
 def list_released_versions(repo_dir):
     """Return [(tag, version, release_json), ...] of flashable v19+ firmware releases.
@@ -145,7 +172,7 @@ def list_released_versions(repo_dir):
 
 def download_release_bundle(release, version, dest_dir):
     """Download the fw_pack-<version>.fwbundle release asset; return its local path or None."""
-    asset_name = f"fw_pack-{version}.fwbundle"
+    asset_name = _fwbundle_filename(version)
     asset_url = None
     for asset in release.get("assets", []):
         if asset.get("name") == asset_name:
@@ -154,7 +181,7 @@ def download_release_bundle(release, version, dest_dir):
     if not asset_url:
         return None
 
-    dest_path = os.path.join(dest_dir, asset_name)
+    dest_path = _safe_join(dest_dir, asset_name)
     print(f"\nDownloading {asset_name} ...")
     print(f"  from: {asset_url}")
     request = urllib.request.Request(asset_url, headers={"User-Agent": _USER_AGENT})
@@ -174,7 +201,7 @@ def find_fwbundle(repo_dir, version):
     directly (rather than attaching them as release assets), so this is used
     when no matching release asset was found. Returns the path, or None.
     """
-    expected = os.path.join(repo_dir, f"fw_pack-{version}.fwbundle")
+    expected = _safe_join(repo_dir, _fwbundle_filename(version))
     if os.path.exists(expected):
         return expected
 
