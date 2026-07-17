@@ -249,7 +249,14 @@ void kernel_main() {
                     Dst::D0,
                     OperandKind::Block,
                     OperandKind::Col>{},
-                ckl::Exp<>{},
+                // R3c: fast SFPU exp for the dominant softmax P=exp phase. Measured
+                // ~54% of per-chunk compute cycles as the exact exp; the fast exp is
+                // ~75% cheaper (per-chunk compute 71.1k -> 41.9k cyc on the flagged
+                // shape). Softmax normalization absorbs the exp's relative error
+                // (production SDPA uses the fast exp), so PCC holds — see changelog.
+                // The alpha-correction exp (phase 5, small) stays exact to protect the
+                // online-softmax recurrence's running (m, l, O).
+                ckl::Exp<ckl::Approx::Fast>{},
                 ckl::PackTile<cb_exp, OutputLifecycle::Bulk>{});
 
             // Phase 7: chunk row-sum + running sum l update.
