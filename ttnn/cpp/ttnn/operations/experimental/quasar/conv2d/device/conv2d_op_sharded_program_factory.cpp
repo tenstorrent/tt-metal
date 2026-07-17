@@ -232,6 +232,7 @@ const m2::KernelSpecName KERNEL_READER{"reader"};
 const m2::KernelSpecName KERNEL_WRITER_SENDER{"writer_mcast_sender"};
 const m2::KernelSpecName KERNEL_WRITER_RECEIVER{"writer_mcast_receiver"};
 const m2::KernelSpecName KERNEL_COMPUTE{"compute"};
+const m2::KernelSpecName KERNEL_OUT_DRAIN{"out_drain"};  // Program A: credit-only OUT-drain DM kernel
 
 }  // namespace
 
@@ -764,7 +765,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // [full_K, N] weights. The reader already gathers the full window (ACTFILL nt = full_K tiles per tile-row);
     // we just tilize all of it. (RISK: the reader's gathered K-ordering — window-position x channel — must match
     // the weights' [r][s][c] flattening; if not, PCC needs a weight reorder. Verified by the e2e PCC test.)
-    const uint32_t full_k_ntiles = act_block_w_ntiles * filter_h;
+    // FULL im2col contraction dim (K), in tiles. Use the PREPARED weights' K-height (= in_ch_padded*kh*kw),
+    // which is the intrinsic K and is arch-independent. The old `act_block_w_ntiles * filter_h` was WRONG on
+    // WH/BH: there conv2d.cpp's no-spill path collapses the whole K into act_block_w (act_block_w == full_K,
+    // num_blocks_act_w == 1), so `* filter_h` double-counts by filter_h (e.g. stem: 16*4=64 vs true 16), which
+    // over-sized OUT/the output tensor 4x AND drove num_blocks 4x too high -> tilize starved after full_K/act_bw
+    // blocks (WH hang at block 4). On Quasar act_block_w stays one window-row so both formulas coincide.
+    const uint32_t full_k_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
 
     TT_FATAL(
         act_matrix_height_ntiles % per_core_out_matrix_height_ntiles == 0,
@@ -1716,16 +1723,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         };
     } else if (split_program_tilize_only) {
         // OPTION B / Program A: compute consumes ACT (gathered by the reader) and tilizes it STRAIGHT INTO OUT
-        // (borrowed from the op's output tensor — the op output IS the tilized activation). PRODUCER + the
-        // degenerate self-CONSUMER, mirroring the fused packer-into-output idiom. No weights / act_tilized /
-        // matmul_partials. Program B (host-level matmul) consumes this tilized activation.
+        // (borrowed from the op's output tensor — the op output IS the tilized activation). Compute is the OUT
+        // PRODUCER only; the OUT CONSUMER is the dedicated credit-only drain DM kernel (KERNEL_OUT_DRAIN below),
+        // NOT a compute self-loop. On Quasar a borrowed-output ring holds num_entries-1, so a self-consumer that
+        // never pops makes the packer's LAST reserve_back exact-fill-stall (dprint_tr14). The drain DM pops OUT
+        // in lockstep on a free DM core so the ring never fills. No weights / act_tilized / matmul_partials.
         compute_dfb_bindings = {
             m2::DFBBinding{
                 .dfb_spec_name = DFB_ACT, .accessor_name = "act", .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            m2::DFBBinding{
-                .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
     } else if (is_conv_1d_depthwise_conv) {
         // Depthwise: consumes ACT (raw RM) + WEIGHTS, produces ACT_TILIZED (tilize out) and consumes it,
@@ -1831,13 +1838,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"in0_subblock_num_tiles", act_subblock_num_tiles},
             // OPTION B / Program A (tilize-only, NOT the reduce probe): the tilize kernel computes
             // num_blocks = in0_num_blocks_h * reader_num_h_subblocks and tilizes num_blocks x in0_block_w
-            // (=act_block_w) tiles. To cover the FULL im2col K (act_block_w * filter_h tiles) rather than just
-            // one window-row, scale reader_num_h_subblocks by filter_h so num_blocks = M * filter_h and the
-            // tilize produces [M, full_K] into OUT. (Only the tilize-only kernel reads this; the fused kernel and
-            // the reduce probe keep the un-scaled value.)
+            // (=act_block_w) tiles. To cover the FULL im2col K it must produce M*full_K tiles total, so scale
+            // reader_num_h_subblocks by (full_K / act_block_w) = number of act_block_w-wide sub-blocks per K row.
+            // On WH/BH (no-spill) act_block_w == full_K so this is 1 (num_blocks == M); on Quasar act_block_w is
+            // one window-row so this is filter_h (num_blocks == M*filter_h). Using `filter_h` unconditionally
+            // over-counted 4x on WH -> starvation hang. (Only the tilize-only kernel reads this scaled value.)
             {"reader_num_h_subblocks",
              (enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks) *
-                 ((split_program_tilize_only && !split_program_unpack_tilize) ? filter_h : 1u)},
+                 ((split_program_tilize_only && !split_program_unpack_tilize) ? (full_k_ntiles / act_block_w_ntiles)
+                                                                              : 1u)},
             {"in1_num_subblocks", weight_num_subblocks},
             {"in1_block_num_tiles", weight_block_num_tiles},
             {"in1_block_w", weight_block_w_ntiles},
@@ -1905,8 +1914,41 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         }
     }
 
+    // OPTION B / Program A: credit-only OUT-drain DM kernel (drain_out_metal2.cpp). Pops DFB_OUT in lockstep
+    // with the compute's per-block push so the borrowed-output ring never exact-fill-stalls (dprint_tr14).
+    // RISCV_0 is free (the weights writer is skipped in Program A) and is a DIFFERENT DM processor than the
+    // reader (RISCV_1) -> per-node SPSC satisfied. Explicit pop_front -> opt out of implicit sync (mirrors the
+    // reader/writer). Gated to the PURE tilize path (not the reduce probe, which never fills OUT).
+    const bool build_out_drain = split_program_tilize_only && !split_program_unpack_tilize;
+    m2::KernelSpec out_drain_spec{
+        .unique_id = KERNEL_OUT_DRAIN,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/drain_out_metal2.cpp"),
+        .dfb_bindings = {m2::DFBBinding{
+            .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
+        // Same three CTAs the compute kernel uses (conv_tilize_only_metal2.cpp), so num_blocks/block_width match
+        // 1:1 and the drain pops exactly what the tilize pushes. split_reader is forced off for this path.
+        .compile_time_args =
+            {{"in0_block_w", act_block_w_ntiles},
+             {"in0_num_blocks_h", num_blocks_act_h_per_core},
+             // Must MATCH the compute kernel's reader_num_h_subblocks exactly (num_blocks tracks 1:1). Scale by
+             // (full_K / act_block_w), NOT filter_h — see the compute CTA above (filter_h over-counted on WH).
+             {"reader_num_h_subblocks",
+              act_subblock_h_ntiles * act_num_subblocks * (full_k_ntiles / act_block_w_ntiles)}},
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_config =
+                    m2::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
+            },
+    };
+
     // ---- Register kernels ----
     spec.kernels.push_back(std::move(reader_kernel_spec));
+    if (build_out_drain) {
+        spec.kernels.push_back(std::move(out_drain_spec));
+    }
     // OPTION B / Program A has no weights/bias mcast: register only reader + compute (no writer kernels).
     if (!split_program_tilize_only) {
         spec.kernels.push_back(std::move(writer_sender_spec));
@@ -1926,9 +1968,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // runs reader+compute+writer_sender; a receiver core runs reader+compute+writer_receiver; any
     // remaining reader/compute cores (block-sharded: output cores outside input_cores) run reader+compute.
     if (split_program_tilize_only) {
-        // OPTION B / Program A: reader + compute only (no writer), across all reader/compute cores.
+        // OPTION B / Program A: reader + compute (+ OUT-drain) only (no writer), across all reader/compute cores.
         m2::WorkUnitSpec wu{.name = "reader_compute", .target_nodes = reader_compute_cores};
         wu.kernels = {KERNEL_READER, KERNEL_COMPUTE};
+        if (build_out_drain) {
+            wu.kernels.push_back(KERNEL_OUT_DRAIN);
+        }
         spec.work_units.push_back(std::move(wu));
     } else {
         {
@@ -2226,6 +2271,11 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         }
     }
     run_args.kernel_run_args.push_back(std::move(compute_run_args));
+
+    // OPTION B / Program A OUT-drain: no per-node runtime args (all block counts are compile-time).
+    if (build_out_drain) {
+        run_args.kernel_run_args.push_back(m2::KernelRunArgs{.kernel = KERNEL_OUT_DRAIN});
+    }
 
     // ---- Op-owned tensors ----
     std::vector<tt::tt_metal::MeshTensor> op_owned_tensors;

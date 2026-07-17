@@ -41,7 +41,7 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
 }
 
 TensorSpec Conv2dDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // OPTION B — PROGRAM A (tilize-only). When TT_METAL_QSR_CONV_SPLIT_PROGRAM is set on the height-sharded
     // path, the conv op runs only gather+tilize and OUTPUTS the tilized activations (Program B / matmul is
     // chained at the host level later). The output tensor is the per-core tilized activation shard:
@@ -54,8 +54,12 @@ TensorSpec Conv2dDeviceOperation::compute_output_specs(
          (std::getenv("TT_METAL_QSR_CONV_UNPACK_TILIZE") != nullptr)) &&
         args.memory_config.is_sharded() && args.memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         const uint32_t m_ntiles = args.parallelization_config.per_core_out_matrix_height_ntile;
-        const uint32_t filter_h = static_cast<uint32_t>(args.sliding_window_config.window_hw.first);
-        const uint32_t k_ntiles = args.block_config.act_block_w_ntiles * filter_h;
+        // FULL im2col K, in tiles = the PREPARED weights' K-height (b.padded_shape()[2] / TILE_HEIGHT). This is
+        // EXACTLY what the factory uses for full_k_ntiles (weight_matrix_height / TILE_HEIGHT), so the output
+        // tensor width and the factory OUT DFB always agree, on every arch and channel alignment. The old
+        // `act_block_w_ntiles * filter_h` over-counted 4x on WH/BH (there act_block_w is ALREADY the full K),
+        // sizing this tilized-activation output 4x too wide; and sliding_window_config.channels is 0 here.
+        const uint32_t k_ntiles = tensor_args.b.padded_shape()[2] / tt::constants::TILE_HEIGHT;
         const uint32_t num_cores_nhw = args.parallelization_config.num_cores_nhw;
         const uint32_t padded_w = num_cores_nhw * m_ntiles * tt::constants::TILE_HEIGHT;
         const uint32_t padded_c = k_ntiles * tt::constants::TILE_WIDTH;

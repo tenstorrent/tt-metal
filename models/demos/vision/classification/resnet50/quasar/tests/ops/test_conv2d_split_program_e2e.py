@@ -35,19 +35,34 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 PCC = 0.99
 
 
-def _run(mesh_device, *, with_bias_relu):
+def _run(
+    mesh_device,
+    *,
+    with_bias_relu,
+    in_channels=32,  # default = folded-stem-like: K = 32*4*4 = 16 tiles
+    out_channels=64,
+    kernel_size=(4, 4),
+    out_h=16,
+    out_w=32,  # 16x32 = 512 sticks
+    stride=(1, 1),
+    padding=(0, 0),
+    act_block_h_override=128,  # None -> let the factory pick (force_conv_no_spill caps it)
+):
     device = mesh_device
     torch.manual_seed(0)
 
     batch_size = 1
-    in_channels = 32  # groups(4) * C_aligned(8); K = 32*4*4 = 16 tiles (same as folded stem)
-    out_channels = 64
-    kernel_size = (4, 4)
-    stride = (1, 1)
-    padding = (0, 0)
-    out_h, out_w = 16, 32  # 16x32 = 512 sticks = 16 out-height tiles
-    input_height = out_h + kernel_size[0] - 1  # 19
-    input_width = out_w + kernel_size[1] - 1  # 35
+    # stride 1: out = in + 2*pad - kernel + 1  ->  in = out + kernel - 1 - 2*pad
+    input_height = out_h + kernel_size[0] - 1 - 2 * padding[0]
+    input_width = out_w + kernel_size[1] - 1 - 2 * padding[1]
+    # full im2col K in tiles (must stay <= kQuasarConvNoSpillMaxKTiles=32 for the no-spill/split path)
+    import math as _math
+
+    k_tiles = _math.ceil(in_channels * kernel_size[0] * kernel_size[1] / 32)
+    print(
+        f"  DIAG shape: in_ch={in_channels} out_ch={out_channels} k={kernel_size} out=({out_h},{out_w}) "
+        f"K_tiles={k_tiles} N_tiles={_math.ceil(out_channels/32)}"
+    )
 
     torch_input_nchw = torch.randn((batch_size, in_channels, input_height, input_width), dtype=torch.bfloat16).float()
     torch_weight = torch.randn((out_channels, in_channels, *kernel_size), dtype=torch.bfloat16).float()
@@ -84,7 +99,9 @@ def _run(mesh_device, *, with_bias_relu):
         weights_dtype=ttnn.bfloat16,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         full_inner_dim=True,  # single K-block -> factory split_program_tilize_only eligibility + host split gate
-        act_block_h_override=128,  # >=2 height blocks: exercises the multi-block tilize that faulted
+        # act_block_h_override forces >=2 height blocks (exercises the multi-block tilize that faulted); None lets
+        # the factory choose (force_conv_no_spill caps it to fit the DFB ring anyway).
+        act_block_h_override=(act_block_h_override if act_block_h_override is not None else 0),
         reshard_if_not_optimal=True,
         activation=(ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if with_bias_relu else None),
     )
@@ -125,10 +142,94 @@ def _run(mesh_device, *, with_bias_relu):
             else:
                 os.environ[k] = v
 
+    print("  DIAG raw out.shape        =", tuple(out.shape))
+    try:
+        print("  DIAG raw out.padded_shape =", tuple(out.padded_shape()))
+    except Exception as e:
+        print("  DIAG padded_shape n/a:", repr(e))
+    try:
+        print("  DIAG raw out.layout       =", out.layout, "| mem =", out.memory_config())
+    except Exception as e:
+        print("  DIAG mem_config n/a:", repr(e))
     tt_out = ttnn.to_torch(ttnn.from_device(out))
+    print("  DIAG to_torch raw shape   =", tuple(tt_out.shape))
     tt_out = tt_out.reshape(batch_size, oh, ow, tt_out.shape[-1])[:, :, :, :out_channels]
     tt_out = torch.permute(tt_out, (0, 3, 1, 2))
     print(f"split conv (Program A tilize + Program B matmul) completed. out shape={tuple(tt_out.shape)}")
+
+    # -------- DIAGNOSTIC: which matmul did Program B actually compute? --------
+    # The tilize (Program A) is confirmed to produce A[M,K] with K ordered [kh,kw,c] (readback test). The conv
+    # golden = A_khkwc @ W_khkwc. Compare the DEVICE output against several host candidates to localize the fault:
+    #   * torch_golden           : correct conv (A & W both [kh,kw,c])
+    #   * W in [c,kh,kw] order    : weight K-order mismatch vs the activation
+    #   * W transposed ([N,K])    : linear used the wrong weight orientation
+    def _pcc(a, b):
+        a = a.reshape(-1).float()
+        b = b.reshape(-1).float()
+        return float(torch.corrcoef(torch.stack([a, b]))[0, 1])
+
+    with torch.no_grad():
+        # host im2col A[M,K] with K = [kh,kw,c] (matches the confirmed tilize order)
+        inp = torch_input_nchw  # [1, C, iH, iW]
+        patches = torch.nn.functional.unfold(
+            inp, kernel_size=kernel_size, stride=stride, padding=padding
+        )  # [1, C*kh*kw, M]
+        M = patches.shape[-1]
+        # unfold gives K order [c][kh][kw]; permute to [kh][kw][c]
+        A_ckhkw = patches[0].transpose(0, 1).reshape(M, in_channels, kernel_size[0], kernel_size[1])
+        A_khkwc = A_ckhkw.permute(0, 2, 3, 1).reshape(M, -1)  # [M, kh*kw*c]
+        # weights: torch_weight [O, C, kh, kw]
+        W_khkwc = torch_weight.permute(2, 3, 1, 0).reshape(-1, out_channels)  # [kh*kw*c, O]
+        W_ckhkw = torch_weight.reshape(out_channels, -1).transpose(0, 1)  # [c*kh*kw, O]
+        dev = tt_out.permute(0, 2, 3, 1).reshape(M, out_channels).float()  # [M, O]
+        print(
+            "  DIAG PCC(device, torch_golden)          =",
+            _pcc(dev, torch_golden.permute(0, 2, 3, 1).reshape(M, out_channels)),
+        )
+        print("  DIAG PCC(device, A_khkwc @ W_khkwc)      =", _pcc(dev, A_khkwc @ W_khkwc))
+        print("  DIAG PCC(device, A_khkwc @ W_ckhkw)      =", _pcc(dev, A_khkwc @ W_ckhkw))
+
+        # value-distribution: are the output VALUES present (permuted) or totally wrong?
+        print(
+            "  DIAG sorted-flat PCC(device, golden)     =",
+            _pcc(torch.sort(dev.reshape(-1))[0], torch.sort((A_khkwc @ W_khkwc).reshape(-1))[0]),
+        )
+
+        # read back the PREPARED on-device weight and compare its K-order directly to the candidates
+        try:
+            wdev = _wb[0] if isinstance(_wb, (tuple, list)) else _wb
+            w_host = ttnn.to_torch(ttnn.from_device(wdev)).float()
+            w_host2 = w_host.reshape(w_host.shape[-2], w_host.shape[-1])  # [K_padded, N_padded]
+            K = W_khkwc.shape[0]
+            N = out_channels
+            w_kn = w_host2[:K, :N]
+            print("  DIAG prepared-weight shape               =", tuple(w_host.shape), "-> KxN used", (K, N))
+            print("  DIAG PCC(prep_weight, W_khkwc)           =", _pcc(w_kn, W_khkwc))
+            print("  DIAG PCC(prep_weight, W_ckhkw)           =", _pcc(w_kn, W_ckhkw))
+            print(
+                "  DIAG PCC(sorted prep_weight, sorted Wref)=",
+                _pcc(torch.sort(w_kn.reshape(-1))[0], torch.sort(W_khkwc.reshape(-1))[0]),
+            )
+        except Exception as e:
+            print("  DIAG weight readback failed:", repr(e))
+
+        # ---- localize the output permutation (values are correct per sorted-flat PCC) ----
+        gold_mn = A_khkwc @ W_khkwc  # [M, N]
+        # transpose check
+        if dev.shape[0] == gold_mn.shape[1] or dev.numel() == gold_mn.numel():
+            print("  DIAG PCC(device_flat, golden.T_flat)     =", _pcc(dev.reshape(-1), gold_mn.t().reshape(-1)))
+        # per-row (M) multiset preserved?  -> only N within each row permuted
+        row_ok = torch.isclose(torch.sort(dev, dim=1)[0], torch.sort(gold_mn, dim=1)[0], atol=0.1).all(dim=1)
+        # per-col (N) multiset preserved?  -> only M within each col permuted
+        col_ok = torch.isclose(torch.sort(dev, dim=0)[0], torch.sort(gold_mn, dim=0)[0], atol=0.1).all(dim=0)
+        print(f"  DIAG rows(M) with matching multiset      = {int(row_ok.sum())}/{dev.shape[0]}")
+        print(f"  DIAG cols(N) with matching multiset      = {int(col_ok.sum())}/{dev.shape[1]}")
+        # eyeball first row / first col
+        print("  DIAG device[0,:6] =", [round(float(x), 2) for x in dev[0, :6]])
+        print("  DIAG golden[0,:6] =", [round(float(x), 2) for x in gold_mn[0, :6]])
+        print("  DIAG device[:6,0] =", [round(float(x), 2) for x in dev[:6, 0]])
+        print("  DIAG golden[:6,0] =", [round(float(x), 2) for x in gold_mn[:6, 0]])
+
     assert_with_pcc(torch_golden, tt_out.float(), pcc=PCC)
 
 
@@ -144,3 +245,35 @@ def test_quasar_conv2d_split_program_e2e_pure(mesh_device):
 def test_quasar_conv2d_split_program_e2e_bias_relu(mesh_device):
     # Bonus: bias + RELU folded into Program B's matmul.
     _run(mesh_device, with_bias_relu=True)
+
+
+# Larger-shape sweep — stress the pieces that only bite at scale:
+#   * wider N (out_channels)  -> more per_core_N tiles + wider in1 mcast (the mcast_in1 NOC path)
+#   * larger K (in_ch / kernel) -> wider tilize block + bigger [full_K, N] weights (must stay K<=32 tiles for
+#     the no-spill/split path; kQuasarConvNoSpillMaxKTiles)
+#   * larger M (out_h*out_w)  -> more sharded cores / more mcast receivers
+# act_block_h_override=None lets the factory pick (force_conv_no_spill caps act_block_h to fit the DFB ring).
+_LARGER_SHAPES = [
+    dict(in_channels=32, out_channels=128, kernel_size=(4, 4), out_h=16, out_w=32, act_block_h_override=None),  # N=4t
+    dict(in_channels=32, out_channels=256, kernel_size=(4, 4), out_h=16, out_w=32, act_block_h_override=None),  # N=8t
+    dict(
+        in_channels=32, out_channels=64, kernel_size=(3, 3), out_h=16, out_w=32, act_block_h_override=None
+    ),  # 3x3 K=9t
+    dict(in_channels=64, out_channels=64, kernel_size=(3, 3), out_h=16, out_w=32, act_block_h_override=None),  # K=18t
+    dict(in_channels=32, out_channels=64, kernel_size=(4, 4), out_h=32, out_w=32, act_block_h_override=None),  # M=1024
+]
+_LARGER_IDS = [
+    "N128_k4x4",
+    "N256_k4x4",
+    "k3x3_K9",
+    "inch64_k3x3_K18",
+    "M1024_k4x4",
+]
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("shape", _LARGER_SHAPES, ids=_LARGER_IDS)
+@pytest.mark.parametrize("with_bias_relu", [False, True], ids=["pure", "bias_relu"])
+def test_quasar_conv2d_split_program_e2e_shapes(mesh_device, shape, with_bias_relu):
+    _run(mesh_device, with_bias_relu=with_bias_relu, **shape)

@@ -12,6 +12,9 @@
  */
 #include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#ifdef TILIZE_DEBUG_BLOCKS
+#include "api/debug/ring_buffer.h"
+#endif
 
 // JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
 // The arrays are available in scope but guarded by TRISC type:
@@ -184,6 +187,13 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             // Asymmetric: min(32, pages_left)
             input_pages = (pages_left < 32) ? pages_left : 32;
         }
+#ifdef TILIZE_DEBUG_BLOCKS
+        // DIAGNOSTIC (split-conv tilize-only WH hang): push per-block progress to the NON-BLOCKING watcher ring
+        // buffer (NOT DPRINT — DPRINT blocks the RISC at "DPW" once its FIFO fills on a hung program, which
+        // cascades into a false full-pipeline freeze). 0x7A = block ENTER (before reserve/tilize). The last
+        // 0x7A/0x7B pair in the watcher ring dump = the exact block the tilize froze on. Gated to this kernel.
+        WATCHER_RING_BUFFER_PUSH(0x7A000000u | (block & 0xffff));
+#endif
 
         if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
             in_dfb.wait_front(input_pages);
@@ -206,6 +216,11 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
 
         out_dfb.push_back(block_width_tiles);
+#ifdef TILIZE_DEBUG_BLOCKS
+        // 0x7B = block EXIT (after push_back). If 0x7B is present for block N but 0x7A of N+1 is the last entry,
+        // the tilize completed N and froze entering N+1; if 0x7A(N) is last with no 0x7B(N), it froze INSIDE N.
+        WATCHER_RING_BUFFER_PUSH(0x7B000000u | (block & 0xffff));
+#endif
 #if defined(ARCH_QUASAR)
         // TEN-4746: on Quasar the unpacker traps on a trailing pop_front with no following TDMA op to flush it.
         // The final block's pop_front is the last unpacker op in a tilize-only program (nothing follows), so it

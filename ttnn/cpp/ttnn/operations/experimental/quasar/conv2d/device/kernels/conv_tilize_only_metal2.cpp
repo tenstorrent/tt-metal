@@ -28,8 +28,14 @@
 
 #include <cstdint>
 
+// DIAGNOSTIC (split-conv tilize-only hang, WH/BH-visible): make the shared tilize helper emit a per-block
+// TZBLK-IN/TZBLK-OUT DPRINT so the watcher/DPRINT shows exactly which block the tilize freezes on. Must be
+// defined BEFORE including tilize_helpers.hpp (which pulls in the .inl). Remove once the hang is root-caused.
+#define TILIZE_DEBUG_BLOCKS 1
+
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
@@ -70,6 +76,17 @@ void kernel_main() {
                                    ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
                                    : compute_kernel_lib::tilize_config::Fp32Mode::Fast;
     const uint32_t num_blocks = in0_num_blocks_h * reader_num_h_subblocks;
+
+    // DIAGNOSTIC: dump the block schedule once at entry (PACK thread). If num_blocks/in0_block_w are wrong the
+    // tilize will over/under-run the act CB and stall — this pins the counts. (Only scalar CTAs: the CB-geometry
+    // getters are ARCH_QUASAR-only and don't compile on WH.)
+    PACK(DPRINT(
+        "TZONLY-CFG nblk={} w={} nbh={} rsub={}\n",
+        (uint32_t)num_blocks,
+        (uint32_t)in0_block_w,
+        (uint32_t)in0_num_blocks_h,
+        (uint32_t)reader_num_h_subblocks));
+
     compute_kernel_lib::tilize<
         in0_block_w,
         in0_cb_id,

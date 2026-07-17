@@ -6823,6 +6823,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // to the corner cores -> receivers never get VALID -> hang). The legacy descriptor pins
     // in1 writers to RISCV_0 + in1_noc; mirror that here instead of leaving the NOC to the role hint.
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    // in0 sender must be pinned to a DISTINCT NOC from in1 (see the [#47797] hw_config below). On WH this is
+    // NOC_1 (dram-write) vs in1_noc = NOC_0 (dram-read); on Quasar both map to the single NOC.
+    const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     m2::Group<m2::KernelSpec> kernels;
 
@@ -6902,9 +6905,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                          "last_block_h",
                          "sparsity_addr",
                      }},
+            // [#47797] Pin RISCV_1 + in0_noc instead of a plain READER role hint. A bare READER hint resolves
+            // to NOC_0, which collides with in1_sender_writer (RISCV_0 + in1_noc = NOC_0) -> the m2 spec
+            // validator rejects two dedicated-NOC DM kernels on the same NOC (program_spec.cpp:956). The
+            // mcast_in0 builder already does this; the mcast_in1 builder (this one) was missed, so the split
+            // conv's Program B (mcast_in0=false, multi-core) hung/faulted on WH. in0_noc = NOC_1 (dram-write).
             .hw_config =
                 m2::DataMovementHardwareConfig{
-                    .role = m2::DataMovementRoleHint::READER,
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
                     .gen2_config =
                         m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
