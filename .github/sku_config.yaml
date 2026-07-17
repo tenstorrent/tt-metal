@@ -3,6 +3,9 @@
 
 # Each SKU entry contains:
 #   runs_on: Array of GitHub Actions runner labels that tests for this SKU.
+#   merge_queue_sku: (Optional) Concrete prio SKU to use when github.event_name is
+#     merge_group. Logical test-list SKUs should set this instead of listing prio
+#     SKUs in YAML. Multiple logical SKUs may share the same merge_queue_sku.
 #   allocation: (Optional) Configuration for TTOP allocation
 #     type: "Count" or "MGD"
 #     count: Number of nodes (for Count type)
@@ -92,10 +95,7 @@ skus:
   wh_llmbox_civ2_viommu:
     runs_on:
       - tt-ubuntu-2204-N300-llmbox-viommu-stable
-
-  wh_llmbox_civ2_prio:
-    runs_on:
-      - tt-ubuntu-2204-N300-llmbox-viommu-prio-stable
+    merge_queue_sku: wh_llmbox_civ2_prio
 
   bh_p100_perf:
     runs_on:
@@ -110,10 +110,7 @@ skus:
   bh_p150b_civ2_viommu:
     runs_on:
       - tt-ubuntu-2204-P150b-viommu-stable
-
-  bh_p150b_civ2_viommu_prio:
-    runs_on:
-      - tt-ubuntu-2204-P150b-viommu-prio-stable
+    merge_queue_sku: bh_p150b_civ2_viommu_prio
 
   bh_p150b_civ2:
     runs_on:
@@ -177,13 +174,6 @@ skus:
       - in-service
     weights-cache-mode: yyz4-mnt-models
 
-  bh_quietbox_2_iommu:
-    runs_on:
-      - BH-Quietbox-2-iommu
-      - pipeline-perf
-      - in-service
-    weights-cache-mode: yyz4-mnt-models
-
   bh_spsg:
     runs_on:
       - exabox-multihost-with-nfs
@@ -230,6 +220,21 @@ skus:
   cpu_medium:
     runs_on:
       - tt-ubuntu-2204-medium-stable
+    merge_queue_sku: cpu_medium_prio
+
+  # ---------------------------------------------------------------------------
+  # Merge-queue prio SKUs (merge_group events only).
+  # Referenced from logical SKUs via merge_queue_sku; do not list these in test
+  # YAML skus maps. Multiple logical SKUs may share the same merge_queue_sku.
+  # ---------------------------------------------------------------------------
+  wh_llmbox_civ2_prio:
+    runs_on:
+      - tt-ubuntu-2204-N300-llmbox-viommu-prio-stable
+
+  bh_p150b_civ2_viommu_prio:
+    runs_on:
+      - tt-ubuntu-2204-P150b-viommu-prio-stable
+
   cpu_medium_prio:
     runs_on:
       - tt-ubuntu-2204-medium-prio-stable

@@ -77,17 +77,14 @@ ttnn:
     wh_n150_civ2: 45
     wh_n300_civ2: 55
     wh_llmbox_civ2_viommu: 15
-    wh_llmbox_civ2_prio: 15
     bh_p150b_civ2_viommu: 45
-    bh_p150b_civ2_viommu_prio: 45
     sim_wormhole_b0: 40
     sim_blackhole: 40
   sanity:
     wh_n300_civ2: 545
     bh_p100: 545
     bh_p150b_civ2: 545
-    bh_quietbox_2: 35
-    bh_quietbox_2_iommu: 30 # sdpa nightly (20) + ring sdpa PERF (10); both need IOMMU for the RT profiler (IOMMU-enabled QB2)
+    bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox: 25
     sim_wormhole_b0: 680
@@ -169,6 +166,7 @@ shield:
     bh_p150b_civ2: 18
   unit_tier3:
     bh_p150b_civ2: 20
+    bh_p150: 2
   unit:
     wh_n150: 90
     wh_n300: 115
@@ -178,7 +176,6 @@ shield:
 scaleout:
   merge_gate:
     cpu_medium: 10
-    cpu_medium_prio: 10
     wh_n300_civ2: 10
   unit:
     cpu_medium: 235 # fabric CPU-only shards: unit/sp4-glx/subtorus/pod-revAB/pod-revC ×15 + bh-slices ×25 + pod-llama ×55 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30 + bh-ring-stress ×10
@@ -216,9 +213,7 @@ runtime:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
     wh_llmbox_civ2_viommu: 15
-    wh_llmbox_civ2_prio: 15
     bh_p150b_civ2_viommu: 45
-    bh_p150b_civ2_viommu_prio: 45
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
@@ -250,24 +245,20 @@ runtime:
 triage:
   merge_gate:
     wh_n150_civ2: 11
-    bh_p150b_civ2_viommu_prio: 11
     bh_p150b_civ2_viommu: 11
   unit:
     wh_n150_civ2: 16
-    bh_p150b_civ2_viommu_prio: 16
     bh_p150b_civ2_viommu: 16
 
 llk:
   pr_gate:
     wh_n150_civ2: 40
-    bh_p150b_civ2: 40
-    bh_p150b_civ2_viommu_prio: 40
+    bh_p150b_civ2_viommu: 40
   unit:
     wh_n150_civ2: 40
     wh_n300_civ2: 40
     bh_p150: 40
     bh_p150b_civ2_viommu: 110
-    bh_p150b_civ2_viommu_prio: 70
     bh_p100: 40
   e2e:
     wh_n150_civ2: 1800
@@ -277,9 +268,7 @@ llk:
     bh_p150b_civ2: 1200
   merge_gate:
     wh_n150_civ2: 300
-    bh_p150b_civ2: 160
     bh_p150b_civ2_viommu: 70
-    bh_p150b_civ2_viommu_prio: 70
 
 models:
   merge_gate:
@@ -333,10 +322,10 @@ models:
   unit_tier1:
     wh_llmbox: 61
     wh_n150: 110
-    wh_galaxy: 45
+    wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 250  # GPT-OSS-120B 15->22 (host-variance headroom)
+    bh_quietbox_2: 260
     bh_galaxy: 70
   unit_tier2:
     wh_llmbox: 114
