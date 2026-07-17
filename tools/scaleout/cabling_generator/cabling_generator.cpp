@@ -2502,10 +2502,12 @@ void CablingGenerator::recreate_nodes_from_templates(ResolvedGraphInstance& grap
 
 namespace {
 
-// True if `suffix` matches the trailing segments of `instance_path`. A filter matches an instance
-// when it is a suffix of that instance's full path (relative match).
+// True if `suffix` matches the trailing segments of `instance_path` (relative match). An empty suffix
+// or one containing an empty segment matches nothing (rejects malformed filter paths).
 bool path_is_suffix(const std::vector<std::string>& suffix, const std::vector<std::string>& instance_path) {
-    if (suffix.size() > instance_path.size()) {
+    if (suffix.empty() ||
+        std::any_of(suffix.begin(), suffix.end(), [](const std::string& segment) { return segment.empty(); }) ||
+        suffix.size() > instance_path.size()) {
         return false;
     }
     size_t offset = instance_path.size() - suffix.size();

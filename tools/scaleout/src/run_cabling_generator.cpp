@@ -30,15 +30,18 @@ struct InputConfig {
 };
 
 // Split a slash-delimited instance path (e.g. "bh_galaxy_sp_0/bh_galaxy_node_2") into its keys.
-std::vector<std::string> split_instance_path(const std::string& path) {
+// Rejects empty segments (empty value, leading/trailing/double slash) rather than dropping them, so a
+// malformed --include/--exclude value errors instead of silently widening the output.
+std::vector<std::string> split_instance_path(const std::string& flag, const std::string& path) {
     std::vector<std::string> keys;
     size_t start = 0;
-    while (start <= path.size()) {
+    while (true) {
         size_t slash = path.find('/', start);
-        std::string key = path.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
-        if (!key.empty()) {
-            keys.push_back(key);
+        std::string key = (slash == std::string::npos) ? path.substr(start) : path.substr(start, slash - start);
+        if (key.empty()) {
+            throw std::invalid_argument("Invalid --" + flag + " path '" + path + "': empty path segment");
         }
+        keys.push_back(std::move(key));
         if (slash == std::string::npos) {
             break;
         }
@@ -125,18 +128,12 @@ InputConfig parse_arguments(int argc, char** argv) {
         config.loc_info = !result["simple"].as<bool>();
         if (result.contains("include")) {
             for (const auto& raw_path : result["include"].as<std::vector<std::string>>()) {
-                auto keys = split_instance_path(raw_path);
-                if (!keys.empty()) {
-                    config.include_paths.push_back(std::move(keys));
-                }
+                config.include_paths.push_back(split_instance_path("include", raw_path));
             }
         }
         if (result.contains("exclude")) {
             for (const auto& raw_path : result["exclude"].as<std::vector<std::string>>()) {
-                auto keys = split_instance_path(raw_path);
-                if (!keys.empty()) {
-                    config.exclude_paths.push_back(std::move(keys));
-                }
+                config.exclude_paths.push_back(split_instance_path("exclude", raw_path));
             }
         }
 
