@@ -2,6 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Non-mux fabric halo writer for neighbor_pad_halo. One binary, two roles selected by the
+// is_w_fabric_writer compile-time arg:
+//   H writer (is_w_fabric_writer=0): phase-1 H exchange. Sends this device's H-halo rows to the
+//     H-neighbor — corner-first (the pad2 corner sticks land in the neighbor's L1 so its recv clears
+//     early, the bulk row goes straight to its halo-buffer DRAM) — commits the incoming H-halo, and
+//     signals the phase-2 W readers once H is in place (the W corners read those H rows).
+//   W writer (is_w_fabric_writer=1): phase-2 W exchange. Ships the W-boundary sticks the paired
+//     np_phase2_w_reader gathered into the send CB, bank-major coalesced, to the W-neighbor.
+// The bandwidth-bound mux path uses np_h_mux_writer / np_w_mux_writer instead. A few args are
+// role-overloaded (send_cb_id, and W_COALESCE which carries h_coalesce_n on the H writer) — flagged inline.
+
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"

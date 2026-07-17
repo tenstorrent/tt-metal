@@ -2,6 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// H-fabric reader for neighbor_pad_halo (phase-1 H exchange), on both the non-mux H cores and the
+// H-mux worker cores.
+//   Send side: reads this device's edge H rows from the input into the send CB (bank-major coalesced
+//     when H_COALESCE>0) for the paired writer to ship to the H-neighbor.
+//   Receive side (non-edge): pulls the neighbor's incoming H-halo from the L1 recv buffer.
+//   Edge device (is_first_chip): fills the local outward H padding (zeros or replicate).
+// In the H-mux path (H_SIGNAL_W_RECV) it owns the H->W barrier, signalling the W readers after its
+// recv has landed so the W corner reads never race the H exchange.
+
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_halo/device/kernels/np_zero_pad.hpp"
