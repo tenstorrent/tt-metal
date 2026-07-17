@@ -12,6 +12,7 @@ Ported/adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
 """
 
 import math
+import os
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -47,7 +48,26 @@ def _find_grid(n_tiles, target=32):
 
 
 def prefill_grid_default():
+    """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""
     return (8, 10) if is_blackhole() else (8, 8)
+
+
+def prefill_max_cols_default(mesh_device=None):
+    """Max grid width for FPU-tuned prefill progcfg.
+
+    Safe default is ``prefill_grid_default()[0]`` (8). On BH, ``grid_x>=10`` can
+    garble the regular 2D matmul (Qwen notes the same); auto-using the full
+    worker-grid width (11 on P150) cut 128k TTFT (~73s→~55s) but destroyed
+    generation quality on Gemma4-31B. Keep the ``_best_prefill_cols`` search
+    inside the safe band (e.g. gate_up 7-wide / out_subblock_w=4).
+
+    Override with ``GEMMA4_PREFILL_MAX_COLS`` for sweeps (9 stays coherent on
+    31B/P150x8; 11 is faster but incorrect). ``mesh_device`` is API parity only.
+    """
+    env = os.environ.get("GEMMA4_PREFILL_MAX_COLS")
+    if env is not None:
+        return max(1, int(env))
+    return prefill_grid_default()[0]
 
 
 # Prefill activation-row cutoff. The 2D matmul's circular buffers scale with
@@ -131,10 +151,34 @@ def _get_out_subblock_w(per_core_n, out_subblock_h):
     return 1
 
 
-def prefill_progcfg(m, k, n, grid_size=None):
-    """2D matmul program config for prefill on a DRAM-width-sharded weight."""
+def _best_prefill_cols(n, max_cols):
+    """Grid width (<=max_cols) maximizing the output subblock, tie-broken to more cores.
+
+    Avoids the 1x1-subblock stall the default full-width grid can force on wide N
+    (ported from Qwen3.6 ``tp_common._best_prefill_cols`` / PR #48861).
+    """
+    n_tiles = math.ceil(n / TILE_SIZE)
+    best_cols, best_key = 1, None
+    for cols in range(1, max_cols + 1):
+        sw = _get_out_subblock_w(math.ceil(n_tiles / cols), 1)
+        key = (sw, cols)  # prefer wider subblock, then more columns
+        if best_key is None or key > best_key:
+            best_key, best_cols = key, cols
+    return best_cols
+
+
+def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=None):
+    """FPU-tuned 2D matmul program config for prefill on a DRAM-width-sharded weight.
+
+    When ``grid_size`` is omitted, picks the grid width that maximizes
+    ``out_subblock_w`` (drives prefill FPU) instead of always using the full
+    ``prefill_grid_default()`` width. ``max_cols`` caps that search (pass the
+    device worker-grid width, 11 on BH P150, for the measured wide-grid winners).
+    """
     if grid_size is None:
-        grid_size = prefill_grid_default()
+        base = prefill_grid_default()
+        cols = _best_prefill_cols(n, max_cols if max_cols is not None else base[0])
+        grid_size = (cols, base[1])
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
     out_subblock_h = 1
@@ -149,7 +193,7 @@ def prefill_progcfg(m, k, n, grid_size=None):
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=None,
+        fused_activation=fused_activation,
         fuse_batch=False,
     )
 
@@ -159,12 +203,13 @@ class DramShardedLinear:
 
     Decode (M<=32): width-shard the activation to L1, run the DRAM-sharded
     kernel, return a DRAM-interleaved result. Prefill (M>32): plain matmul with
-    an explicit 2D program config (auto-selection overflows L1 for these shapes).
+    an FPU-tuned 2D program config (auto-selection overflows L1 for these shapes).
     """
 
     def __init__(self, weight_torch, mesh_device, mesh_mapper, k, n, dtype, cache_file_name):
         self.k = k
         self.n = n
+        self._prefill_max_cols = prefill_max_cols_default(mesh_device)
         self.weight = ttnn.as_tensor(
             weight_torch,
             device=mesh_device,
@@ -177,10 +222,43 @@ class DramShardedLinear:
         self._act_memcfg = activation_memcfg(k)
         self._decode_pc = decode_progcfg(TILE_SIZE, k, n)
 
+    def _prefill_pc(self, m):
+        return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)
+
     def __call__(self, x, compute_kernel_config=None, out_memory_config=None):
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
-        if x.shape[-2] <= TILE_SIZE:
-            x_sh = ttnn.to_memory_config(x, self._act_memcfg)
+        # Prefill with batch>1 reshapes activations to [B, 1, S, K] (see
+        # DecoderLayer). Row count for the matmul is the product of all leading
+        # dims — not just shape[-2], which would make the cutoff reshape
+        # (1, S/cutoff, cutoff, K) disagree with volume B*S*K.
+        # ttnn Shape only supports integer indexing (no slices).
+        x_shape = [int(x.shape[i]) for i in range(len(x.shape))]
+        orig_leading = x_shape[:-1]
+        n_in = x_shape[-1]
+        M = 1
+        for d in orig_leading:
+            M *= d
+        flat_shape = [1, 1, M, n_in]
+        x_work = x if x_shape == flat_shape else ttnn.reshape(x, flat_shape)
+
+        def _restore(out):
+            out_leading = [int(out.shape[i]) for i in range(len(out.shape) - 1)]
+            if out_leading == orig_leading:
+                return out
+            return ttnn.reshape(out, (*orig_leading, int(out.shape[-1])))
+
+        if M <= TILE_SIZE:
+            # Decode DRAM-sharded kernel + activation memcfg are tiled for
+            # M=TILE_SIZE (32). Packed-verify / small-batch paths pass M=B*P
+            # (e.g. 4, 16) — pad to one tile, run, then slice back so callers
+            # keep the logical [..., M, N] volume (avoids reshape volume mismatch).
+            pad = TILE_SIZE - M
+            x_run = x_work
+            if pad:
+                x_run = ttnn.pad(x_work, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+            x_sh = ttnn.to_memory_config(x_run, self._act_memcfg)
+            if pad:
+                x_run.deallocate(True)
             out = ttnn.linear(
                 x_sh,
                 self.weight,
@@ -189,15 +267,28 @@ class DramShardedLinear:
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             )
             x_sh.deallocate(True)
-            return ttnn.to_memory_config(out, out_mc)
+            out = ttnn.to_memory_config(out, out_mc)
+            if pad:
+                out_pad = out
+                out = ttnn.slice(
+                    out_pad,
+                    [0, 0, 0, 0],
+                    [out_pad.shape[0], out_pad.shape[1], M, out_pad.shape[3]],
+                )
+                out_pad.deallocate(True)
+            return _restore(out)
 
         # Prefill on the width-sharded weight via the 2D matmul kernel.
-        M = x.shape[-2]
         if M <= _PREFILL_CUTOFF:
-            pc = prefill_progcfg(M, self.k, self.n)
-            return ttnn.linear(
-                x, self.weight, program_config=pc, compute_kernel_config=compute_kernel_config, memory_config=out_mc
+            pc = self._prefill_pc(M)
+            out = ttnn.linear(
+                x_work,
+                self.weight,
+                program_config=pc,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=out_mc,
             )
+            return _restore(out)
 
         if M % _PREFILL_CUTOFF == 0:
             # Reshape M into (batch, cutoff) so per_core_M is sized to the cutoff
@@ -205,14 +296,13 @@ class DramShardedLinear:
             # reshapes are metadata-only (cutoff is tile-aligned). Single matmul,
             # single-size output — no concat, no memory doubling.
             batch = M // _PREFILL_CUTOFF
-            n_dim = x.shape[-1]
-            x_r = ttnn.reshape(x, (1, batch, _PREFILL_CUTOFF, n_dim))
-            pc = prefill_progcfg(_PREFILL_CUTOFF, self.k, self.n)
+            x_r = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
+            pc = self._prefill_pc(_PREFILL_CUTOFF)
             out_r = ttnn.linear(
                 x_r, self.weight, program_config=pc, compute_kernel_config=compute_kernel_config, memory_config=out_mc
             )
             out = ttnn.reshape(out_r, (1, 1, M, out_r.shape[-1]))
-            return out
+            return _restore(out)
 
         # Fallback for M not divisible by the cutoff (rare; small M in practice):
         # chunk + concat. Only reached for shapes that don't hit the long-context
@@ -220,8 +310,8 @@ class DramShardedLinear:
         outs = []
         for start in range(0, M, _PREFILL_M_CHUNK):
             end = min(start + _PREFILL_M_CHUNK, M)
-            x_c = ttnn.slice(x, [0, 0, start, 0], [x.shape[0], x.shape[1], end, self.k])
-            pc = prefill_progcfg(end - start, self.k, self.n)
+            x_c = ttnn.slice(x_work, [0, 0, start, 0], [1, 1, end, self.k])
+            pc = self._prefill_pc(end - start)
             outs.append(
                 ttnn.linear(
                     x_c,
@@ -235,4 +325,4 @@ class DramShardedLinear:
         out = ttnn.concat(outs, dim=-2, memory_config=out_mc)
         for o in outs:
             o.deallocate(True)
-        return out
+        return _restore(out)
