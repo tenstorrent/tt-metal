@@ -1582,6 +1582,91 @@ def test_issue_47602_same_shape_reuses_cache_entry(device):
     assert entries_after_second == entries_after_first, "identical slice must be a cache hit, not a miss"
 
 
+def _run_slice_override_addr_change(device, layout, in_mem_config, out_mem_config, shape, slice_start, slice_end):
+    """Cache-hit hook (override_runtime_arguments) correctness: buffer addresses are excluded from the
+    slice hash, so a second identical-shape slice at a DIFFERENT input address must hit the cache and
+    still produce correct output (re-derived addresses / re-patched sharded CB bases), not stale data."""
+    torch.manual_seed(47828)
+
+    def _make():
+        t = torch.rand(shape, dtype=torch.bfloat16)
+        return t, ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=in_mem_config)
+
+    def _ref(t):
+        return t[
+            slice_start[0] : slice_end[0],
+            slice_start[1] : slice_end[1],
+            slice_start[2] : slice_end[2],
+            slice_start[3] : slice_end[3],
+        ]
+
+    torch_a, tt_a = _make()
+    tt_out_a = ttnn.slice(tt_a, slice_start, slice_end, memory_config=out_mem_config)
+    entries_after_first = device.num_program_cache_entries()
+    assert_with_pcc(_ref(torch_a), ttnn.to_torch(tt_out_a), 0.9999)
+
+    # Keep A alive so B is forced to a different buffer address; the second slice must be a cache HIT.
+    torch_b, tt_b = _make()
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    tt_out_b = ttnn.slice(tt_b, slice_start, slice_end, memory_config=out_mem_config)
+    assert device.num_program_cache_entries() == entries_after_first, "identical-shape slice must be a cache hit"
+    assert_with_pcc(_ref(torch_b), ttnn.to_torch(tt_out_b), 0.9999)
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    ids=["rm", "tile"],
+)
+def test_slice_override_addr_change_interleaved(device, layout):
+    """override_runtime_arguments re-derives input/output buffer addresses on a cache hit (RM + TILE)."""
+    _run_slice_override_addr_change(
+        device,
+        layout,
+        ttnn.DRAM_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+        (1, 4, 128, 128),
+        [0, 0, 0, 0],
+        [1, 4, 64, 64],
+    )
+
+
+def test_slice_override_addr_change_rm_height_sharded(device):
+    """override_runtime_arguments re-patches the sharded CB base addresses on a cache hit for the
+    CB-bound height-sharded RM factory (the factory the removed get_dynamic_runtime_args special-cased)."""
+    n, c, h, w = 16, 128, 128, 16
+    num_cores_x, num_cores_y = 8, 7
+    ncores = num_cores_x * num_cores_y
+    grid_coord = ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    c_out, h_out = 115, 115
+
+    def _make():
+        t = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+        in_shard = ttnn.ShardSpec(shard_grid, ((n * c * h + ncores - 1) // ncores, w), ttnn.ShardOrientation.ROW_MAJOR)
+        in_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in_shard)
+        tt = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg)
+        return t, tt
+
+    out_shard = ttnn.ShardSpec(
+        shard_grid, ((n * c_out * h_out + ncores - 1) // ncores, w), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    out_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard)
+
+    torch_a, tt_a = _make()
+    tt_out_a = ttnn.slice(tt_a, (0, 0, 0, 0), (n, c_out, h_out, w), memory_config=out_cfg)
+    entries_after_first = device.num_program_cache_entries()
+    assert_equal(torch_a[:n, :c_out, :h_out, :], ttnn.to_torch(ttnn.to_memory_config(tt_out_a, ttnn.L1_MEMORY_CONFIG)))
+
+    torch_b, tt_b = _make()  # A kept alive → B at a different L1 address
+    assert tt_b.buffer_address() != tt_a.buffer_address(), "second input must land at a different address"
+    tt_out_b = ttnn.slice(tt_b, (0, 0, 0, 0), (n, c_out, h_out, w), memory_config=out_cfg)
+    assert (
+        device.num_program_cache_entries() == entries_after_first
+    ), "identical-shape sharded slice must be a cache hit"
+    assert_equal(torch_b[:n, :c_out, :h_out, :], ttnn.to_torch(ttnn.to_memory_config(tt_out_b, ttnn.L1_MEMORY_CONFIG)))
+
+
 @pytest.mark.parametrize(
     "shape, slice_start, slice_end",
     [
