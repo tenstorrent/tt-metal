@@ -7,6 +7,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
 
+# Prefix every output line with [hostname][time] using the orchestrator host.
+# Lines that already carry a [host][time] tag (e.g. the per-rank tt-smi reset
+# lines, which are tagged with their own remote hostname) are passed through
+# unchanged so they keep their real source attribution and are not double-tagged.
+tag_stream() {
+    local line
+    local tagged_re='^\[[^]]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]'
+    while IFS= read -r line; do
+        if [[ "$line" =~ $tagged_re ]]; then
+            printf '%s\n' "$line"
+        else
+            printf '[%s][%(%H:%M:%S)T] %s\n' "${HOSTNAME:-$(hostname)}" -1 "$line"
+        fi
+    done
+}
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -311,8 +327,9 @@ mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 LOG_FILE="$OUTPUT_DIR/recover_$(date +%Y%m%d_%H%M%S).log"
 
-# Redirect all output: terminal sees colors, log file gets ANSI/CR stripped
-exec > >(tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
+# Redirect all output: every line is tagged with [hostname][time] (already-tagged
+# reset lines pass through untouched), terminal sees colors, log file gets ANSI/CR stripped
+exec > >(tag_stream | tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
 echo "Logging to: $LOG_FILE"
 
 # --check: dry run to verify MPI can reach all hosts, then exit

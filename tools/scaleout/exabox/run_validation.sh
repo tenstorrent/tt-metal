@@ -5,6 +5,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
 source "$SCRIPT_DIR/utils/host_utils.sh"
 
+# Prefix every output line with [hostname][time] using the orchestrator host.
+# Lines that already carry a [host][time] tag (e.g. the per-rank tt-smi reset
+# lines, which are tagged with their own remote hostname) are passed through
+# unchanged so they keep their real source attribution and are not double-tagged.
+tag_stream() {
+    local line
+    local tagged_re='^\[[^]]*\]\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]'
+    while IFS= read -r line; do
+        if [[ "$line" =~ $tagged_re ]]; then
+            printf '%s\n' "$line"
+        else
+            printf '[%s][%(%H:%M:%S)T] %s\n' "${HOSTNAME:-$(hostname)}" -1 "$line"
+        fi
+    done
+}
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -339,6 +355,12 @@ RESET_CMD
 }
 
 
+# Tag every line of this script's output with [hostname][time]. Per-rank reset
+# lines already carry their own remote tag and pass through untouched. The
+# per-iteration tee blocks below re-run tag_stream so their log files are tagged
+# too; those lines arrive here already-tagged and are left as-is.
+exec > >(tag_stream) 2>&1
+
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
 if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
@@ -420,7 +442,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
-    } 2>&1 | tee "$LOG_FILE"
+    } 2>&1 | tag_stream | tee "$LOG_FILE"
 
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
