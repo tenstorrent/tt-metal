@@ -1078,8 +1078,8 @@ class Pi0_5GLX1x8Pipeline:
         iters: int,
     ) -> Tuple[torch.Tensor, List[float]]:
         """Run `iters` iterations of trace replay with H2D input upload on CQ1
-        overlapped with compute on CQ0. Exercised by
-        tests/perf/test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py::test_perf_1x8_traced_2cq.
+        overlapped with compute on CQ0. Exercised by the LIBERO ttnn_1x8 backend
+        (libero_sim/libero_rollout.py).
 
         Requires the mesh to have been opened with num_command_queues=2.
         Returns (last_actions, per_iter_wall_clock_ms).

@@ -1054,8 +1054,7 @@ def main():
         )
         print(f"   ttnn device opened in {time.time() - t0:.1f}s (device_id={args.device_id})")
     elif args.backend == "ttnn_1x8":
-        # 1×8-specific env vars that the perf test (test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py)
-        # self-applies at module load. These are NOT in pi05_production.env
+        # 1×8-specific env vars for the ttnn_1x8 backend. These are NOT in pi05_production.env
         # — they're pipeline_1x8-specific and control how attention/MLP
         # weights shard across the 8-chip mesh. Without these, wqkv loads
         # un-sharded (N=2560 instead of N=768/chip) and the prefill QKV

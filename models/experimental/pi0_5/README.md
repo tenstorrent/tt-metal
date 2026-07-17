@@ -20,7 +20,7 @@ SigLIP DP + prefill TP=8 + denoise on one 1×8 Blackhole mesh.
 │  │  ┌───────────┐   ┌───────────────┐  │   │           ┌────────┐     ││
 │  │  │  Images   │   │   Language    │  │   │           │ Noisy  │     ││
 │  │  │  (224x224)│   │ (200 tokens,  │  │   │           │Actions │     ││
-│  │  │  (3 views)│   │  task prompt) │  │   │           │(10, 32)│     ││
+│  │  │  (3 views)│   │  task prompt) │  │   │           │(50, 32)│     ││
 │  │  └─────┬─────┘   └───────┬───────┘  │   │           └───┬────┘     ││
 │  │        │                 │          │   │               │          ││
 │  │        ▼                 │          │   │               ▼          ││
@@ -77,7 +77,7 @@ SigLIP DP + prefill TP=8 + denoise on one 1×8 Blackhole mesh.
 │                                      ▼                                 │
 │                        ┌──────────────────────────┐                    │
 │                        │      Action Output       │                    │
-│                        │     [batch=1, 10, 32]    │                    │
+│                        │     [batch=1, 50, 32]    │                    │
 │                        └──────────────────────────┘                    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -85,8 +85,9 @@ SigLIP DP + prefill TP=8 + denoise on one 1×8 Blackhole mesh.
 **Key architectural details:**
 - **Shared Attention**: VLM and Expert share K,V tensors (concatenated), but have separate Q and MLPs (same as PI0)
 - **AdaRMSNorm in Expert**: each layer reads `(scale, shift, gate)` from a Dense projection of `adarms_cond` (time-derived). `out = RMSNorm(x)·(1+scale) + shift`; residual is gated.
-- **Language prompt**: the default `pi05_libero` checkpoint (`discrete_state_input=False`) feeds the task description only — there is no separate state token in the suffix and no state projection weight in either expert. (A checkpoint trained with `discrete_state_input=True` instead discretizes the 8-dim robot state into 256 bins appended to the prompt; select it at rollout with `--state-in-prompt true`.)
-- **Flow Matching**: same Euler integration as PI0; **10** denoising steps (openpi training default) from N(0,I) → actions. The perf-tuned path uses **5** (validated PCC-equal on LIBERO, ~half the device time).
+- **Action horizon**: `pi05_base` predicts a **50-action** chunk (`action_horizon=50`, tile-padded to 64); the suffix carries 50 noisy action tokens `(50, 32)`. The single-chip fused expert kernels are extended to a 2-tile suffix to run this natively (see the single-chip Tests section).
+- **Language prompt**: `pi05_base` (`discrete_state_input=False`) feeds the task description only — there is no separate state token in the suffix and no state projection weight in either expert. (A checkpoint trained with `discrete_state_input=True`, e.g. the lerobot `pi05_libero_finetuned`, instead discretizes the 8-dim robot state into 256 bins appended to the prompt; select it at rollout with `--state-in-prompt true`.)
+- **Flow Matching**: same Euler integration as PI0; from N(0,I) → the 50-action chunk. **10** denoising steps (openpi training default); the perf-tuned path uses **5** (~half the device time, validated on the LIBERO fine-tune).
 - **Dual Experts**: VLM (2B) processes images + language; Expert (300M, adaRMS) processes only the action tokens.
 
 ---
@@ -107,6 +108,7 @@ pi0_5/
 │   ├── torch_paligemma.py    # PaliGemmaBackbone + Pi0_5PaliGemmaBackbone
 │   ├── torch_prefix.py
 │   ├── torch_siglip.py
+│   ├── torch_siglip_hf.py    # HF-SigLIP wrapper (upstream pi05_libero compat)
 │   ├── torch_suffix.py       # SuffixEmbedding + Pi0_5SuffixEmbedding
 │   └── torch_pi0_5_model.py  # Pi0_5Model
 ├── tt/                       # TTNN implementation
@@ -123,11 +125,17 @@ pi0_5/
 │   ├── robot_runtime.py      #   RobotInterface / run_realrobot / MockRobot
 │   ├── demo_realrobot.py     #   in-process CLI demo (log-only; --enable-motion)
 │   └── policy_server.py      #   remote policy server (HTTP/JSON)
-├── tests/
-│   ├── pcc/                  # Reference-vs-spec correctness
-│   └── perf/                 # Latency / throughput on Blackhole
+├── tests/                    # single-chip (Blackhole) only
+│   ├── pcc/                  # TTNN-vs-torch correctness
+│   │   ├── test_pcc_siglip_vs_torch.py
+│   │   ├── test_pcc_prefix_vs_torch.py
+│   │   ├── test_pcc_suffix_vs_torch.py
+│   │   ├── test_pcc_paligemma_vs_torch.py
+│   │   └── test_pcc_pi05_model_libero.py   # full-model e2e
+│   └── perf/                 # latency / throughput
+│       └── test_perf_ttnn_full_e2e_trace_2cq.py
 └── weights/                  # checkpoints (not tracked; see weights/README.md)
-    └── download_pi05_libero.py  # download + prepare + verify the upstream checkpoint
+    └── download_pi05_libero.py  # download + prepare + verify the LIBERO fine-tune
 ```
 
 ---
@@ -137,7 +145,7 @@ pi0_5/
 Build tt-metal from this branch and set up the Python env:
 
 ```bash
-git clone -b tt_bh_glx_pi05_8_chips https://github.com/tenstorrent/tt-metal.git --recurse-submodules
+git clone -b tt_bh_glx_pi05_1_chip_pi05_base_model https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 cd tt-metal
 ./install_dependencies.sh
 ./build_metal.sh
@@ -154,7 +162,7 @@ tt-smi -r 0,1                # reset only specific device(s) by number (0..31)
 TT_VISIBLE_DEVICES=0,1 <cmd> # run on a specific device subset only
 ```
 
-The 1×8 tests/pipeline need 8 chips on one healthy tray — e.g.
+The 1×8 pipeline (LIBERO `--backend ttnn_1x8`, demo) needs 8 chips on one healthy tray — e.g.
 `TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15`. Reset first if mesh-open reports a
 fabric router-sync / ethernet-handshake timeout.
 
@@ -162,16 +170,19 @@ fabric router-sync / ethernet-handshake timeout.
 
 ## Quickstart
 
-Set once (get the checkpoint via [`weights/download_pi05_libero.py`](weights/README.md)):
+Set the environment once. The single-chip PCC/perf tests default to the base checkpoint
+in `weights/pi05_base`; LIBERO task-success needs a fine-tuned checkpoint (see
+[`weights/download_pi05_libero.py`](weights/README.md)):
 
 ```bash
-export PYTHONPATH=$PWD TT_METAL_HOME=$PWD PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream
+export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
+export PI05_CHECKPOINT_DIR=$PWD/models/experimental/pi0_5/weights/pi05_base
 ```
 
-### TTNN — e2e trace + 2CQ perf (Blackhole)
+### TTNN — e2e trace + 2CQ perf (single chip, Blackhole)
 
-The 1×8 test uses the visible devices (pin a subset with `TT_VISIBLE_DEVICES` on a
-shared box). Two knobs vary the workload (defaults from `pi05_production.env`):
+Pin one device with `TT_VISIBLE_DEVICES=0`. Two knobs vary the workload
+(defaults from `pi05_production.env`):
 
 - `PI0_NUM_CAMERAS` — 2 or 3 cameras (3 = training spec; 2 also set `PI0_VLM_CHUNK_SIZE=768`).
 - `PI05_NUM_DENOISE_STEPS` — denoise steps (5 = perf-tuned, 10 = training default).
@@ -179,15 +190,16 @@ shared box). Two knobs vary the workload (defaults from `pi05_production.env`):
 ```bash
 source models/experimental/pi0_5/common/pi05_production.env   # perf flags (tests auto-apply too)
 
-PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
-  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py
+TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
 ```
 
-### LIBERO sim — task-success rollout
+### LIBERO sim — task-success rollout (single chip)
 
-Full setup + all flags in [`libero_sim/README.md`](libero_sim/README.md). Prefix the
-LIBERO env vars (`PI0_TOKENIZER_PATH`, `LIBERO_REPO_PATH`, `MUJOCO_GL=osmesa`) and pick
-`--backend ttnn` (single chip) or `ttnn_1x8` (1×8 mesh; pin devices with `TT_VISIBLE_DEVICES` if needed):
+Full setup + all flags in [`libero_sim/README.md`](libero_sim/README.md). Needs a
+**fine-tuned** checkpoint — `pi05_base` is not fine-tuned for LIBERO (it produces near-0%).
+Prefix the LIBERO env vars (`PI0_TOKENIZER_PATH`, `LIBERO_REPO_PATH`, `MUJOCO_GL=osmesa`)
+and run on one chip with `--backend ttnn` (`TT_VISIBLE_DEVICES=0`):
 
 ```bash
 ROLL="models/experimental/pi0_5/libero_sim/libero_rollout.py --checkpoint $PI05_CHECKPOINT_DIR \
@@ -205,50 +217,13 @@ python_env/bin/python -u $ROLL --num-episodes 10
 
 ## Tests
 
-Skipped automatically if the checkpoint (`$PI05_CHECKPOINT_DIR`) is missing. All
-commands assume:
+Skipped automatically if the checkpoint (`weights/pi05_base`, or `$PI05_CHECKPOINT_DIR`)
+is missing. The PCC and perf tests run on a **single Blackhole chip** and default to the
+`pi05_base` checkpoint. All commands assume:
 
 ```bash
-export PYTHONPATH=$PWD TT_METAL_HOME=$PWD PI05_CHECKPOINT_DIR=/path/to/pi05_libero_upstream
+export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
 ```
-
-### PCC tests
-
-Compare TTNN vs the PyTorch reference on real upstream weights, gated at **PCC ≥ 0.99**
-(8 BH chips, 1×8 mesh):
-
-```bash
-python_env/bin/pytest -sq models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_1x8.py
-# On by default (runs a slow CPU torch reference); set PI05_E2E_PCC=0 to skip.
-```
-
-Results (upstream pi05_libero, ≥ 0.99 bar):
-
-| stage | PCC |
-|---|---|
-| vision | 0.9997 |
-| prefill | 0.9946 |
-| e2e | 0.9965 |
-
-### Perf tests
-
-Trace + 2CQ (the canonical "fast" path). Vary the workload with two env vars
-(defaults from `pi05_production.env`):
-
-- `PI0_NUM_CAMERAS` — `2` or `3` cameras (`3` = training spec; `2` also set `PI0_VLM_CHUNK_SIZE=768`).
-- `PI05_NUM_DENOISE_STEPS` — denoise steps (`5` = perf-tuned, `10` = training default).
-
-Run (8 BH chips, 1×8 mesh):
-```bash
-PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
-  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8_e2e_trace_2cq.py
-```
-
-Results (trace + 2CQ, N=5 — per-chunk ms):
-
-| | 2 cameras | 3 cameras |
-|---|---|---|
-| **8 BH chips (1×8)** | 25.52 ms | 27.99 ms |
 
 ### Single chip (Blackhole) — `pi05_base`
 
@@ -264,7 +239,7 @@ seq > 32. Pin one device with `TT_VISIBLE_DEVICES=0`. The checkpoint default is
 export PI05_CHECKPOINT_DIR=$PWD/models/experimental/pi0_5/weights/pi05_base
 ```
 
-**Perf — e2e trace + 2CQ (device 0).** Same knobs as the 1×8 test:
+**Perf — e2e trace + 2CQ (device 0).** Two workload knobs (`PI0_NUM_CAMERAS` 2/3, `PI05_NUM_DENOISE_STEPS` 5/10):
 
 ```bash
 TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
