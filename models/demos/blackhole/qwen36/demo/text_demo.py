@@ -690,9 +690,9 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
 
     # Prefill routes: T<=256 grouped single-pass; T>256 prefill_chunked_peruser (per-user).
-    # QWEN_BATCHED_GROUPED=1 (default): group short prompts for ~4x (T<=128, B=4 groups) / ~1.6x
-    # (T<=256, B=2 groups) TTFT. prefill_paged_grouped auto-caps group size by the GDN kernel's
-    # per-bucket L1 ceiling. Long prompts (T>256) can't batch GDN (chunk clash) -> stay per-user.
+    # QWEN_BATCHED_GROUPED=1 (default): group short prompts (groups of up to 8 users — the fused GDN
+    # op's SCAN ceiling BH=B*Nv_tp<=cores, bucket-independent) so a B=8 request is one group for both
+    # T<=128 and T<=256. prefill_paged_grouped auto-caps group size. T>256 stays per-user.
     bucket = 128
     eager = os.environ.get("QWEN35_TP_PREFILL_EAGER") == "1"
     grouped_short = os.environ.get("QWEN_BATCHED_GROUPED", "1") != "0" and T <= 256
@@ -705,7 +705,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         model.capture_prefill_trace_bucket(mesh, page_table[0:1].contiguous(), bucket=bucket)
     t0 = time.time()
     if grouped_short:
-        pf_logits = model.prefill_paged_grouped(token_list, page_table, valid_lens=[T] * B, group_size=4)
+        pf_logits = model.prefill_paged_grouped(token_list, page_table, valid_lens=[T] * B, group_size=8)
     elif use_traced_bucket:
         pf_logits = model.prefill_traced_bucket_batched(token_list, page_table, valid_lens=[T] * B)
     elif T > bucket:

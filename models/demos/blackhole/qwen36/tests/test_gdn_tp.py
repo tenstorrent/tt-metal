@@ -204,8 +204,12 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     tw = load_gdn_weights_tp(mesh_device, sd, args)
     comp = tp_composer(mesh_device)
 
-    Tmax = 128  # common bucket (one chunk-seq kernel chunk)
-    lens = [Tmax - 8 * (u % 8) for u in range(B)]  # distinct real lengths in {72..128}
+    Tmax = 128  # common bucket (one fused-chunk kernel bucket; must be a 32-multiple)
+    # Distinct real lengths, each a 32-multiple > TILE_SIZE: the fused chunk op requires the per-call
+    # bucket T to be a multiple of the fused chunk size (32), and the B=1 reference routes S<=32 to the
+    # decode matmul (replicated input) — so keep lens in {64, 96, 128}. The batched path pads to Tmax
+    # and masks via valid_lens; the reference runs each user at its own length.
+    lens = [Tmax - 32 * (u % 3) for u in range(B)]  # {128, 96, 64}
     xp = [torch.randn(1, 1, lens[u], args.dim, dtype=torch.bfloat16) for u in range(B)]
     xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for u in range(B)]
 
@@ -333,3 +337,70 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     passing, pcc = comp_pcc(dec, pf, get_pcc_threshold(request))
     logger.info(f"GDN TP PREFILL vs DECODE PCC (T={T}) = {pcc}")
     assert passing, f"GDN prefill/decode mismatch PCC: {pcc}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensure_gc, request):
+    """Isolate main's fused chunk_gated_delta_rule kernel (the DEFAULT prefill path).
+
+    forward_prefill routes single-user prefill through ttnn.transformer.chunk_gated_delta_rule
+    (fused_chunk_enabled() is on by default) — this is the per-user prefill path the model
+    actually runs (prefill_chunked_peruser -> forward_prefill_collect -> forward_prefill). Here we
+    run the SAME tokens twice — once fused (default), once with fused_chunk_enabled forced off so
+    forward_prefill falls back to the trusted chunk_gated_delta_rule_seq_adapter — and require the
+    fused output to match the seq path. Cross-checked against step-by-step decode for absolute
+    grounding (both agree AND are correct). Multi-chunk (T > chunk_size) exercises the recurrence.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    T, chunk = 256, 128  # T > chunk => multiple internal chunks (cross-chunk recurrence exercised)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=512)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} T={T} chunk={chunk}")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    gdn = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+
+    x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
+    # Prefill input is K-sharded (the model's prefill norm skips its AG; the fused in-proj gathers).
+    x_tt = shard_to_device(mesh_device, x, dim=-1)
+    composer = tp_composer(mesh_device)
+
+    import models.demos.blackhole.qwen36.tt.gdn.fused_chunk as fc
+
+    assert fc.fused_chunk_enabled(), "fused chunk must be ON by default (production prefill path)"
+
+    # ---- Fused chunk kernel (default) ----
+    gdn.reset_state()
+    out_fused = gdn.forward_prefill(x_tt, chunk_size=chunk)
+    fused = ttnn.to_torch(out_fused, mesh_composer=composer)[0, 0].float()  # [T, dim]
+    assert not torch.isnan(fused).any() and fused.abs().max() > 0
+
+    # ---- Seq adapter (fused forced off) on the SAME tokens ----
+    monkeypatch.setattr(fc, "fused_chunk_enabled", lambda: False)
+    gdn.reset_state()
+    out_seq = gdn.forward_prefill(x_tt, chunk_size=chunk)
+    seq = ttnn.to_torch(out_seq, mesh_composer=composer)[0, 0].float()  # [T, dim]
+
+    thr = get_pcc_threshold(request)
+    passing_fs, pcc_fs = comp_pcc(seq, fused, thr)
+    logger.info(f"GDN fused-chunk vs seq-adapter prefill PCC (T={T}) = {pcc_fs}")
+    assert passing_fs, f"fused chunk kernel disagrees with seq adapter: PCC {pcc_fs} < {thr}"
+
+    # ---- Absolute grounding: fused prefill must also match step-by-step decode ----
+    monkeypatch.undo()  # restore fused-on (decode path is unaffected, but keep state clean)
+    gdn.reset_state()
+    dec_rows = []
+    for t in range(T):
+        xt = replicate_to_device(mesh_device, x[:, :, t : t + 1, :])
+        ot = gdn.forward_decode(xt)
+        dec_rows.append(ttnn.to_torch(ot, mesh_composer=composer)[0, 0, 0].float())
+    dec = torch.stack(dec_rows, dim=0)  # [T, dim]
+    passing_fd, pcc_fd = comp_pcc(dec, fused, thr)
+    logger.info(f"GDN fused-chunk prefill vs step-decode PCC (T={T}) = {pcc_fd}")
+    assert passing_fd, f"fused chunk prefill disagrees with step-by-step decode: PCC {pcc_fd} < {thr}"

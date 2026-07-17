@@ -785,21 +785,29 @@ class TPGatedDeltaNet:
         ttnn.deallocate(qkv)
 
         kd = self.key_dim_tp
-        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (B, T, kd)), (B, T, Nk, Dk))
-        k = ttnn.reshape(ttnn.slice(conv, (0, 0, kd), (B, T, 2 * kd)), (B, T, Nk, Dk))
-        v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (B, T, D)), (B, T, Nv, Dv))
+        # Flat token-major q/k/v (no host head-split / GQA): the fused op does in-kernel L2-norm and
+        # GQA (Nk->Nv) from qkv_head_dims, matching the single-user forward_prefill fused path.
+        q = ttnn.slice(conv, (0, 0, 0), (B, T, kd))
+        k = ttnn.slice(conv, (0, 0, kd), (B, T, 2 * kd))
+        v = ttnn.slice(conv, (0, 0, 2 * kd), (B, T, D))
         ttnn.deallocate(conv)
-        rf = Nv // Nk
-        q = ttnn.repeat_interleave(q, rf, dim=2)
-        k = ttnn.repeat_interleave(k, rf, dim=2)
 
         beta = ttnn.reshape(ttnn.sigmoid(b), (B, T, Nv))
         ttnn.deallocate(b)
-        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"]))), (B, T, Nv))
+        g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (B, T, Nv))
         ttnn.deallocate(a)
 
-        # Chunk-parallel recurrence over the BH = B*Nv batch (each row an independent scan).
-        o, final_state = chunk_gated_delta_rule_seq_adapter(
+        # Chunk-parallel recurrence over the BH = B*Nv batch (each row an independent scan). Fused
+        # chunk_gated_delta_rule (same op as single-user prefill); per-row valid_lens mask each user.
+        from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import (
+            chunk_gated_delta_rule_fused_adapter,
+            fused_chunk_enabled,
+        )
+
+        _use_fused = fused_chunk_enabled()
+        _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
+        _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        o, final_state = _delta_fn(
             q,
             k,
             v,
@@ -811,6 +819,8 @@ class TPGatedDeltaNet:
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
             valid_len=valid_lens,
+            qkv_head_dims=(Nk, Dk, Nv, Dv),
+            **_extra,
         )
 
         # ---- write the batched decode state directly (row u == user u) ----
