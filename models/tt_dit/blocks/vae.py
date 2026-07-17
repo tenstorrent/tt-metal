@@ -277,6 +277,7 @@ class VaeConv2d(Module):
         out_channels: int,
         *,
         kernel_size: int,
+        stride: int = 1,
         padding: int = 0,
         tensor_parallel: bool = True,
         ctx: VaeContext,
@@ -304,6 +305,9 @@ class VaeConv2d(Module):
         self._use_conv3d = ctx.use_conv3d and no_tp
 
         if self._use_conv3d:
+            if stride != 1:
+                msg = "conv3d path does not support stride != 1"
+                raise ValueError(msg)
             self.inner = _VaeConv2dConv3d(
                 in_channels,
                 out_channels,
@@ -317,6 +321,7 @@ class VaeConv2d(Module):
                 in_channels,
                 out_channels,
                 kernel_size=kernel_size,
+                stride=stride,
                 padding=actual_padding,
                 mesh_device=ctx.device,
                 in_mesh_axis=ctx.tp_axis if tensor_parallel and not out_is_greater else None,
@@ -659,6 +664,65 @@ class VaeUpBlock(Module):
 
         if self.upsampler is not None:
             x = self.upsampler.forward(x)
+
+        return x
+
+
+class VaeDownsample(Module):
+    # Mirrors diffusers Downsample2D(use_conv=True, padding=0): asymmetric bottom/right pad of 1
+    # (F.pad(0,1,0,1)) followed by a 3x3 stride-2 conv. Under H/W spatial sharding the stride-2
+    # conv would need a strided halo exchange, so we all-gather to full spatial, run the conv
+    # replicated across the spatial axes (channel TP is preserved), then repartition. Only one
+    # gather per downsample (3 total in the encoder) — a deliberate correctness-over-comms tradeoff.
+    def __init__(self, *, channels: int, ctx: VaeContext) -> None:
+        super().__init__()
+        conv_ctx = replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
+        self.conv = VaeConv2d(channels, channels, kernel_size=3, stride=2, padding=0, ctx=conv_ctx)
+        self._ctx = ctx
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = _all_gather_hw(self._ctx, x)  # → [N, H, W, C] full spatial, TILE_LAYOUT
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        # pad right (W) and bottom (H) by 1 to match diffusers' F.pad(0, 1, 0, 1)
+        x = ttnn.pad(x, [(0, 0), (0, 1), (0, 1), (0, 0)], value=0.0)
+        x = self.conv.forward(x)
+        return _partition_hw(self._ctx, x)
+
+
+class VaeDownBlock(Module):
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        out_channels: int,
+        num_layers: int,
+        downsample: bool,
+        norm: VaeNormDesc,
+        ctx: VaeContext,
+    ) -> None:
+        super().__init__()
+
+        self.resnets = ModuleList(
+            VaeResnetBlock(
+                in_channels=in_channels if i == 0 else out_channels,
+                out_channels=out_channels,
+                norm=norm,
+                ctx=ctx,
+            )
+            for i in range(num_layers)
+        )
+
+        self.downsampler = VaeDownsample(channels=out_channels, ctx=ctx) if downsample else None
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        rename_substate(state, "downsamplers.0", "downsampler")
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        for block in self.resnets:
+            x = block.forward(x)
+
+        if self.downsampler is not None:
+            x = self.downsampler.forward(x)
 
         return x
 

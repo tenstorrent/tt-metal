@@ -17,12 +17,13 @@ from ...encoders.mistral3.model_mistral3 import Mistral3Encoder
 from ...encoders.transformer import RopeConfig
 from ...layers.module import Module
 from ...utils import cache, tensor
-from .system_messages import SYSTEM_MESSAGE, SYSTEM_MESSAGE_UPSAMPLING_T2I
+from .system_messages import SYSTEM_MESSAGE, SYSTEM_MESSAGE_UPSAMPLING_I2I, SYSTEM_MESSAGE_UPSAMPLING_T2I
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Any
 
+    from PIL import Image
     from transformers import PreTrainedTokenizerBase
 
     from ...parallel.config import EncoderParallelConfig
@@ -42,6 +43,7 @@ class PromptEncoder:
         self._device = device
         self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
+        self._checkpoint_name = checkpoint_name
 
         self._tokenizer = transformers.LlamaTokenizerFast.from_pretrained(checkpoint_name, subfolder="tokenizer")
         assert isinstance(self._tokenizer, transformers.LlamaTokenizerFast)
@@ -49,8 +51,6 @@ class PromptEncoder:
         if use_torch_encoder:
             self._encoder = _load_torch_encoder(checkpoint_name)
             return
-
-        self._checkpoint_name = checkpoint_name
 
         self._encoder = Mistral3Encoder(
             vocab_size=131072,
@@ -106,8 +106,26 @@ class PromptEncoder:
         )
 
     def upsample(
-        self, prompts: Sequence[str], *, max_length: int, temperature: float, traced: bool = False
+        self,
+        prompts: Sequence[str],
+        *,
+        max_length: int,
+        temperature: float,
+        images: Sequence[Image.Image | None] | None = None,
+        traced: bool = False,
     ) -> list[str]:
+        if images is not None and any(img is not None for img in images):
+            return _upsample_prompts_i2i(
+                prompts,
+                images=images,
+                max_length=max_length,
+                temperature=temperature,
+                checkpoint_name=self._checkpoint_name,
+                tokenizer=self._tokenizer,
+                encoder=self._encoder,
+                device=self._device,
+            )
+
         return _upsample_prompts(
             prompts,
             max_length=max_length,
@@ -253,14 +271,97 @@ def _upsample_prompts(
     return tokenizer.batch_decode(generated_tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True)
 
 
-def _format_input(prompts: Sequence[str], *, system_message: str) -> list[list[dict[str, Any]]]:
-    return [
-        [
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": system_message}],
-            },
-            {"role": "user", "content": [{"type": "text", "text": prompt}]},
+def _upsample_prompts_i2i(
+    prompts: Sequence[str],
+    *,
+    images: Sequence[Image.Image | None],
+    encoder: Module | torch.nn.Module,
+    tokenizer: PreTrainedTokenizerBase,
+    max_length: int,
+    temperature: float,
+    checkpoint_name: str | None,
+    device: ttnn.MeshDevice | None,
+) -> list[str]:
+    if isinstance(encoder, Module):
+        torch_encoder = _load_torch_encoder(checkpoint_name)
+    else:
+        torch_encoder = encoder
+
+    torch_processor = transformers.AutoProcessor.from_pretrained(checkpoint_name, subfolder="tokenizer")
+
+    conversation = _format_input(
+        prompts,
+        system_message=SYSTEM_MESSAGE_UPSAMPLING_I2I,
+        images=list(images),
+    )
+
+    # Image-conditioned upsampling needs PixtralProcessor tokenization (see Flux2Pipeline.upsample_prompt).
+    tokenizer_out = torch_processor.apply_chat_template(
+        conversation,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=2048,
+    )
+
+    input_ids = tokenizer_out["input_ids"].to(torch_encoder.device)
+    attention_mask = tokenizer_out["attention_mask"].to(torch_encoder.device)
+    model_inputs: dict[str, Any] = {"input_ids": input_ids, "attention_mask": attention_mask}
+    for key in ("pixel_values", "image_sizes"):
+        if key in tokenizer_out:
+            value = tokenizer_out[key].to(torch_encoder.device)
+            if key == "pixel_values":
+                value = value.to(torch_encoder.dtype)
+            model_inputs[key] = value
+
+    with torch.no_grad():
+        output_tokens = torch_encoder.generate(
+            **model_inputs,
+            max_new_tokens=512,
+            do_sample=True,
+            temperature=temperature,
+            use_cache=True,
+        )
+
+    input_length = input_ids.shape[1]
+    generated_tokens = output_tokens[:, input_length:]
+    return torch_processor.tokenizer.batch_decode(
+        generated_tokens, skip_special_tokens=True, clean_up_tokenization_spaces=True
+    )
+
+
+def _format_input(
+    prompts: Sequence[str],
+    *,
+    system_message: str,
+    images: Sequence[Image.Image | None] | None = None,
+) -> list[list[dict[str, Any]]]:
+    cleaned = [prompt.replace("[IMG]", "") for prompt in prompts]
+
+    if images is None:
+        return [
+            [
+                {"role": "system", "content": [{"type": "text", "text": system_message}]},
+                {"role": "user", "content": [{"type": "text", "text": prompt}]},
+            ]
+            for prompt in cleaned
         ]
-        for prompt in prompts
-    ]
+
+    if len(images) != len(cleaned):
+        msg = f"Number of images ({len(images)}) must match number of prompts ({len(cleaned)})"
+        raise ValueError(msg)
+
+    messages: list[list[dict[str, Any]]] = []
+    for prompt, image in zip(cleaned, images):
+        conversation: list[dict[str, Any]] = [
+            {"role": "system", "content": [{"type": "text", "text": system_message}]},
+        ]
+        if image is not None:
+            conversation.append({"role": "user", "content": [{"type": "image", "image": image}]})
+        conversation.append({"role": "user", "content": [{"type": "text", "text": prompt}]})
+        messages.append(conversation)
+
+    return messages

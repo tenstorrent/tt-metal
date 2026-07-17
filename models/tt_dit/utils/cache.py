@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -12,7 +13,7 @@ from loguru import logger
 
 import ttnn
 
-from ..layers.module import Module
+from ..layers.module import LoadingError, Module
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -38,6 +39,17 @@ def config_id(parallel_config):
 
 def cache_dir_is_set() -> bool:
     return _cache_root() is not None
+
+
+def _remove_cache_dir(cache_dir: Path) -> None:
+    if not cache_dir.is_dir():
+        return
+    if ttnn.using_distributed_env():
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            shutil.rmtree(cache_dir)
+        ttnn.distributed_context_barrier()
+    else:
+        shutil.rmtree(cache_dir)
 
 
 def load_model(
@@ -102,14 +114,24 @@ def load_model(
 
     if Path(cache_dir).is_dir():
         logger.info(f"loading cache at '{cache_dir}'.")
-        tt_model.load(cache_dir)
-        ttnn.distributed_context_barrier()
-        return
+        try:
+            tt_model.load(cache_dir)
+            ttnn.distributed_context_barrier()
+            return
+        except LoadingError as err:
+            if get_torch_state_dict is None:
+                raise
+            logger.warning(
+                f"Failed to load cache at '{cache_dir}' ({err}). "
+                "Reloading from PyTorch state dict and rewriting cache."
+            )
+            tt_model.deallocate_weights()
 
     if get_torch_state_dict is None:
         raise MissingCacheError(cache_dir)
 
-    logger.info("Cache does not exist. Loading PyTorch state dict.")
+    if not Path(cache_dir).is_dir():
+        logger.info("Cache does not exist. Loading PyTorch state dict.")
     tt_model.load_torch_state_dict(get_torch_state_dict())
 
     # If distributed, ensure that all processes have completed the check whether cache_dir exists,
@@ -117,6 +139,7 @@ def load_model(
     ttnn.distributed_context_barrier()
 
     if create_cache:
+        _remove_cache_dir(cache_dir)
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
 

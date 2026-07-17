@@ -245,6 +245,177 @@ def test_transformer(
     assert_quality(torch_output, tt_output_torch, pcc=0.996, relative_rmse=0.09)
 
 
+def test_img2img_latent_helpers(tt_dit_cache_dir) -> None:
+    from diffusers.pipelines.flux2.pipeline_flux2 import Flux2Pipeline
+
+    from ....pipelines.flux2.pipeline_flux2 import _pack_latents, _patchify_latents, _prepare_ids, _prepare_image_ids
+
+    torch.manual_seed(0)
+    latents = torch.randn(2, 32, 128, 128)
+
+    ref_patchified = Flux2Pipeline._patchify_latents(latents)
+    ours_patchified = _patchify_latents(latents)
+    assert torch.equal(ref_patchified, ours_patchified)
+
+    ref_packed = Flux2Pipeline._pack_latents(ref_patchified)
+    ours_packed = _pack_latents(ours_patchified)
+    assert torch.equal(ref_packed, ours_packed)
+
+    ref_image_ids = Flux2Pipeline._prepare_image_ids([ref_patchified[0]])
+    ours_image_ids = _prepare_image_ids([ref_patchified[0]])
+    assert torch.equal(ref_image_ids, ours_image_ids)
+
+    ref_latent_ids = Flux2Pipeline._prepare_latent_ids(ref_patchified)[0]
+    noise_ids = _prepare_ids(height=ref_patchified.shape[2], width=ref_patchified.shape[3], text_sequence_length=1)
+    assert torch.equal(ref_latent_ids, noise_ids)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis, topology, num_links, device_params",
+    [
+        [(4, 8), 0, 1, ttnn.Topology.Linear, 2, line_params_flux2_transformer],
+    ],
+    ids=["wh_4x8_linear"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    ("batch_size", "height", "width", "cond_height", "cond_width", "prompt_seq_len"),
+    [
+        (1, 1024, 1024, 512, 512, 512),
+    ],
+)
+def test_transformer_img2img(
+    tt_dit_cache_dir,
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    topology: ttnn.Topology,
+    num_links: int,
+    batch_size: int,
+    height: int,
+    width: int,
+    cond_height: int,
+    cond_width: int,
+    prompt_seq_len: int,
+    model_location_generator: ModelLocationGenerator,
+) -> None:
+    """PCC: transformer forward with concatenated noise + reference image latents (img2img)."""
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    skip_layers = 7
+    skip_single_layers = 47
+
+    model_name = model_location_generator("black-forest-labs/FLUX.2-dev", model_subdir="transformer")
+    torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(model_name, subfolder="transformer")
+    assert isinstance(torch_model, diffusers.Flux2Transformer2DModel)
+    torch_model.eval()
+
+    del torch_model.transformer_blocks[len(torch_model.transformer_blocks) - skip_layers :]
+    del torch_model.single_transformer_blocks[len(torch_model.single_transformer_blocks) - skip_single_layers :]
+
+    head_dim = torch_model.config.attention_head_dim
+    num_heads = torch_model.config.num_attention_heads
+    in_channels = torch_model.in_channels
+    joint_attention_dim = torch_model.config.joint_attention_dim
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    parallel_config = DiTGParallelConfigNoCFG(
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+    padding_config = (
+        PaddingConfig.from_tensor_parallel_factor(num_heads, head_dim, tp_factor)
+        if num_heads % tp_factor != 0
+        else None
+    )
+
+    tt_model = Flux2Transformer(
+        in_channels=in_channels,
+        num_layers=torch_model.config.num_layers - skip_layers,
+        num_single_layers=torch_model.config.num_single_layers - skip_single_layers,
+        attention_head_dim=head_dim,
+        num_attention_heads=num_heads,
+        joint_attention_dim=joint_attention_dim,
+        out_channels=torch_model.out_channels,
+        device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        padding_config=padding_config,
+    )
+    cache.load_model(
+        tt_model,
+        get_torch_state_dict=torch_model.state_dict,
+        model_name="FLUX.2-dev",
+        subfolder="transformer",
+        parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
+    )
+
+    from ....pipelines.flux2.pipeline_flux2 import _prepare_image_ids
+
+    noise_seq_len = height * width // 16**2
+    cond_seq_len = cond_height * cond_width // 16**2
+    total_seq_len = noise_seq_len + cond_seq_len
+
+    torch.manual_seed(0)
+    noise_latents = torch.randn([batch_size, noise_seq_len, in_channels])
+    cond_latents = torch.randn([batch_size, cond_seq_len, in_channels])
+    concat_latents = torch.cat([noise_latents, cond_latents], dim=1)
+
+    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim])
+    timestep = torch.full([batch_size], fill_value=500)
+    guidance = torch.full([batch_size], fill_value=3)
+
+    text_ids = _prepare_ids(text_sequence_length=prompt_seq_len)
+    noise_ids = _prepare_ids(height=height // 16, width=width // 16, text_sequence_length=1)
+    cond_patchified = torch.randn(1, in_channels, cond_height // 16, cond_width // 16)
+    cond_ids = _prepare_image_ids([cond_patchified[0]]).squeeze(0)
+    combined_ids = torch.cat([noise_ids, cond_ids], dim=0)
+
+    prompt_rope_cos, prompt_rope_sin = torch_model.pos_embed.forward(text_ids)
+    spatial_rope_cos, spatial_rope_sin = torch_model.pos_embed.forward(combined_ids)
+
+    tt_concat = tensor.from_torch(concat_latents, device=mesh_device, mesh_axes=[None, sp_axis, None])
+    tt_prompt = tensor.from_torch(prompt, device=mesh_device)
+    tt_timestep = tensor.from_torch(timestep.unsqueeze(-1), dtype=ttnn.float32, device=mesh_device)
+    tt_guidance = tensor.from_torch(guidance.unsqueeze(-1), device=mesh_device)
+    tt_spatial_rope_cos = tensor.from_torch(
+        spatial_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=[None, None, sp_axis, None]
+    )
+    tt_spatial_rope_sin = tensor.from_torch(
+        spatial_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device, mesh_axes=[None, None, sp_axis, None]
+    )
+    tt_prompt_rope_cos = tensor.from_torch(prompt_rope_cos.unsqueeze(0).unsqueeze(0), device=mesh_device)
+    tt_prompt_rope_sin = tensor.from_torch(prompt_rope_sin.unsqueeze(0).unsqueeze(0), device=mesh_device)
+
+    logger.info("running Torch model (img2img concat)...")
+    with torch.no_grad():
+        torch_output_full = torch_model.forward(
+            hidden_states=concat_latents,
+            encoder_hidden_states=prompt,
+            timestep=timestep / 1000,
+            guidance=guidance,
+            img_ids=combined_ids,
+            txt_ids=text_ids,
+        ).sample
+    torch_output = torch_output_full[:, :noise_seq_len]
+
+    logger.info("running TT model (img2img concat)...")
+    tt_output_full = tt_model.forward(
+        spatial=tt_concat,
+        prompt=tt_prompt,
+        timestep=tt_timestep,
+        guidance=tt_guidance,
+        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        spatial_sequence_length=total_seq_len,
+        prompt_sequence_length=prompt_seq_len,
+    )
+    tt_output_torch = tensor.to_torch(tt_output_full, mesh_axes=[None, sp_axis, None])[:, :noise_seq_len]
+    assert_quality(torch_output, tt_output_torch, pcc=0.996, relative_rmse=0.09)
+
+
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, topology, num_links, fsdp, device_params",
     [
