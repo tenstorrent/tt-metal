@@ -82,13 +82,8 @@ bool supported_by_codegen(const Tensor& input_tensor, uint32_t repeats, int32_t 
     return false;
 }
 
-// Perf-demoted ledger: empty. The one point flagged by phase 7 ([1, 4, 64, 64] | dim=1 |
-// repeats=4 | int32 | row_major -- generic/ported=0.901408, native/ported=3.576852) was NOT
-// demoted: reroutes were exhausted, and the regression against generic (~10%) was accepted
-// because codegen still beats native by ~3.6x on this point. `auto` therefore keeps routing it to
-// codegen, same as forced implementation="codegen"/"validate". Still emitted (always returning
-// false) so the `auto` branch's `supported_by_codegen(attrs) && !is_demoted(attrs)` wiring holds
-// even with an empty ledger.
+// Perf-demoted ledger: empty. Still emitted (always returning false) so the `auto` branch's
+// `supported_by_codegen(attrs) && !is_demoted(attrs)` wiring holds even with an empty ledger.
 bool is_demoted(const Tensor& /*input_tensor*/, uint32_t /*repeats*/, int32_t /*dim*/) { return false; }
 
 }  // namespace ttnn::operations::data_movement::repeat_interleave
