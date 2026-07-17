@@ -288,6 +288,12 @@ struct NoIn1BaseOffset {
  *   caller_owns_pack_target  caller does one reserve before + one push after; the helper
  *                            skips its own reserve/push/drain. Pairs with TileRowMajor +
  *                            packer_l1_acc + Interm.
+ *   accumulate_output  (caller_owns Interm path only) when true, the FIRST K-block ALSO
+ *                      L1-accumulates onto the caller-preloaded interm target instead of
+ *                      overwriting it — so a single-K-block matmul (num_k_blocks==1) adds
+ *                      its C = A×B onto whatever the caller left at the pack write pointer
+ *                      (e.g. an online-softmax running accumulator alpha*O). Default false =
+ *                      block 0 seeds (overwrite), byte-identical to every prior caller.
  *   Activation         fuse an SFPU activation on the PACKER thread at the last-block pack
  *                      (default none); independent of PostComputeFn (MATH thread) and
  *                      allowed with Interm. Build from the sfpu_activation_helpers.hpp
@@ -347,6 +353,7 @@ template <
     typename In0SourceFn = NoIn0Source,
     typename In1BaseOffsetFn = NoIn1BaseOffset,
     bool caller_owns_pack_target = false,
+    bool accumulate_output = false,
     typename Activation = NoneActivation,
     matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT,
     typename Buf = ::CircularBuffer>

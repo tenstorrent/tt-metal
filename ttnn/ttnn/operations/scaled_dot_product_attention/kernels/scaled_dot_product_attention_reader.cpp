@@ -98,22 +98,34 @@ FORCE_INLINE void fill_causal_diag_tile(uint32_t wptr) {
 // reserve starts slot-aligned in the KV_DEPTH-slot ring and never straddles the
 // buffer wrap, so the linear write-pointer walk is contiguous. Partial-chunk
 // shapes keep the per-tile path (byte-identical to phase-0; not the perf target).
-template <uint32_t cb, bool batch, typename Acc, typename PageFn>
+//
+// `ablate` (MEASUREMENT-ONLY, /perf-measure classify-the-bound): when true, SKIP the
+// noc_async_read_tile + barrier but KEEP cb_reserve_back/cb_push_back — DRAM bytes
+// moved drop to zero while the CB producer/consumer counts (and thus compute) are
+// unchanged. If wall-time is flat with reads stubbed, the reads were hidden behind
+// compute (compute-bound); if it craters, they were on the critical path (DM-bound).
+// Compile-time-elided at its default (ablate=false => byte-identical to shipped). Gated
+// by env SDPA_ABLATE_READER in the descriptor; 0 for every shipped build.
+template <uint32_t cb, bool batch, bool ablate, typename Acc, typename PageFn>
 FORCE_INLINE void read_tiles(uint32_t n, uint32_t tile_bytes, const Acc& acc, PageFn page_of) {
     if constexpr (batch) {
         cb_reserve_back(cb, n);
-        uint32_t wptr = get_write_ptr(cb);
-        for (uint32_t t = 0; t < n; ++t) {
-            noc_async_read_tile(page_of(t), acc, wptr);
-            wptr += tile_bytes;
+        if constexpr (!ablate) {
+            uint32_t wptr = get_write_ptr(cb);
+            for (uint32_t t = 0; t < n; ++t) {
+                noc_async_read_tile(page_of(t), acc, wptr);
+                wptr += tile_bytes;
+            }
+            noc_async_read_barrier();  // ONE barrier for n reads -> up to n reads in flight
         }
-        noc_async_read_barrier();  // ONE barrier for n reads -> up to n reads in flight
         cb_push_back(cb, n);
     } else {
         for (uint32_t t = 0; t < n; ++t) {
             cb_reserve_back(cb, 1);
-            noc_async_read_tile(page_of(t), acc, get_write_ptr(cb));
-            noc_async_read_barrier();
+            if constexpr (!ablate) {
+                noc_async_read_tile(page_of(t), acc, get_write_ptr(cb));
+                noc_async_read_barrier();
+            }
             cb_push_back(cb, 1);
         }
     }
@@ -188,6 +200,10 @@ void kernel_main() {
     constexpr bool is_causal = is_causal_v != 0;
     constexpr bool has_kv_pad = has_kv_pad_raw && !is_causal;
 
+    // MEASUREMENT-ONLY reader NoC stub (see read_tiles). 0 for every shipped build.
+    constexpr uint32_t ablate_reader_v = get_compile_time_arg_val(15);
+    constexpr bool ablate_reader = ablate_reader_v != 0;
+
     // R3 DM-batching knob — RE-MEASURED in R3a, kept PARKED at its trivial (per-tile)
     // default. R3a re-enabled the divisor predicates on top of the compute-side
     // coarsen (chunk 4->8) and re-measured the flagged shape: batched reads 9.05 ms
@@ -211,7 +227,7 @@ void kernel_main() {
     constexpr bool batch_kv = false;
     constexpr bool batch_mask = batch_q && batch_kv;
 
-    constexpr auto q_args = TensorAccessorArgs<15>();
+    constexpr auto q_args = TensorAccessorArgs<16>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -285,7 +301,7 @@ void kernel_main() {
 
         // Q chunk: (sq_valid x Dt) tiles, row-major (sq, d).
         const uint32_t q_base = (b * H + h) * Sq_t;
-        read_tiles<cb_q_in, batch_q>(sq_valid * Dt, tile_bytes, q_acc, [&](uint32_t t) {
+        read_tiles<cb_q_in, batch_q, ablate_reader>(sq_valid * Dt, tile_bytes, q_acc, [&](uint32_t t) {
             const uint32_t sq_g = sq_off + (t / Dt);
             const uint32_t d = t % Dt;
             return (q_base + sq_g) * Dt + d;
@@ -306,24 +322,25 @@ void kernel_main() {
             // (outer d, inner skv). The transpose flag flips each 32x32 tile's
             // contents; it does NOT reorder the block indices. DRAM page for K
             // tile (skv, d) is still (kv_base + skv_g)*Dt + d.
-            read_tiles<cb_k_in, batch_kv>(Dt * skv_valid, tile_bytes, k_acc, [&](uint32_t t) {
+            read_tiles<cb_k_in, batch_kv, ablate_reader>(Dt * skv_valid, tile_bytes, k_acc, [&](uint32_t t) {
                 const uint32_t d = t / skv_valid;
                 const uint32_t skv_g = skv_off + (t % skv_valid);
                 return (kv_base + skv_g) * Dt + d;
             });
             // V chunk: (skv_valid x Dt) tiles, row-major (skv, d).
-            read_tiles<cb_v_in, batch_kv>(skv_valid * Dt, tile_bytes, v_acc, [&](uint32_t t) {
+            read_tiles<cb_v_in, batch_kv, ablate_reader>(skv_valid * Dt, tile_bytes, v_acc, [&](uint32_t t) {
                 const uint32_t skv_g = skv_off + (t / Dt);
                 const uint32_t d = t % Dt;
                 return (kv_base + skv_g) * Dt + d;
             });
             // mask chunk: (sq_valid x skv_valid) tiles, row-major (sq, skv).
             if constexpr (has_mask) {
-                read_tiles<cb_mask_in, batch_mask>(sq_valid * skv_valid, tile_bytes, mask_acc, [&](uint32_t t) {
-                    const uint32_t sq_g = sq_off + (t / skv_valid);
-                    const uint32_t skv_g = skv_off + (t % skv_valid);
-                    return (mask_base + sq_g) * Skv_t + skv_g;
-                });
+                read_tiles<cb_mask_in, batch_mask, ablate_reader>(
+                    sq_valid * skv_valid, tile_bytes, mask_acc, [&](uint32_t t) {
+                        const uint32_t sq_g = sq_off + (t / skv_valid);
+                        const uint32_t skv_g = skv_off + (t % skv_valid);
+                        return (mask_base + sq_g) * Skv_t + skv_g;
+                    });
             }
 
             // R4 causal: on a straddling KV chunk (some key tile-col >= some query

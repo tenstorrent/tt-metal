@@ -61,6 +61,19 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
+// MEASUREMENT-ONLY per-phase profiling (Perf: attribute the compute-bound residual
+// across the ~8 serialized helper phases per KV chunk). DeviceZoneScopedN records a
+// begin/end cycle timestamp per zone per RISC into profile_log_device.csv; the MATH
+// thread's per-phase span is the clock-invariant per-phase cost. Present ONLY when the
+// descriptor injects -DSDPA_ZONE_PROFILE (env SDPA_ZONE_PROFILE=1) — ABSENT and fully
+// no-op in every shipped build (byte-identical), so it never perturbs the perf harness.
+#if defined(SDPA_ZONE_PROFILE)
+#include "tools/profiler/kernel_profiler.hpp"
+#define SDPA_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define SDPA_ZONE(name)
+#endif
+
 namespace ckl = compute_kernel_lib;
 
 namespace {
@@ -218,6 +231,14 @@ void kernel_main() {
     // regression). The exp's Approx template is a compile-time value.
     constexpr bool use_fast_exp = get_compile_time_arg_val(10) != 0;
     constexpr ckl::Approx exp_approx = use_fast_exp ? ckl::Approx::Fast : ckl::Approx::Exact;
+    // Perf: in the throughput regime (use_fast_exp == !fp32_dest_acc_en) the whole compute
+    // chain is uniform bf16 — inputs, intermediates, AND accumulators (the accumulators now
+    // follow interm_format) — so no data-format reconfig is ever needed. Drop them (None).
+    // The fp32-DEST regime is mixed-format (bf16 in, fp32 interm/accum) so it keeps Input/Output.
+    // NOTE: the LLK already runtime-skips a reconfig whose formats match, so this mainly removes
+    // the per-call equality check; measured to quantify that residual.
+    constexpr auto RCFG = use_fast_exp ? ckl::BinaryDataFormatReconfig::None : ckl::BinaryDataFormatReconfig::Input;
+    constexpr auto PRCFG = use_fast_exp ? ckl::PackTileReconfig::None : ckl::PackTileReconfig::Output;
     // R3e (perf): fuse the per-chunk row-sum reduce into the exp pack via packer L1
     // accumulation (raw-LLK dual-pack — see file-head comment). Host-gated to the
     // fp32_dest_acc_en=False throughput regime (== use_fast_exp), so the softmax
@@ -293,9 +314,20 @@ void kernel_main() {
     using ckl::ReduceInputBlockShape;
     using ckl::ReduceInputPolicy;
 
-    // CircularBuffer wrappers for the two matmuls.
+    // R6 (perf): fuse the online-softmax O-accumulate (former phase 10) into the PV matmul
+    // (phase 9) via packer L1-accumulation onto cb_out_accum, eliminating a whole serial phase
+    // and the cb_pv CB. Gated to the throughput regime (fuse_rowsum) AND no-partial-q-chunk
+    // (Sq_t % Sq_chunk_t == 0, so sq_valid == Sq_chunk_t for every work unit => cb_out_accum is a
+    // FULL ring, wr_ptr wraps to the block base each push, so after phase 8's in-place rescale the
+    // packer write pointer lands exactly on the resident alpha*O for the matmul to L1-accumulate
+    // P*V onto in place). The fp32-DEST/max-precision path AND the rare prime-Sq_t partial-q
+    // throughput path stay on the current P08/P09/P10 + cb_pv structure (byte-identical). See the
+    // phase 8/9/10 blocks below and the CB-choreography note there.
+    constexpr bool fuse_oaccum = fuse_rowsum && ((Sq_t % Sq_chunk_t) == 0);
+
+    // CircularBuffer wrappers for the two matmuls (+ the fused-accumulate O target).
     ::CircularBuffer q_scaled_buf(cb_q_scaled), k_buf(cb_k_in), scores_buf(cb_scores);
-    ::CircularBuffer exp_buf(cb_exp), v_buf(cb_v_in), pv_buf(cb_pv);
+    ::CircularBuffer exp_buf(cb_exp), v_buf(cb_v_in), pv_buf(cb_pv), out_accum_buf(cb_out_accum);
 
     // Boot: matmul-order hw config + one full matmul_block_init (helper's Short
     // init restores state after intervening eltwise/reduce ops per call).
@@ -338,18 +370,21 @@ void kernel_main() {
         }
 
         // Phase 1: pre-scale Q (folds attention scale) -> cb_q_scaled (resident).
-        ckl::mul<
-            cb_q_in,
-            cb_scale,
-            cb_q_scaled,
-            BroadcastDim::Scalar,
-            InputLifecycle::Streaming,
-            InputLifecycle::HeldBulk,
-            OutputLifecycle::Streaming,
-            ckl::BinaryDataFormatReconfig::Input,
-            ckl::PackTileReconfig::Output,
-            OperandKind::Scalar,
-            OperandKind::Scalar>(EltwiseShape::tiles(sq_dt));
+        {
+            SDPA_ZONE("P01_QSCALE");
+            ckl::mul<
+                cb_q_in,
+                cb_scale,
+                cb_q_scaled,
+                BroadcastDim::Scalar,
+                InputLifecycle::Streaming,
+                InputLifecycle::HeldBulk,
+                OutputLifecycle::Streaming,
+                RCFG,
+                PRCFG,
+                OperandKind::Scalar,
+                OperandKind::Scalar>(EltwiseShape::tiles(sq_dt));
+        }
 
         for (uint32_t j = 0; j < n_kv_active; ++j) {
             const bool first = (j == 0);
@@ -364,31 +399,34 @@ void kernel_main() {
             const uint32_t qk_in1_sb = skv_valid / qk_out_sb_w;
 
             // Phase 2: scores = Q_scaled . K^T  (transpose B; cb_q_scaled retained).
-            if constexpr (ablate_pv >= 3) {
-                // Ablation (mode 3): QK^T matmul FMA+pack stubbed — wait cb_q_scaled (retained,
-                // not popped), drain cb_k_in like the real matmul, push a garbage cb_scores.
-                // Downstream mask/rowmax/exp run on garbage (perf-representative). Bounds total
-                // matmul headroom together with the PV+accum stub (modes >=1, >=2).
-                cb_wait_front(cb_q_scaled, sq_dt);
-                cb_wait_front(cb_k_in, skv_valid * Dt);
-                cb_pop_front(cb_k_in, skv_valid * Dt);
-                cb_reserve_back(cb_scores, sq_skv);
-                cb_push_back(cb_scores, sq_skv);
-            } else {
-                ckl::matmul_block<
-                    /*transpose=*/true,
-                    /*packer_l1_acc=*/false,
-                    LastBlockTarget::Out,
-                    OutputCBLayout::SubblockMajor,
-                    ckl::matmul_config::InitMode::Short,
-                    ckl::InputPolicy::WaitAndRetainOnLastBlock,
-                    ckl::InputPolicy::WaitAndPopPerKBlock>(
-                    q_scaled_buf,
-                    k_buf,
-                    scores_buf,
-                    scores_buf,
-                    MatmulBlockShape::of(sq_valid, qk_in1_sb, 1, qk_out_sb_w, Dt, 1));
-            }
+            {
+                SDPA_ZONE("P02_QKT");
+                if constexpr (ablate_pv >= 3) {
+                    // Ablation (mode 3): QK^T matmul FMA+pack stubbed — wait cb_q_scaled (retained,
+                    // not popped), drain cb_k_in like the real matmul, push a garbage cb_scores.
+                    // Downstream mask/rowmax/exp run on garbage (perf-representative). Bounds total
+                    // matmul headroom together with the PV+accum stub (modes >=1, >=2).
+                    cb_wait_front(cb_q_scaled, sq_dt);
+                    cb_wait_front(cb_k_in, skv_valid * Dt);
+                    cb_pop_front(cb_k_in, skv_valid * Dt);
+                    cb_reserve_back(cb_scores, sq_skv);
+                    cb_push_back(cb_scores, sq_skv);
+                } else {
+                    ckl::matmul_block<
+                        /*transpose=*/true,
+                        /*packer_l1_acc=*/false,
+                        LastBlockTarget::Out,
+                        OutputCBLayout::SubblockMajor,
+                        ckl::matmul_config::InitMode::Short,
+                        ckl::InputPolicy::WaitAndRetainOnLastBlock,
+                        ckl::InputPolicy::WaitAndPopPerKBlock>(
+                        q_scaled_buf,
+                        k_buf,
+                        scores_buf,
+                        scores_buf,
+                        MatmulBlockShape::of(sq_valid, qk_in1_sb, 1, qk_out_sb_w, Dt, 1));
+                }
+            }  // P02_QKT
 
             // Phase 3: additive mask (custom mode), in place, before the row-max.
             if constexpr (has_mask) {
@@ -413,61 +451,94 @@ void kernel_main() {
             }
 
             // Phase 4: chunk row-max -> cb_corr (cb_scores held for the exp below).
-            if constexpr (ablate_softmax != 0) {
-                // Ablation: row-max reduce payload stubbed — wait cb_scores (no pop, as
-                // WaitUpfrontNoPop) and reserve/push a garbage cb_corr (sq_valid). Keeps
-                // CB balance byte-identical; downstream runs on garbage (perf-only).
-                cb_wait_front(cb_scores, sq_skv);
-                cb_reserve_back(cb_corr, sq_valid);
-                cb_push_back(cb_corr, sq_valid);
-            } else {
-                ckl::reduce<
-                    ckernel::PoolType::MAX,
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_scores,
-                    cb_scaler,
-                    cb_corr,
-                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
-            }
+            {
+                SDPA_ZONE("P04_ROWMAX");
+                if constexpr (ablate_softmax != 0) {
+                    // Ablation: row-max reduce payload stubbed — wait cb_scores (no pop, as
+                    // WaitUpfrontNoPop) and reserve/push a garbage cb_corr (sq_valid). Keeps
+                    // CB balance byte-identical; downstream runs on garbage (perf-only).
+                    cb_wait_front(cb_scores, sq_skv);
+                    cb_reserve_back(cb_corr, sq_valid);
+                    cb_push_back(cb_corr, sq_valid);
+                } else {
+                    ckl::reduce<
+                        ckernel::PoolType::MAX,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_scores,
+                        cb_scaler,
+                        cb_corr,
+                        ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
+                }
+            }  // P04_ROWMAX
 
             // Phase 5: update running max m, form correction alpha.
-            if (first) {
-                ckl::copy<cb_corr, cb_row_max>(EltwiseShape::tiles(sq_valid));  // m = chunk_max
-            } else {
-                // m_new = max(chunk_max, m_old) -> cb_m_new (m_old held for alpha).
-                // The held operand is walked with Block indexing (absolute base+i):
-                // Scalar+HeldStream never advances the front (no pop), so it would
-                // re-read tile 0 for every sq_valid>1 iteration.
-                ckl::binary_sfpu<
-                    ckl::BinaryMax<>,
-                    cb_corr,
-                    cb_row_max,
-                    cb_m_new,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::HeldBulk,
-                    OutputLifecycle::Streaming,
-                    ckl::PackTileReconfig::Output,
-                    OperandKind::Scalar,
-                    OperandKind::Block>(EltwiseShape::tiles(sq_valid));
-                // alpha = exp(m_old - m_new) -> cb_corr (m_old popped, m_new held).
-                ckl::eltwise_chain(
-                    EltwiseShape::tiles(sq_valid),
-                    ckl::BinaryFpu<
+            {
+                SDPA_ZONE("P05_MAXUPD");
+                if constexpr (ablate_softmax >= 2) {
+                    // FULL-STUB (measurement-only): replicate P05's net CB ops, no math. Net:
+                    // cb_corr pop+push, cb_row_max pop+push, cb_m_new push+pop. No in-place CB.
+                    if (first) {
+                        cb_wait_front(cb_corr, sq_valid);
+                        cb_reserve_back(cb_row_max, sq_valid);
+                        cb_push_back(cb_row_max, sq_valid);
+                        cb_pop_front(cb_corr, sq_valid);
+                    } else {
+                        // binary_sfpu: corr(pop) x row_max(held) -> m_new(push)
+                        cb_wait_front(cb_corr, sq_valid);
+                        cb_wait_front(cb_row_max, sq_valid);
+                        cb_reserve_back(cb_m_new, sq_valid);
+                        cb_push_back(cb_m_new, sq_valid);
+                        cb_pop_front(cb_corr, sq_valid);
+                        // eltwise_chain: row_max(pop) x m_new(held) -> corr(push)
+                        cb_wait_front(cb_row_max, sq_valid);
+                        cb_wait_front(cb_m_new, sq_valid);
+                        cb_reserve_back(cb_corr, sq_valid);
+                        cb_push_back(cb_corr, sq_valid);
+                        cb_pop_front(cb_row_max, sq_valid);
+                        // copy: m_new(pop) -> row_max(push)
+                        cb_wait_front(cb_m_new, sq_valid);
+                        cb_reserve_back(cb_row_max, sq_valid);
+                        cb_push_back(cb_row_max, sq_valid);
+                        cb_pop_front(cb_m_new, sq_valid);
+                    }
+                } else if (first) {
+                    ckl::copy<cb_corr, cb_row_max>(EltwiseShape::tiles(sq_valid));  // m = chunk_max
+                } else {
+                    // m_new = max(chunk_max, m_old) -> cb_m_new (m_old held for alpha).
+                    // The held operand is walked with Block indexing (absolute base+i):
+                    // Scalar+HeldStream never advances the front (no pop), so it would
+                    // re-read tile 0 for every sq_valid>1 iteration.
+                    ckl::binary_sfpu<
+                        ckl::BinaryMax<>,
+                        cb_corr,
                         cb_row_max,
                         cb_m_new,
-                        ckl::BinaryFpuOp::Sub,
-                        BroadcastDim::None,
                         InputLifecycle::Streaming,
                         InputLifecycle::HeldBulk,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        Dst::D0,
+                        OutputLifecycle::Streaming,
+                        PRCFG,
                         OperandKind::Scalar,
-                        OperandKind::Block>{},
-                    ckl::Exp<>{},
-                    ckl::PackTile<cb_corr, OutputLifecycle::Streaming>{});
-                // m = m_new.
-                ckl::copy<cb_m_new, cb_row_max>(EltwiseShape::tiles(sq_valid));
-            }
+                        OperandKind::Block>(EltwiseShape::tiles(sq_valid));
+                    // alpha = exp(m_old - m_new) -> cb_corr (m_old popped, m_new held).
+                    ckl::eltwise_chain(
+                        EltwiseShape::tiles(sq_valid),
+                        ckl::BinaryFpu<
+                            cb_row_max,
+                            cb_m_new,
+                            ckl::BinaryFpuOp::Sub,
+                            BroadcastDim::None,
+                            InputLifecycle::Streaming,
+                            InputLifecycle::HeldBulk,
+                            RCFG,
+                            Dst::D0,
+                            OperandKind::Scalar,
+                            OperandKind::Block>{},
+                        ckl::Exp<>{},
+                        ckl::PackTile<cb_corr, OutputLifecycle::Streaming>{});
+                    // m = m_new.
+                    ckl::copy<cb_m_new, cb_row_max>(EltwiseShape::tiles(sq_valid));
+                }
+            }  // P05_MAXUPD
 
             // Phase 6: P = exp(scores - m) -> cb_exp (Col bcast; scores popped, m held).
             // R3c: fast SFPU exp for the dominant softmax P=exp phase (measured ~54%
@@ -476,208 +547,349 @@ void kernel_main() {
             // fp32_dest_acc_en=False throughput regime (host-gated); the max-precision
             // regime stays Exact (byte-identical, no regression). The alpha-correction
             // exp (phase 5) stays exact always to protect the running (m, l, O).
-            if constexpr (ablate_softmax != 0) {
-                // Ablation: exp payload stubbed — replicate fused_exp_dual_pack's CB ops
-                // exactly (wait cb_scores + cb_row_max[no-pop], reserve+push cb_exp +
-                // cb_sum_chunk, pop cb_scores) with no sub/exp/pack math. Isolates the
-                // exp SFPU + dual-pack payload from its phase overhead (perf-only path;
-                // requires fuse_rowsum, which holds in the throughput regime this gate
-                // targets).
-                cb_wait_front(cb_scores, sq_skv);
-                cb_wait_front(cb_row_max, sq_valid);
-                cb_reserve_back(cb_exp, sq_skv);
-                cb_reserve_back(cb_sum_chunk, sq_valid);
-                cb_push_back(cb_exp, sq_skv);
-                cb_push_back(cb_sum_chunk, sq_valid);
-                cb_pop_front(cb_scores, sq_skv);
-            } else if constexpr (fuse_rowsum) {
-                // R3e: raw-LLK dual-pack — cb_exp AND the partial row-sum (cb_sum_chunk)
-                // from ONE exp DEST window (fast exp; scores popped, m held). Replaces
-                // the phase-7 per-chunk reduce<SUM> below.
-                fused_exp_dual_pack(sq_valid, skv_valid);
-            } else {
-                ckl::eltwise_chain(
-                    EltwiseShape::grid(sq_valid, skv_valid),
-                    ckl::BinaryFpu<
-                        cb_scores,
-                        cb_row_max,
-                        ckl::BinaryFpuOp::Sub,
-                        BroadcastDim::Col,
-                        InputLifecycle::Bulk,
-                        InputLifecycle::HeldBulk,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        Dst::D0,
-                        OperandKind::Block,
-                        OperandKind::Col>{},
-                    ckl::Exp<exp_approx>{},
-                    ckl::PackTile<cb_exp, OutputLifecycle::Bulk>{});
-            }
+            {
+                SDPA_ZONE("P06_EXP");
+                if constexpr (ablate_softmax != 0) {
+                    // Ablation: exp payload stubbed — replicate fused_exp_dual_pack's CB ops
+                    // exactly (wait cb_scores + cb_row_max[no-pop], reserve+push cb_exp +
+                    // cb_sum_chunk, pop cb_scores) with no sub/exp/pack math. Isolates the
+                    // exp SFPU + dual-pack payload from its phase overhead (perf-only path;
+                    // requires fuse_rowsum, which holds in the throughput regime this gate
+                    // targets).
+                    cb_wait_front(cb_scores, sq_skv);
+                    cb_wait_front(cb_row_max, sq_valid);
+                    cb_reserve_back(cb_exp, sq_skv);
+                    cb_reserve_back(cb_sum_chunk, sq_valid);
+                    cb_push_back(cb_exp, sq_skv);
+                    cb_push_back(cb_sum_chunk, sq_valid);
+                    cb_pop_front(cb_scores, sq_skv);
+                } else if constexpr (fuse_rowsum) {
+                    // R3e: raw-LLK dual-pack — cb_exp AND the partial row-sum (cb_sum_chunk)
+                    // from ONE exp DEST window (fast exp; scores popped, m held). Replaces
+                    // the phase-7 per-chunk reduce<SUM> below.
+                    fused_exp_dual_pack(sq_valid, skv_valid);
+                } else {
+                    ckl::eltwise_chain(
+                        EltwiseShape::grid(sq_valid, skv_valid),
+                        ckl::BinaryFpu<
+                            cb_scores,
+                            cb_row_max,
+                            ckl::BinaryFpuOp::Sub,
+                            BroadcastDim::Col,
+                            InputLifecycle::Bulk,
+                            InputLifecycle::HeldBulk,
+                            RCFG,
+                            Dst::D0,
+                            OperandKind::Block,
+                            OperandKind::Col>{},
+                        ckl::Exp<exp_approx>{},
+                        ckl::PackTile<cb_exp, OutputLifecycle::Bulk>{});
+                }
+            }  // P06_EXP
 
             // Phase 7: chunk row-sum + running sum l update.
-            if constexpr (fuse_rowsum) {
-                // R3e: the partial (rows x 1, 32-col, un-reduced) row-sum for this chunk
-                // is already in cb_sum_chunk (from the dual-pack above). Keep the running
-                // sum l in the SAME partial form across the KV loop: alpha-rescale +
-                // accumulate here, collapse to a scalar ONCE after the loop (phase 11).
-                if (first) {
-                    // l_partial = chunk_partial_sum (bf16 -> fp32).
-                    ckl::copy<cb_sum_chunk, cb_row_sum>(EltwiseShape::tiles(sq_valid));
+            {
+                SDPA_ZONE("P07_ROWSUM");
+                if constexpr (ablate_softmax >= 2) {
+                    // FULL-STUB (measurement-only, throughput/fuse_rowsum regime): replicate P07's
+                    // net CB ops, no math. cb_row_sum is written IN-PLACE (mul, add) so pop before
+                    // reserve. cb_corr (alpha) is HELD here — P08's rescale pops it.
+                    if (first) {
+                        cb_wait_front(cb_sum_chunk, sq_valid);
+                        cb_reserve_back(cb_row_sum, sq_valid);
+                        cb_push_back(cb_row_sum, sq_valid);
+                        cb_pop_front(cb_sum_chunk, sq_valid);
+                    } else {
+                        // mul: row_sum *= alpha (in-place; corr held)
+                        cb_wait_front(cb_corr, sq_valid);
+                        cb_wait_front(cb_row_sum, sq_valid);
+                        cb_pop_front(cb_row_sum, sq_valid);
+                        cb_reserve_back(cb_row_sum, sq_valid);
+                        cb_push_back(cb_row_sum, sq_valid);
+                        // add: row_sum += chunk_sum (in-place)
+                        cb_wait_front(cb_row_sum, sq_valid);
+                        cb_wait_front(cb_sum_chunk, sq_valid);
+                        cb_pop_front(cb_row_sum, sq_valid);
+                        cb_pop_front(cb_sum_chunk, sq_valid);
+                        cb_reserve_back(cb_row_sum, sq_valid);
+                        cb_push_back(cb_row_sum, sq_valid);
+                    }
+                } else if constexpr (fuse_rowsum) {
+                    // R3e: the partial (rows x 1, 32-col, un-reduced) row-sum for this chunk
+                    // is already in cb_sum_chunk (from the dual-pack above). Keep the running
+                    // sum l in the SAME partial form across the KV loop: alpha-rescale +
+                    // accumulate here, collapse to a scalar ONCE after the loop (phase 11).
+                    if (first) {
+                        // l_partial = chunk_partial_sum (bf16 -> fp32).
+                        ckl::copy<cb_sum_chunk, cb_row_sum>(EltwiseShape::tiles(sq_valid));
+                    } else {
+                        // l_partial = alpha * l_partial (alpha col-vector bcast across the 32
+                        // cols; alpha held for phase 8's O rescale).
+                        ckl::mul<
+                            cb_row_sum,
+                            cb_corr,
+                            cb_row_sum,
+                            BroadcastDim::Col,
+                            InputLifecycle::Streaming,
+                            InputLifecycle::HeldBulk,
+                            OutputLifecycle::Streaming,
+                            RCFG,
+                            PRCFG,
+                            OperandKind::Scalar,
+                            OperandKind::Col>(EltwiseShape::grid(sq_valid, 1));
+                        // l_partial += chunk_partial_sum.
+                        ckl::add<cb_row_sum, cb_sum_chunk, cb_row_sum>(EltwiseShape::tiles(sq_valid));
+                    }
+                } else if (first) {
+                    // l = chunk_sum (cb_exp held for PV).
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_exp,
+                        cb_scaler,
+                        cb_row_sum,
+                        ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
                 } else {
-                    // l_partial = alpha * l_partial (alpha col-vector bcast across the 32
-                    // cols; alpha held for phase 8's O rescale).
+                    // l = alpha * l (alpha held for phase 8; Block indexing walks the
+                    // held alpha tiles without popping — see phase-5 note).
                     ckl::mul<
                         cb_row_sum,
                         cb_corr,
                         cb_row_sum,
-                        BroadcastDim::Col,
+                        BroadcastDim::None,
                         InputLifecycle::Streaming,
                         InputLifecycle::HeldBulk,
                         OutputLifecycle::Streaming,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::PackTileReconfig::Output,
+                        RCFG,
+                        PRCFG,
                         OperandKind::Scalar,
-                        OperandKind::Col>(EltwiseShape::grid(sq_valid, 1));
-                    // l_partial += chunk_partial_sum.
+                        OperandKind::Block>(EltwiseShape::tiles(sq_valid));
+                    // chunk_sum -> cb_sum_chunk (cb_exp held for PV).
+                    ckl::reduce<
+                        ckernel::PoolType::SUM,
+                        ckernel::ReduceDim::REDUCE_ROW,
+                        cb_exp,
+                        cb_scaler,
+                        cb_sum_chunk,
+                        ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
+                    // l += chunk_sum.
                     ckl::add<cb_row_sum, cb_sum_chunk, cb_row_sum>(EltwiseShape::tiles(sq_valid));
                 }
-            } else if (first) {
-                // l = chunk_sum (cb_exp held for PV).
-                ckl::reduce<
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_exp,
-                    cb_scaler,
-                    cb_row_sum,
-                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
-            } else {
-                // l = alpha * l (alpha held for phase 8; Block indexing walks the
-                // held alpha tiles without popping — see phase-5 note).
-                ckl::mul<
-                    cb_row_sum,
-                    cb_corr,
-                    cb_row_sum,
-                    BroadcastDim::None,
-                    InputLifecycle::Streaming,
-                    InputLifecycle::HeldBulk,
-                    OutputLifecycle::Streaming,
-                    ckl::BinaryDataFormatReconfig::Input,
-                    ckl::PackTileReconfig::Output,
-                    OperandKind::Scalar,
-                    OperandKind::Block>(EltwiseShape::tiles(sq_valid));
-                // chunk_sum -> cb_sum_chunk (cb_exp held for PV).
-                ckl::reduce<
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW,
-                    cb_exp,
-                    cb_scaler,
-                    cb_sum_chunk,
-                    ReduceInputPolicy::WaitUpfrontNoPop>(ReduceInputBlockShape::of(1, skv_valid, sq_valid));
-                // l += chunk_sum.
-                ckl::add<cb_row_sum, cb_sum_chunk, cb_row_sum>(EltwiseShape::tiles(sq_valid));
-            }
+            }  // P07_ROWSUM
 
             // Phase 8: rescale running output O by alpha (Col bcast; pops alpha).
-            if (!first) {
-                if constexpr (ablate_pv >= 2) {
-                    // Ablation: rescale stubbed — just drain alpha (kept CB balance).
-                    cb_wait_front(cb_corr, sq_valid);
-                    cb_pop_front(cb_corr, sq_valid);
-                } else {
-                    ckl::mul<
-                        cb_out_accum,
-                        cb_corr,
-                        cb_out_accum,
-                        BroadcastDim::Col,
-                        InputLifecycle::Streaming,
-                        InputLifecycle::Bulk,
-                        OutputLifecycle::Streaming,
-                        ckl::BinaryDataFormatReconfig::Input,
-                        ckl::PackTileReconfig::Output,
-                        OperandKind::Scalar,
-                        OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
+            // In the fused-O-accumulate regime this in-place rescale is UNCHANGED, but it now
+            // also positions cb_out_accum for phase 9's L1-accumulate: the in-place mul pops the
+            // running O and pushes alpha*O, so (cb_out_accum being a full ring in this regime) the
+            // packer write pointer wraps back onto the just-written alpha*O — exactly where the
+            // phase-9 PV matmul L1-accumulates P*V. (ablate_pv is measurement-only and meaningful
+            // only on the non-fused path; the fused path always runs the real rescale.)
+            {
+                SDPA_ZONE("P08_ORESCALE");
+                if (!first) {
+                    if constexpr (!fuse_oaccum && ablate_pv >= 2) {
+                        // Ablation: rescale stubbed — just drain alpha (kept CB balance).
+                        cb_wait_front(cb_corr, sq_valid);
+                        cb_pop_front(cb_corr, sq_valid);
+                    } else {
+                        ckl::mul<
+                            cb_out_accum,
+                            cb_corr,
+                            cb_out_accum,
+                            BroadcastDim::Col,
+                            InputLifecycle::Streaming,
+                            InputLifecycle::Bulk,
+                            OutputLifecycle::Streaming,
+                            RCFG,
+                            PRCFG,
+                            OperandKind::Scalar,
+                            OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
+                    }
                 }
-            }
+            }  // P08_ORESCALE
 
-            // Phase 9: PV = P . V -> cb_pv (cb_exp + cb_v popped).
-            if constexpr (ablate_pv >= 1) {
-                // Ablation: PV matmul FMA+pack stubbed — drain the operands exactly like
-                // the real matmul (cb_exp sq_skv, cb_v skv_valid*Dt) and push a garbage
-                // cb_pv (sq_dt) so downstream CB balance is byte-identical.
-                cb_wait_front(cb_exp, sq_skv);
-                cb_pop_front(cb_exp, sq_skv);
-                cb_wait_front(cb_v_in, skv_valid * Dt);
-                cb_pop_front(cb_v_in, skv_valid * Dt);
-                cb_reserve_back(cb_pv, sq_dt);
-                cb_push_back(cb_pv, sq_dt);
-            } else {
-                ckl::matmul_block<
-                    /*transpose=*/false,
-                    /*packer_l1_acc=*/false,
-                    LastBlockTarget::Out,
-                    OutputCBLayout::SubblockMajor,
-                    ckl::matmul_config::InitMode::Short,
-                    ckl::InputPolicy::WaitAndPopPerKBlock,
-                    ckl::InputPolicy::WaitAndPopPerKBlock>(
-                    exp_buf,
-                    v_buf,
-                    pv_buf,
-                    pv_buf,
-                    MatmulBlockShape::of(pv_in0_sb, pv_in1_sb, pv_sb_h, pv_out_sb_w, skv_valid, 1));
-            }
+            // Phase 9: PV = P . V (cb_exp + cb_v popped).
+            //
+            // R6 FUSED regime (fuse_oaccum): the PV matmul packs DIRECTLY onto the running O in
+            // cb_out_accum via packer L1-accumulation (caller_owns_pack_target + TileRowMajor +
+            // Interm + packer_l1_acc + the new accumulate_output toggle), so the former phase 10
+            // (O += PV) disappears and cb_pv is not needed.
+            //   * First KV chunk: accumulate_output=false => block 0 SEEDS (l1_acc=0), O = P*V.
+            //     No phase-8 rescale ran, so cb_out_accum is empty: reserve it, pack the seed, push.
+            //   * Non-first: accumulate_output=true => block 0 L1-accumulates (l1_acc=1) onto the
+            //     alpha*O phase 8 left resident. cb_out_accum is CALLER-OWNED (the matmul does NO
+            //     reserve/push/wait/pop on it), so we own its sync: pop the alpha*O phase 8 pushed
+            //     (undoing that push — pop only advances the read pointer, the tiles stay resident
+            //     in L1), reserve the block (full ring => the write pointer lands back exactly on
+            //     that resident alpha*O), let the matmul L1-accumulate P*V onto it, then push the
+            //     new O. The pop+reserve keeps the pack inside a reserved region (CB-sanitizer
+            //     clean) while the L1-accumulate is genuinely in place.
+            // accumulate_output is a compile-time template arg, hence the runtime first/non-first
+            // split into two instantiations. pack_reconfig_l1_acc(0) after restores the packer to
+            // overwrite mode for the next chunk's QKᵀ pack / the post-loop normalize.
+            //
+            // NON-FUSED regime (fp32-DEST max-precision, or rare prime-Sq_t partial-q throughput):
+            // the original PV -> cb_pv matmul + phase-10 accumulate, byte-identical.
+            {
+                SDPA_ZONE("P09_PV");
+                if constexpr (fuse_oaccum) {
+                    const auto pv_shape =
+                        MatmulBlockShape::of(pv_in0_sb, pv_in1_sb, pv_sb_h, pv_out_sb_w, skv_valid, 1);
+                    if (first) {
+                        cb_reserve_back(cb_out_accum, sq_dt);
+                        ckl::matmul_block<
+                            /*transpose=*/false,
+                            /*packer_l1_acc=*/true,
+                            LastBlockTarget::Interm,
+                            OutputCBLayout::TileRowMajor,
+                            ckl::matmul_config::InitMode::Short,
+                            ckl::InputPolicy::WaitAndPopPerKBlock,
+                            ckl::InputPolicy::WaitAndPopPerKBlock,
+                            ckl::NoPostCompute,
+                            ckl::NoPreKBlock,
+                            ckl::NoPostKBlock,
+                            /*untilize_block_ct_dim=*/0,
+                            ckl::NoKBlockInnerDimFn,
+                            ckl::NoIn0Source,
+                            ckl::NoIn1BaseOffset,
+                            /*caller_owns_pack_target=*/true,
+                            /*accumulate_output=*/false,
+                            ckl::NoneActivation,
+                            ckl::matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
+                            exp_buf,
+                            v_buf,
+                            out_accum_buf,
+                            out_accum_buf,
+                            pv_shape,
+                            {},
+                            {},
+                            /*in1_per_core_w=*/0,
+                            /*out_row_width=*/Dt);
+                        cb_push_back(cb_out_accum, sq_dt);
+                    } else {
+                        cb_wait_front(cb_out_accum, sq_dt);    // alpha*O phase 8 pushed
+                        cb_pop_front(cb_out_accum, sq_dt);     // undo that push (alpha*O stays in L1)
+                        cb_reserve_back(cb_out_accum, sq_dt);  // full ring => wr_ptr back onto alpha*O
+                        ckl::matmul_block<
+                            /*transpose=*/false,
+                            /*packer_l1_acc=*/true,
+                            LastBlockTarget::Interm,
+                            OutputCBLayout::TileRowMajor,
+                            ckl::matmul_config::InitMode::Short,
+                            ckl::InputPolicy::WaitAndPopPerKBlock,
+                            ckl::InputPolicy::WaitAndPopPerKBlock,
+                            ckl::NoPostCompute,
+                            ckl::NoPreKBlock,
+                            ckl::NoPostKBlock,
+                            /*untilize_block_ct_dim=*/0,
+                            ckl::NoKBlockInnerDimFn,
+                            ckl::NoIn0Source,
+                            ckl::NoIn1BaseOffset,
+                            /*caller_owns_pack_target=*/true,
+                            /*accumulate_output=*/true,
+                            ckl::NoneActivation,
+                            ckl::matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT>(
+                            exp_buf,
+                            v_buf,
+                            out_accum_buf,
+                            out_accum_buf,
+                            pv_shape,
+                            {},
+                            {},
+                            /*in1_per_core_w=*/0,
+                            /*out_row_width=*/Dt);
+                        cb_push_back(cb_out_accum, sq_dt);  // publish the updated running O
+                    }
+                    ckernel::pack_reconfig_l1_acc(0);  // restore overwrite mode for downstream packs.
+                } else if constexpr (ablate_pv >= 1) {
+                    // Ablation: PV matmul FMA+pack stubbed — drain the operands exactly like
+                    // the real matmul (cb_exp sq_skv, cb_v skv_valid*Dt) and push a garbage
+                    // cb_pv (sq_dt) so downstream CB balance is byte-identical.
+                    cb_wait_front(cb_exp, sq_skv);
+                    cb_pop_front(cb_exp, sq_skv);
+                    cb_wait_front(cb_v_in, skv_valid * Dt);
+                    cb_pop_front(cb_v_in, skv_valid * Dt);
+                    cb_reserve_back(cb_pv, sq_dt);
+                    cb_push_back(cb_pv, sq_dt);
+                } else {
+                    ckl::matmul_block<
+                        /*transpose=*/false,
+                        /*packer_l1_acc=*/false,
+                        LastBlockTarget::Out,
+                        OutputCBLayout::SubblockMajor,
+                        ckl::matmul_config::InitMode::Short,
+                        ckl::InputPolicy::WaitAndPopPerKBlock,
+                        ckl::InputPolicy::WaitAndPopPerKBlock>(
+                        exp_buf,
+                        v_buf,
+                        pv_buf,
+                        pv_buf,
+                        MatmulBlockShape::of(pv_in0_sb, pv_in1_sb, pv_sb_h, pv_out_sb_w, skv_valid, 1));
+                }
+            }  // P09_PV
 
-            // Phase 10: accumulate O += PV.
-            if (first) {
-                ckl::copy<cb_pv, cb_out_accum>(EltwiseShape::tiles(sq_dt));  // O = PV
-            } else if constexpr (ablate_pv >= 2) {
-                // Ablation: accumulate stubbed — drain cb_pv; cb_out_accum stays resident.
-                cb_wait_front(cb_pv, sq_dt);
-                cb_pop_front(cb_pv, sq_dt);
-            } else {
-                ckl::add<cb_out_accum, cb_pv, cb_out_accum>(EltwiseShape::tiles(sq_dt));
+            // Phase 10: accumulate O += PV. Only in the NON-FUSED regime — the fused PV matmul
+            // above already L1-accumulated P*V onto cb_out_accum in place.
+            if constexpr (!fuse_oaccum) {
+                {
+                    SDPA_ZONE("P10_OACCUM");
+                    if (first) {
+                        ckl::copy<cb_pv, cb_out_accum>(EltwiseShape::tiles(sq_dt));  // O = PV
+                    } else if constexpr (ablate_pv >= 2) {
+                        // Ablation: accumulate stubbed — drain cb_pv; cb_out_accum stays resident.
+                        cb_wait_front(cb_pv, sq_dt);
+                        cb_pop_front(cb_pv, sq_dt);
+                    } else {
+                        ckl::add<cb_out_accum, cb_pv, cb_out_accum>(EltwiseShape::tiles(sq_dt));
+                    }
+                }  // P10_OACCUM
             }
         }
 
         // Phase 11: normalize O = O * (1/l), pack to bf16 -> cb_out.
-        if constexpr (fuse_rowsum) {
-            // R3e: collapse the partial (32-col) running sum to the scalar denominator
-            // l ONCE per q-chunk — a single reduce<SUM,REDUCE_ROW> (the FPU
-            // matmul-with-ones), amortized over the whole KV loop instead of one
-            // reduce per chunk. -> cb_corr (free after the loop; pops cb_row_sum).
-            ckl::reduce<
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_ROW,
-                cb_row_sum,
-                cb_scaler,
-                cb_corr,
-                ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, 1, sq_valid));
-            ckl::unary<ckl::Recip<>, cb_corr, cb_corr>(EltwiseShape::tiles(sq_valid));
-            ckl::mul<
-                cb_out_accum,
-                cb_corr,
-                cb_out,
-                BroadcastDim::Col,
-                InputLifecycle::Streaming,
-                InputLifecycle::Bulk,
-                OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                OperandKind::Scalar,
-                OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
-        } else {
-            ckl::unary<ckl::Recip<>, cb_row_sum, cb_row_sum>(EltwiseShape::tiles(sq_valid));
-            ckl::mul<
-                cb_out_accum,
-                cb_row_sum,
-                cb_out,
-                BroadcastDim::Col,
-                InputLifecycle::Streaming,
-                InputLifecycle::Bulk,
-                OutputLifecycle::Streaming,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::PackTileReconfig::Output,
-                OperandKind::Scalar,
-                OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
-        }
+        {
+            SDPA_ZONE("P11_NORM");
+            if constexpr (fuse_rowsum) {
+                // R3e: collapse the partial (32-col) running sum to the scalar denominator
+                // l ONCE per q-chunk — a single reduce<SUM,REDUCE_ROW> (the FPU
+                // matmul-with-ones), amortized over the whole KV loop instead of one
+                // reduce per chunk. -> cb_corr (free after the loop; pops cb_row_sum).
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    cb_row_sum,
+                    cb_scaler,
+                    cb_corr,
+                    ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, 1, sq_valid));
+                ckl::unary<ckl::Recip<>, cb_corr, cb_corr>(EltwiseShape::tiles(sq_valid));
+                ckl::mul<
+                    cb_out_accum,
+                    cb_corr,
+                    cb_out,
+                    BroadcastDim::Col,
+                    InputLifecycle::Streaming,
+                    InputLifecycle::Bulk,
+                    OutputLifecycle::Streaming,
+                    RCFG,
+                    PRCFG,
+                    OperandKind::Scalar,
+                    OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
+            } else {
+                ckl::unary<ckl::Recip<>, cb_row_sum, cb_row_sum>(EltwiseShape::tiles(sq_valid));
+                ckl::mul<
+                    cb_out_accum,
+                    cb_row_sum,
+                    cb_out,
+                    BroadcastDim::Col,
+                    InputLifecycle::Streaming,
+                    InputLifecycle::Bulk,
+                    OutputLifecycle::Streaming,
+                    RCFG,
+                    PRCFG,
+                    OperandKind::Scalar,
+                    OperandKind::Col>(EltwiseShape::grid(sq_valid, Dt));
+            }
+        }  // P11_NORM
 
         // Release the retained Q-scaled block and the running max for the next q-chunk.
         cb_pop_front(cb_q_scaled, sq_dt);

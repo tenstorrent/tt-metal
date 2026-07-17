@@ -16,22 +16,34 @@ constexpr uint32_t cb_out = 16;
 // with ONE barrier instead of one write + barrier + pop per tile. `batch` is the
 // compile-time full-slot predicate (no partial q-chunk), so the multi-page linear
 // read-pointer walk stays contiguous in the OUT_DEPTH-slot ring.
-template <uint32_t cb, bool batch, typename Acc, typename PageFn>
+//
+// `ablate` (MEASUREMENT-ONLY, /perf-measure classify-the-bound, writer twin of the
+// reader stub): when true, SKIP the noc_async_write_tile + barrier but KEEP
+// cb_wait_front/cb_pop_front — output DRAM bytes moved drop to zero while the
+// compute->writer CB counts are unchanged. A flat wall-time with writes stubbed
+// proves the output writes are hidden behind compute; a large drop would prove them
+// on the critical path. Compile-time-elided at its default (ablate=false =>
+// byte-identical to shipped). Gated by env SDPA_ABLATE_WRITER in the descriptor.
+template <uint32_t cb, bool batch, bool ablate, typename Acc, typename PageFn>
 FORCE_INLINE void write_tiles(uint32_t n, uint32_t tile_bytes, const Acc& acc, PageFn page_of) {
     if constexpr (batch) {
         cb_wait_front(cb, n);
-        uint32_t rptr = get_read_ptr(cb);
-        for (uint32_t t = 0; t < n; ++t) {
-            noc_async_write_tile(page_of(t), acc, rptr);
-            rptr += tile_bytes;
+        if constexpr (!ablate) {
+            uint32_t rptr = get_read_ptr(cb);
+            for (uint32_t t = 0; t < n; ++t) {
+                noc_async_write_tile(page_of(t), acc, rptr);
+                rptr += tile_bytes;
+            }
+            noc_async_write_barrier();  // ONE barrier for n writes -> up to n writes in flight
         }
-        noc_async_write_barrier();  // ONE barrier for n writes -> up to n writes in flight
         cb_pop_front(cb, n);
     } else {
         for (uint32_t t = 0; t < n; ++t) {
             cb_wait_front(cb, 1);
-            noc_async_write_tile(page_of(t), acc, get_read_ptr(cb));
-            noc_async_write_barrier();
+            if constexpr (!ablate) {
+                noc_async_write_tile(page_of(t), acc, get_read_ptr(cb));
+                noc_async_write_barrier();
+            }
             cb_pop_front(cb, 1);
         }
     }
@@ -48,7 +60,11 @@ void kernel_main() {
     // R1b: the last q-chunk may be a partial block — the compute kernel packs only
     // sq_valid tile-rows to cb_out, so the writer drains exactly that many.
 
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    // MEASUREMENT-ONLY writer NoC stub (see write_tiles). 0 for every shipped build.
+    constexpr uint32_t ablate_writer_v = get_compile_time_arg_val(6);
+    constexpr bool ablate_writer = ablate_writer_v != 0;
+
+    constexpr auto dst_args = TensorAccessorArgs<7>();
 
     // R3 DM-batching knob (writer twin) — RE-MEASURED in R3a, kept PARKED at the
     // per-tile default to match the reader (see the reader kernel for the full
@@ -81,7 +97,7 @@ void kernel_main() {
         // Output block: (sq_valid x Dt) tiles, row-major (sq, d) — matches the
         // compute kernel's phase-11 pack order.
         const uint32_t base = (b * H + h) * Sq_t;
-        write_tiles<cb_out, batch_q>(sq_valid * Dt, tile_bytes, acc, [&](uint32_t t) {
+        write_tiles<cb_out, batch_q, ablate_writer>(sq_valid * Dt, tile_bytes, acc, [&](uint32_t t) {
             const uint32_t sq_g = sq_off + (t / Dt);
             const uint32_t d = t % Dt;
             return (base + sq_g) * Dt + d;

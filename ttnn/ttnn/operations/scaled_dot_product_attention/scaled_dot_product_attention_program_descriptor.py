@@ -127,8 +127,10 @@ def _working_set_bytes(
     total += sq_chunk_t * skv_chunk_t * interm_bytes  # scores
     total += sq_chunk_t * skv_chunk_t * interm_bytes  # exp
     total += sq_chunk_t * dt * out_depth * out_bytes  # out
-    total += (sq_chunk_t * 5) * fp32  # row_max, row_sum, corr, m_new, sum_chunk
-    total += (sq_chunk_t * dt * 2) * fp32  # pv, out_accum
+    # Accumulators + sum_chunk follow interm_format (fp32 under fp32-DEST, bf16 in the
+    # throughput regime) — see the CB block. In the 16-bit-DEST regime they are bf16.
+    total += (sq_chunk_t * 5) * interm_bytes  # row_max, row_sum, corr, m_new, sum_chunk
+    total += (sq_chunk_t * dt * 2) * interm_bytes  # pv, out_accum
     return total
 
 
@@ -222,6 +224,24 @@ def create_program_descriptor(
     n_kv_chunks = _ceil_div(Skv_t, Skv_chunk_t)
     total_work = B * H * n_q_chunks
 
+    # R3e (perf): fuse the per-chunk row-sum reduce into the exp pack (raw-LLK dual-pack). Gated to
+    # the fp32_dest_acc_en=False throughput regime (bf16 softmax intermediates, so the dual-pack
+    # targets share a format); the max-precision fp32-DEST regime keeps the exact per-chunk reduce.
+    fuse_rowsum = 0 if fp32_dest else 1
+    # Perf A/B knob (measurement only, defaults to no-op): SDPA_FUSE_ROWSUM=0 forces the pre-R3e
+    # reduce<SUM> row-sum path even in the throughput regime so the fused dual-pack can be compared
+    # same-session against its own baseline (defeats AICLK drift between fresh invocations).
+    if os.environ.get("SDPA_FUSE_ROWSUM") == "0":
+        fuse_rowsum = 0
+    # R6 (perf): fuse the online-softmax O-accumulate (former compute phase 10) into the PV matmul
+    # via packer L1-accumulation onto cb_out_accum. Gated to the throughput regime (fuse_rowsum)
+    # AND no-partial-q-chunk (Sq_t % Sq_chunk_t == 0): only then is cb_out_accum a FULL ring, so
+    # phase 8's in-place rescale wraps the packer write pointer back onto the resident alpha*O for
+    # the matmul to L1-accumulate P*V onto in place. When fused, cb_pv is not needed (the PV matmul
+    # packs straight onto cb_out_accum) and phase 10 disappears — see the compute kernel. The
+    # fp32-DEST path and the rare prime-Sq_t partial-q throughput path keep cb_pv + phase 10.
+    fuse_oaccum = (fuse_rowsum == 1) and ((Sq_t % Sq_chunk_t) == 0)
+
     # DEST tile budget: fp32 accumulation halves the 8-tile bf16 budget. The matmul
     # N-subblock decomposition (out_subblock_w <= dest_limit) is derived on-device
     # (R1b) so the partial last chunk's runtime N re-derives cleanly — single source
@@ -250,7 +270,15 @@ def create_program_descriptor(
         _cb(CB_V_IN, in_page, Skv_chunk_t * Dt * KV_DEPTH, query.dtype, all_cores),
         _cb(CB_SCALER, bf16, 1, ttnn.bfloat16, all_cores),
         _cb(CB_SCALE, bf16, 1, ttnn.bfloat16, all_cores),
-        _cb(CB_M_NEW, fp32, Sq_chunk_t, ttnn.float32, all_cores),
+        # Accumulators follow interm_format (fp32 under fp32-DEST, bf16 in the throughput
+        # regime). In fp32_dest_acc_en=False the DEST is 16-bit, so every op's arithmetic is
+        # bf16-precision regardless — an fp32 L1 accumulator only holds a bf16 value in an
+        # fp32 container and forces a bf16<->fp32 reconfig at each phase boundary for no
+        # precision gain. Matching interm_format makes the throughput chain uniform-bf16
+        # (numerically identical: the values were already bf16-bound by the DEST), eliding
+        # those reconfigs and halving the accumulators' L1. fp32-DEST regime: interm_format
+        # is fp32 -> unchanged.
+        _cb(CB_M_NEW, interm_bytes, Sq_chunk_t, interm_format, all_cores),
         # R3e: cb_sum_chunk carries the per-chunk partial row-sum. In the fused
         # (fp32_dest_acc_en=False) regime it is the L1-accumulation target of the
         # exp dual-pack, so it MUST share cb_exp's data format (interm_format) — the
@@ -265,12 +293,18 @@ def create_program_descriptor(
         # from bf16 (7-bit) to fp32 (unpacks to TF32, 10-bit) through the pipeline.
         _cb(CB_SCORES, interm_bytes, Sq_chunk_t * Skv_chunk_t, interm_format, all_cores),
         _cb(CB_EXP, interm_bytes, Sq_chunk_t * Skv_chunk_t, interm_format, all_cores),
-        _cb(CB_ROW_MAX, fp32, Sq_chunk_t, ttnn.float32, all_cores),
-        _cb(CB_ROW_SUM, fp32, Sq_chunk_t, ttnn.float32, all_cores),
-        _cb(CB_PV, fp32, Sq_chunk_t * Dt, ttnn.float32, all_cores),
-        _cb(CB_OUT_ACCUM, fp32, Sq_chunk_t * Dt, ttnn.float32, all_cores),
-        _cb(CB_CORR, fp32, Sq_chunk_t, ttnn.float32, all_cores),
+        _cb(CB_ROW_MAX, interm_bytes, Sq_chunk_t, interm_format, all_cores),
+        _cb(CB_ROW_SUM, interm_bytes, Sq_chunk_t, interm_format, all_cores),
+        _cb(CB_OUT_ACCUM, interm_bytes, Sq_chunk_t * Dt, interm_format, all_cores),
+        _cb(CB_CORR, interm_bytes, Sq_chunk_t, interm_format, all_cores),
     ]
+    if not fuse_oaccum:
+        # R6: cb_pv holds the PV result before the phase-10 accumulate. Not needed in the fused
+        # regime (the PV matmul L1-accumulates straight onto cb_out_accum). Allocated for the
+        # fp32-DEST + partial-q throughput paths that keep phase 10. NOTE: _working_set_bytes still
+        # counts cb_pv unconditionally (conservative) so the block-knob selection stays byte-
+        # identical to the pre-R6 tree — the fused regime just frees the block at runtime.
+        cbs.append(_cb(CB_PV, interm_bytes, Sq_chunk_t * Dt, interm_format, all_cores))
     if has_mask:
         cbs.append(_cb(CB_MASK_IN, in_page, Sq_chunk_t * Skv_chunk_t * KV_DEPTH, query.dtype, all_cores))
     if gen_kv_mask:
@@ -282,6 +316,13 @@ def create_program_descriptor(
         cbs.append(_cb(CB_KV_MASK, bf16, Sq_chunk_t * Skv_chunk_t, ttnn.bfloat16, all_cores))
 
     # ---- Reader kernel ----
+    # Perf (MEASUREMENT-ONLY, /perf-measure classify-the-bound): reader NoC stub. Skips
+    # every noc_async_read_tile + barrier in read_tiles while keeping cb_reserve/push
+    # intact, so DRAM bytes moved -> 0 but the CB producer/consumer counts (and compute)
+    # are unchanged. A flat wall-time with reads stubbed proves the reads are hidden behind
+    # compute (compute-bound); a large drop would prove DM-bound. Unset => 0 (shipped path,
+    # byte-identical). SDPA_ABLATE_READER=1 stubs the reads (same family as SDPA_ABLATE_PV).
+    ablate_reader = 1 if os.environ.get("SDPA_ABLATE_READER") == "1" else 0
     reader_ct = [
         B,
         H,
@@ -298,6 +339,7 @@ def create_program_descriptor(
         _f32_bits(scale),
         skv_partial,
         1 if causal else 0,
+        ablate_reader,
     ]
     reader_ct += ttnn.TensorAccessorArgs(query).get_compile_time_args()
     reader_ct += ttnn.TensorAccessorArgs(key).get_compile_time_args()
@@ -335,7 +377,13 @@ def create_program_descriptor(
     )
 
     # ---- Writer kernel ----
-    writer_ct = [B, H, Sq_t, Dt, Sq_chunk_t, n_q_chunks]
+    # Perf (MEASUREMENT-ONLY, writer twin of SDPA_ABLATE_READER): output NoC stub. Skips
+    # every noc_async_write_tile + barrier in write_tiles while keeping cb_wait_front/pop
+    # intact, so output DRAM bytes moved -> 0 but the compute->writer CB counts are
+    # unchanged. A flat wall-time with writes stubbed proves the output writes are hidden
+    # behind compute. Unset => 0 (shipped path, byte-identical). SDPA_ABLATE_WRITER=1 stubs.
+    ablate_writer = 1 if os.environ.get("SDPA_ABLATE_WRITER") == "1" else 0
+    writer_ct = [B, H, Sq_t, Dt, Sq_chunk_t, n_q_chunks, ablate_writer]
     writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_writer.cpp"),
@@ -360,18 +408,8 @@ def create_program_descriptor(
     # so it gets the full speedup. The alpha-correction exp (phase 5) stays exact
     # regardless (protects the online-softmax running (m, l, O) across chunks).
     fast_exp = 0 if fp32_dest else 1
-    # R3e (perf): fuse the per-chunk row-sum reduce into the exp pack via packer L1
-    # accumulation (raw-LLK dual-pack in the compute kernel). Same gate as fast_exp
-    # (the fp32_dest_acc_en=False throughput regime): the softmax intermediates are
-    # bf16 so the dual-pack targets (cb_exp + cb_sum_chunk) share a format, and the
-    # max-precision fp32-DEST regime keeps the exact per-chunk reduce (byte-identical).
-    fuse_rowsum = 0 if fp32_dest else 1
-    # Perf A/B knob (measurement only, defaults to no-op): SDPA_FUSE_ROWSUM=0 forces
-    # the pre-R3e reduce<SUM> row-sum path even in the fp32_dest_acc_en=False regime,
-    # so the fused dual-pack can be compared same-session against its own baseline
-    # (defeats the AICLK drift between fresh invocations). Unset/other => normal gate.
-    if os.environ.get("SDPA_FUSE_ROWSUM") == "0":
-        fuse_rowsum = 0
+    # R3e (perf): fuse_rowsum (the raw-LLK exp+row-sum dual-pack) is computed above with the CB
+    # list (cb_pv allocation keys on the derived fuse_oaccum). Same gate as fast_exp.
     # R5 (perf): PV matmul output-subblock HEIGHT knob — grow out_subblock_h to fill the DEST
     # budget (the compute kernel's decomp_h: h = dest_limit/out_subblock_w when the output is
     # single-N-subblock, so the PV matmul (N=Dt=4, dest_limit=8 in the fp32_dest_acc_en=False
@@ -397,8 +435,18 @@ def create_program_descriptor(
         ablate_pv = int(_abl)
     # Perf 2 (MEASUREMENT-ONLY): stub the softmax payloads (row-max reduce + exp dual-pack)
     # keeping CB sync intact. Combined with SDPA_ABLATE_PV=3 this measures the pure per-phase
-    # overhead floor vs the softmax payload. Unset/other => 0 (shipped path, byte-identical).
-    ablate_softmax = 1 if os.environ.get("SDPA_ABLATE_SOFTMAX") == "1" else 0
+    # overhead floor vs the softmax payload. =2 ALSO stubs the online-recurrence phases P05
+    # (max-update + alpha) and P07 (row-sum update) so the ENTIRE per-chunk KV loop is empty
+    # CB bookkeeping (no wait-sink phase) — a "fully stubbed" per-chunk pipeline. Only valid in
+    # the throughput regime (fuse_rowsum=True). Unset/other => 0 (shipped path, byte-identical).
+    _abs = os.environ.get("SDPA_ABLATE_SOFTMAX")
+    ablate_softmax = int(_abs) if _abs in ("1", "2") else 0
+    # Perf (MEASUREMENT-ONLY): per-phase profiling zones. When SDPA_ZONE_PROFILE=1, inject
+    # -DSDPA_ZONE_PROFILE so the compute kernel's DeviceZoneScopedN per-phase markers compile
+    # in (recording begin/end cycles per phase per RISC into profile_log_device.csv). Absent by
+    # default -> the zone macros are no-ops -> shipped build byte-identical (never perturbs the
+    # perf harness). Attributes the compute-bound residual across the serialized helper phases.
+    compute_defines = [("SDPA_ZONE_PROFILE", "1")] if os.environ.get("SDPA_ZONE_PROFILE") == "1" else []
     compute_ct = [
         Dt,
         Sq_chunk_t,
@@ -421,6 +469,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "scaled_dot_product_attention_compute.cpp"),
         core_ranges=all_cores,
         compile_time_args=compute_ct,
+        defines=compute_defines,
         runtime_args=compute_rt,
         config=ttnn.ComputeConfigDescriptor(
             # R2: full compute-config surface threaded from the caller's config. The
