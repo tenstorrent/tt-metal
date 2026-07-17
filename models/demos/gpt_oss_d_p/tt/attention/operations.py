@@ -49,22 +49,43 @@ def split_qkv_heads_prefill(xqkv_fused, num_heads: int, num_kv_heads: int):
     )
 
 
-def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool = False):
+def apply_rope(
+    tensor, rope_mats, transformation_mat, is_decode_mode: bool = False, kv_actual_global=None, cluster_axis=None
+):
     """
     Apply rotary position embedding (RoPE) — FULL rotary for gpt-oss (rotary_dim == head_dim, 64).
 
     The YaRN scaling (rope_theta 150000, factor 32, orig_max_pos 4096) is baked into the cos/sin
     matrices (``rope_mats``) at build time, so this op is a plain full rotation of the whole head.
 
+    Two inner ops:
+      * default (``kv_actual_global`` is None): ``rotary_embedding_llama`` with a per-chunk cos/sin
+        already sliced to this chunk's positions (the non-cache / single-shot prefill path).
+      * indexed (``kv_actual_global`` set): ``rotary_embedding_indexed`` — ``rope_mats`` carry the
+        WHOLE-cache, block-cyclic-reordered, SP-sharded cos/sin (built once by tt/rope.py), and the op
+        derives this chunk's per-chip start row on-device from ``kv_actual_global`` + the device's
+        ``cluster_axis`` coordinate (same block-cyclic math as the KV-cache writer). No host reshard.
+
     Args:
         tensor: Input tensor (Q or K), shape [1, n_heads, seq_len, head_dim]
         rope_mats: Tuple/list of (cos, sin) matrices, last dim = head_dim
         transformation_mat: Transformation matrix for the mode
         is_decode_mode: Whether in decode mode (False for prefill)
+        kv_actual_global: prior valid global KV length (tile-aligned). Set -> indexed on-device RoPE.
+        cluster_axis: SP mesh axis the whole-cache cos/sin are sharded along (required when indexed).
 
     Returns:
         Tensor with RoPE applied
     """
+    if kv_actual_global is not None:
+        return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            tensor,
+            rope_mats[0],
+            rope_mats[1],
+            transformation_mat,
+            kv_actual_global=kv_actual_global,
+            cluster_axis=cluster_axis,
+        )
     return ttnn.experimental.rotary_embedding_llama(
         tensor, rope_mats[0], rope_mats[1], transformation_mat, is_decode_mode=is_decode_mode
     )
