@@ -955,6 +955,10 @@ class LTXPipeline:
 
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
+        # Every file the state dict is built from, so the artifact is keyed on the weights and the
+        # prep code that produced it: without this the entry is content-blind and a mismatched or
+        # half-written cache is served back silently instead of missing and rebuilding.
+        sources = [self.checkpoint_name, *(s.path for s in state.lora_specs)]
         cache_module.load_model(
             state.model,
             model_name=state.cache_name,
@@ -963,6 +967,7 @@ class LTXPipeline:
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
             is_fsdp=self.is_fsdp,
+            sources=sources,
             get_torch_state_dict=state.state_dict_provider,
             post_load_hook=getattr(self, "_transformer_post_load_hook", None),
         )
@@ -1028,6 +1033,7 @@ class LTXPipeline:
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
+            sources=[self._vae_checkpoint_path],
             get_torch_state_dict=_vae_state_provider,
         )
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
@@ -1060,6 +1066,7 @@ class LTXPipeline:
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
+            sources=[self._vae_checkpoint_path],
             get_torch_state_dict=_vae_encoder_state_provider,
         )
         logger.info(f"Loaded TTNN VAE encoder ({len(self._vae_encoder_blocks)} blocks)")
@@ -1275,6 +1282,7 @@ class LTXPipeline:
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
+            sources=[self._upsampler_path],
             get_torch_state_dict=_upsampler_state_provider,
         )
         logger.info("Loaded TTNN latent upsampler")
