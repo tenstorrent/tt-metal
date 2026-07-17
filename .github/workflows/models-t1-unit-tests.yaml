@@ -45,10 +45,10 @@ on:
           # Exabox multihost SKUs - routed to the models-unit-tests-multihost job. Dispatch-only:
           # deliberately excluded from the scheduled ALL_SKUS set so cron runs don't allocate
           # scarce exabox hardware.
-          - "bh_spsg (BH Single Galaxy)"
-          - "bh_sp1 (BH Superpod 1)"
-          - "bh_sp1-blitz (BH Superpod 1 / Blitz)"
-          - "bh_sp4 (BH Superpod 4)"
+          - "bh_sc1 (BH Single Galaxy)"
+          - "bh_sc4 (BH Supercluster 4)"
+          - "bh_sc4-blitz (BH Supercluster 4 / Blitz)"
+          - "bh_sc16 (BH Supercluster 16)"
       platform:
         required: false
         type: choice

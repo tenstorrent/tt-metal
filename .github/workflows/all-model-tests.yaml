@@ -120,7 +120,7 @@ jobs:
           WH_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
           BH_SKUS="bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
           ALL_SKUS="$WH_SKUS,$BH_SKUS"
-          # NOTE: exabox multihost SKUs (bh_spsg/bh_sp1/bh_sp1-blitz/bh_sp4) are intentionally NOT
+          # NOTE: exabox multihost SKUs (bh_sc1/bh_sc4/bh_sc4-blitz/bh_sc16) are intentionally NOT
           # dispatchable from all-model-tests yet — exabox model-unit tests are dispatched via the
           # standalone models-t1/t2/t3-unit-tests workflows (which grant ttop OIDC on their caller
           # jobs). TODO: to dispatch exabox jobs here alongside everything else, we must:

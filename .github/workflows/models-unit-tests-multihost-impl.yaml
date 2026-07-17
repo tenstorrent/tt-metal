@@ -91,7 +91,7 @@ jobs:
 
       - name: Compute k8s-safe allocation name
         id: names
-        # SKU names contain underscores (e.g. bh_spsg) which are invalid in k8s resource
+        # SKU names contain underscores (e.g. bh_sc1) which are invalid in k8s resource
         # names (RFC 1123 subdomain). Map underscores to hyphens for the allocation/env name.
         run: |
           SAFE_SKU=$(printf '%s' "${{ matrix.test-group.sku }}" | tr '_' '-')
