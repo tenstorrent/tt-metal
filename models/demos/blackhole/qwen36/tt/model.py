@@ -112,7 +112,7 @@ class Qwen36Model:
         lm_head_weight = state_dict["output.weight"].T.contiguous()  # [dim, vocab_size]
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

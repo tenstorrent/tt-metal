@@ -15,9 +15,9 @@ import ttnn
 
 @dataclass(frozen=True)
 class MLPWeights:
-    w1: ttnn.Tensor  # gate_proj  [in, out], bfloat4_b
-    w2: ttnn.Tensor  # down_proj  [in, out], bfloat8_b
-    w3: ttnn.Tensor  # up_proj    [in, out], bfloat4_b
+    w1: ttnn.Tensor  # gate_proj  [in, out], bfloat16
+    w2: ttnn.Tensor  # down_proj  [in, out], bfloat16
+    w3: ttnn.Tensor  # up_proj    [in, out], bfloat16
 
 
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None) -> MLPWeights:
@@ -43,7 +43,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat16,
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
@@ -51,7 +51,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=ttnn.bfloat16,
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
@@ -59,7 +59,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 dim=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("down_proj"),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             ),
         )
 
@@ -74,12 +74,13 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # Gate and up projections use bfloat4_b (halves memory bandwidth for these large matmuls).
-    # Down projection stays at bfloat8_b (on the critical accuracy path).
+    # All three projections use bfloat16 for maximum precision (previously gate/up
+    # were bfloat4_b and down was bfloat8_b to save memory bandwidth). This roughly
+    # doubles/quadruples the MLP weight footprint but keeps full bf16 precision.
     return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
-        w2=load("down_proj", ttnn.bfloat8_b),
-        w3=load("up_proj", ttnn.bfloat4_b),
+        w1=load("gate_proj", ttnn.bfloat16),
+        w2=load("down_proj", ttnn.bfloat16),
+        w3=load("up_proj", ttnn.bfloat16),
     )
 
 
@@ -92,11 +93,15 @@ class Qwen36MLP:
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
         self.weights = load_mlp_weights(mesh_device, state_dict, tensor_cache_path, args=args)
+        # HiFi2 (was LoFi): LoFi only consumes the top mantissa bits of the inputs,
+        # which is fine for bf4/bf8 weights but discards most of the precision of the
+        # bf16 weights now used above. HiFi2 processes more mantissa bits so the bf16
+        # upgrade is not wasted (at some throughput cost).
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
         )
         self.compute_kernel_config_decode = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
+            math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
     def forward(self, x):

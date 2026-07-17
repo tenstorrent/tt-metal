@@ -83,7 +83,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     )
     tw = {}
     tw["qkvz"] = tpc.shard_w(
-        fused, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("qkvz"), dtype=ttnn.bfloat8_b
+        fused, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("qkvz"), dtype=ttnn.bfloat16
     )
     # ---- fused A+B (column-parallel), per-device [a(nv_per), b(nv_per)] ----
     a_w, b_w = sd[P + "in_proj_a.weight"], sd[P + "in_proj_b.weight"]
@@ -92,7 +92,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         dim=0,
     )
     tw["ab"] = tpc.shard_w(
-        ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat8_b
+        ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=ttnn.bfloat16
     )
     # ---- out projection (row-parallel) ----
     tw["out"] = tpc.shard_w(
@@ -101,7 +101,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         dim=0,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("out"),
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     # ---- per-head params ----
     tw["dt_bias"] = tpc.shard_small(sd[P + "dt_bias"].float(), mesh, c("dt_bias"))

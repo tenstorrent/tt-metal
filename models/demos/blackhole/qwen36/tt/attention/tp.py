@@ -47,7 +47,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("wqkv"),
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     tw["wk"] = tpc.shard_w(
         state_dict["k_proj.weight"],
@@ -55,7 +55,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("wk"),
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     tw["wv"] = tpc.shard_w(
         state_dict["v_proj.weight"],
@@ -63,7 +63,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("wv"),
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     # Row-parallel: shard input dim → reduce-scatter after
     tw["wo"] = tpc.shard_w(
@@ -72,7 +72,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dim=0,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("wo"),
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
     )
     # Per-head QK norms, replicated. HF Qwen3_5RMSNorm computes output*(1+weight) and the ckpts
     # store raw zero-centered weights (means ~0.32-0.58), so +1 is the correct scale. Without it

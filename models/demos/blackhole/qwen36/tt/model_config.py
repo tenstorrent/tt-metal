@@ -116,7 +116,7 @@ class Qwen36ModelArgs(ModelArgs):
         if mesh_device is not None:
             import ttnn
 
-            self.weight_dtype = ttnn.bfloat8_b
+            self.weight_dtype = ttnn.bfloat16
             self.act_dtype = ttnn.bfloat16
         else:
             self.weight_dtype = None
