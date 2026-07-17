@@ -38,7 +38,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // If mesh_device shape is 2D but !FABRIC_2D, then must specify cluster_axis
     const auto mesh_shape = input_tensor.device()->shape();
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(::tt::tt_fabric::GetFabricConfig());
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
     TT_FATAL(
         fabric_is_2d || args.cluster_axis.has_value() || mesh_shape[0] == 1 || mesh_shape[1] == 1,
         "1D fabric on a 2D mesh_device requires cluster_axis to be set");
@@ -178,7 +178,7 @@ AllGatherDeviceOperation::create_op_performance_model(
     // (N-1)*S bytes must be received over K links, farthest byte travels `diameter_hops` hops.
     const uint64_t fabric_bytes = static_cast<uint64_t>(num_devices - 1) * input_size_bytes;
     const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
-        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, fabric_bytes, bottleneck_links, diameter_hops);
+        arch, args.fabric_config, clock_rate_mhz, fabric_bytes, bottleneck_links, diameter_hops);
 
     // --- Local DRAM bandwidth ceiling (first-principles) ---
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
@@ -220,16 +220,15 @@ AllGatherDeviceOperation::create_op_performance_model(
 }
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
-    const AllGatherParams& /*args*/, const AllGatherInputs& tensor_args) {
+    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     // Heuristics to pick the kernel algorithm.
     // Multicast supports all Fabric topologies, unicast only supports Fabric 1D topologies.
     // Unicast is empirically found to be faster for large tensors.
     bool use_unicast = false;
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
+    if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
         // NeighborExchange only permits 1-hop unicast
         use_unicast = true;
-    } else if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
+    } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
         // Ring: multicast for small tensors and unicast for large tensors
         const auto& input_tensor = tensor_args.input_tensor;
         const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
@@ -299,6 +298,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             gather_dim,
             memory_config.value_or(input_tensor.memory_config()),
             cluster_axis,
+            fabric_config,
             axis_topology,
             axis_num_devices,
             axis_num_links,

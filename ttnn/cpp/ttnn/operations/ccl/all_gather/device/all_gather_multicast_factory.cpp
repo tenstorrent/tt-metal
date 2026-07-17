@@ -76,7 +76,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Compute hops + neighbors for each mesh axis.
     // Each axis ∈ {0, 1} contributes a forward/backward pair: axis 1 -> (E=fwd, W=bwd),
     // axis 0 -> (S=fwd, N=bwd). In 1D only one axis is active; in 2D both can be.
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
 
     std::optional<MeshCoordinate> e_coord, w_coord, n_coord, s_coord;
     uint32_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;

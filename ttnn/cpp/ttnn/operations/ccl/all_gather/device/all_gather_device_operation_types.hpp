@@ -29,6 +29,7 @@ struct AllGatherParams {
     std::optional<uint32_t> cluster_axis;
 
     // Fabric setup info
+    tt::tt_fabric::FabricConfig fabric_config{};
     // Per-axis info (an inactive axis has num_devices = 1, num_links = 0, and Linear topology)
     std::array<tt::tt_fabric::Topology, 2> axis_topology{};
     std::array<uint32_t, 2> axis_num_devices{};

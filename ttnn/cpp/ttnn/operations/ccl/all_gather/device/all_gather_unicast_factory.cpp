@@ -96,7 +96,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     //   antipode       -- on a ring, the device N/2 hops away.
     ////////////////////////////////////////////////////////////////
 
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
     TT_FATAL(!fabric_is_2d, "all_gather unicast algorithm supports Fabric_1D line/ring only, not Fabric_2D");
 
     uint32_t active_axis = 0;
