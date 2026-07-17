@@ -1,0 +1,62 @@
+{
+  "source_csv": "dense_layer/reports/2026_07_17_20_29_55/ops_perf_results_2026_07_17_20_29_55.csv",
+  "hardware": "4x Blackhole p300c, fixed 1x4 FABRIC_1D_RING mesh",
+  "workload": "real decoder layer 20, batch 32, logical sequence length 17",
+  "implementation_sha256": "25d9b50dd182a626f5195db56e194d897ab495e53b16c7f107465ac62fdd41e9",
+  "current_implementation_sha256": "25d9b50dd182a626f5195db56e194d897ab495e53b16c7f107465ac62fdd41e9",
+  "implementation_change_since_profile": "none",
+  "test_sha256_at_profile": "09f8eec582af3ac057ca0b3d5194fb5bdfb2ab0e8f56b57a99d63ca92a277075",
+  "current_test_sha256": "09f8eec582af3ac057ca0b3d5194fb5bdfb2ab0e8f56b57a99d63ca92a277075",
+  "test_change_since_profile": "none",
+  "percentage_denominators": {
+    "device_op": "sum of merged-device Device Time divided by profiled iterations",
+    "device_plus_gap": "device_op plus sum of in-signpost Op-to-Op Gap divided by profiled iterations; the decode CSV's 93351.652 us cross-iteration Tracy boundary gap is excluded"
+  },
+  "prefill": {
+    "iterations": 2,
+    "reported_rows": 438,
+    "wall_ms_per_iteration": 4.0523586794734,
+    "device_op_us_per_iteration": 1500.41475,
+    "op_to_op_gap_us_per_iteration": 2399.1055,
+    "device_plus_gap_us_per_iteration": 3899.52025,
+    "collective_us_per_iteration": 221.07575,
+    "collective_device_op_percent": 14.734309296821742,
+    "collective_device_plus_gap_percent": 5.669306371736902,
+    "matmul_us_per_iteration": 351.378,
+    "matmul_device_op_percent": 23.41872472256538,
+    "matmul_device_plus_gap_percent": 9.010800751682906,
+    "overall_modeled_dram_gb_per_second": 47.0,
+    "overall_dram_roofline_percent": 9.2,
+    "collective_rows": {
+      "reduce_scatter": 4,
+      "all_gather": 4
+    }
+  },
+  "decode": {
+    "iterations": 3,
+    "reported_rows": 204,
+    "wall_ms_per_iteration": 0.6140537249545256,
+    "device_op_us_per_iteration": 518.4153333333334,
+    "op_to_op_gap_us_per_iteration": 82.165,
+    "device_plus_gap_us_per_iteration": 600.5803333333334,
+    "excluded_cross_iteration_gap_us": 93351.652,
+    "collective_us_per_iteration": 76.39233333333334,
+    "collective_device_op_percent": 14.735739554987399,
+    "collective_device_plus_gap_percent": 12.719752728112131,
+    "matmul_us_per_iteration": 136.92133333333334,
+    "matmul_device_op_percent": 26.41151303426991,
+    "matmul_device_plus_gap_percent": 22.798171324270295,
+    "overall_modeled_dram_gb_per_second": 61.0,
+    "overall_dram_roofline_percent": 11.9,
+    "collective_rows": {
+      "reduce_scatter": 6,
+      "all_gather": 6
+    }
+  },
+  "interpretation": [
+    "The selected all-reduce appears in the report as one reduce-scatter plus one all-gather per residual boundary.",
+    "Decode collectives consume 76.392 us/replay and matmuls consume 136.921 us/replay; data movement, structural ops, and gaps remain material.",
+    "At 61 GB/s (11.9% modeled DRAM roofline), decode is not limited by sustained DRAM bandwidth; CCL, small ops, layouts, and dispatch gaps dominate the remaining scaling loss.",
+    "Prefill length 17 is gap-heavy under profiler instrumentation; the separate uninstrumented warmed latency gate is authoritative."
+  ]
+}

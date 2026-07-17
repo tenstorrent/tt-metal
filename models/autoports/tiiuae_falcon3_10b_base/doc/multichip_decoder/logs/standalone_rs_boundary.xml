@@ -1,0 +1,298 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="39.734" timestamp="2026-07-17T17:41:42.421294+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.tiiuae_falcon3_10b_base.tests.test_multichip_decoder" name="test_reduce_scatter_distributed_norm_all_gather_matmul_boundary[blackhole-1x4-ring]" time="38.838"><properties><property name="start_timestamp" value="2026-07-17T17:41:43" /><property name="end_timestamp" value="2026-07-17T17:42:22" /></properties><failure message="RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/dispatch/system_memory_manager.cpp:757: tt::exception&#10;info:&#10;TIMEOUT: device timeout, potential hang detected, the device is unrecoverable&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c4ef2) [0x7ab70c1c4ef2]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x7f6c81) [0x7ab7093f6c81]&#10; --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue_event(tt::tt_metal::distributed::MeshReadEventDescriptor&amp;)&#10; --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()&#10; --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7ab74fe3dc79]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x7ab7528f9aa4]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x7ab752986a64]">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.skipif(
+        os.getenv("FALCON3_RUN_MULTICHIP_SHARDED_BOUNDARY") != "1",
+        reason="manual exact lower-data-movement graph-rewrite candidate",
+    )
+    @pytest.mark.parametrize("mesh_device,device_params", MESH_PARAMS, indirect=True)
+    @pytest.mark.timeout(1800)
+    def test_reduce_scatter_distributed_norm_all_gather_matmul_boundary(mesh_device):
+        """Compare the exact O/residual/RMSNorm/QKV boundary before changing the model graph.
+
+        The production graph all-reduces the row-parallel O result and keeps the
+        residual replicated.  The candidate reduce-scatters O, performs the add and
+        distributed RMSNorm on hidden/TP shards, then fuses the restoring all-gather
+        with the following column-parallel QKV matmul.
+        """
+        torch.manual_seed(20260717)
+        rows, hidden, qkv_width = 32, 3072, 5120
+        local_hidden = hidden // TENSOR_PARALLEL_SIZE
+        local_qkv_width = qkv_width // TENSOR_PARALLEL_SIZE
+        topology = ttnn.Topology.Ring
+        rs_mode = os.getenv("FALCON3_MULTICHIP_BOUNDARY_RS_MODE", "standalone").lower()
+        assert rs_mode in ("standalone", "fused")
+        compute_config = _compute_config(mesh_device, ttnn.MathFidelity.LoFi)
+
+        full_input_host = torch.randn((1, 1, rows, hidden), dtype=torch.bfloat16)
+        o_weight_host = torch.randn((1, 1, hidden, hidden), dtype=torch.bfloat16)
+        qkv_weight_host = torch.randn((1, 1, hidden, qkv_width), dtype=torch.bfloat16)
+        gamma_flat_host = torch.ones((1, 1, 1, hidden), dtype=torch.bfloat16)
+        local_input = ttnn.from_torch(
+            full_input_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        )
+        replicated_input = ttnn.from_torch(
+            full_input_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        o_weight = ttnn.from_torch(
+            o_weight_host,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        )
+        qkv_weight = ttnn.from_torch(
+            qkv_weight_host,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        )
+        gamma_replicated = ttnn.from_torch(
+            gamma_flat_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        gamma_local = ttnn.from_torch(
+            gamma_flat_host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
+        )
+        o_program = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 2),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=1,
+            per_core_N=12,
+            out_block_w=12,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+        qkv_program = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 4),
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=5,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+        grid = mesh_device.compute_with_storage_grid_size()
+        all_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        )
+        sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([all_cores])], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group([sub_device_id])
+        ccl = TT_CCL(mesh_device)
+        rs_intermediate = ttnn.from_torch(
+            torch.zeros((1, 1, rows, hidden), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        rs_output = ttnn.from_torch(
+            torch.zeros((1, 1, rows, local_hidden), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        ag_output = ttnn.from_torch(
+            torch.zeros_like(full_input_host),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+        def baseline_boundary():
+            partial = ttnn.matmul(
+                local_input,
+                o_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=o_program,
+                compute_kernel_config=compute_config,
+            )
+            reduced = ttnn.all_reduce(
+                partial,
+                cluster_axis=1,
+                num_links=2,
+                topology=topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            added = ttnn.add(replicated_input, reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            normed = ttnn.rms_norm(
+                added,
+                epsilon=1e-6,
+                weight=gamma_replicated,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=compute_config,
+            )
+            output = ttnn.matmul(
+                normed,
+                qkv_weight,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=qkv_program,
+                compute_kernel_config=compute_config,
+            )
+            for tensor in (partial, reduced, added, normed):
+                tensor.deallocate()
+            return output
+
+        def candidate_boundary():
+            if rs_mode == "fused":
+                partial, local_projected = ttnn.experimental.matmul_reduce_scatter_async(
+                    local_input,
+                    o_weight,
+                    persistent_intermediate_buffer=rs_intermediate,
+                    persistent_output_buffer=rs_output,
+                    dim=3,
+                    multi_device_global_semaphore=ccl.get_and_cycle_rs_semaphore_handles(),
+                    reduce_scatter_core_grid_offset=(0, 6),
+                    num_links=2,
+                    memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=topology,
+                    subdevice_id=sub_device_id,
+                    memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=o_program,
+                    compute_kernel_config=compute_config,
+                )
+            else:
+                partial = ttnn.matmul(
+                    local_input,
+                    o_weight,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=o_program,
+                    compute_kernel_config=compute_config,
+                )
+                local_projected = ttnn.experimental.reduce_scatter_minimal_async(
+                    partial,
+                    persistent_output_buffers=[rs_intermediate, rs_output],
+                    dim=3,
+                    multi_device_global_semaphore=ccl.get_and_cycle_rs_semaphore_handles(),
+                    num_links=2,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    topology=topology,
+                    subdevice_id=sub_device_id,
+                )
+            local_added = ttnn.add(local_input, local_projected, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            stats = ttnn.rms_norm_pre_all_gather(
+                local_added,
+                compute_kernel_config=compute_config,
+                dtype=ttnn.bfloat16,
+            )
+            gathered_stats = ttnn.experimental.all_gather_async(
+                stats,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=2,
+                topology=topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+            local_normed = ttnn.rms_norm_post_all_gather(
+                local_added,
+                gathered_stats,
+                epsilon=1e-6,
+                weight=gamma_local,
+                compute_kernel_config=compute_config,
+            )
+            gathered_norm, output = ttnn.experimental.all_gather_matmul_async(
+                local_normed,
+                qkv_weight,
+                persistent_output_buffer=ag_output,
+                dim=3,
+                multi_device_global_semaphore=ccl.get_and_cycle_ag_semaphore_handles(),
+                all_gather_core_grid_offset=(0, 6),
+                barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(),
+                num_links=2,
+                memory_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+                topology=topology,
+                subdevice_id=sub_device_id,
+                memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=qkv_program,
+                compute_kernel_config=compute_config,
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+            for tensor in (partial, local_added, stats, gathered_stats, local_normed):
+                tensor.deallocate()
+            del local_projected, gathered_norm
+            return output
+
+        baseline_warm = baseline_trace = fused_warm = fused_trace = None
+        baseline_trace_id = fused_trace_id = None
+        try:
+            baseline_warm, baseline_trace, baseline_trace_id, baseline_ms, baseline_samples = _trace_mesh_callable(
+                mesh_device,
+                baseline_boundary,
+                samples=5,
+                iterations=100,
+            )
+            ttnn.release_trace(mesh_device, baseline_trace_id)
+            baseline_trace_id = None
+&gt;           fused_warm, fused_trace, fused_trace_id, fused_ms, fused_samples = _trace_mesh_callable(
+                mesh_device,
+                candidate_boundary,
+                samples=5,
+                iterations=100,
+            )
+
+models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py:1485:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+mesh_device = MeshDevice(1x4 grid, 4 devices)
+function = &lt;function test_reduce_scatter_distributed_norm_all_gather_matmul_boundary.&lt;locals&gt;.candidate_boundary at 0x7ab6bacab380&gt;
+
+    def _trace_mesh_callable(mesh_device, function, *, samples: int = 5, iterations: int = 20):
+        warm_output = function()
+&gt;       ttnn.synchronize_device(mesh_device)
+E       RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/dispatch/system_memory_manager.cpp:757: tt::exception
+E       info:
+E       TIMEOUT: device timeout, potential hang detected, the device is unrecoverable
+E       backtrace:
+E        --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x3c4ef2) [0x7ab70c1c4ef2]
+E        --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x7f6c81) [0x7ab7093f6c81]
+E        --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue_event(tt::tt_metal::distributed::MeshReadEventDescriptor&amp;)
+E        --- tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()
+E        --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x7ab74fe3dc79]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4) [0x7ab7528f9aa4]
+E        --- /lib/x86_64-linux-gnu/libc.so.6(__clone+0x44) [0x7ab752986a64]
+
+models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py:191: RuntimeError</failure></testcase></testsuite></testsuites>

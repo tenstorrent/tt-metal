@@ -1,8 +1,8 @@
 {
   "hf_model": "tiiuae/Falcon3-10B-Base",
   "hf_advertised_context": 32768,
-  "current_supported_context": 6528,
-  "limiting_reason": "device_dram_capacity",
+  "current_supported_context": 32768,
+  "limiting_reason": "hf_model_limit",
   "capacity_evidence": {
     "workload_batch": 32,
     "device": "one Blackhole p300c in a 1x1 TTNN mesh",
@@ -27,7 +27,63 @@
     "boundary_recharacterized": false,
     "explanation": "The optimized dtype/layout policy changes persistent-cache and weight capacity, so the advertised functional boundary was rerun and passes. The first optimized attempt exposed an explicit large-M L1 circular-buffer request; the bounded large-M implementation fixed it. The optimized pass did not claim a larger context because the complete optimized boundary above 6528 was not re-characterized. Advertised capability is unchanged."
   },
-  "notes": "This remains the measured single-device boundary, not a reduced Falcon3 architecture limit. The IR emitted length-128 persistent caches; both functional and optimized implementations parameterize them and default to 6528. Optimized numerical PCC validation covers prefill lengths 17, 31, and 128 plus decode positions 31 and 32, while 6528 is a full optimized dense-layer execution/capacity validation. The optimized pass changed KV-cache dtype to BFP8_B but did not reduce advertised capability.",
+  "multichip_capacity_evidence": {
+    "target_mesh": "four Blackhole p300c devices in a fixed 1x4 FABRIC_1D_RING mesh",
+    "tensor_parallel_degree": 4,
+    "selected_weight_policy": "BFP4_B LoFi projections; rank-local column/row tensor parallelism",
+    "kv_cache_dtype_layout": "BFP8_B TILE DRAM, one of four KV heads per device",
+    "largest_passing_prefill": 32768,
+    "workload_batch": 1,
+    "full_prefill_executed": true,
+    "full_prefill_seconds": 0.17793416511267424,
+    "paged_cache": {
+      "page_block_size": 32,
+      "physical_pages_per_device": 1024,
+      "local_cache_shape_each_k_or_v": [1024, 1, 32, 256],
+      "page_table": "cyclic permutation"
+    },
+    "sampled_hf_reference_positions": [0, 31, 1023, 1024, 16383, 32767],
+    "sampled_key_cache_pcc_vs_hf": 0.9964203067745778,
+    "sampled_value_cache_pcc_vs_hf": 0.9947687843968028,
+    "last_position_decode_executed": 32767,
+    "finite_replicated_stack_output": true,
+    "batch32_full_stack_memory_projection": {
+      "allocator_dram_grid_per_device": [8, 1],
+      "allocator_dram_bytes_per_bank": 4272341376,
+      "allocator_dram_bytes_per_device": 34178731008,
+      "local_k_plus_v_bytes_per_layer": 570425344,
+      "local_k_plus_v_bytes_all_40_layers": 22817013760,
+      "local_projection_weight_bytes_per_layer_per_prefill_or_decode_copy": 35389440,
+      "resident_prefill_plus_decode_projection_weight_bytes_per_layer": 70778880,
+      "resident_prefill_plus_decode_projection_weight_bytes_all_40_layers": 2831155200,
+      "known_kv_plus_projection_residency_bytes_per_device": 25648168960,
+      "allocator_headroom_after_known_kv_and_projection_residency_bytes_per_device": 8530562048,
+      "shared_rope_k_plus_v_bytes_per_device": 33554432,
+      "conservative_reserved_headroom_budget": {
+        "replicated_bf16_input_embedding_bytes": 805306368,
+        "replicated_bf16_untied_lm_head_bytes": 805306368,
+        "shared_bf16_rope_cos_plus_sin_bytes": 33554432,
+        "all_layer_norm_plus_final_norm_bf16_bytes": 497664,
+        "shared_batch32_page_table_int32_bytes": 131072,
+        "configured_trace_region_bytes": 100000000,
+        "decode_activation_residual_and_ccl_workspace_reserve_bytes": 536870912,
+        "allocator_program_and_fragmentation_safety_margin_bytes": 4294967296,
+        "total_reserved_headroom_bytes": 6576634112,
+        "uncommitted_bytes_after_all_listed_reserves": 1953927936,
+        "assumptions": "Both 131072x3072 untied vocabulary matrices are conservatively replicated in BF16 even though the later full-model stage may shard or quantize them. RoPE is shared across all layers through the decoder's rope_cache argument. Decode activation/CCL reserve is a reusable per-layer peak allowance, not multiplied by 40; the 512 MiB reservation is far above the sub-megabyte logical batch-32 residual and local MLP tensors. The independent 4 GiB allocator/program/fragmentation margin is retained after the configured 100 MB trace region."
+      },
+      "executed_vs_projected_boundary": {
+        "executed_full_context": "batch 1, full 32768-token prefill, paged K/V sampling, and decode at position 32767",
+        "executed_batch32": "logical prefill length 31 plus paged decode positions 31 and 32 with warm trace replay",
+        "projected_not_executed_in_this_stage": "40-layer batch-32 32768-token persistent K/V allocation and full-model decode",
+        "scope_reason": "Allocating and scheduling the 40-layer stack is the later full-model goal. This decoder stage proves the rank-local cache shape/bytes and uses the measured TTNN allocator capacity plus conservative non-decoder reservations to establish fit without claiming a full-model execution. Full-context batch-32 prefill activation scheduling is also not claimed."
+      },
+      "explanation": "TP4 removes three quarters of projection and KV-head storage from every device. The 40-layer batch-32 HF-context KV projection is 22.817 GB per device. Projection residency uses the physical padded local MLP width 6,144: one prefill or decode copy is 35,389,440 bytes/layer, and the separate prefill plus decode copies total 2.831 GB across 40 layers. A direct TTNN allocator query reports 34.179 GB usable DRAM/device; known K/V plus both physical projection copies consume 25.648 GB, leaving 8.531 GB. A conservative itemized non-decoder/trace/activation/CCL/allocator budget reserves 6.577 GB of that headroom and leaves 1.954 GB uncommitted. The layer API uses internal 1,024-row MLP chunks and local KV heads; full-model scheduling of residual buffers remains a later-stage responsibility."
+    },
+    "artifact": "models/autoports/tiiuae_falcon3_10b_base/doc/multichip_decoder/results/max_context_batch1.json",
+    "explanation": "The target mesh executes the full HF-advertised logical context with paged local-head cache, nontrivial page-table mapping, sampled HF K/V correctness through the final page, and decode at the final valid position. No aligned-only public contract is introduced. The supported context is therefore extended to the HF model limit rather than carrying forward the single-chip DRAM boundary."
+  },
+  "notes": "The 6,528-token result remains the measured batch-32 single-device boundary, not a Falcon3 architecture limit. The fixed TP4 multichip decoder restores the compiler mesh plan, defaults to the HF limit of 32,768, and validates logical lengths 17, 31, 1,025, and 32,768 plus decode positions 17, 31, 32, and 32,767. The full-context execution is batch 1; batch-32 full-stack KV and weight storage is projected per device here, while full-model residual-buffer scheduling belongs to the later full-model stage.",
   "paths": {
     "prefill": {
       "status": "translated_and_validated",
@@ -37,8 +93,11 @@
       "optimized_pcc_validated_sequence_lengths": [17, 31, 128],
       "capacity_validated_sequence_lengths": [256, 512, 1024, 2048, 4096, 6144, 6400, 6528],
       "optimized_capacity_validated_sequence_lengths": [6528],
+      "multichip_pcc_validated_sequence_lengths": [17, 31, 1025],
+      "multichip_capacity_validated_sequence_lengths": [32768],
       "first_failing_tile_aligned_sequence_length": 6560,
-      "default_cache_length": 6528,
+      "single_chip_default_cache_length": 6528,
+      "default_cache_length": 32768,
       "emitted_cache_length": 128,
       "classification": "compiler g0: fill_cache=2560, paged_update_cache=0, decode_sdpa=0"
     },
@@ -47,8 +106,11 @@
       "emitted_batch": 32,
       "validated_positions": [17],
       "optimized_validated_positions": [31, 32],
-      "default_cache_length": 6528,
+      "multichip_validated_positions": [17, 31, 32, 32767],
+      "single_chip_default_cache_length": 6528,
+      "default_cache_length": 32768,
       "optimized_cache_dtype": "BFP8_B",
+      "multichip_local_kv_heads_per_device": 1,
       "emitted_cache_length": 128,
       "classification": "compiler g1: fill_cache=0, paged_update_cache=80, decode_sdpa=40"
     }
@@ -57,6 +119,7 @@
     "mesh_shape": [1, 4],
     "tp_degree": 4,
     "collapsed_to_single_device_dense": true,
+    "multichip_restored_from_ir_provenance": true,
     "representative_layer": 20
   }
 }

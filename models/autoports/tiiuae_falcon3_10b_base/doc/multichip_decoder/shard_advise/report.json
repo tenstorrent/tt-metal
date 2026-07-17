@@ -1,0 +1,295 @@
+{
+  "function": "decode",
+  "optimization_level": 2,
+  "pipeline": "ttnn",
+  "total_ops": 24,
+  "final_choices": 21,
+  "spill": {
+    "ran": true,
+    "total_spills": 1
+  },
+  "unfixable_ops": [
+    {
+      "op": "ttnn.nlp_concat_heads_decode",
+      "reason": "MetalBackendError - Op constraint query failed with error: TT_FATAL @ /home/mvasiljevic/tt-mlir/third_party/tt-metal/src/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp:44: input_tensor.is_sharded() info: Input tensor must be sharded"
+    }
+  ],
+  "ops": [
+    {
+      "index": 0,
+      "op": "ttnn.reshape",
+      "layout": "l1/interleaved/10x11",
+      "program_config": ""
+    },
+    {
+      "index": 1,
+      "op": "ttnn.rms_norm",
+      "layout": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "program_config": ""
+    },
+    {
+      "index": 2,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @11x8"
+    },
+    {
+      "index": 3,
+      "op": "ttnn.nlp_create_qkv_heads_decode",
+      "layout": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "program_config": ""
+    },
+    {
+      "index": 4,
+      "op": "ttnn.slice_static",
+      "layout": "dram/interleaved/1x1",
+      "program_config": ""
+    },
+    {
+      "index": 5,
+      "op": "ttnn.slice_static",
+      "layout": "dram/interleaved/1x1",
+      "program_config": ""
+    },
+    {
+      "index": 6,
+      "op": "ttnn.rotary_embedding",
+      "layout": "l1/height_sharded/32x1 cores=(10,2)-(10,2)",
+      "program_config": ""
+    },
+    {
+      "index": 7,
+      "op": "ttnn.rotary_embedding",
+      "layout": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "program_config": ""
+    },
+    {
+      "index": 8,
+      "op": "ttnn.slice_static",
+      "layout": "l1/interleaved/10x11",
+      "program_config": ""
+    },
+    {
+      "index": 9,
+      "op": "ttnn.slice_static",
+      "layout": "l1/interleaved/10x11",
+      "program_config": ""
+    },
+    {
+      "index": 10,
+      "op": "ttnn.scaled_dot_product_attention_decode",
+      "layout": "dram/interleaved/1x1",
+      "program_config": ""
+    },
+    {
+      "index": 11,
+      "op": "ttnn.nlp_concat_heads_decode",
+      "layout": "dram/interleaved/1x1",
+      "program_config": ""
+    },
+    {
+      "index": 12,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @11x9"
+    },
+    {
+      "index": 13,
+      "op": "ttnn.add",
+      "layout": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 14,
+      "op": "ttnn.rms_norm",
+      "layout": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "program_config": ""
+    },
+    {
+      "index": 15,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x103 cores=(0,0)-(10,8)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @11x10"
+    },
+    {
+      "index": 16,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x103 cores=(0,0)-(10,8)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @11x10"
+    },
+    {
+      "index": 17,
+      "op": "ttnn.multiply",
+      "layout": "l1/width_sharded/1x103 cores=(0,0)-(10,8)",
+      "program_config": ""
+    },
+    {
+      "index": 18,
+      "op": "ttnn.matmul",
+      "layout": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "program_config": "matmul_multi_core_reuse_multi_cast_1d @11x9"
+    },
+    {
+      "index": 19,
+      "op": "ttnn.add",
+      "layout": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "program_config": ""
+    },
+    {
+      "index": 20,
+      "op": "ttnn.reshape",
+      "layout": "l1/interleaved/10x11",
+      "program_config": ""
+    }
+  ],
+  "reshards": [
+    {
+      "kind": "to_memory_config",
+      "producer": "reshape",
+      "consumer": "rms_norm",
+      "from": "l1/interleaved/10x11",
+      "to": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "rms_norm",
+      "consumer": "matmul",
+      "from": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "to": "l1/width_sharded/1x48 cores=(0,0)-(10,3)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "slice_static",
+      "consumer": "rotary_embedding",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "slice_static",
+      "consumer": "rotary_embedding",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "slice_static",
+      "consumer": "rotary_embedding",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "slice_static",
+      "consumer": "rotary_embedding",
+      "from": "dram/interleaved/1x1",
+      "to": "l1/height_sharded/1x1 cores=(0,0)-(0,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "rotary_embedding",
+      "consumer": "slice_static",
+      "from": "l1/height_sharded/32x1 cores=(10,2)-(10,2)",
+      "to": "l1/interleaved/10x11",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "rotary_embedding",
+      "consumer": "slice_static",
+      "from": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "to": "l1/interleaved/10x11",
+      "output_revert": false
+    },
+    {
+      "kind": "to_layout",
+      "producer": "input",
+      "consumer": "?",
+      "from": "dram/interleaved/1x1",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "slice_static",
+      "consumer": "?",
+      "from": "l1/interleaved/10x11",
+      "to": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_layout",
+      "producer": "input",
+      "consumer": "?",
+      "from": "dram/interleaved/1x1",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "slice_static",
+      "consumer": "scaled_dot_product_attention_decode",
+      "from": "l1/interleaved/10x11",
+      "to": "dram/interleaved/1x1",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "add",
+      "consumer": "rms_norm",
+      "from": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "to": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "rms_norm",
+      "consumer": "matmul",
+      "from": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "to": "l1/width_sharded/1x48 cores=(0,0)-(10,3)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "rms_norm",
+      "consumer": "matmul",
+      "from": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "to": "l1/width_sharded/1x48 cores=(0,0)-(10,3)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "multiply",
+      "consumer": "matmul",
+      "from": "l1/width_sharded/1x103 cores=(0,0)-(10,8)",
+      "to": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "add",
+      "consumer": "reshape",
+      "from": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "to": "l1/interleaved/10x11",
+      "output_revert": false
+    },
+    {
+      "kind": "to_memory_config",
+      "producer": "reshape",
+      "consumer": "return",
+      "from": "l1/interleaved/10x11",
+      "to": "dram/interleaved/1x1",
+      "output_revert": true
+    }
+  ],
+  "artifacts": {
+    "final_ir": "/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_10b_base/doc/multichip_decoder/shard_advise/final_ir.mlir",
+    "report_txt": "/home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_10b_base/doc/multichip_decoder/shard_advise/report.txt"
+  }
+}

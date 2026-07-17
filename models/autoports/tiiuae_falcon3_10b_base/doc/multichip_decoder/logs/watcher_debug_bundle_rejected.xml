@@ -1,0 +1,442 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="25.723" timestamp="2026-07-17T17:06:06.413277+00:00" hostname="23ff5195c3f7"><testcase classname="models.autoports.tiiuae_falcon3_10b_base.tests.test_multichip_decoder" name="test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-1x4-ring]" time="24.800"><properties><property name="start_timestamp" value="2026-07-17T17:06:07" /><property name="end_timestamp" value="2026-07-17T17:06:32" /></properties><failure message="RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset &lt;= max_size&#10;info:&#10;Program size (72640) too large for kernel config buffer (70656) on TENSIX&#10;backtrace:&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ed0da) [0x7fac30eed0da]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x7fac30ecb6fe]&#10; --- tt::tt_metal::distributed::MeshWorkloadImpl::finalize_offsets(tt::tt_metal::distributed::MeshDevice*)&#10; --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)&#10; --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&amp;, tt::tt_metal::distributed::MeshWorkload&amp;, bool)&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x37e) [0x7fac33542dce]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1b48963) [0x7fac33548963]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x21b) [0x7fac3354007b]&#10; --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim25SdpaDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2db) [0x7fac3352714b]&#10; --- ttnn::prim::sdpa_decode(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, bool, bool, std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt; const&amp;, std::optional&lt;float&gt;, std::optional&lt;unsigned int&gt;, tt::tt_metal::MemoryConfig const&amp;, std::optional&lt;ttnn::operations::transformer::SDPAProgramConfig&gt; const&amp;, ttnn::ComputeKernelConfig, unsigned int, std::optional&lt;bool&gt;, std::optional&lt;bool&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;)&#10; --- ttnn::transformer::paged_scaled_dot_product_attention_decode(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, bool, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;float&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;ttnn::operations::transformer::SDPAProgramConfig&gt;, std::optional&lt;ttnn::ComputeKernelConfig&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;)&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x457793) [0x7fac33c57793]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x457450) [0x7fac33c57450]&#10; --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7fac33b15575]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7fac7a3db1ca]&#10; --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7fac7a3db28b]&#10; --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]">mesh_device = MeshDevice(1x4 grid, 4 devices)
+
+    @pytest.mark.parametrize("mesh_device,device_params", MESH_PARAMS, indirect=True)
+    @pytest.mark.timeout(1800)
+    def test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace(mesh_device):
+        config = _config()
+        batch, seq_len, max_cache_len = 32, 31, 64
+        state_dict = _real_layer_state_dict(IR_REPRESENTATIVE_LAYER)
+        hf_layer = _hf_layer(config, state_dict, IR_REPRESENTATIVE_LAYER)
+        model = MultichipDecoder.from_state_dict(
+            state_dict,
+            hf_config=config,
+            mesh_device=mesh_device,
+            batch=batch,
+            max_cache_len=max_cache_len,
+        )
+        prefill, decode_31, decode_32 = _recorded_layer20_seq31_inputs(batch)
+        hf_cache = DynamicCache(config=config)
+        expected_prefill = _hf_prefill(hf_layer, config, prefill, cache=hf_cache)
+
+        pages_per_user = math.ceil(max_cache_len / model.page_block_size)
+        page_table_host = torch.arange(batch * pages_per_user, dtype=torch.int32).reshape(batch, pages_per_user).flip(1)
+        page_table = _mesh_int32(page_table_host, mesh_device)
+        key_cache, value_cache = model.allocate_kv_cache(paged=True)
+        tt_prefill = _mesh_input(prefill, mesh_device)
+        tt_prefill_output = model.prefill_forward(
+            tt_prefill,
+            key_cache=key_cache,
+            value_cache=value_cache,
+            page_table=page_table,
+        )
+        _assert_replicated(tt_prefill_output)
+        _assert_pcc("multichip real prefill seq=31", expected_prefill, _first_rank(tt_prefill_output).squeeze(0), REAL_WEIGHT_PCC)
+        hf_layer_cache = hf_cache.layers[IR_REPRESENTATIVE_LAYER]
+        _assert_pcc("multichip paged key cache seq=31", hf_layer_cache.keys, _paged_cache_to_torch(key_cache, page_table_host, seq_len), REAL_WEIGHT_PCC)
+        _assert_pcc("multichip paged value cache seq=31", hf_layer_cache.values, _paged_cache_to_torch(value_cache, page_table_host, seq_len), REAL_WEIGHT_PCC)
+
+        expected_31 = _hf_decode(hf_layer, config, decode_31, hf_cache, 31)
+        tt_decode_31 = _mesh_input(decode_31, mesh_device)
+        position_31 = _mesh_int32(torch.full((batch,), 31, dtype=torch.int32), mesh_device)
+&gt;       out_31 = model.decode_forward(
+            tt_decode_31,
+            key_cache=key_cache,
+            value_cache=value_cache,
+            cache_position=position_31,
+            position_index=31,
+            page_table=page_table,
+        )
+
+models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py:346:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/tiiuae_falcon3_10b_base/tt/multichip_decoder.py:776: in decode_forward
+    residual = self._decode_attention(residual, key_cache=key_cache, value_cache=value_cache, cache_position=cache_position, position_index=position_index, page_table=page_table)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+models/autoports/tiiuae_falcon3_10b_base/tt/multichip_decoder.py:668: in _decode_attention
+    attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.transformer.paged_scaled_dot_product_attention_decode', function=&lt;ttnn._ttnn.operations.transformer.paged_scaled_dot_product_attention_decode_t object at 0x7fabe6c89470&gt;, preprocess_golden_function_inputs=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 1.8984e+00,  2.0469e+00,  ..., -1.2891e+00,  2.6250e+00],
+               [-3.2969e+00, -2.7812e+00,  ...,  8.2031e-01,  2.4219e-01],
+               [-2.5391e-01,  4.9805e-01,  ..., -4.9414e-01,  1.7969e+00]],
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]],
+
+              ...,
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]],
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]]], shape=Shape([1, 32, 3, 256]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[[[-8.5547e-01, -6.6406e-01,  ...,  1.5781e+00,  6.0547e-01],
+               [-2.0312e+00, -9.5703e-01,  ...,  2.5938e+00,  1.4141e+00],
+               [ 4.4336e-01, -9.7266e-01,  ...,  2.0000e+00, -6.4941e-02]],
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]],
+
+              ...,
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]],
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]]], shape=Shape([1, 32, 3, 256]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[[[ 4.1211e-01,  8.3984e-01,  ..., -3.2812e+00,  3.5625e+00],
+               [ 1.8164e-01,  2.1094e-01,  ..., -3.1562e+00,  2.2969e+00],
+               [ 2.0625e+00,  2.0781e+00,  ..., -2.1406e+00,  9.7656e-01]],
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]],
+
+              ...,
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]],
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]]], shape=Shape([1, 32, 3, 256]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[[[-1.3516e+00, -5.0781e-01,  ...,  1.6328e+00,  9.4922e-01],
+               [ 4.6875e-01,  6.7188e-01,  ...,  1.0000e+00,  8.1641e-01],
+               [ 1.3379e-01,  8.0078e-02,  ...,  1.0781e+00, -6.0547e-01]],
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]],
+
+              ...,
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]],
+
+              [[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]]], shape=Shape([1, 32, 3, 256]), dtype=DataType::BFLOAT16, layout=Layout::TILE), device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[-3.5645e-02,  2.1973e-02,  ..., -1.8750e-01,  3.7500e-01],
+               [-2.9688e-01,  1.1094e+00,  ...,  6.5625e-01, -9.3750e-02],
+               ...,
+               [ 1.9062e+00,  4.0625e-01,  ..., -1.5625e-01,  6.2500e-01],
+               [-3.5938e-01, -2.9688e-01,  ..., -1.6875e+00,  4.4375e+00]]],
+
+             ...,
+
+             [[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[-3.5645e-02,  2.1973e-02,  ..., -1.8750e-01,  3.7500e-01],
+               [-2.9688e-01,  1.1094e+00,  ...,  6.5625e-01, -9.3750e-02],
+               ...,
+               [ 1.9062e+00,  4.0625e-01,  ..., -1.5625e-01,  6.2500e-01],
+               [-3.5938e-01, -2.9688e-01,  ..., -1.6875e+00,  4.4375e+00]]]], shape=Shape([64, 1, 32, 256]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[-3.8574e-02,  7.3242e-03,  ...,  1.2500e-01,  0.0000e+00],
+               [-1.3125e+00,  3.7500e-01,  ...,  3.1250e-01, -1.5625e+00],
+               ...,
+               [-1.1875e+00, -1.8125e+00,  ...,  3.1250e+00, -8.7500e-01],
+               [-1.9375e+00,  1.5625e-01,  ...,  3.8750e+00,  1.7500e+00]]],
+
+             ...,
+
+             [[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[-3.8574e-02,  7.3242e-03,  ...,  1.2500e-01,  0.0000e+00],
+               [-1.3125e+00,  3.7500e-01,  ...,  3.1250e-01, -1.5625e+00],
+               ...,
+               [-1.1875e+00, -1.8125e+00,  ...,  3.1250e+00, -8.7500e-01],
+               [-1.9375e+00,  1.5625e-01,  ...,  3.8750e+00,  1.7500e+00]]]], shape=Shape([64, 1, 32, 256]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[-1.1719e-02,  7.8125e-03,  ..., -3.1250e-01,  3.1250e-02],
+               [-3.1250e-01,  3.7500e-01,  ..., -8.4375e-01, -2.1875e-01],
+               ...,
+               [ 1.4062e-01,  7.1094e-01,  ..., -5.0000e-01,  2.5000e-01],
+               [-2.0312e-01, -6.8750e-01,  ..., -1.5000e+00,  1.4375e+00]]],
+
+             ...,
+
+             [[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[-1.1719e-02,  7.8125e-03,  ..., -3.1250e-01,  3.1250e-02],
+               [-3.1250e-01,  3.7500e-01,  ..., -8.4375e-01, -2.1875e-01],
+               ...,
+               [ 1.4062e-01,  7.1094e-01,  ..., -5.0000e-01,  2.5000e-01],
+               [-2.0312e-01, -6.8750e-01,  ..., -1.5000e+00,  1.4375e+00]]]], shape=Shape([64, 1, 32, 256]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[ 4.1016e-02,  2.6367e-02,  ...,  2.0312e-01, -4.2188e-01],
+               [ 3.7500e-01, -7.0312e-01,  ...,  1.7500e+00, -4.3750e-01],
+               ...,
+               [-1.0938e-01,  5.1562e-01,  ...,  3.1250e-01,  1.2500e-01],
+               [ 4.4531e-01, -6.3281e-01,  ...,  1.2812e+00,  1.3438e+00]]],
+
+             ...,
+
+             [[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[ 4.1016e-02,  2.6367e-02,  ...,  2.0312e-01, -4.2188e-01],
+               [ 3.7500e-01, -7.0312e-01,  ...,  1.7500e+00, -4.3750e-01],
+               ...,
+               [-1.0938e-01,  5.1562e-01,  ...,  3.1250e-01,  1.2500e-01],
+               [ 4.4531e-01, -6.3281e-01,  ...,  1.2812e+00,  1.3438e+00]]]], shape=Shape([64, 1, 32, 256]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE), device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[ 7.2266e-02, -6.6406e-02,  ...,  9.7656e-03,  5.6641e-02],
+               [ 1.8750e-01,  4.6875e-01,  ...,  1.4219e+00, -6.5625e-01],
+               ...,
+               [-9.2188e-01,  5.4688e-01,  ...,  1.6250e+00, -9.6875e-01],
+               [-5.0000e-01,  1.7812e+00,  ...,  1.7500e+00, -5.0000e-01]]],
+
+             ...,
+
+             [[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[ 7.2266e-02, -6.6406e-02,  ...,  9.7656e-03,  5.6641e-02],
+               [ 1.8750e-01,  4.6875e-01,  ...,  1.4219e+00, -6.5625e-01],
+               ...,
+               [-9.2188e-01,  5.4688e-01,  ...,  1.6250e+00, -9.6875e-01],
+               [-5.0000e-01,  1.7812e+00,  ...,  1.7500e+00, -5.0000e-01]]]], shape=Shape([64, 1, 32, 256]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[-4.6875e-02,  6.4453e-02,  ...,  3.5156e-02, -9.7656e-04],
+               [ 2.0312e-01, -6.4062e-01,  ...,  1.8750e-01,  2.0312e-01],
+               ...,
+               [-2.9688e-01,  2.9688e-01,  ..., -4.6875e-01, -3.7500e-01],
+               [ 1.5625e-02,  3.9062e-01,  ...,  1.4062e-01,  8.4375e-01]]],
+
+             ...,
+
+             [[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[-4.6875e-02,  6.4453e-02,  ...,  3.5156e-02, -9.7656e-04],
+               [ 2.0312e-01, -6.4062e-01,  ...,  1.8750e-01,  2.0312e-01],
+               ...,
+               [-2.9688e-01,  2.9688e-01,  ..., -4.6875e-01, -3.7500e-01],
+               [ 1.5625e-02,  3.9062e-01,  ...,  1.4062e-01,  8.4375e-01]]]], shape=Shape([64, 1, 32, 256]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[ 1.5625e-02,  6.4062e-01,  ..., -9.7656e-04,  1.2695e-02],
+               [ 7.8125e-01, -1.5000e+00,  ...,  4.2188e-01, -1.9219e+00],
+               ...,
+               [ 4.6875e-01,  3.1250e-02,  ..., -8.4375e-01,  1.7500e+00],
+               [ 5.7812e-01, -1.0000e+00,  ...,  5.6250e-01, -2.9688e-01]]],
+
+             ...,
+
+             [[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[ 1.5625e-02,  6.4062e-01,  ..., -9.7656e-04,  1.2695e-02],
+               [ 7.8125e-01, -1.5000e+00,  ...,  4.2188e-01, -1.9219e+00],
+               ...,
+               [ 4.6875e-01,  3.1250e-02,  ..., -8.4375e-01,  1.7500e+00],
+               [ 5.7812e-01, -1.0000e+00,  ...,  5.6250e-01, -2.9688e-01]]]], shape=Shape([64, 1, 32, 256]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[ 5.4688e-02,  7.8125e-03,  ...,  2.9297e-02,  3.9062e-02],
+               [ 3.2812e-01,  2.8125e-01,  ...,  5.4688e-01,  4.2188e-01],
+               ...,
+               [ 3.1250e-02, -7.5000e-01,  ..., -2.3438e-01,  7.9688e-01],
+               [ 3.7500e-01, -4.3750e-01,  ...,  8.1250e-01,  1.2500e+00]]],
+
+             ...,
+
+             [[[ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               ...,
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00],
+               [ 0.0000e+00,  0.0000e+00,  ...,  0.0000e+00,  0.0000e+00]]],
+
+             [[[ 5.4688e-02,  7.8125e-03,  ...,  2.9297e-02,  3.9062e-02],
+               [ 3.2812e-01,  2.8125e-01,  ...,  5.4688e-01,  4.2188e-01],
+               ...,
+               [ 3.1250e-02, -7.5000e-01,  ..., -2.3438e-01,  7.9688e-01],
+               [ 3.7500e-01, -4.3750e-01,  ...,  8.1250e-01,  1.2500e+00]]]], shape=Shape([64, 1, 32, 256]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE))
+function_kwargs = {'compute_kernel_config': &lt;ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7fabdffe0930&gt;, 'cur_pos_tensor': device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([   31,    31,  ...,    31,    31], shape=Shape([32]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([   31,    31,  ...,    31,    31], shape=Shape([32]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([   31,    31,  ...,    31,    31], shape=Shape([32]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([   31,    31,  ...,    31,    31], shape=Shape([32]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR), 'memory_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'page_table_tensor': device_id: 3, MeshCoordinate([0, 0])
+ttnn.Tensor([[    1,     0],
+             [    3,     2],
+             ...,
+             [   61,    60],
+             [   63,    62]], shape=Shape([32, 2]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
+device_id: 2, MeshCoordinate([0, 1])
+ttnn.Tensor([[    1,     0],
+             [    3,     2],
+             ...,
+             [   61,    60],
+             [   63,    62]], shape=Shape([32, 2]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
+device_id: 1, MeshCoordinate([0, 2])
+ttnn.Tensor([[    1,     0],
+             [    3,     2],
+             ...,
+             [   61,    60],
+             [   63,    62]], shape=Shape([32, 2]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR)
+device_id: 0, MeshCoordinate([0, 3])
+ttnn.Tensor([[    1,     0],
+             [    3,     2],
+             ...,
+             [   61,    60],
+             [   63,    62]], shape=Shape([32, 2]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR), ...}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+&gt;               result = self.function(*function_args, **function_kwargs)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               RuntimeError: TT_FATAL @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:2483: state.offset &lt;= max_size
+E               info:
+E               Program size (72640) too large for kernel config buffer (70656) on TENSIX
+E               backtrace:
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(+0x8ed0da) [0x7fac30eed0da]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal6detail11ProgramImpl24finalize_program_offsetsEN4ttsl10StrongTypeIiNS0_12ContextIdTagEEEPNS0_7IDeviceERKSt8functionIFRSt13unordered_mapIjSt10shared_ptrINS0_6KernelEESt4hashIjESt8equal_toIjESaISt4pairIKjSD_EEEjEERKS9_IFRSt6vectorISB_INS0_11KernelGroupEESaISU_EEjEERKS9_IFRKSS_INS0_9SemaphoreESaIS12_EEvEESt4spanIPS2_Lm18446744073709551615EE+0xa6e) [0x7fac30ecb6fe]
+E                --- tt::tt_metal::distributed::MeshWorkloadImpl::finalize_offsets(tt::tt_metal::distributed::MeshDevice*)
+E                --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+E                --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&amp;, tt::tt_metal::distributed::MeshWorkload&amp;, bool)
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x37e) [0x7fac33542dce]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1b48963) [0x7fac33548963]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x21b) [0x7fac3354007b]
+E                --- /home/mvasiljevic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim25SdpaDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2db) [0x7fac3352714b]
+E                --- ttnn::prim::sdpa_decode(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, bool, bool, std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt; const&amp;, std::optional&lt;float&gt;, std::optional&lt;unsigned int&gt;, tt::tt_metal::MemoryConfig const&amp;, std::optional&lt;ttnn::operations::transformer::SDPAProgramConfig&gt; const&amp;, ttnn::ComputeKernelConfig, unsigned int, std::optional&lt;bool&gt;, std::optional&lt;bool&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;)
+E                --- ttnn::transformer::paged_scaled_dot_product_attention_decode(tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, tt::tt_metal::Tensor const&amp;, bool, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;tt::tt_metal::Tensor const&gt; const&amp;, std::optional&lt;float&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;tt::tt_metal::MemoryConfig&gt; const&amp;, std::optional&lt;ttnn::operations::transformer::SDPAProgramConfig&gt;, std::optional&lt;ttnn::ComputeKernelConfig&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;, std::optional&lt;unsigned int&gt;)
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x457793) [0x7fac33c57793]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x457450) [0x7fac33c57450]
+E                --- /home/mvasiljevic/tt-metal/ttnn/ttnn/_ttnn.so(+0x315575) [0x7fac33b15575]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x65cb) [0x181940b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ac8a22]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18c68da]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyEval_EvalFrameDefault+0x2fa8) [0x1815de8]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(PyEval_EvalCode+0xde) [0x18931a0]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x18b12c9]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2b145]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_SimpleFileObject+0x106) [0x1a2af06]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_PyRun_AnyFileObject+0x4a) [0x1a2ac8a]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ac10]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1a2ab1d]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x1ae1fe3]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c298]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3() [0x198c0ac]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7fac7a3db1ca]
+E                --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7fac7a3db28b]
+E                --- /home/mvasiljevic/tt-metal/python_env/bin/python3(_start+0x29) [0x19a4a69]
+
+ttnn/ttnn/decorators.py:473: RuntimeError</failure></testcase></testsuite></testsuites>

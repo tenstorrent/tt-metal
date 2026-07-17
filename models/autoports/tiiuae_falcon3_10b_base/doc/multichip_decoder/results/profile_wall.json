@@ -1,0 +1,16 @@
+{
+  "batch": 32,
+  "decode_iterations": 3,
+  "decode_wall_ms": 0.6140537249545256,
+  "decode_wall_total_ms": 1.842161174863577,
+  "generated_at_utc": "2026-07-17T20:29:46.961150+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "25d9b50dd182a626f5195db56e194d897ab495e53b16c7f107465ac62fdd41e9",
+  "prefill_iterations": 2,
+  "prefill_wall_ms": 4.0523586794734,
+  "prefill_wall_total_ms": 8.1047173589468,
+  "repo_head": "6f97f9aa5a9a5aec1d98f91bd4a40b662cac15a3",
+  "sequence_length": 17,
+  "test_sha256": "09f8eec582af3ac057ca0b3d5194fb5bdfb2ab0e8f56b57a99d63ca92a277075",
+  "weights": "real_layer_20"
+}

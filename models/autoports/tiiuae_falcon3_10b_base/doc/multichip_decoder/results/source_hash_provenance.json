@@ -1,0 +1,27 @@
+{
+  "reason": "The repository commit hook applied Black-only line wrapping after the original hardware gates. Review remediation closed the candidate-grid validation matrix, corrected the performance harness to compare decode position 17 like-for-like, and selected the repeatably faster two-core output projection.",
+  "hardware_evidence_source": {
+    "implementation_sha256": "81c66595f5bce7267c9b1d136bd0ab8f70789e0f1fbfadf39f012078b54bc596",
+    "test_sha256": "7accc69dd1ad22afa518b6e36ad3e57e96b65a4c638a49077af6d9dee33697da"
+  },
+  "post_black_source": {
+    "implementation_sha256": "1bd81abc99df4a8805db4e04fe2f1831f18d3a6f2450bafd70f6aa7dee6b3b38",
+    "test_sha256": "bd8a1bdf5121c1ce8ec9059a6d96d743b5cb60a0224a2f1b4a3c89c2c14c58e2"
+  },
+  "candidate_validation_source": {
+    "implementation_sha256": "ae4cf7ed2d5299b843e0664a969938515d7e681f4543c5dd93b3109c44533319",
+    "test_sha256": "bd8a1bdf5121c1ce8ec9059a6d96d743b5cb60a0224a2f1b4a3c89c2c14c58e2"
+  },
+  "alternating_o_grid_source": {
+    "implementation_sha256": "ae4cf7ed2d5299b843e0664a969938515d7e681f4543c5dd93b3109c44533319",
+    "test_sha256": "21e0342274ecb54a127a8c65ea8f3e0f83110bb4c401143a1eb076e97bef60d1",
+    "semantic_delta": "performance test derives decode position, position index, and result metadata from the recorded prefill length; explicit environment overrides select O2 or O4"
+  },
+  "final_source": {
+    "implementation_sha256": "25d9b50dd182a626f5195db56e194d897ab495e53b16c7f107465ac62fdd41e9",
+    "test_sha256": "09f8eec582af3ac057ca0b3d5194fb5bdfb2ab0e8f56b57a99d63ca92a277075"
+  },
+  "semantic_delta": "selected output-projection target changes from four to two cores; performance test uses the actual logical decode position 17",
+  "final_source_hardware_evidence": "27-point current-source candidate sweep, correctness, direct optimized-baseline PCC, maximum context, fallback audit, watcher, Tracy profile, final batch32, and final batch1",
+  "evidence_result_hash_policy": "Result JSON implementation_sha256/test_sha256 fields preserve the exact files used. Final gates name final_source; the six alternating O-grid artifacts name their immediately preceding explicit-override source."
+}

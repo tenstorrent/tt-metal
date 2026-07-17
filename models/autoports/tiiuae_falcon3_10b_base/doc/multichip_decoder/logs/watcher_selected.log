@@ -1,0 +1,148 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: Device marked dirty from previous hang, resetting...
+Resetting all PCI devices: [0, 1, 2, 3]
+[95m Re-initializing boards after reset.... [0m
+SAFE_PYTEST: Device reset complete
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: pytest models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace -s -q --junitxml=models/autoports/tiiuae_falcon3_10b_base/doc/multichip_decoder/logs/watcher_selected.xml
+========================================
+2026-07-17 20:22:06.152 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-1x4-ring] 2026-07-17 20:22:07.656 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-17 20:22:07.656 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-17 20:22:07.656 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-17 20:22:07.656 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-17 20:22:07.657 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-07-17 20:22:07.657 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-17 20:22:07.661 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-17 20:22:07.883 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-07-17 20:22:07.883 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-17 20:22:07.883 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-07-17 20:22:07.883 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-17 20:22:07.884 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-17 20:22:08.177 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.23ff5195c3f7.1000.5eb50000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  23ff5195c3f7
+  Space Requested: 16777216 B
+  Space Available: 17539072 B
+--------------------------------------------------------------------------
+2026-07-17 20:22:08.306 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-17 20:22:08.306 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-17 20:22:08.306 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-17 20:22:08.306 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-17 20:22:08.306 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-17 20:22:08.306 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-17 20:22:08.306 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-17 20:22:08.306 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-17 20:22:08.306 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-17 20:22:08.306 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-17 20:22:08.306 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-17 20:22:08.306 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-17 20:22:08.306 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-07-17 20:22:08.306 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-07-17 20:22:08.306 | warning  |       Inspector | Failed to create logging directory: /home/mvasiljevic/tt-metal/generated/inspector. Error: filesystem error: cannot remove all: Permission denied [/home/mvasiljevic/tt-metal/generated/inspector] [/home/mvasiljevic/tt-metal/generated/inspector/programs_log.yaml]
+
+You can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality. (logger.cpp:37)
+2026-07-17 20:22:08.361 | info     |       LLRuntime | Watcher log file: /home/mvasiljevic/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-17 20:22:08.361 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-17 20:22:08.361 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:132)
+2026-07-17 20:22:08.361 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:132)
+2026-07-17 20:22:08.361 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:132)
+2026-07-17 20:22:08.361 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:547)
+2026-07-17 20:22:08.361 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-17 20:22:08.365 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:393)
+2026-07-17 20:22:08.367 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:288)
+2026-07-17 20:22:08.372 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:393)
+2026-07-17 20:22:08.377 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:393)
+2026-07-17 20:22:08.397 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:429)
+2026-07-17 20:22:08.398 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:429)
+2026-07-17 20:22:08.398 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:429)
+2026-07-17 20:22:08.399 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:429)
+2026-07-17 20:22:08.399 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:435)
+2026-07-17 20:22:08.399 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:305)
+2026-07-17 20:22:08.543 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-07-17 20:22:08.543 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-07-17 20:22:08.543 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-07-17 20:22:08.543 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-07-17 20:22:09.122 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349988 GHz, device_time_at_sync=5884311578 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-17 20:22:09.122 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349987 GHz, device_time_at_sync=5920614994 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-17 20:22:09.123 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349992 GHz, device_time_at_sync=5907270512 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-17 20:22:09.123 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349984 GHz, device_time_at_sync=35870330467 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-17 20:22:09.153 | DEBUG    | conftest:mesh_device:599 - multidevice with 4 devices is created
+2026-07-17 20:22:14.730 | INFO     | models.autoports.tiiuae_falcon3_10b_base.tests.test_functional_decoder:_assert_pcc:158 - multichip real prefill seq=31: PCC=0.99994867 target=0.99
+2026-07-17 20:22:14.749 | INFO     | models.autoports.tiiuae_falcon3_10b_base.tests.test_functional_decoder:_assert_pcc:158 - multichip paged key cache seq=31: PCC=0.99655404 target=0.99
+2026-07-17 20:22:14.766 | INFO     | models.autoports.tiiuae_falcon3_10b_base.tests.test_functional_decoder:_assert_pcc:158 - multichip paged value cache seq=31: PCC=0.99496777 target=0.99
+2026-07-17 20:22:15.217 | INFO     | models.autoports.tiiuae_falcon3_10b_base.tests.test_functional_decoder:_assert_pcc:158 - multichip real decode position=31: PCC=0.99932893 target=0.99
+2026-07-17 20:22:15.263 | INFO     | models.autoports.tiiuae_falcon3_10b_base.tests.test_functional_decoder:_assert_pcc:158 - multichip real decode position=32: PCC=0.99923151 target=0.99
+2026-07-17 20:22:15.285 | INFO     | models.autoports.tiiuae_falcon3_10b_base.tests.test_functional_decoder:_assert_pcc:158 - multichip paged key cache position=32: PCC=0.99656263 target=0.99
+2026-07-17 20:22:15.307 | INFO     | models.autoports.tiiuae_falcon3_10b_base.tests.test_functional_decoder:_assert_pcc:158 - multichip paged value cache position=32: PCC=0.99498064 target=0.99
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/models/autoports/tiiuae_falcon3_10b_base/doc/multichip_decoder/logs/watcher_selected.xml -
+============================== slowest durations ===============================
+6.46s call     models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-1x4-ring]
+1.70s setup    models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-1x4-ring]
+0.15s teardown models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-1x4-ring]
+=========================== short test summary info ============================
+PASSED models/autoports/tiiuae_falcon3_10b_base/tests/test_multichip_decoder.py::test_real_layer_paged_non_aligned_prefill_decode_cache_and_trace[blackhole-1x4-ring]
+============================== 1 passed in 8.97s ===============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x765a05118288 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x765a058b1f68 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 22 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "id"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_dtype"
+ - leaked function "devices"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-17 20:22:17.463 | info     |    BuildKernels | JIT cache stats: 283/288 hits (98.3%) [283 cached, 159 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-17 20:22:17.463 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-17 20:22:17.463 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-17 20:22:17.464 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-17 20:22:17.464 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:181)
+2026-07-17 20:22:17.464 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:181)
+2026-07-17 20:22:17.464 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:181)
+2026-07-17 20:22:17.475 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-17 20:22:17.475 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-17 20:22:17.954 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-17 20:22:17.954 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-17 20:22:17.954 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+========================================
+SAFE_PYTEST_RESULT: PASS

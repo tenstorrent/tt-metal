@@ -1,0 +1,13 @@
+{
+  "generated_at_utc": "2026-07-17T20:15:17.661421+00:00",
+  "hardware": "4x Blackhole p300c, mesh 1x4, FABRIC_1D_RING",
+  "implementation_sha256": "25d9b50dd182a626f5195db56e194d897ab495e53b16c7f107465ac62fdd41e9",
+  "internal_chunk_rows": 1024,
+  "key_cache_pcc": 0.9965554378618665,
+  "logical_sequence_length": 1025,
+  "page_table": "cyclic_permutation",
+  "prefill_pcc": 0.9999505360177762,
+  "repo_head": "6f97f9aa5a9a5aec1d98f91bd4a40b662cac15a3",
+  "test_sha256": "09f8eec582af3ac057ca0b3d5194fb5bdfb2ab0e8f56b57a99d63ca92a277075",
+  "value_cache_pcc": 0.9949666020436485
+}

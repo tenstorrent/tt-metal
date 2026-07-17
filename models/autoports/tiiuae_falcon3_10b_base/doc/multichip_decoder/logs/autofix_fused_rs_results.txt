@@ -1,0 +1,20 @@
+AutoFix fused matmul-reduce-scatter isolation, 2026-07-17 UTC
+
+Target: 4x Blackhole p300c, MeshShape(1,4), FABRIC_1D_RING
+Geometry: [1,1,32,768] @ [1,1,768,3072] -> RS dim 3 -> [1,1,32,768]
+Persistent intermediate corrected to [1,1,32,3072].
+
+Run 1: num_links=2
+- ordinary matmul + reduce_scatter_minimal_async: STANDALONE_RS_PASS
+- matmul_reduce_scatter_async: dispatch timeout / hang
+- watcher active kernels: fused matmul readers/compute plus Ring RS reader, writer, reduction
+- safe runner reset all devices
+
+Run 2: num_links=1
+- ordinary matmul + reduce_scatter_minimal_async: STANDALONE_RS_PASS
+- matmul_reduce_scatter_async: dispatch timeout / hang
+- watcher active kernels: same fused matmul and Ring RS family
+- safe runner reset all devices
+
+Conclusion: workspace and two-link hypotheses refuted. Reject fused graph on this target;
+retain the production local matmul + Ring all-reduce graph.
