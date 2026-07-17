@@ -71,27 +71,6 @@ MAX_QKV_MM_SEQ_LEN = 2048  # Maximum sequence length for single QKV matmul
 # Source: TTTv1 model_config.py "MAX_MM_SEQ_LEN": 1024
 MAX_MM_SEQ_LEN = 1024
 
-# Total tokens in a locally allocated KV cache must fit in device DRAM. The 128K limit is a
-# hardware constraint for Wormhole devices (by 12GB DRAM per chip).
-MAX_TOTAL_TOKENS = 128 * 1024  # 131072 tokens
-
-
-def _validate_token_budget(config: "Attention1DConfig") -> None:
-    if config.use_vllm_paged_kv_cache:
-        # External paged KV cache capacity is configured and managed by the
-        # caller, which is responsible for ensuring it fits in device DRAM.
-        return
-
-    total_tokens = config.max_batch_size * config.max_seq_len
-    if total_tokens > MAX_TOTAL_TOKENS:
-        raise ValueError(
-            f"Total token budget exceeded: max_batch_size ({config.max_batch_size}) × "
-            f"max_seq_len ({config.max_seq_len}) = {total_tokens:,} tokens, "
-            f"but maximum is {MAX_TOTAL_TOKENS:,} tokens (128K). "
-            f"Reduce max_batch_size or max_seq_len to fit in device DRAM."
-        )
-
-
 # =============================================================================
 # Attention1DConfig dataclass
 # =============================================================================
@@ -168,7 +147,6 @@ class Attention1DConfig:
     # - tuple[LazyWeight, LazyWeight]: (keys, values) backed by cache files, resolved lazily
     # - tuple[ttnn.Tensor, ttnn.Tensor]: Pre-allocated (keys, values) tensors (e.g., from vLLM)
     # When enabled, KV cache allocation and capacity are owned by the caller.
-    # The caller must ensure the paged cache fits in device DRAM.
     use_vllm_paged_kv_cache: bool = False
     kv_cache: "tuple[LazyWeight, LazyWeight] | tuple[ttnn.Tensor, ttnn.Tensor] | None" = None
     paged_attention_config: "PagedAttentionConfig | None" = None  # type: ignore
@@ -1454,9 +1432,6 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
             "Typically: head_dim = hidden_size // num_attention_heads."
         )
 
-    # --- Phase 1b: Token budget validation (fail-fast for memory) ---
-    _validate_token_budget(config)
-
     # Reject sliding_window + paged attention (chunked prefill doesn't support window masking)
     if config.sliding_window is not None and config.paged_attention_config is not None:
         raise ValueError(
@@ -1963,6 +1938,8 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
     # --- Phase 11: Resolve KV cache ---
     # KV cache is a static configuration, allocated once and reused for all forward calls.
     # If use_paged_kv_cache=True, the cache is managed externally (e.g., by vLLM) and not created here.
+    # Attention1D does not validate KV-cache DRAM/token capacity; callers own sizing.
+    # Allocation will fail at device memory allocation time if the cache does not fit.
     if not config.use_vllm_paged_kv_cache:
         n_local_kv_heads = n_kv_heads // num_devices
         kv_cache_dtype = config.kv_cache_dtype
@@ -1976,26 +1953,6 @@ def _resolve_attention1d_config(config: Attention1DConfig) -> Attention1DConfig:
                 mesh_shape_override=ttnn.MeshShape([num_devices]),
             ),
         )
-
-        # Validate paged attention has enough blocks for the specified token budget
-        if config.paged_attention_config is not None:
-            paged_cfg = config.paged_attention_config
-            block_size = paged_cfg.block_size
-            max_num_blocks = paged_cfg.max_num_blocks
-            # Each user needs ceil(max_seq_len / block_size) blocks
-            blocks_per_user = (config.max_seq_len + block_size - 1) // block_size
-            required_blocks = blocks_per_user * config.max_batch_size
-            paged_cache_max_seq_len = (block_size * max_num_blocks) // config.max_batch_size
-
-            if required_blocks > max_num_blocks:
-                raise ValueError(
-                    f"Paged attention block budget exceeded: "
-                    f"max_batch_size ({config.max_batch_size}) × "
-                    f"ceil(max_seq_len ({config.max_seq_len}) / block_size ({block_size})) = "
-                    f"{required_blocks} blocks required, but max_num_blocks is only {max_num_blocks}. "
-                    f"With current config, max supported seq_len is {paged_cache_max_seq_len}. "
-                    f"Either increase max_num_blocks or reduce max_seq_len/max_batch_size."
-                )
 
         if config.kv_cache is None:
             # Create default kv_cache LazyWeights
